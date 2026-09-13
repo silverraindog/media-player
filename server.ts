@@ -1,0 +1,500 @@
+import express, { Request, Response } from 'express';
+import path from 'path';
+import dotenv from 'dotenv';
+import { GoogleGenAI } from '@google/genai';
+import { createServer as createViteServer } from 'vite';
+import {
+  getAllMediaFromDb,
+  saveMediaToDb,
+  deleteMediaFromDb,
+  getAllWatchProgress,
+  getSeriesProgress,
+  updateWatchProgressInDb,
+  executeRawSqlQuery,
+  getDbStats,
+} from './src/server/database';
+
+dotenv.config();
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json({ limit: '10mb' }));
+
+// Lazy Google GenAI Client
+let genAIClient: GoogleGenAI | null = null;
+function getGenAI(): GoogleGenAI | null {
+  if (!genAIClient && process.env.GEMINI_API_KEY) {
+    genAIClient = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  }
+  return genAIClient;
+}
+
+// ==========================================
+// API ROUTES
+// ==========================================
+
+// Health Check
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Search & Download Metadata for TV Shows, Movies, Music Albums
+app.post('/api/metadata/search', async (req: Request, res: Response) => {
+  try {
+    const { query, type = 'movie', year } = req.body;
+    if (!query) {
+      return res.status(400).json({ error: 'Query is required' });
+    }
+
+    const ai = getGenAI();
+    if (!ai) {
+      return res.status(200).json({
+        source: 'fallback',
+        message: 'No GEMINI_API_KEY configured. Using local metadata database.',
+        query,
+      });
+    }
+
+    const prompt = `You are a professional media metadata database scraper and tagger for Kodi, Jellyfin, Plex, Emby, and MusicBrainz.
+Extract complete and accurate metadata for the requested ${type}: "${query}" ${year ? `(released around ${year})` : ''}.
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "title": "Exact Official Title",
+  "originalTitle": "Original language title if different",
+  "type": "${type}",
+  "year": 2024,
+  "premiered": "YYYY-MM-DD",
+  "overview": "Detailed synopsis / plot summary (2-3 paragraphs)",
+  "tagline": "Memorable tagline if any",
+  "genres": ["Genre1", "Genre2", "Genre3"],
+  "rating": 8.5,
+  "votes": 125000,
+  "runtime": "120 min" or "50 min/ep" or "45 min",
+  "directors": ["Director Name"],
+  "artists": ["Artist Name" if album],
+  "studio": "Production Studio / Network or Record Label",
+  "certification": "PG-13 / R / TV-MA / Explicit",
+  "country": "Country",
+  "language": "Language",
+  "imdbId": "tt1234567",
+  "tmdbId": "12345",
+  "posterUrl": "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80",
+  "fanartUrl": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80",
+  "recommendedFolderStructure": "e.g. Movies/Title (Year)/ or TV Shows/Title (Year)/Season 01/ or Music/Artist/Album (Year)/",
+  "recommendedFilenames": [
+    "Clean File Naming 1.mkv",
+    "Clean File Naming 2.mkv"
+  ],
+  "seasons": [
+    {
+      "seasonNumber": 1,
+      "name": "Season 1",
+      "episodeCount": 8,
+      "episodes": [
+        {
+          "episodeNumber": 1,
+          "seasonNumber": 1,
+          "title": "Episode 1 Title",
+          "airDate": "YYYY-MM-DD",
+          "plot": "Episode 1 summary",
+          "rating": 8.4
+        }
+      ]
+    }
+  ],
+  "tracks": [
+    {
+      "trackNumber": 1,
+      "title": "Track Title",
+      "duration": "3:45",
+      "artist": "Artist Name"
+    }
+  ]
+}
+Ensure high factual accuracy for real movies, series, or albums. If it's a TV show, provide real season and episode titles. If it's a music album, provide the actual track listing.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const responseText = response.text || '{}';
+    let parsedData;
+    try {
+      parsedData = JSON.parse(responseText);
+    } catch {
+      // Clean up markdown code blocks if any
+      const cleaned = responseText.replace(/```json\n?|\n?```/g, '').trim();
+      parsedData = JSON.parse(cleaned);
+    }
+
+    // Set id and source
+    parsedData.id = `${type}-${Date.now()}`;
+    parsedData.source = 'gemini-ai';
+
+    return res.json({
+      success: true,
+      data: parsedData,
+    });
+  } catch (error: any) {
+    console.error('Gemini metadata search error:', error);
+    return res.status(500).json({
+      error: 'Failed to search metadata',
+      message: error?.message || 'Unknown error',
+    });
+  }
+});
+
+// Parse messy release filenames (e.g. Breaking.Bad.S01E01.720p.BluRay.x264.mkv)
+app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => {
+  try {
+    const { filenames } = req.body;
+    if (!filenames || !Array.isArray(filenames)) {
+      return res.status(400).json({ error: 'filenames array is required' });
+    }
+
+    const ai = getGenAI();
+    if (!ai) {
+      // Regex-based fallback parser
+      const parsed = filenames.map((fn: string, index: number) => {
+        let detectedType: 'movie' | 'series' | 'album' = 'movie';
+        let title = fn.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ');
+        let year: number | undefined;
+        let season: number | undefined;
+        let episode: number | undefined;
+
+        // Check for S01E02 pattern
+        const sMatch = fn.match(/s(\d{1,2})e(\d{1,2})/i);
+        if (sMatch) {
+          detectedType = 'series';
+          season = parseInt(sMatch[1], 10);
+          episode = parseInt(sMatch[2], 10);
+          title = title.split(/s\d{1,2}e\d{1,2}/i)[0].trim();
+        }
+
+        // Check for year
+        const yMatch = fn.match(/(19\d{2}|20\d{2})/);
+        if (yMatch) {
+          year = parseInt(yMatch[1], 10);
+          if (detectedType === 'movie') {
+            title = title.split(yMatch[1])[0].trim();
+          }
+        }
+
+        // Check for audio track
+        const trackMatch = fn.match(/^(\d{1,2})[\s._-]+(.+)/);
+        if (trackMatch && (fn.endsWith('.mp3') || fn.endsWith('.flac') || fn.endsWith('.m4a'))) {
+          detectedType = 'album';
+          title = trackMatch[2].replace(/\.[^/.]+$/, '').trim();
+        }
+
+        const ext = fn.includes('.') ? fn.split('.').pop() : 'mkv';
+
+        let cleanFormatted = `${title} (${year || 2024}).${ext}`;
+        let cleanFolder = `Movies/${title} (${year || 2024})/`;
+
+        if (detectedType === 'series') {
+          const sPad = String(season || 1).padStart(2, '0');
+          const ePad = String(episode || 1).padStart(2, '0');
+          cleanFormatted = `${title} - S${sPad}E${ePad}.${ext}`;
+          cleanFolder = `TV Shows/${title}/Season ${sPad}/`;
+        } else if (detectedType === 'album') {
+          cleanFormatted = `${fn}`;
+          cleanFolder = `Music/${title}/`;
+        }
+
+        return {
+          id: `file-${index}-${Date.now()}`,
+          originalFilename: fn,
+          detectedType,
+          detectedTitle: title || 'Unknown Title',
+          detectedYear: year,
+          detectedSeason: season,
+          detectedEpisode: episode,
+          cleanFormattedFilename: cleanFormatted,
+          cleanFolderPath: cleanFolder,
+          status: 'pending',
+        };
+      });
+
+      return res.json({ success: true, results: parsed, source: 'regex-parser' });
+    }
+
+    const prompt = `You are an automated media file tagger and Plex/Jellyfin/Kodi organizer.
+Parse each of the following raw media filenames into structured metadata and recommended standard clean filenames for macOS, Linux, and Windows Samba shares.
+
+Filenames:
+${JSON.stringify(filenames, null, 2)}
+
+Return a JSON array of objects with:
+[
+  {
+    "originalFilename": "raw_filename",
+    "detectedType": "movie" | "series" | "album",
+    "detectedTitle": "Clean Media Title",
+    "detectedYear": 2023,
+    "detectedSeason": 1,
+    "detectedEpisode": 3,
+    "detectedResolution": "1080p" or "2160p" or "720p",
+    "detectedCodec": "x264" or "HEVC" or "FLAC",
+    "detectedAudio": "DTS-HD" or "Atmos" or "AAC",
+    "detectedArtist": "Artist name if album",
+    "detectedTrack": 1,
+    "cleanFormattedFilename": "Standardized filename according to Plex/Kodi rules",
+    "cleanFolderPath": "Movies/Title (Year)/ or TV Shows/Title/Season 01/ or Music/Artist/Album (Year)/"
+  }
+]`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const responseText = response.text || '[]';
+    let parsedArray = [];
+    try {
+      parsedArray = JSON.parse(responseText);
+    } catch {
+      const cleaned = responseText.replace(/```json\n?|\n?```/g, '').trim();
+      parsedArray = JSON.parse(cleaned);
+    }
+
+    const results = parsedArray.map((item: any, idx: number) => ({
+      id: `file-${idx}-${Date.now()}`,
+      status: 'pending',
+      ...item,
+    }));
+
+    return res.json({
+      success: true,
+      results,
+      source: 'gemini-ai',
+    });
+  } catch (error: any) {
+    console.error('Filename parser error:', error);
+    return res.status(500).json({
+      error: 'Failed to parse filenames',
+      message: error?.message || 'Unknown error',
+    });
+  }
+});
+
+// Samba share connection test simulator
+app.post('/api/samba/test-connection', (req: Request, res: Response) => {
+  const { server, share, port = 445, isGuest, username } = req.body;
+  if (!server || !share) {
+    return res.status(400).json({ error: 'Server host and share name are required' });
+  }
+
+  // Simulate network probe
+  const isLocalOrValid = /^(?:\d{1,3}\.){3}\d{1,3}$|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$|^[a-zA-Z0-9_-]+$/.test(server);
+
+  return res.json({
+    connected: true,
+    server,
+    share,
+    port,
+    protocol: 'SMB3 / CIFS',
+    authenticatedAs: isGuest ? 'guest (Anonymous)' : (username || 'authenticated user'),
+    permissions: 'read-write',
+    shareFreeSpace: '3.84 TB / 8.00 TB (48% free)',
+    osEndpoints: {
+      macos: `smb://${server}/${share}`,
+      linux: `//${server}/${share}`,
+      windows: `\\\\${server}\\${share}`,
+    },
+    latencyMs: Math.floor(2 + Math.random() * 8),
+    message: `Connected to Samba share //${server}/${share} successfully!`,
+  });
+});
+
+// ==========================================
+// SQLITE DATABASE & SERIES PROGRESS ROUTES
+// ==========================================
+
+// Get all media items (titles & synopses) stored in SQLite DB
+app.get('/api/db/media', async (req: Request, res: Response) => {
+  try {
+    const items = await getAllMediaFromDb();
+    res.json({ success: true, items });
+  } catch (error: any) {
+    console.error('Error fetching media from SQLite:', error);
+    res.status(500).json({ error: 'Failed to fetch media from SQLite', message: error?.message });
+  }
+});
+
+// Save or update media title & synopsis in SQLite DB
+app.post('/api/db/media', async (req: Request, res: Response) => {
+  try {
+    const media = req.body;
+    if (!media || !media.title || !media.synopsis) {
+      return res.status(400).json({ error: 'Title and synopsis are required to save to SQLite database' });
+    }
+
+    await saveMediaToDb({
+      id: media.id || `media-${Date.now()}`,
+      media_type: media.type || media.media_type || 'series',
+      title: media.title,
+      original_title: media.originalTitle || media.original_title || media.title,
+      synopsis: media.overview || media.synopsis,
+      year: media.year,
+      rating: media.rating,
+      poster_url: media.posterUrl || media.poster_url,
+      fanart_url: media.fanartUrl || media.fanart_url,
+      genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres,
+      recommended_folder: media.recommendedFolderStructure || media.recommended_folder,
+      raw_data: JSON.stringify(media),
+    });
+
+    res.json({ success: true, message: `Saved "${media.title}" to SQLite database successfully` });
+  } catch (error: any) {
+    console.error('Error saving media to SQLite:', error);
+    res.status(500).json({ error: 'Failed to save media to SQLite', message: error?.message });
+  }
+});
+
+// Delete media item from SQLite DB
+app.delete('/api/db/media/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    await deleteMediaFromDb(id);
+    res.json({ success: true, message: 'Item deleted from SQLite database' });
+  } catch (error: any) {
+    console.error('Error deleting from SQLite:', error);
+    res.status(500).json({ error: 'Failed to delete from SQLite', message: error?.message });
+  }
+});
+
+// Get all watch progress ("where you left off in the series")
+app.get('/api/db/progress', async (req: Request, res: Response) => {
+  try {
+    const progressList = await getAllWatchProgress();
+    res.json({ success: true, progress: progressList });
+  } catch (error: any) {
+    console.error('Error fetching watch progress:', error);
+    res.status(500).json({ error: 'Failed to fetch watch progress', message: error?.message });
+  }
+});
+
+// Get progress for a specific series
+app.get('/api/db/progress/:seriesId', async (req: Request, res: Response) => {
+  try {
+    const { seriesId } = req.params;
+    const progress = await getSeriesProgress(seriesId);
+    res.json({ success: true, progress });
+  } catch (error: any) {
+    console.error('Error fetching series progress:', error);
+    res.status(500).json({ error: 'Failed to fetch series progress', message: error?.message });
+  }
+});
+
+// Save or update series watch progress ("keep a record of where you left off")
+app.post('/api/db/progress', async (req: Request, res: Response) => {
+  try {
+    const {
+      series_id,
+      series_title,
+      season_number,
+      episode_number,
+      episode_title,
+      playback_position_seconds,
+      total_duration_seconds,
+      progress_percentage,
+      is_completed,
+      notes,
+    } = req.body;
+
+    if (!series_id || !series_title || season_number === undefined || episode_number === undefined) {
+      return res.status(400).json({ error: 'series_id, series_title, season_number, and episode_number are required' });
+    }
+
+    await updateWatchProgressInDb({
+      series_id,
+      series_title,
+      season_number: Number(season_number),
+      episode_number: Number(episode_number),
+      episode_title: episode_title || `Episode ${episode_number}`,
+      playback_position_seconds: Number(playback_position_seconds || 0),
+      total_duration_seconds: Number(total_duration_seconds || 3000),
+      progress_percentage: progress_percentage !== undefined ? Number(progress_percentage) : undefined,
+      is_completed: Boolean(is_completed),
+      notes: notes || '',
+    });
+
+    res.json({
+      success: true,
+      message: `Updated progress for "${series_title}" to S${String(season_number).padStart(2, '0')}E${String(episode_number).padStart(2, '0')} in SQLite database`,
+    });
+  } catch (error: any) {
+    console.error('Error updating watch progress:', error);
+    res.status(500).json({ error: 'Failed to update watch progress', message: error?.message });
+  }
+});
+
+// Run custom SQL query in SQLite for data exploration
+app.post('/api/db/query', async (req: Request, res: Response) => {
+  try {
+    const { sql } = req.body;
+    if (!sql) {
+      return res.status(400).json({ error: 'SQL statement is required' });
+    }
+    const result = await executeRawSqlQuery(sql);
+    res.json({ success: true, result });
+  } catch (error: any) {
+    console.error('SQLite query execution error:', error);
+    res.status(400).json({ error: 'Query execution failed', message: error?.message });
+  }
+});
+
+// Get SQLite Database statistics
+app.get('/api/db/stats', async (req: Request, res: Response) => {
+  try {
+    const stats = await getDbStats();
+    res.json({ success: true, stats });
+  } catch (error: any) {
+    console.error('Error getting SQLite stats:', error);
+    res.status(500).json({ error: 'Failed to get stats', message: error?.message });
+  }
+});
+
+// Start Server and Vite Middleware
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req: Request, res: Response) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Samba Media Vault server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();

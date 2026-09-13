@@ -1,0 +1,7 @@
+{
+  "name": "Samba Media Vault & Metadata Downloader",
+  "description": "Cross-platform media metadata manager & downloader for Movies, TV Series, and Music Albums with Samba (SMB) network share sync for macOS, Linux, and Windows, featuring an embedded SQLite database for titles, synopses, and series watch progress tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -168,3 +168,59 @@ export const probeLocalNetwork = async (host: string, port: number): Promise<Net
     };
   }
 };
+
+export interface ScannedShareItem {
+  name: string;
+  rel_path: string;
+  is_dir: boolean;
+  size_str?: string;
+  extension?: string;
+}
+
+export interface ScanVolumeResult {
+  success: boolean;
+  mountPath: string;
+  items: ScannedShareItem[];
+  totalScanned: number;
+  error?: string | null;
+}
+
+export const scanSambaVolume = async (
+  shareName: string,
+  customPath?: string
+): Promise<ScanVolumeResult> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const result = await invoke<any>('scan_samba_volume', {
+        shareName,
+        customPath: customPath || null,
+      });
+      return {
+        success: Boolean(result?.success),
+        mountPath: result?.mount_path || `/Volumes/${shareName}`,
+        items: result?.items || [],
+        totalScanned: result?.total_scanned || (result?.items?.length ?? 0),
+        error: result?.error || null,
+      };
+    } catch (e: any) {
+      console.error('[SambaVault Scanner] Tauri invoke scan_samba_volume failed:', e);
+      return {
+        success: false,
+        mountPath: `/Volumes/${shareName}`,
+        items: [],
+        totalScanned: 0,
+        error: e?.message || String(e),
+      };
+    }
+  }
+
+  // Preview fallback: simulate scanner
+  return {
+    success: false,
+    mountPath: `/Volumes/${shareName}`,
+    items: [],
+    totalScanned: 0,
+    error: 'Preview mode: Native volume scan runs when running in desktop mode on mounted share.',
+  };
+};

@@ -276,9 +276,25 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                 </div>
               )}
               {systemVolumes.length > 0 && (
-                <div className="pt-1 text-[10px] text-slate-400">
-                  <span>Other mounted volumes: </span>
-                  <span className="text-indigo-300">{systemVolumes.join(', ')}</span>
+                <div className="pt-1.5 text-[10px] text-slate-400">
+                  <div className="mb-1">Detected volumes in /Volumes:</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {systemVolumes.map((vol) => (
+                      <button
+                        key={vol}
+                        type="button"
+                        onClick={() => setSambaConfig({ ...sambaConfig, share: vol })}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono border transition ${
+                          sambaConfig.share.toLowerCase() === vol.toLowerCase()
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+                            : 'bg-slate-900 text-indigo-300 border-slate-700 hover:border-indigo-500'
+                        }`}
+                        title={`Use "${vol}" as share name`}
+                      >
+                        {vol}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

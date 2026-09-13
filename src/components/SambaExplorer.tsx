@@ -19,6 +19,8 @@ import {
   Film,
   Music,
   FolderTree,
+  RotateCw,
+  FolderSearch,
 } from 'lucide-react';
 import { SambaConfig, SambaShareNode, SyncLog, MediaMetadata } from '../types';
 
@@ -30,6 +32,8 @@ interface SambaExplorerProps {
   onOpenDetails: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
   onRefreshSamba: () => void;
+  onSyncSamba?: (customScanPath?: string) => Promise<void>;
+  isSyncing?: boolean;
   isMountedInFinder?: boolean;
   mountedVolumeInfo?: any;
 }
@@ -42,6 +46,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onOpenDetails,
   onOpenInNfoStudio,
   onRefreshSamba,
+  onSyncSamba,
+  isSyncing = false,
   isMountedInFinder = false,
   mountedVolumeInfo = null,
 }) => {
@@ -53,6 +59,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   });
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [customScanPath, setCustomScanPath] = useState('');
 
   const toggleFolder = (id: string) => {
     setExpandedFolderIds((prev) => ({
@@ -126,40 +133,73 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     <div className="space-y-6">
       {/* Top Banner */}
       <div className="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-medium mb-3">
               <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
               <span>Samba Network Share Browser</span>
             </div>
             <h2 className="text-2xl font-bold text-white tracking-tight">
-              //{sambaConfig.server}/{sambaConfig.share}
+              {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'Configure Samba Share'}
             </h2>
-            <p className="mt-1 text-sm text-slate-300">
-              Live filesystem representation of your Samba media library. Inspect files, check NFO metadata status, and monitor sync transactions.
+            <p className="mt-1 text-sm text-slate-300 max-w-2xl">
+              Live filesystem representation of your Samba media library. Recursively scans any folder structure (series, movies, films, or flat files) and pulls canonical metadata.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold ${
                 isMountedInFinder
                   ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'bg-slate-800 text-slate-400 border border-slate-700'
+                  : 'bg-amber-950/40 text-amber-300 border border-amber-500/30'
               }`}
             >
-              <span className={`w-2 h-2 rounded-full ${isMountedInFinder ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-              <span>{isMountedInFinder ? `Mounted in Finder (/Volumes/${sambaConfig.share})` : 'Not in /Volumes'}</span>
+              <span className={`w-2 h-2 rounded-full ${isMountedInFinder ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span>{isMountedInFinder ? `Mounted in /Volumes/${sambaConfig.share}` : 'Not in /Volumes'}</span>
             </span>
+
+            {/* Sync Share Media Button */}
+            <button
+              id="samba-sync-share-btn"
+              onClick={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
+              disabled={isSyncing}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white text-xs font-semibold shadow-lg shadow-indigo-500/25 transition cursor-pointer disabled:opacity-50"
+              title="Recursively scan the Samba share, detect movies/series across any folder layout, and pull metadata"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'Scanning & Fetching Details...' : 'Sync Share & Media Details'}</span>
+            </button>
 
             <button
               id="samba-refresh-btn"
               onClick={onRefreshSamba}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition shadow"
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition shadow cursor-pointer"
+              title="Re-check /Volumes mount status"
             >
               <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
               <span>Check /Volumes</span>
             </button>
+          </div>
+        </div>
+
+        {/* Custom Folder & Advanced Scan Path Bar */}
+        <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-slate-400 flex-wrap">
+            <FolderSearch className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span>Scan custom mount or directory path:</span>
+            <input
+              id="samba-custom-scan-path"
+              type="text"
+              value={customScanPath}
+              onChange={(e) => setCustomScanPath(e.target.value)}
+              placeholder={`Default: /Volumes/${sambaConfig.share || 'media'}`}
+              className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-200 font-mono text-xs focus:outline-none focus:border-indigo-500 w-64"
+            />
+          </div>
+
+          <div className="text-[11px] text-slate-400">
+            <span>Supports any folder naming (e.g. <em>Series</em>, <em>Anime</em>, <em>Films</em>, without requiring &quot;TV Shows&quot;).</span>
           </div>
         </div>
       </div>

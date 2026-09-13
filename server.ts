@@ -370,6 +370,129 @@ app.post('/api/samba/test-connection', async (req: Request, res: Response) => {
   }
 });
 
+// Recursive Media Finder & Metadata Sync for any Samba share structure
+app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
+  try {
+    const { items, shareName } = req.body;
+    // items: array of relative paths or filenames, e.g. ["Breaking Bad/Season 01/S01E01.mkv", "Interstellar.2014.mkv"]
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items array of paths/filenames is required' });
+    }
+
+    const ai = getGenAI();
+    if (!ai) {
+      // Fallback matching using filename patterns
+      const parsedItems = items.map((rawPath: string, idx: number) => {
+        const parts = rawPath.split('/').filter(Boolean);
+        const fileName = parts[parts.length - 1] || rawPath;
+        const parentFolder = parts.length > 1 ? parts[parts.length - 2] : '';
+        
+        let detectedType: 'movie' | 'series' | 'album' = 'movie';
+        let detectedTitle = fileName.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ');
+        let detectedYear: number | undefined;
+        let detectedSeason: number | undefined;
+        let detectedEpisode: number | undefined;
+
+        // Check for season/episode markers (S01E02 or Season 1)
+        const sMatch = fileName.match(/s(\d{1,2})e(\d{1,2})/i);
+        const sFolderMatch = parentFolder.match(/season\s*(\d{1,2})/i);
+        if (sMatch) {
+          detectedType = 'series';
+          detectedSeason = parseInt(sMatch[1], 10);
+          detectedEpisode = parseInt(sMatch[2], 10);
+          detectedTitle = (parts.length > 2 ? parts[0] : detectedTitle.split(/s\d{1,2}e\d{1,2}/i)[0]).trim();
+        } else if (sFolderMatch) {
+          detectedType = 'series';
+          detectedSeason = parseInt(sFolderMatch[1], 10);
+          detectedTitle = (parts[0] || detectedTitle).replace(/\(\d{4}\)/, '').trim();
+        }
+
+        const yMatch = fileName.match(/(19\d{2}|20\d{2})/) || parentFolder.match(/(19\d{2}|20\d{2})/);
+        if (yMatch) {
+          detectedYear = parseInt(yMatch[1], 10);
+        }
+
+        return {
+          id: `scan-${idx}-${Date.now()}`,
+          rawPath,
+          fileName,
+          detectedType,
+          detectedTitle: detectedTitle || 'Unknown Title',
+          detectedYear,
+          detectedSeason,
+          detectedEpisode,
+          confidence: 0.85,
+        };
+      });
+
+      return res.json({
+        success: true,
+        source: 'local-heuristic',
+        results: parsedItems,
+      });
+    }
+
+    const prompt = `You are a high-performance media scanner for Samba shares and NAS servers (Kodi, Plex, Jellyfin).
+The user scanned their Samba share (which does NOT use standard "TV Shows" folders, but arbitrary directory layouts).
+Analyze the following list of discovered files/paths on the share and identify each unique Movie or Series, extracting its clean canonical title, media type, release year, overview/plot synopsis, rating (0-10), genres, and recommended clean filename.
+
+Discovered paths/filenames:
+${JSON.stringify(items.slice(0, 50), null, 2)}
+
+Return a valid JSON array of objects with the structure:
+[
+  {
+    "rawPath": "the original file path from input",
+    "detectedType": "movie" | "series" | "album",
+    "title": "Canonical Clean Title",
+    "year": 2024,
+    "overview": "Comprehensive 1-2 sentence plot summary",
+    "genres": ["Genre1", "Genre2"],
+    "rating": 8.5,
+    "season": 1,
+    "episode": 1,
+    "cleanFormattedFilename": "Canonical - S01E01 - Title.mkv or Title (Year).mkv",
+    "cleanFolderPath": "Relative clean folder structure",
+    "posterUrl": "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80"
+  }
+]`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const responseText = response.text || '[]';
+    let parsedArray = [];
+    try {
+      parsedArray = JSON.parse(responseText);
+    } catch {
+      const cleaned = responseText.replace(/```json\n?|\n?```/g, '').trim();
+      parsedArray = JSON.parse(cleaned);
+    }
+
+    const results = parsedArray.map((item: any, idx: number) => ({
+      id: `sync-${idx}-${Date.now()}`,
+      ...item,
+    }));
+
+    return res.json({
+      success: true,
+      source: 'gemini-ai',
+      results,
+    });
+  } catch (error: any) {
+    console.error('Samba sync scan error:', error);
+    return res.status(500).json({
+      error: 'Failed to process samba sync scan',
+      message: error?.message || 'Unknown error',
+    });
+  }
+});
+
 // ==========================================
 // SQLITE DATABASE & SERIES PROGRESS ROUTES
 // ==========================================

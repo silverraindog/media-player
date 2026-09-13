@@ -113,8 +113,12 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               id="header-samba-status-btn"
               onClick={onOpenQuickMount}
-              className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700/80 text-xs text-slate-300 transition-all cursor-pointer hover:border-indigo-500/50"
-              title="Click to configure Samba share connection"
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg border text-xs transition-all cursor-pointer ${
+                isConnected
+                  ? 'bg-slate-800 hover:bg-slate-750 border-emerald-500/30 text-slate-300 hover:border-emerald-500/50'
+                  : 'bg-amber-950/40 hover:bg-amber-950/60 border-amber-500/40 text-amber-200 hover:border-amber-500/60'
+              }`}
+              title={isConnected ? 'Samba share active & verified' : 'Samba share unverified / pending connection. Click to configure.'}
             >
               <span className="relative flex h-2 w-2">
                 {isConnected && (
@@ -126,11 +130,13 @@ export const Header: React.FC<HeaderProps> = ({
                   }`}
                 ></span>
               </span>
-              <span className="font-mono text-slate-200">
-                //{sambaConfig.server}/{sambaConfig.share}
+              <span className="font-mono">
+                {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'Configure Samba Share'}
               </span>
-              <span className="text-[10px] text-indigo-400 font-semibold uppercase tracking-wider">
-                SMB3
+              <span className={`text-[10px] font-semibold uppercase tracking-wider ${
+                isConnected ? 'text-emerald-400' : 'text-amber-400'
+              }`}>
+                {isConnected ? 'SMB3' : 'OFFLINE'}
               </span>
             </button>
           </div>

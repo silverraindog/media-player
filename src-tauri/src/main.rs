@@ -117,6 +117,140 @@ fn check_volume_mounted(share_name: String) -> VolumeMountInfo {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ScannedShareItem {
+    pub name: String,
+    pub rel_path: String,
+    pub is_dir: bool,
+    pub size_str: Option<String>,
+    pub extension: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ScanVolumeResult {
+    pub success: bool,
+    pub mount_path: String,
+    pub items: Vec<ScannedShareItem>,
+    pub total_scanned: usize,
+    pub error: Option<String>,
+}
+
+fn scan_dir_recursive(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    max_depth: usize,
+    items: &mut Vec<ScannedShareItem>,
+    limit: usize,
+) {
+    if depth > max_depth || items.len() >= limit {
+        return;
+    }
+
+    if let Ok(entries) = fs::read_dir(current) {
+        for entry in entries.flatten() {
+            if items.len() >= limit {
+                break;
+            }
+            if let Ok(name) = entry.file_name().into_string() {
+                if name.starts_with('.') || name.starts_with('$') || name == "System Volume Information" {
+                    continue;
+                }
+
+                let path = entry.path();
+                let is_dir = path.is_dir();
+                let rel_path = path.strip_prefix(root)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| name.clone());
+
+                let (size_str, ext) = if !is_dir {
+                    let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    let size_formatted = if len > 1024 * 1024 * 1024 {
+                        format!("{:.1} GB", len as f64 / (1024.0 * 1024.0 * 1024.0))
+                    } else if len > 1024 * 1024 {
+                        format!("{:.1} MB", len as f64 / (1024.0 * 1024.0))
+                    } else if len > 1024 {
+                        format!("{:.0} KB", len as f64 / 1024.0)
+                    } else {
+                        format!("{} B", len)
+                    };
+                    let e = path.extension().map(|s| s.to_string_lossy().to_lowercase());
+                    (Some(size_formatted), e)
+                } else {
+                    (None, None)
+                };
+
+                items.push(ScannedShareItem {
+                    name,
+                    rel_path,
+                    is_dir,
+                    size_str,
+                    extension: ext,
+                });
+
+                if is_dir {
+                    scan_dir_recursive(root, &path, depth + 1, max_depth, items, limit);
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn scan_samba_volume(share_name: String, custom_path: Option<String>) -> ScanVolumeResult {
+    let clean_share = share_name.trim_start_matches('/').trim_end_matches('/');
+    let base_path = if let Some(cp) = custom_path {
+        if !cp.is_empty() {
+            Path::new(&cp).to_path_buf()
+        } else {
+            Path::new("/Volumes").join(clean_share)
+        }
+    } else {
+        #[cfg(target_os = "macos")]
+        {
+            Path::new("/Volumes").join(clean_share)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let mnt_share = Path::new("/mnt").join(clean_share);
+            if mnt_share.exists() {
+                mnt_share
+            } else {
+                Path::new("/Volumes").join(clean_share)
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            Path::new("/Volumes").join(clean_share)
+        }
+    };
+
+    if !base_path.exists() {
+        return ScanVolumeResult {
+            success: false,
+            mount_path: base_path.to_string_lossy().to_string(),
+            items: Vec::new(),
+            total_scanned: 0,
+            error: Some(format!(
+                "Mount path '{}' does not exist. Ensure the share is mounted first.",
+                base_path.display()
+            )),
+        };
+    }
+
+    let mut items = Vec::new();
+    scan_dir_recursive(&base_path, &base_path, 0, 5, &mut items, 600);
+    let total = items.len();
+
+    ScanVolumeResult {
+        success: true,
+        mount_path: base_path.to_string_lossy().to_string(),
+        items,
+        total_scanned: total,
+        error: None,
+    }
+}
+
 #[tauri::command]
 fn list_mounted_volumes() -> Vec<String> {
     let mut volumes = Vec::new();
@@ -323,7 +457,8 @@ fn main() {
             check_volume_mounted,
             list_mounted_volumes,
             probe_local_port,
-            mount_samba_share
+            mount_samba_share,
+            scan_samba_volume
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

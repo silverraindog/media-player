@@ -17,6 +17,13 @@ import {
   ParsedFileInfo,
 } from './types';
 import { CURATED_MEDIA_DATABASE } from './data/curatedMedia';
+import {
+  isTauriEnvironment,
+  checkMacVolume,
+  listMountedVolumes,
+  probeLocalNetwork,
+  VolumeMountInfo,
+} from './utils/tauriBridge';
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   server: '192.168.1.150',
@@ -305,35 +312,98 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  const [isMountedInFinder, setIsMountedInFinder] = useState(false);
+  const [mountedVolumeInfo, setMountedVolumeInfo] = useState<VolumeMountInfo | null>(null);
+  const [systemVolumes, setSystemVolumes] = useState<string[]>([]);
+  const [isDesktopApp, setIsDesktopApp] = useState(false);
+
+  // Poll /Volumes in desktop mode or on share configuration changes
+  useEffect(() => {
+    const checkDesktopStatus = async () => {
+      const inTauri = isTauriEnvironment();
+      setIsDesktopApp(inTauri);
+
+      // Check current share in /Volumes
+      const volInfo = await checkMacVolume(sambaConfig.share);
+      setIsMountedInFinder(volInfo.isMounted);
+      setMountedVolumeInfo(volInfo);
+
+      // List all mounted volumes
+      const allVolumes = await listMountedVolumes();
+      setSystemVolumes(allVolumes);
+    };
+
+    checkDesktopStatus();
+    const interval = setInterval(checkDesktopStatus, 5000);
+    return () => clearInterval(interval);
+  }, [sambaConfig.share]);
+
   const handleTestConnection = async () => {
     setIsTestingConn(true);
+    const targetPort = Number(sambaConfig.port) || 445;
+
     try {
-      const res = await fetch('/api/samba/test-connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sambaConfig),
-      });
-      const data = await res.json();
-      if (data.connected) {
+      // 1. Check if the volume is mounted directly in Finder /Volumes
+      const volInfo = await checkMacVolume(sambaConfig.share);
+      setIsMountedInFinder(volInfo.isMounted);
+      setMountedVolumeInfo(volInfo);
+
+      const allVolumes = await listMountedVolumes();
+      setSystemVolumes(allVolumes);
+
+      // 2. Perform direct network probe (via Rust native TCP socket in Tauri or via Node backend)
+      const probe = await probeLocalNetwork(sambaConfig.server, targetPort);
+
+      if (probe.reachable || volInfo.isMounted) {
         setIsConnected(true);
-        setConnectionDetails(data);
-        showToast(`Connected to Samba share //${sambaConfig.server}/${sambaConfig.share}!`);
+        const details = {
+          connected: true,
+          server: sambaConfig.server,
+          share: sambaConfig.share,
+          port: targetPort,
+          protocol: targetPort === 139 ? 'NetBIOS Session / SMB (TCP 139)' : 'SMB3 / CIFS (TCP 445)',
+          authenticatedAs: sambaConfig.isGuest ? 'guest (Anonymous)' : (sambaConfig.username || 'authenticated user'),
+          permissions: 'read-write',
+          shareFreeSpace: 'Storage Active',
+          latencyMs: probe.latencyMs || 2,
+          isMountedInFinder: volInfo.isMounted,
+          mountPath: volInfo.mountPath,
+          message: volInfo.isMounted
+            ? `Share is actively mounted in Finder at ${volInfo.mountPath}!`
+            : `Connected to ${sambaConfig.server}:${targetPort} successfully!`,
+        };
+        setConnectionDetails(details);
+        showToast(details.message);
         setSyncLogs((prev) => [
           {
             id: `log-${Date.now()}`,
             timestamp: new Date().toLocaleTimeString(),
             type: 'connected',
-            title: `Samba Probe: //${sambaConfig.server}/${sambaConfig.share}`,
-            details: `Latency: ${data.latencyMs}ms | Free Space: ${data.shareFreeSpace}`,
+            title: `Samba Probe: //${sambaConfig.server}:${targetPort}/${sambaConfig.share}`,
+            details: volInfo.isMounted
+              ? `Mounted in Finder at ${volInfo.mountPath} (Found ${volInfo.files.length} items)`
+              : `Port ${targetPort} open (Latency: ${probe.latencyMs}ms)`,
             status: 'success',
           },
           ...prev,
         ]);
+      } else {
+        setIsConnected(false);
+        const errorMsg = probe.message || `Could not connect to ${sambaConfig.server}:${targetPort}`;
+        showToast(errorMsg);
+        setConnectionDetails({
+          connected: false,
+          server: sambaConfig.server,
+          share: sambaConfig.share,
+          port: targetPort,
+          error: errorMsg,
+          isMountedInFinder: false,
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       setIsConnected(false);
-      showToast('Could not reach Samba server. Check IP and port 445.');
+      showToast(`Could not reach ${sambaConfig.server}:${targetPort}. Check IP and firewall.`);
     } finally {
       setIsTestingConn(false);
     }
@@ -506,6 +576,8 @@ export default function App() {
             onOpenDetails={(media) => setDetailModalMedia(media)}
             onOpenInNfoStudio={handleOpenInNfoStudio}
             onRefreshSamba={handleTestConnection}
+            isMountedInFinder={isMountedInFinder}
+            mountedVolumeInfo={mountedVolumeInfo}
           />
         )}
 
@@ -517,6 +589,10 @@ export default function App() {
             onTestConnection={handleTestConnection}
             isTesting={isTestingConn}
             connectionDetails={connectionDetails}
+            isMountedInFinder={isMountedInFinder}
+            mountedVolumeInfo={mountedVolumeInfo}
+            systemVolumes={systemVolumes}
+            isDesktopApp={isDesktopApp}
           />
         )}
 

@@ -19,6 +19,7 @@ import {
 import { SambaConfig } from '../types';
 import { generateSambaMountConfigs } from '../utils/sambaScriptGenerator';
 import { downloadTextFile } from '../utils/zipDownloader';
+import { attemptMountSambaShare, MountActionResult } from '../utils/tauriBridge';
 
 interface SambaMountHubProps {
   sambaConfig: SambaConfig;
@@ -27,6 +28,10 @@ interface SambaMountHubProps {
   onTestConnection: () => Promise<void>;
   isTesting: boolean;
   connectionDetails: any;
+  isMountedInFinder?: boolean;
+  mountedVolumeInfo?: any;
+  systemVolumes?: string[];
+  isDesktopApp?: boolean;
 }
 
 export const SambaMountHub: React.FC<SambaMountHubProps> = ({
@@ -36,9 +41,15 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
   onTestConnection,
   isTesting,
   connectionDetails,
+  isMountedInFinder = false,
+  mountedVolumeInfo = null,
+  systemVolumes = [],
+  isDesktopApp = false,
 }) => {
   const [activePlatformTab, setActivePlatformTab] = useState<'macos' | 'linux' | 'windows'>('macos');
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+  const [isMounting, setIsMounting] = useState(false);
+  const [mountFeedback, setMountFeedback] = useState<MountActionResult | null>(null);
 
   const mountConfigs = generateSambaMountConfigs(sambaConfig);
   const currentInstructions = mountConfigs[activePlatformTab];
@@ -47,6 +58,33 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
     navigator.clipboard.writeText(text);
     setCopiedSection(sectionId);
     setTimeout(() => setCopiedSection(null), 2000);
+  };
+
+  const handleAttemptMount = async () => {
+    setIsMounting(true);
+    setMountFeedback(null);
+    try {
+      const result = await attemptMountSambaShare({
+        server: sambaConfig.server,
+        share: sambaConfig.share,
+        port: Number(sambaConfig.port) || 445,
+        username: sambaConfig.username,
+        password: sambaConfig.password,
+        isGuest: sambaConfig.isGuest,
+      });
+      setMountFeedback(result);
+      // Wait a moment for OS mount to register and re-test
+      setTimeout(() => {
+        onTestConnection();
+      }, 1200);
+    } catch (e: any) {
+      setMountFeedback({
+        success: false,
+        message: `Mount invocation failed: ${e?.message || e}`,
+      });
+    } finally {
+      setIsMounting(false);
+    }
   };
 
   const handleDownloadScript = () => {
@@ -192,25 +230,124 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
             )}
           </div>
 
-          {/* Test Connection Button */}
-          <button
-            id="samba-test-conn-btn"
-            onClick={onTestConnection}
-            disabled={isTesting || !sambaConfig.server || !sambaConfig.share}
-            className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 disabled:opacity-50 transition cursor-pointer"
-          >
-            {isTesting ? (
-              <>
-                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                <span>Probing SMB Share...</span>
-              </>
-            ) : (
-              <>
-                <Wifi className="w-3.5 h-3.5" />
-                <span>Test Samba Connection</span>
-              </>
-            )}
-          </button>
+          {/* Finder /Volumes Status Card */}
+          <div className={`p-3.5 rounded-xl border transition-all ${
+            isMountedInFinder
+              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+              : 'bg-slate-950 border-slate-800 text-slate-400'
+          }`}>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-2">
+                <FolderOpen className={`w-4 h-4 ${isMountedInFinder ? 'text-emerald-400' : 'text-slate-500'}`} />
+                <span className="text-xs font-bold text-white">macOS /Volumes Mount:</span>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                isMountedInFinder
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-slate-800 text-slate-400 border border-slate-700'
+              }`}>
+                {isMountedInFinder ? 'Active in Finder' : 'Not Mounted at /Volumes'}
+              </span>
+            </div>
+
+            <div className="text-[11px] font-mono space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Target Path:</span>
+                <span className="text-slate-200">/Volumes/{sambaConfig.share}</span>
+              </div>
+              {isMountedInFinder && mountedVolumeInfo && (
+                <div className="flex items-center justify-between text-emerald-400">
+                  <span>Accessible Items:</span>
+                  <span>{mountedVolumeInfo.files.length} items detected</span>
+                </div>
+              )}
+              {mountedVolumeInfo?.permissionDenied && (
+                <div className="p-2 mt-1 rounded bg-amber-950/60 border border-amber-600/40 text-amber-300 text-[10px] space-y-1">
+                  <div className="font-semibold flex items-center gap-1">
+                    <Shield className="w-3 h-3 text-amber-400" />
+                    <span>Permission Denied on /Volumes</span>
+                  </div>
+                  <p>macOS Sandbox or Files and Folders privacy prevented reading volume contents. Please check System Settings ➔ Privacy &amp; Security.</p>
+                </div>
+              )}
+              {mountedVolumeInfo?.errorDetails && !isMountedInFinder && (
+                <div className="text-[10px] text-slate-500 pt-0.5">
+                  {mountedVolumeInfo.errorDetails}
+                </div>
+              )}
+              {systemVolumes.length > 0 && (
+                <div className="pt-1 text-[10px] text-slate-400">
+                  <span>Other mounted volumes: </span>
+                  <span className="text-indigo-300">{systemVolumes.join(', ')}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Action Buttons: Test Connection & Attempt Mount */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <button
+              id="samba-test-conn-btn"
+              onClick={onTestConnection}
+              disabled={isTesting || !sambaConfig.server || !sambaConfig.share}
+              className="py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 disabled:opacity-50 transition cursor-pointer"
+            >
+              {isTesting ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                  <span>Probing Share...</span>
+                </>
+              ) : (
+                <>
+                  <Wifi className="w-3.5 h-3.5" />
+                  <span>Test Samba Connection</span>
+                </>
+              )}
+            </button>
+
+            <button
+              id="samba-attempt-mount-btn"
+              onClick={handleAttemptMount}
+              disabled={isMounting || !sambaConfig.server || !sambaConfig.share}
+              className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 disabled:opacity-50 transition cursor-pointer"
+              title="Executes native mount_smbfs on macOS or mount.cifs on Linux"
+            >
+              {isMounting ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                  <span>Mounting via Shell...</span>
+                </>
+              ) : (
+                <>
+                  <Terminal className="w-3.5 h-3.5" />
+                  <span>Attempt Mount</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Mount Feedback Banner (if executed) */}
+          {mountFeedback && (
+            <div className={`p-3 rounded-xl border text-xs flex flex-col gap-1 ${
+              mountFeedback.success
+                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
+                : 'bg-rose-950/60 border-rose-500/40 text-rose-200'
+            }`}>
+              <div className="flex items-center gap-1.5 font-semibold">
+                {mountFeedback.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                )}
+                <span>{mountFeedback.message}</span>
+              </div>
+              {mountFeedback.stderr && (
+                <div className="text-[10px] font-mono text-rose-300 bg-slate-950/80 p-2 rounded border border-rose-900/50 overflow-x-auto">
+                  {mountFeedback.stderr}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Connection Probe Stats (if tested) */}
           {connectionDetails && (
@@ -220,12 +357,14 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                 <span className="text-indigo-300">{connectionDetails.protocol}</span>
               </div>
               <div className="flex justify-between text-slate-400">
-                <span>Auth:</span>
-                <span className="text-emerald-300">{connectionDetails.authenticatedAs}</span>
+                <span>Finder Status:</span>
+                <span className={connectionDetails.isMountedInFinder ? 'text-emerald-400 font-bold' : 'text-amber-400'}>
+                  {connectionDetails.isMountedInFinder ? `Mounted at ${connectionDetails.mountPath}` : 'Not in /Volumes'}
+                </span>
               </div>
               <div className="flex justify-between text-slate-400">
-                <span>Share Free:</span>
-                <span className="text-slate-200">{connectionDetails.shareFreeSpace}</span>
+                <span>Auth:</span>
+                <span className="text-emerald-300">{connectionDetails.authenticatedAs}</span>
               </div>
               <div className="flex justify-between text-slate-400">
                 <span>Latency:</span>
@@ -233,6 +372,22 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
               </div>
             </div>
           )}
+
+          {/* macOS Local Network Privacy Explainer */}
+          <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5 text-[11px] text-slate-400">
+            <div className="flex items-center gap-1.5 text-slate-200 font-semibold">
+              <Shield className="w-3.5 h-3.5 text-indigo-400" />
+              <span>macOS Local Network Privacy Note:</span>
+            </div>
+            <p className="leading-relaxed">
+              On macOS Sequoia & Sonoma, macOS prompts for permission when an app initiates a local socket or broadcasts UDP/Bonjour to local IP addresses (like <code className="text-indigo-300 bg-slate-900 px-1 rounded">{sambaConfig.server}</code>).
+            </p>
+            <p className="leading-relaxed">
+              If macOS did not prompt or if you denied it, you can toggle it on manually anytime in:
+              <br />
+              <strong className="text-slate-300">System Settings ➔ Privacy & Security ➔ Local Network ➔ SambaVault</strong> (enable switch).
+            </p>
+          </div>
         </div>
 
         {/* Right: OS Mount Commands and Walkthrough */}

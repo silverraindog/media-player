@@ -40,7 +40,7 @@ open "${macUri}"
 
 # Method 2: Command-line mount_smbfs to dedicated mountpoint
 # mkdir -p "${macMountPoint}"
-# mount_smbfs "//${safeUser}:${safePass}@${server}/${share}" "${macMountPoint}"
+# mount_smbfs "//${safeUser}:${safePass}@${server}${portStr}/${share}" "${macMountPoint}"
 
 if [ $? -eq 0 ]; then
   echo "✅ Successfully mounted //${server}/${share} to ${macMountPoint}"

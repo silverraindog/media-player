@@ -30,6 +30,8 @@ interface SambaExplorerProps {
   onOpenDetails: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
   onRefreshSamba: () => void;
+  isMountedInFinder?: boolean;
+  mountedVolumeInfo?: any;
 }
 
 export const SambaExplorer: React.FC<SambaExplorerProps> = ({
@@ -40,6 +42,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onOpenDetails,
   onOpenInNfoStudio,
   onRefreshSamba,
+  isMountedInFinder = false,
+  mountedVolumeInfo = null,
 }) => {
   const [selectedNode, setSelectedNode] = useState<SambaShareNode | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({
@@ -137,13 +141,24 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <span
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold ${
+                isMountedInFinder
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-slate-800 text-slate-400 border border-slate-700'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${isMountedInFinder ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+              <span>{isMountedInFinder ? `Mounted in Finder (/Volumes/${sambaConfig.share})` : 'Not in /Volumes'}</span>
+            </span>
+
             <button
               id="samba-refresh-btn"
               onClick={onRefreshSamba}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition shadow"
             >
               <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Refresh Share</span>
+              <span>Check /Volumes</span>
             </button>
           </div>
         </div>

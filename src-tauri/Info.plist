@@ -3,6 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>SambaVault needs local network access to connect to your NAS and Samba shares.</string>
+    <string>SambaVault needs local network access to discover, probe, and mount Samba (SMB/CIFS) network storage shares on your LAN.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_smb._tcp</string>
+        <string>_cifs._tcp</string>
+        <string>_netbios._tcp</string>
+    </array>
 </dict>
 </plist>

@@ -3,6 +3,7 @@ name: "Build Tauri App (macOS & Windows)"
 on:
   push:
     branches: [ "main", "master" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
@@ -16,9 +17,9 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: ""
+            name: macOS
           - platform: windows-latest
-            args: ""
+            name: Windows
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -33,12 +34,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install dependencies (Ubuntu/Linux prerequisites if any)
-        if: matrix.platform == 'ubuntu-22_04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.0-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-
       - name: Install Node dependencies
         run: npm install --include=optional
 
@@ -48,4 +43,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tauriScript: "npx tauri"
-          args: ${{ matrix.args }}
+
+      - name: Upload macOS Artifacts
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-app-macos
+          path: src-tauri/target/release/bundle/
+
+      - name: Upload Windows Artifacts
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-app-windows
+          path: src-tauri/target/release/bundle/
+

@@ -19,11 +19,13 @@ export function generateSambaMountConfigs(config: SambaConfig): {
   const { server, share, username, password, isGuest, port } = config;
   const safeUser = isGuest ? 'guest' : username || 'user';
   const safePass = isGuest ? '' : password || 'password';
+  const portNum = Number(port) || 445;
+  const portStr = portNum !== 445 ? `:${portNum}` : '';
 
   // macOS
   const macUri = isGuest
-    ? `smb://${server}/${share}`
-    : `smb://${encodeURIComponent(safeUser)}:${encodeURIComponent(safePass)}@${server}/${share}`;
+    ? `smb://${server}${portStr}/${share}`
+    : `smb://${encodeURIComponent(safeUser)}:${encodeURIComponent(safePass)}@${server}${portStr}/${share}`;
   const macMountPoint = `/Volumes/${share}`;
   const macTerminalScript = `#!/bin/bash
 # ==============================================================================
@@ -50,10 +52,11 @@ fi
   // Linux (CIFS)
   const linuxMountPoint = `/mnt/${share}`;
   const linuxCredentialsFile = `/etc/samba/credentials_${share}`;
+  const cifsPortOpt = portNum !== 445 ? `,port=${portNum}` : '';
   const linuxTerminalScript = `#!/bin/bash
 # ==============================================================================
 # Samba (CIFS) Mount Script for Linux (Ubuntu/Debian/Arch/Fedora)
-# Share: //${server}/${share}
+# Share: //${server}/${share} (Port: ${portNum})
 # ==============================================================================
 
 # Ensure cifs-utils is installed
@@ -74,8 +77,8 @@ sudo mkdir -p "${linuxMountPoint}"
 echo "Mounting //${server}/${share} to ${linuxMountPoint}..."
 ${
   isGuest
-    ? `sudo mount -t cifs "//${server}/${share}" "${linuxMountPoint}" -o guest,uid=$(id -u),gid=$(id -g),iocharset=utf8,vers=3.0`
-    : `sudo mount -t cifs "//${server}/${share}" "${linuxMountPoint}" -o username="${safeUser}",password="${safePass}",uid=$(id -u),gid=$(id -g),iocharset=utf8,vers=3.0`
+    ? `sudo mount -t cifs "//${server}/${share}" "${linuxMountPoint}" -o guest${cifsPortOpt},uid=$(id -u),gid=$(id -g),iocharset=utf8,vers=3.0`
+    : `sudo mount -t cifs "//${server}/${share}" "${linuxMountPoint}" -o username="${safeUser}",password="${safePass}"${cifsPortOpt},uid=$(id -u),gid=$(id -g),iocharset=utf8,vers=3.0`
 }
 
 if [ $? -eq 0 ]; then

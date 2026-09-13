@@ -22,7 +22,12 @@
         "icons/128x128.png",
         "icons/icon.icns",
         "icons/icon.ico"
-      ]
+      ],
+      "macOS": {
+        "infoPlist": {
+          "NSLocalNetworkUsageDescription": "SambaVault needs local network access to connect to your NAS and Samba shares."
+        }
+      }
     },
     "security": {
       "csp": null

@@ -1,35 +1,39 @@
 {
-  "productName": "SambaVault",
-  "version": "1.0.0",
-  "identifier": "com.sambavault.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
     "devPath": "http://localhost:3000",
     "distDir": "../dist"
   },
-  "app": {
-    "withGlobalTauri": true,
+  "package": {
+    "productName": "SambaVault",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": true
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "com.sambavault.desktop",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ]
+    },
+    "security": {
+      "csp": null
+    },
     "windows": [
       {
         "title": "SambaVault & Metadata Manager",
         "width": 1280,
         "height": 800
       }
-    ],
-    "security": {
-      "csp": null
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "identifier": "com.sambavault.desktop",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
     ]
   }
 }
+

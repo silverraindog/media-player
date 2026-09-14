@@ -21,8 +21,11 @@ import {
   FolderTree,
   RotateCw,
   FolderSearch,
+  Terminal,
 } from 'lucide-react';
 import { SambaConfig, SambaShareNode, SyncLog, MediaMetadata } from '../types';
+import { DiscoveredFilesInspector } from './DiscoveredFilesInspector';
+import { ConsoleLogSection } from './ConsoleLogSection';
 
 interface SambaExplorerProps {
   sambaConfig: SambaConfig;
@@ -56,10 +59,13 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     'root-movies': true,
     'root-shows': true,
     'root-music': true,
+    'root-documentaries': true,
+    'root-anime': true,
   });
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [customScanPath, setCustomScanPath] = useState('');
+  const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs'>('explorer');
 
   const toggleFolder = (id: string) => {
     setExpandedFolderIds((prev) => ({
@@ -204,135 +210,178 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         </div>
       </div>
 
-      {/* Explorer Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Directory Tree */}
-        <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <FolderTree className="w-4 h-4 text-emerald-400" />
-                <h3 className="text-sm font-bold text-white">Samba Directory Tree</h3>
-              </div>
-              <span className="text-xs text-slate-500 font-mono">
-                Protocol: SMB 3.1.1
-              </span>
-            </div>
+      {/* Sub-navigation for Discovered Files, Directory Explorer, and Console Logs */}
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+        <button
+          onClick={() => setActiveSubTab('files')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            activeSubTab === 'files'
+              ? 'bg-emerald-600 text-white shadow'
+              : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+          }`}
+        >
+          <FolderTree className="w-4 h-4 text-emerald-300" />
+          <span>1. Discovered Files Inspector (What it's picking up)</span>
+        </button>
 
-            {/* Tree Viewer */}
-            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 max-h-[460px] overflow-y-auto space-y-1">
-              {sambaTree.map((rootNode) => renderNode(rootNode, 0))}
-            </div>
-          </div>
+        <button
+          onClick={() => setActiveSubTab('explorer')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            activeSubTab === 'explorer'
+              ? 'bg-indigo-600 text-white shadow'
+              : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+          }`}
+        >
+          <HardDrive className="w-4 h-4 text-indigo-300" />
+          <span>2. Directory Tree Browser</span>
+        </button>
 
-          {/* Quick Helper / Status Footer */}
-          <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Full read/write permissions active</span>
-            </span>
-            <span className="font-mono text-indigo-400">
-              {sambaConfig.baseMountPath}
-            </span>
-          </div>
-        </div>
+        <button
+          onClick={() => setActiveSubTab('logs')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            activeSubTab === 'logs'
+              ? 'bg-purple-600 text-white shadow'
+              : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+          }`}
+        >
+          <Terminal className="w-4 h-4 text-purple-300" />
+          <span>3. Application Console Logs</span>
+        </button>
+      </div>
 
-        {/* Right: Selected Node Details & Live Sync Activity Logs */}
-        <div className="lg:col-span-5 space-y-6">
-          {/* Selected Item Inspector */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <Folder className="w-4 h-4 text-cyan-400" />
-                <span>Selected Object Details</span>
-              </h3>
-            </div>
+      {activeSubTab === 'files' && (
+        <DiscoveredFilesInspector
+          sambaTree={sambaTree}
+          onSelectNode={(node) => {
+            setSelectedNode(node);
+            if (node.matchedMedia) {
+              onOpenDetails(node.matchedMedia);
+            }
+          }}
+          onSyncTrigger={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
+        />
+      )}
 
-            {selectedNode ? (
-              <div className="space-y-3 text-xs">
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                  <div className="text-slate-200 font-bold font-mono text-sm break-all">
-                    {selectedNode.name}
+      {activeSubTab === 'logs' && (
+        <ConsoleLogSection logs={syncLogs} />
+      )}
+
+      {activeSubTab === 'explorer' && (
+        <>
+          {/* Discovered Files preview card at top of explorer as requested */}
+          <DiscoveredFilesInspector
+            sambaTree={sambaTree}
+            onSelectNode={(node) => {
+              setSelectedNode(node);
+              if (node.matchedMedia) {
+                onOpenDetails(node.matchedMedia);
+              }
+            }}
+            onSyncTrigger={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
+          />
+
+          {/* Explorer Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left: Directory Tree */}
+            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <FolderTree className="w-4 h-4 text-emerald-400" />
+                    <h3 className="text-sm font-bold text-white">Samba Directory Tree (Movies, Series, Music, Documentaries, Anime, etc.)</h3>
                   </div>
-                  <div className="text-slate-400 font-mono text-[11px] break-all">
-                    Path: <span className="text-indigo-300">//{sambaConfig.server}/{sambaConfig.share}/{selectedNode.path}</span>
-                  </div>
-                  <div className="flex items-center gap-3 pt-1 text-[11px] text-slate-400">
-                    <span>Type: <strong className="text-white uppercase">{selectedNode.type}</strong></span>
-                    {selectedNode.size && <span>Size: <strong className="text-white">{selectedNode.size}</strong></span>}
-                  </div>
+                  <span className="text-xs text-slate-500 font-mono">
+                    Protocol: SMB 3.1.1
+                  </span>
                 </div>
 
-                {selectedNode.matchedMedia && (
-                  <div className="p-3 bg-indigo-950/30 border border-indigo-800/40 rounded-xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-white">
-                        {selectedNode.matchedMedia.title} ({selectedNode.matchedMedia.year})
-                      </span>
-                      <span className="px-2 py-0.5 rounded bg-indigo-900/60 text-indigo-300 text-[10px] font-bold">
-                        ★ {selectedNode.matchedMedia.rating}
-                      </span>
+                {/* Tree Viewer */}
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 max-h-[460px] overflow-y-auto space-y-1">
+                  {sambaTree.map((rootNode) => renderNode(rootNode, 0))}
+                </div>
+              </div>
+
+              {/* Quick Helper / Status Footer */}
+              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Full read/write permissions active</span>
+                </span>
+                <span className="font-mono text-indigo-400">
+                  {sambaConfig.baseMountPath}
+                </span>
+              </div>
+            </div>
+
+            {/* Right: Selected Node Details & Console Logs */}
+            <div className="lg:col-span-5 space-y-6">
+              {/* Selected Item Inspector */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Folder className="w-4 h-4 text-cyan-400" />
+                    <span>Selected Object Details</span>
+                  </h3>
+                </div>
+
+                {selectedNode ? (
+                  <div className="space-y-3 text-xs">
+                    <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
+                      <div className="text-slate-200 font-bold font-mono text-sm break-all">
+                        {selectedNode.name}
+                      </div>
+                      <div className="text-slate-400 font-mono text-[11px] break-all">
+                        Path: <span className="text-indigo-300">//{sambaConfig.server}/{sambaConfig.share}/{selectedNode.path}</span>
+                      </div>
+                      <div className="flex items-center gap-3 pt-1 text-[11px] text-slate-400">
+                        <span>Type: <strong className="text-white uppercase">{selectedNode.type}</strong></span>
+                        {selectedNode.size && <span>Size: <strong className="text-white">{selectedNode.size}</strong></span>}
+                      </div>
                     </div>
-                    <p className="text-[11px] text-slate-400 line-clamp-2">
-                      {selectedNode.matchedMedia.overview}
-                    </p>
-                    <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={() => onOpenDetails(selectedNode.matchedMedia!)}
-                        className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium transition"
-                      >
-                        Inspect Full Metadata
-                      </button>
-                      <button
-                        onClick={() => onOpenInNfoStudio(selectedNode.matchedMedia!)}
-                        className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium transition"
-                      >
-                        Edit in XML Studio
-                      </button>
-                    </div>
+
+                    {selectedNode.matchedMedia && (
+                      <div className="p-3 bg-indigo-950/30 border border-indigo-800/40 rounded-xl space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-white">
+                            {selectedNode.matchedMedia.title} ({selectedNode.matchedMedia.year})
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-indigo-900/60 text-indigo-300 text-[10px] font-bold">
+                            ★ {selectedNode.matchedMedia.rating}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 line-clamp-2">
+                          {selectedNode.matchedMedia.overview}
+                        </p>
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            onClick={() => onOpenDetails(selectedNode.matchedMedia!)}
+                            className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium transition cursor-pointer"
+                          >
+                            Inspect Full Metadata
+                          </button>
+                          <button
+                            onClick={() => onOpenInNfoStudio(selectedNode.matchedMedia!)}
+                            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium transition cursor-pointer"
+                          >
+                            Edit in XML Studio
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-6 text-center text-slate-500 text-xs bg-slate-950/40 border border-slate-800 rounded-xl">
+                    Click any file or directory in the Samba tree to view details and metadata actions.
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="p-6 text-center text-slate-500 text-xs bg-slate-950/40 border border-slate-800 rounded-xl">
-                Click any file or directory in the Samba tree to view details and metadata actions.
-              </div>
-            )}
-          </div>
 
-          {/* Sync & File Operation Logs */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-indigo-400" />
-                <h3 className="text-sm font-bold text-white">Network Sync Activity</h3>
-              </div>
-              <span className="text-[11px] text-slate-400">{syncLogs.length} events</span>
-            </div>
-
-            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-              {syncLogs.length === 0 ? (
-                <div className="text-slate-500 text-center py-4 text-xs">
-                  No sync events recorded yet.
-                </div>
-              ) : (
-                syncLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    className="p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-xs space-y-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-200 truncate">{log.title}</span>
-                      <span className="text-[10px] text-slate-500 font-mono">{log.timestamp}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 font-mono truncate">{log.details}</p>
-                  </div>
-                ))
-              )}
+              {/* Console Log Preview Card */}
+              <ConsoleLogSection logs={syncLogs} />
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 };

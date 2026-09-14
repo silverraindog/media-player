@@ -22,6 +22,7 @@ import { downloadTextFile } from '../utils/zipDownloader';
 interface BatchFilenameCleanerProps {
   sambaConfig: SambaConfig;
   onBatchPushToSamba: (items: ParsedFileInfo[]) => void;
+  onAddToLibrary?: (items: ParsedFileInfo[]) => void;
 }
 
 const SAMPLE_RAW_FILES = [
@@ -38,6 +39,7 @@ const SAMPLE_RAW_FILES = [
 export const BatchFilenameCleaner: React.FC<BatchFilenameCleanerProps> = ({
   sambaConfig,
   onBatchPushToSamba,
+  onAddToLibrary,
 }) => {
   const [inputText, setInputText] = useState(SAMPLE_RAW_FILES.join('\n'));
   const [parsedFiles, setParsedFiles] = useState<ParsedFileInfo[]>([]);
@@ -305,14 +307,28 @@ if exist "${f.originalFilename}" (
               </div>
 
               {parsedFiles.length > 0 && (
-                <button
-                  id="batch-push-all-btn"
-                  onClick={() => onBatchPushToSamba(parsedFiles)}
-                  className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Push All to Samba Share</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {onAddToLibrary && (
+                    <button
+                      id="batch-add-to-library-btn"
+                      onClick={() => onAddToLibrary(parsedFiles)}
+                      className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                      title="Populate 'All Media', 'TV Series', 'Movies', and 'Music Albums' with these parsed files"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Add to All Media</span>
+                    </button>
+                  )}
+
+                  <button
+                    id="batch-push-all-btn"
+                    onClick={() => onBatchPushToSamba(parsedFiles)}
+                    className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Push All to Samba Share</span>
+                  </button>
+                </div>
               )}
             </div>
 

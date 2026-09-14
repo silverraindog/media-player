@@ -20,7 +20,7 @@ import {
   Bookmark,
   Play,
 } from 'lucide-react';
-import { MediaMetadata, SambaConfig, EpisodeMetadata } from '../types';
+import { MediaMetadata, SambaConfig, EpisodeMetadata, TrackMetadata } from '../types';
 import { downloadMediaBundleZip, downloadTextFile } from '../utils/zipDownloader';
 import { generateMetadataFile, generateEpisodeNfo } from '../utils/nfoGenerator';
 
@@ -29,6 +29,7 @@ interface MediaDetailModalProps {
   onClose: () => void;
   onPushToSamba: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
+  onPlayMedia?: (media: MediaMetadata, episode?: EpisodeMetadata, track?: TrackMetadata) => void;
   sambaConfig: SambaConfig;
 }
 
@@ -37,6 +38,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   onClose,
   onPushToSamba,
   onOpenInNfoStudio,
+  onPlayMedia,
   sambaConfig,
 }) => {
   if (!media) return null;
@@ -121,7 +123,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         <button
           id="btn-close-detail-modal"
           onClick={onClose}
-          className="absolute top-4 right-4 z-20 p-2 rounded-full bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-white transition"
+          className="absolute top-4 right-4 z-20 p-2 rounded-full bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
@@ -134,6 +136,17 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             className="w-full h-full object-cover opacity-60"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent"></div>
+
+          {/* Quick Play Banner Button */}
+          {onPlayMedia && (
+            <button
+              onClick={() => onPlayMedia(media)}
+              className="absolute top-4 left-6 z-20 flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+            >
+              <Play className="w-4 h-4 fill-white" />
+              <span>{media.type === 'album' ? 'Play Album Audio' : 'Play Video Stream'}</span>
+            </button>
+          )}
 
           {/* Content inside header */}
           <div className="absolute bottom-4 left-6 right-6 flex items-end gap-5">
@@ -269,6 +282,16 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                           E{String(ep.episodeNumber).padStart(2, '0')} - {ep.title}
                         </span>
                         <div className="flex items-center gap-2">
+                          {onPlayMedia && (
+                            <button
+                              onClick={() => onPlayMedia(media, ep)}
+                              className="flex items-center gap-1 px-2.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition cursor-pointer shadow-sm"
+                              title="Play this episode"
+                            >
+                              <Play className="w-3 h-3 fill-white" />
+                              <span>Play Ep</span>
+                            </button>
+                          )}
                           {ep.rating && (
                             <span className="text-amber-400 font-bold text-[11px]">
                               ★ {ep.rating}
@@ -335,7 +358,18 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                         <span className="text-slate-400 text-[11px] truncate">({t.artist})</span>
                       )}
                     </div>
-                    <span className="font-mono text-slate-400">{t.duration}</span>
+                    <div className="flex items-center gap-2">
+                      {onPlayMedia && (
+                        <button
+                          onClick={() => onPlayMedia(media, undefined, t)}
+                          className="p-1 rounded bg-emerald-600/80 hover:bg-emerald-500 text-white transition cursor-pointer"
+                          title="Play this track"
+                        >
+                          <Play className="w-3 h-3 fill-white" />
+                        </button>
+                      )}
+                      <span className="font-mono text-slate-400">{t.duration}</span>
+                    </div>
                   </div>
                 ))}
               </div>

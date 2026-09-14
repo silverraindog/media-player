@@ -9,6 +9,7 @@ export interface EpisodeMetadata {
   rating?: number;
   runtime?: string;
   thumbUrl?: string;
+  playbackUrl?: string;
 }
 
 export interface SeasonMetadata {
@@ -27,6 +28,7 @@ export interface TrackMetadata {
   duration: string;
   artist?: string;
   composer?: string;
+  playbackUrl?: string;
 }
 
 export interface CastMember {
@@ -62,6 +64,8 @@ export interface MediaMetadata {
   fanartUrl?: string;
   bannerUrl?: string;
   logoUrl?: string;
+  playbackUrl?: string;
+  localBlobUrl?: string;
   seasons?: SeasonMetadata[];
   tracks?: TrackMetadata[];
   nfoContent?: string;

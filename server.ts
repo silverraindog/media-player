@@ -381,11 +381,11 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
 
     const ai = getGenAI();
     if (!ai) {
-      // Fallback matching using filename patterns
+      // Fallback matching using robust directory hierarchy & filename patterns
       const parsedItems = items.map((rawPath: string, idx: number) => {
         const parts = rawPath.split('/').filter(Boolean);
         const fileName = parts[parts.length - 1] || rawPath;
-        const parentFolder = parts.length > 1 ? parts[parts.length - 2] : '';
+        const topCategory = (parts[0] || '').toLowerCase();
         
         let detectedType: 'movie' | 'series' | 'album' = 'movie';
         let detectedTitle = fileName.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ');
@@ -393,23 +393,71 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
         let detectedSeason: number | undefined;
         let detectedEpisode: number | undefined;
 
-        // Check for season/episode markers (S01E02 or Season 1)
+        // Determine type based on topCategory or filename
+        if (
+          topCategory.includes('series') ||
+          topCategory.includes('show') ||
+          topCategory.includes('anime') ||
+          topCategory.includes('docu')
+        ) {
+          detectedType = 'series';
+        } else if (
+          topCategory.includes('music') ||
+          topCategory.includes('audio') ||
+          topCategory.includes('album') ||
+          fileName.endsWith('.flac') ||
+          fileName.endsWith('.mp3') ||
+          fileName.endsWith('.m4a') ||
+          fileName.endsWith('.m4b')
+        ) {
+          detectedType = 'album';
+        } else {
+          detectedType = 'movie';
+        }
+
+        // Check for season/episode markers (e.g. S01E02 or Season 1)
         const sMatch = fileName.match(/s(\d{1,2})e(\d{1,2})/i);
-        const sFolderMatch = parentFolder.match(/season\s*(\d{1,2})/i);
+        const sFolderMatch = parts.find((p) => /season\s*(\d{1,2})/i.test(p));
+        
         if (sMatch) {
           detectedType = 'series';
           detectedSeason = parseInt(sMatch[1], 10);
           detectedEpisode = parseInt(sMatch[2], 10);
-          detectedTitle = (parts.length > 2 ? parts[0] : detectedTitle.split(/s\d{1,2}e\d{1,2}/i)[0]).trim();
         } else if (sFolderMatch) {
           detectedType = 'series';
-          detectedSeason = parseInt(sFolderMatch[1], 10);
-          detectedTitle = (parts[0] || detectedTitle).replace(/\(\d{4}\)/, '').trim();
+          const match = sFolderMatch.match(/season\s*(\d{1,2})/i);
+          if (match) detectedSeason = parseInt(match[1], 10);
         }
 
-        const yMatch = fileName.match(/(19\d{2}|20\d{2})/) || parentFolder.match(/(19\d{2}|20\d{2})/);
-        if (yMatch) {
-          detectedYear = parseInt(yMatch[1], 10);
+        // Extract Title from folder structure:
+        // E.g. Series/Breaking Bad/Season 01/S01E01.mkv -> "Breaking Bad"
+        // E.g. Franchises/Star Wars/Star Wars Episode IV (1977)/file.mkv -> "Star Wars: Episode IV"
+        // E.g. Music/Daft Punk/Random Access Memories (2013)/01.flac -> "Random Access Memories"
+        // E.g. Audio books/The Hobbit (J.R.R. Tolkien)/Chapter 01.m4b -> "The Hobbit"
+        if (parts.length >= 3 && (topCategory.includes('series') || topCategory.includes('anime') || topCategory.includes('docu'))) {
+          detectedTitle = parts[1];
+        } else if (parts.length >= 4 && topCategory.includes('franchise')) {
+          detectedTitle = parts[2] || parts[1];
+        } else if (parts.length >= 3 && (topCategory.includes('music') || topCategory.includes('audio'))) {
+          detectedTitle = parts[2] || parts[1];
+        } else if (parts.length >= 2 && (topCategory.includes('movie') || topCategory.includes('film') || topCategory.includes('audio') || topCategory.includes('book'))) {
+          detectedTitle = parts[1];
+        } else if (sMatch) {
+          detectedTitle = detectedTitle.split(/s\d{1,2}e\d{1,2}/i)[0].trim();
+        }
+
+        // Clean year tags from title: "Breaking Bad (2008)" -> title: "Breaking Bad", year: 2008
+        const yearInTitleMatch = detectedTitle.match(/\((\d{4})\)/);
+        if (yearInTitleMatch) {
+          detectedYear = parseInt(yearInTitleMatch[1], 10);
+          detectedTitle = detectedTitle.replace(/\(\d{4}\)/, '').trim();
+        }
+
+        if (!detectedYear) {
+          const yMatch = fileName.match(/(19\d{2}|20\d{2})/) || rawPath.match(/(19\d{2}|20\d{2})/);
+          if (yMatch) {
+            detectedYear = parseInt(yMatch[1], 10);
+          }
         }
 
         return {
@@ -418,10 +466,10 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
           fileName,
           detectedType,
           detectedTitle: detectedTitle || 'Unknown Title',
-          detectedYear,
+          detectedYear: detectedYear || 2024,
           detectedSeason,
           detectedEpisode,
-          confidence: 0.85,
+          confidence: 0.9,
         };
       });
 

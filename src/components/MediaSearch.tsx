@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Search,
   Film,
   Tv,
   Music,
   Download,
-  Share2,
   FolderPlus,
   Eye,
   Star,
@@ -16,36 +15,100 @@ import {
   Check,
   HardDrive,
   Copy,
-  ExternalLink,
-  Info,
   Database,
+  Upload,
+  FolderSync,
+  Play,
+  FileVideo,
+  FileAudio,
+  CheckCircle2,
+  Filter,
 } from 'lucide-react';
-import { MediaMetadata, MediaType, SambaConfig } from '../types';
-import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
-import { downloadMediaBundleZip, downloadTextFile } from '../utils/zipDownloader';
+import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata } from '../types';
+import { downloadMediaBundleZip } from '../utils/zipDownloader';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 
 interface MediaSearchProps {
+  mediaLibrary: MediaMetadata[];
   onPushToSamba: (media: MediaMetadata) => void;
   onOpenDetails: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
+  onPlayMedia?: (media: MediaMetadata, episode?: EpisodeMetadata, track?: TrackMetadata) => void;
   sambaConfig: SambaConfig;
+  onImportFiles?: (files: File[] | string[]) => Promise<void> | void;
+  onSyncFromSamba?: () => void;
+  isSyncing?: boolean;
 }
 
 export const MediaSearch: React.FC<MediaSearchProps> = ({
+  mediaLibrary,
   onPushToSamba,
   onOpenDetails,
   onOpenInNfoStudio,
+  onPlayMedia,
   sambaConfig,
+  onImportFiles,
+  onSyncFromSamba,
+  isSyncing = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<'all' | MediaType>('all');
-  const [searchResults, setSearchResults] = useState<MediaMetadata[]>(CURATED_MEDIA_DATABASE);
+  const [originFilter, setOriginFilter] = useState<'all' | 'imported' | 'curated'>('all');
   const [isLoading, setIsLoading] = useState(false);
-  const [isAiSearching, setIsAiSearching] = useState(false);
   const [pushedIds, setPushedIds] = useState<Record<string, boolean>>({});
   const [savedDbIds, setSavedDbIds] = useState<Record<string, boolean>>({});
   const [copiedNfoId, setCopiedNfoId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Compute live counts across the library
+  const allCount = mediaLibrary.length;
+  const seriesCount = mediaLibrary.filter((m) => m.type === 'series').length;
+  const moviesCount = mediaLibrary.filter((m) => m.type === 'movie').length;
+  const albumsCount = mediaLibrary.filter((m) => m.type === 'album').length;
+  const importedCount = mediaLibrary.filter(
+    (m) => m.id.startsWith('imported-') || m.id.startsWith('batch-') || m.matchedFilename
+  ).length;
+
+  // Filter items based on type, origin, and query
+  const filteredMedia = useMemo(() => {
+    return mediaLibrary.filter((media) => {
+      // Type filter
+      if (selectedType !== 'all' && media.type !== selectedType) {
+        return false;
+      }
+
+      // Origin filter
+      const isImported =
+        media.id.startsWith('imported-') ||
+        media.id.startsWith('batch-') ||
+        Boolean(media.matchedFilename);
+      if (originFilter === 'imported' && !isImported) return false;
+      if (originFilter === 'curated' && isImported) return false;
+
+      // Search Query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchesTitle = media.title.toLowerCase().includes(q);
+        const matchesGenre = media.genres.some((g) => g.toLowerCase().includes(q));
+        const matchesArtist = media.artists?.some((a) => a.toLowerCase().includes(q));
+        const matchesDirector = media.directors?.some((d) => d.toLowerCase().includes(q));
+        const matchesFolder = media.recommendedFolderStructure.toLowerCase().includes(q);
+        const matchesFilename = media.matchedFilename?.toLowerCase().includes(q);
+        return (
+          matchesTitle ||
+          matchesGenre ||
+          matchesArtist ||
+          matchesDirector ||
+          matchesFolder ||
+          matchesFilename
+        );
+      }
+
+      return true;
+    });
+  }, [mediaLibrary, selectedType, originFilter, searchQuery]);
 
   const handleSaveToSqlite = async (media: MediaMetadata) => {
     try {
@@ -65,115 +128,42 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     }
   };
 
-  const handleSearch = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleSearchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     const query = searchQuery.trim();
-    if (!query) {
-      setSearchResults(
-        selectedType === 'all'
-          ? CURATED_MEDIA_DATABASE
-          : CURATED_MEDIA_DATABASE.filter((m) => m.type === selectedType)
-      );
-      return;
-    }
+    if (!query) return;
 
-    setIsLoading(true);
-    setIsAiSearching(true);
+    // Check if query is already matched in our current dynamic library
+    const matched = mediaLibrary.filter((m) =>
+      m.title.toLowerCase().includes(query.toLowerCase())
+    );
 
-    try {
-      // 1. Try backend Gemini AI Search
-      const targetType = selectedType === 'all' ? 'movie' : selectedType;
-      const res = await fetch('/api/metadata/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, type: targetType }),
-      });
-
-      const data = await res.json();
-
-      if (data.success && data.data) {
-        // AI found or generated accurate structured metadata
-        const aiMedia: MediaMetadata = data.data;
-        // Merge with any local matches
-        const localMatches = CURATED_MEDIA_DATABASE.filter(
-          (m) =>
-            m.title.toLowerCase().includes(query.toLowerCase()) ||
-            m.genres.some((g) => g.toLowerCase().includes(query.toLowerCase()))
-        );
-
-        const merged = [
-          aiMedia,
-          ...localMatches.filter((m) => m.title.toLowerCase() !== aiMedia.title.toLowerCase()),
-        ];
-        setSearchResults(merged);
-      } else {
-        // Fallback to local curated search
-        const filtered = CURATED_MEDIA_DATABASE.filter((m) => {
-          const matchesType = selectedType === 'all' || m.type === selectedType;
-          const matchesQuery =
-            m.title.toLowerCase().includes(query.toLowerCase()) ||
-            (m.artists && m.artists.some((a) => a.toLowerCase().includes(query.toLowerCase()))) ||
-            (m.directors && m.directors.some((d) => d.toLowerCase().includes(query.toLowerCase()))) ||
-            m.genres.some((g) => g.toLowerCase().includes(query.toLowerCase()));
-          return matchesType && matchesQuery;
+    if (matched.length === 0) {
+      setIsLoading(true);
+      try {
+        const targetType = selectedType === 'all' ? 'movie' : selectedType;
+        const res = await fetch('/api/metadata/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, type: targetType }),
         });
 
-        if (filtered.length === 0) {
-          // Create synthetic entry if not found
-          const synthetic: MediaMetadata = {
-            id: `media-${Date.now()}`,
-            type: selectedType === 'all' ? 'movie' : selectedType,
-            title: query,
-            year: new Date().getFullYear(),
-            overview: `Metadata profile for "${query}". High-resolution media information formatted for Plex, Jellyfin, Kodi, and Samba network storage.`,
-            genres: ['Media', 'General'],
-            rating: 8.0,
-            posterUrl:
-              'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80',
-            recommendedFolderStructure: `${selectedType === 'series' ? 'TV Shows' : selectedType === 'album' ? 'Music' : 'Movies'}/${query}/`,
-            recommendedFilenames: [`${query}.mkv`],
-            source: 'curated-database',
-          };
-          setSearchResults([synthetic]);
-        } else {
-          setSearchResults(filtered);
+        const data = await res.json();
+        if (data.success && data.data && onImportFiles) {
+          // Add newly discovered AI metadata into the library
+          onImportFiles([query]);
         }
+      } catch (err) {
+        console.error('Search scrape error:', err);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (err) {
-      console.error('Search error:', err);
-      // Fallback
-      const localMatches = CURATED_MEDIA_DATABASE.filter((m) =>
-        m.title.toLowerCase().includes(query.toLowerCase())
-      );
-      setSearchResults(localMatches.length > 0 ? localMatches : CURATED_MEDIA_DATABASE);
-    } finally {
-      setIsLoading(false);
-      setIsAiSearching(false);
-    }
-  };
-
-  const handleTypeChange = (type: 'all' | MediaType) => {
-    setSelectedType(type);
-    if (!searchQuery) {
-      setSearchResults(
-        type === 'all'
-          ? CURATED_MEDIA_DATABASE
-          : CURATED_MEDIA_DATABASE.filter((m) => m.type === type)
-      );
     }
   };
 
   const handlePresetClick = (presetQuery: string, type: MediaType) => {
     setSearchQuery(presetQuery);
     setSelectedType(type);
-    const matched = CURATED_MEDIA_DATABASE.find(
-      (m) => m.title.toLowerCase() === presetQuery.toLowerCase()
-    );
-    if (matched) {
-      setSearchResults([matched]);
-    } else {
-      setTimeout(() => handleSearch(), 50);
-    }
   };
 
   const handlePush = (media: MediaMetadata) => {
@@ -191,127 +181,268 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     setTimeout(() => setCopiedNfoId(null), 2000);
   };
 
+  // Drag and drop handler
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0 && onImportFiles) {
+      const filesArray = Array.from(e.dataTransfer.files) as File[];
+      await onImportFiles(filesArray);
+    }
+  };
+
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0 && onImportFiles) {
+      const filesArray = Array.from(e.target.files) as File[];
+      await onImportFiles(filesArray);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Top Banner / Hero Explanation */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        <div className="max-w-3xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-medium mb-3">
-            <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Automated Media Scraper & Downloader</span>
+      {/* Hidden file input for file imports */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+
+      {/* Top Banner & Quick Import Bar */}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900 border rounded-2xl p-6 shadow-xl transition-all ${
+          isDragging
+            ? 'border-indigo-500 bg-indigo-950/70 ring-4 ring-indigo-500/30'
+            : 'border-slate-800'
+        }`}
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="max-w-2xl">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-medium mb-3">
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Unified Media Scraper, Network Sync & Ingestion</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+              All Media Library & Network Downloader
+            </h1>
+            <p className="mt-2 text-sm text-slate-300 leading-relaxed">
+              Populated with <span className="text-white font-semibold">{allCount}</span> total items ({seriesCount} TV Series, {moviesCount} Movies, and {albumsCount} Music Albums) discovered from your Samba share and local file imports.
+            </p>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-            Download TV Series, Movie & Album Metadata
-          </h1>
-          <p className="mt-2 text-sm text-slate-300 leading-relaxed">
-            Search any movie, TV show, or music album. Download standard <code className="text-indigo-300 bg-indigo-950/60 px-1 py-0.5 rounded">.nfo</code> files, high-resolution artwork, season & episode guides, and sync them directly to your Samba (SMB) network shares across <span className="text-white font-medium">macOS</span>, <span className="text-white font-medium">Linux</span>, and <span className="text-white font-medium">Windows</span>.
-          </p>
+
+          {/* Quick Import & Sync Actions */}
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <button
+              id="btn-import-files-direct"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg shadow-indigo-500/20 transition cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Import Files (Video/Audio/NFO)</span>
+            </button>
+
+            {onSyncFromSamba && (
+              <button
+                id="btn-sync-samba-all-media"
+                onClick={onSyncFromSamba}
+                disabled={isSyncing}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50"
+              >
+                <FolderSync className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Scanning Share...' : 'Sync from Samba Share'}</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Quick Suggestion Pills */}
-        <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-slate-400 font-medium">Try popular titles:</span>
-          <button
-            id="preset-severance"
-            onClick={() => handlePresetClick('Severance', 'series')}
-            className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-          >
-            📺 Severance (2022)
-          </button>
-          <button
-            id="preset-breaking-bad"
-            onClick={() => handlePresetClick('Breaking Bad', 'series')}
-            className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-          >
-            📺 Breaking Bad
-          </button>
-          <button
-            id="preset-dune-two"
-            onClick={() => handlePresetClick('Dune: Part Two', 'movie')}
-            className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-          >
-            🎬 Dune: Part Two (2024)
-          </button>
-          <button
-            id="preset-interstellar"
-            onClick={() => handlePresetClick('Interstellar', 'movie')}
-            className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-          >
-            🎬 Interstellar (2014)
-          </button>
-          <button
-            id="preset-daft-punk"
-            onClick={() => handlePresetClick('Random Access Memories', 'album')}
-            className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-          >
-            🎵 Daft Punk - RAM
-          </button>
-          <button
-            id="preset-pink-floyd"
-            onClick={() => handlePresetClick('The Dark Side of the Moon', 'album')}
-            className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-          >
-            🎵 Pink Floyd - DSOTM
-          </button>
+        <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-400 font-medium">Quick Suggestions:</span>
+            <button
+              id="preset-severance"
+              onClick={() => handlePresetClick('Severance', 'series')}
+              className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+            >
+              📺 Severance (2022)
+            </button>
+            <button
+              id="preset-breaking-bad"
+              onClick={() => handlePresetClick('Breaking Bad', 'series')}
+              className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+            >
+              📺 Breaking Bad
+            </button>
+            <button
+              id="preset-dune-two"
+              onClick={() => handlePresetClick('Dune', 'movie')}
+              className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+            >
+              🎬 Dune: Part Two (2024)
+            </button>
+            <button
+              id="preset-interstellar"
+              onClick={() => handlePresetClick('Interstellar', 'movie')}
+              className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+            >
+              🎬 Interstellar (2014)
+            </button>
+            <button
+              id="preset-daft-punk"
+              onClick={() => handlePresetClick('Random Access Memories', 'album')}
+              className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+            >
+              🎵 Daft Punk - RAM
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-medium">Filter Origin:</span>
+            <button
+              id="filter-origin-all"
+              onClick={() => setOriginFilter('all')}
+              className={`px-2.5 py-1 rounded-lg transition ${
+                originFilter === 'all'
+                  ? 'bg-slate-700 text-white font-medium'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              All ({allCount})
+            </button>
+            <button
+              id="filter-origin-imported"
+              onClick={() => setOriginFilter('imported')}
+              className={`px-2.5 py-1 rounded-lg transition ${
+                originFilter === 'imported'
+                  ? 'bg-emerald-600 text-white font-medium'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Imported ({importedCount})
+            </button>
+            <button
+              id="filter-origin-curated"
+              onClick={() => setOriginFilter('curated')}
+              className={`px-2.5 py-1 rounded-lg transition ${
+                originFilter === 'curated'
+                  ? 'bg-indigo-600 text-white font-medium'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Curated ({allCount - importedCount})
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Search Input and Type Tabs */}
-      <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-        {/* Type selector */}
-        <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs sm:text-sm">
+      {/* Main Tabs (All Media, TV Series, Movies, Music Albums) & Search Bar */}
+      <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center justify-between">
+        {/* Category Tabs with live counts */}
+        <div className="flex bg-slate-900 p-1.5 rounded-2xl border border-slate-800 text-xs sm:text-sm overflow-x-auto">
           <button
             id="search-filter-all"
-            onClick={() => handleTypeChange('all')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium transition ${
+            onClick={() => setSelectedType('all')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold transition cursor-pointer whitespace-nowrap ${
               selectedType === 'all'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-indigo-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <Layers className="w-4 h-4" />
             <span>All Media</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                selectedType === 'all' ? 'bg-indigo-800 text-indigo-100' : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {allCount}
+            </span>
           </button>
+
           <button
             id="search-filter-series"
-            onClick={() => handleTypeChange('series')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium transition ${
+            onClick={() => setSelectedType('series')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold transition cursor-pointer whitespace-nowrap ${
               selectedType === 'series'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <Tv className="w-4 h-4" />
             <span>TV Series</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                selectedType === 'series'
+                  ? 'bg-purple-800 text-purple-100'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {seriesCount}
+            </span>
           </button>
+
           <button
             id="search-filter-movie"
-            onClick={() => handleTypeChange('movie')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium transition ${
+            onClick={() => setSelectedType('movie')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold transition cursor-pointer whitespace-nowrap ${
               selectedType === 'movie'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-cyan-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <Film className="w-4 h-4" />
             <span>Movies</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                selectedType === 'movie' ? 'bg-cyan-800 text-cyan-100' : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {moviesCount}
+            </span>
           </button>
+
           <button
             id="search-filter-album"
-            onClick={() => handleTypeChange('album')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium transition ${
+            onClick={() => setSelectedType('album')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold transition cursor-pointer whitespace-nowrap ${
               selectedType === 'album'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-emerald-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <Music className="w-4 h-4" />
             <span>Music Albums</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                selectedType === 'album'
+                  ? 'bg-emerald-800 text-emerald-100'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {albumsCount}
+            </span>
           </button>
         </div>
 
-        {/* Search Bar Form */}
-        <form onSubmit={handleSearch} className="flex-1 max-w-xl flex gap-2">
+        {/* Search Bar */}
+        <form onSubmit={handleSearchSubmit} className="flex-1 max-w-xl flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
@@ -319,15 +450,15 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search Series, Movies, or Albums (e.g. Inception, The Office, Abbey Road)..."
-              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              placeholder="Search across all imported media, files, genres, tags..."
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
           <button
             id="media-search-submit-btn"
             type="submit"
             disabled={isLoading}
-            className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-2 transition shadow-md shadow-indigo-600/20 disabled:opacity-50"
+            className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-2 transition shadow-md shadow-indigo-600/20 disabled:opacity-50 cursor-pointer"
           >
             {isLoading ? (
               <>
@@ -337,18 +468,79 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             ) : (
               <>
                 <Sparkles className="w-4 h-4 text-indigo-200" />
-                <span>Lookup</span>
+                <span>Search</span>
               </>
             )}
           </button>
         </form>
       </div>
 
+      {/* Results Header Status */}
+      <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+        <div>
+          Showing <span className="text-white font-bold">{filteredMedia.length}</span> media item
+          {filteredMedia.length === 1 ? '' : 's'} in{' '}
+          <span className="text-indigo-400 font-semibold capitalize">
+            {selectedType === 'all'
+              ? 'All Media'
+              : selectedType === 'series'
+              ? 'TV Series'
+              : selectedType === 'movie'
+              ? 'Movies'
+              : 'Music Albums'}
+          </span>
+        </div>
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="text-slate-400 hover:text-slate-200 underline"
+          >
+            Clear Search
+          </button>
+        )}
+      </div>
+
+      {/* Empty State */}
+      {filteredMedia.length === 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4 shadow-xl">
+          <div className="w-16 h-16 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center mx-auto text-slate-400">
+            <Layers className="w-8 h-8 text-indigo-400" />
+          </div>
+          <h3 className="text-lg font-bold text-white">No media found</h3>
+          <p className="text-sm text-slate-400 max-w-md mx-auto">
+            No media matches your current filter ({selectedType}) and search query. You can drop files
+            here to import them or click "Sync from Samba Share".
+          </p>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setSelectedType('all');
+                setOriginFilter('all');
+              }}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+            >
+              Reset Filters
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition"
+            >
+              Import Files Now
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Media Results Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {searchResults.map((media) => {
+        {filteredMedia.map((media) => {
           const isPushed = pushedIds[media.id];
           const isCopied = copiedNfoId === media.id;
+          const isImported =
+            media.id.startsWith('imported-') ||
+            media.id.startsWith('batch-') ||
+            Boolean(media.matchedFilename);
 
           return (
             <div
@@ -365,8 +557,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent"></div>
 
-                {/* Type Badge & Rating */}
-                <div className="absolute top-3 left-3 flex items-center gap-2">
+                {/* Type Badge & Origin Badge */}
+                <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2">
                   <span
                     className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider flex items-center gap-1 shadow-md ${
                       media.type === 'series'
@@ -382,6 +574,13 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     {media.type}
                   </span>
 
+                  {isImported && (
+                    <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1 shadow">
+                      <CheckCircle2 className="w-2.5 h-2.5" />
+                      Imported
+                    </span>
+                  )}
+
                   {media.certification && (
                     <span className="px-2 py-0.5 rounded bg-slate-900/80 border border-slate-700 text-slate-300 text-[10px] font-semibold">
                       {media.certification}
@@ -395,9 +594,18 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   <span>{media.rating.toFixed(1)}</span>
                 </div>
 
+                {/* Quick Play/Preview Overlay on Hover */}
+                <button
+                  onClick={() => onPlayMedia ? onPlayMedia(media) : onOpenDetails(media)}
+                  className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-xl cursor-pointer"
+                  title="Play & Stream Media"
+                >
+                  <Play className="w-5 h-5 fill-white ml-0.5" />
+                </button>
+
                 {/* Floating Title and Meta */}
                 <div className="absolute bottom-3 left-4 right-4">
-                  <h3 className="text-lg font-bold text-white leading-snug drop-shadow-md">
+                  <h3 className="text-lg font-bold text-white leading-snug drop-shadow-md truncate">
                     {media.title}
                   </h3>
                   <div className="flex items-center gap-3 text-xs text-slate-300 mt-0.5">
@@ -449,12 +657,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   {media.overview}
                 </p>
 
-                {/* Target Samba Folder Path info */}
+                {/* Target Samba Folder Path info / matched file */}
                 <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-400 flex items-center justify-between">
                   <div className="flex items-center gap-1.5 truncate">
                     <HardDrive className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                     <span className="truncate">
-                      //{sambaConfig.server}/{sambaConfig.share}/{media.recommendedFolderStructure}
+                      {media.matchedFilename ? `File: ${media.matchedFilename}` : `//${sambaConfig.server}/${sambaConfig.share}/${media.recommendedFolderStructure}`}
                     </span>
                   </div>
                 </div>
@@ -497,21 +705,31 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     </button>
                   </div>
 
-                  {/* Secondary Details & NFO buttons */}
-                  <div className="grid grid-cols-4 gap-1.5 text-[11px]">
+                  {/* Secondary Play, Details, SQLite & NFO buttons */}
+                  <div className="grid grid-cols-5 gap-1 text-[11px]">
+                    <button
+                      id={`btn-play-media-${media.id}`}
+                      onClick={() => onPlayMedia ? onPlayMedia(media) : onOpenDetails(media)}
+                      className="flex items-center justify-center gap-1 py-1.5 rounded bg-indigo-600/90 hover:bg-indigo-500 text-white font-semibold transition cursor-pointer shadow-sm"
+                      title="Play & Stream Media"
+                    >
+                      <Play className="w-3 h-3 fill-white" />
+                      <span>Play</span>
+                    </button>
+
                     <button
                       id={`btn-inspect-${media.id}`}
                       onClick={() => onOpenDetails(media)}
-                      className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition"
+                      className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
                     >
                       <Eye className="w-3 h-3 text-cyan-400" />
-                      <span>Details</span>
+                      <span>Info</span>
                     </button>
 
                     <button
                       id={`btn-save-sqlite-${media.id}`}
                       onClick={() => handleSaveToSqlite(media)}
-                      className={`flex items-center justify-center gap-1 py-1.5 rounded transition ${
+                      className={`flex items-center justify-center gap-1 py-1.5 rounded transition cursor-pointer ${
                         savedDbIds[media.id]
                           ? 'bg-emerald-600 text-white'
                           : 'bg-slate-800/80 hover:bg-slate-700 text-emerald-300'
@@ -526,7 +744,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       ) : (
                         <>
                           <Database className="w-3 h-3" />
-                          <span>SQLite</span>
+                          <span>DB</span>
                         </>
                       )}
                     </button>
@@ -534,7 +752,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     <button
                       id={`btn-copy-nfo-${media.id}`}
                       onClick={() => handleCopyNfo(media)}
-                      className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition"
+                      className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
                     >
                       {isCopied ? (
                         <>
@@ -552,10 +770,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     <button
                       id={`btn-studio-${media.id}`}
                       onClick={() => onOpenInNfoStudio(media)}
-                      className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition"
+                      className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
                     >
                       <Sparkles className="w-3 h-3 text-purple-400" />
-                      <span>Studio</span>
+                      <span>XML</span>
                     </button>
                   </div>
                 </div>

@@ -239,7 +239,7 @@ fn scan_samba_volume(share_name: String, custom_path: Option<String>) -> ScanVol
     }
 
     let mut items = Vec::new();
-    scan_dir_recursive(&base_path, &base_path, 0, 5, &mut items, 600);
+    scan_dir_recursive(&base_path, &base_path, 0, 10, &mut items, 10000);
     let total = items.len();
 
     ScanVolumeResult {

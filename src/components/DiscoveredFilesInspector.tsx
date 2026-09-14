@@ -6,12 +6,14 @@ interface DiscoveredFilesInspectorProps {
   sambaTree: SambaShareNode[];
   onSelectNode?: (node: SambaShareNode) => void;
   onSyncTrigger?: () => void;
+  onPopulateMediaLibrary?: () => void;
 }
 
 export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> = ({
   sambaTree,
   onSelectNode,
   onSyncTrigger,
+  onPopulateMediaLibrary,
 }) => {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -58,16 +60,30 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
           </div>
         </div>
 
-        {onSyncTrigger && (
-          <button
-            id="inspector-sync-btn"
-            onClick={onSyncTrigger}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-            <span>Re-Scan Share Folders</span>
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {onPopulateMediaLibrary && (
+            <button
+              id="inspector-populate-all-media-btn"
+              onClick={onPopulateMediaLibrary}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition cursor-pointer"
+              title="Populate All Media, TV Series, Movies, and Music Albums tabs with these discovered files"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+              <span>Import to All Media</span>
+            </button>
+          )}
+
+          {onSyncTrigger && (
+            <button
+              id="inspector-sync-btn"
+              onClick={onSyncTrigger}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+              <span>Re-Scan Share Folders</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Categories & Search */}

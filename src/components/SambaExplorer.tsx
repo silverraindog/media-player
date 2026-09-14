@@ -36,6 +36,7 @@ interface SambaExplorerProps {
   onOpenInNfoStudio: (media: MediaMetadata) => void;
   onRefreshSamba: () => void;
   onSyncSamba?: (customScanPath?: string) => Promise<void>;
+  onPopulateMediaLibrary?: () => void;
   isSyncing?: boolean;
   isMountedInFinder?: boolean;
   mountedVolumeInfo?: any;
@@ -50,6 +51,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onOpenInNfoStudio,
   onRefreshSamba,
   onSyncSamba,
+  onPopulateMediaLibrary,
   isSyncing = false,
   isMountedInFinder = false,
   mountedVolumeInfo = null,
@@ -259,6 +261,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             }
           }}
           onSyncTrigger={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
+          onPopulateMediaLibrary={onPopulateMediaLibrary}
         />
       )}
 

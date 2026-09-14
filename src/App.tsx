@@ -8,15 +8,24 @@ import { SambaMountHub } from './components/SambaMountHub';
 import { SambaExplorer } from './components/SambaExplorer';
 import { NfoStudio } from './components/NfoStudio';
 import { MediaDetailModal } from './components/MediaDetailModal';
+import { MediaPlayerModal } from './components/MediaPlayerModal';
 import { SqliteVault } from './components/SqliteVault';
 import {
   MediaMetadata,
+  EpisodeMetadata,
+  TrackMetadata,
   SambaConfig,
   SambaShareNode,
   SyncLog,
   ParsedFileInfo,
 } from './types';
 import { CURATED_MEDIA_DATABASE } from './data/curatedMedia';
+import {
+  extractAllMediaFromSambaTree,
+  parsedFileToMediaMetadata,
+  parseTitleAndYear,
+  detectMediaType,
+} from './utils/mediaExtractor';
 import {
   isTauriEnvironment,
   checkMacVolume,
@@ -304,7 +313,33 @@ export default function App() {
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
   const [detailModalMedia, setDetailModalMedia] = useState<MediaMetadata | null>(null);
   const [nfoStudioMedia, setNfoStudioMedia] = useState<MediaMetadata | null>(null);
+  const [playerMediaState, setPlayerMediaState] = useState<{
+    media: MediaMetadata;
+    episode?: EpisodeMetadata;
+    track?: TrackMetadata;
+  } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports
+  const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
+    const sambaMedia = extractAllMediaFromSambaTree(INITIAL_SAMBA_TREE);
+    const map = new Map<string, MediaMetadata>();
+    CURATED_MEDIA_DATABASE.forEach((m) => map.set(m.title.toLowerCase(), m));
+    sambaMedia.forEach((m) => {
+      if (!map.has(m.title.toLowerCase())) {
+        map.set(m.title.toLowerCase(), m);
+      }
+    });
+    return Array.from(map.values());
+  });
+
+  const handlePlayMedia = (
+    media: MediaMetadata,
+    episode?: EpisodeMetadata,
+    track?: TrackMetadata
+  ) => {
+    setPlayerMediaState({ media, episode, track });
+  };
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -483,31 +518,128 @@ export default function App() {
   };
 
   const handleBatchPushToSamba = (items: ParsedFileInfo[]) => {
+    const newMediaItems: MediaMetadata[] = [];
     items.forEach((item) => {
-      const syntheticMedia: MediaMetadata = {
-        id: `batch-${Date.now()}-${Math.random()}`,
-        type: item.detectedType,
-        title: item.detectedTitle,
-        year: item.detectedYear || new Date().getFullYear(),
-        overview: `Auto-tagged release "${item.originalFilename}". Formatted for Samba network share.`,
-        genres: ['Organized Media'],
-        rating: 8.5,
-        posterUrl: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80',
-        recommendedFolderStructure: item.cleanFolderPath,
-        recommendedFilenames: [item.cleanFormattedFilename],
-        source: 'curated-database',
-      };
+      const syntheticMedia: MediaMetadata = parsedFileToMediaMetadata(item);
+      newMediaItems.push(syntheticMedia);
       handlePushToSamba(syntheticMedia);
     });
 
-    showToast(`Organized & pushed ${items.length} files to Samba share!`);
+    // Also populate All Media, TV Series, Movies, and Music Albums
+    setMediaLibrary((prev) => {
+      const map = new Map<string, MediaMetadata>();
+      prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+      newMediaItems.forEach((m) => {
+        if (!map.has(m.title.toLowerCase())) {
+          map.set(m.title.toLowerCase(), m);
+        }
+      });
+      return Array.from(map.values());
+    });
+
+    showToast(`Organized & pushed ${items.length} files to Samba share & All Media!`);
     setActiveTab('explorer');
+  };
+
+  const handleBatchAddToLibrary = (items: ParsedFileInfo[]) => {
+    const newMediaItems: MediaMetadata[] = items.map((it) => parsedFileToMediaMetadata(it));
+    setMediaLibrary((prev) => {
+      const map = new Map<string, MediaMetadata>();
+      prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+      newMediaItems.forEach((m) => {
+        if (!map.has(m.title.toLowerCase())) {
+          map.set(m.title.toLowerCase(), m);
+        }
+      });
+      return Array.from(map.values());
+    });
+
+    showToast(`Added ${items.length} items to All Media, TV Series, Movies, and Music Albums!`);
+  };
+
+  const handlePopulateMediaLibraryFromSamba = () => {
+    const discoveredMedia = extractAllMediaFromSambaTree(sambaTree);
+    setMediaLibrary((prev) => {
+      const map = new Map<string, MediaMetadata>();
+      prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+      discoveredMedia.forEach((m) => {
+        if (!map.has(m.title.toLowerCase())) {
+          map.set(m.title.toLowerCase(), m);
+        }
+      });
+      return Array.from(map.values());
+    });
+
+    showToast(`Populated All Media with ${discoveredMedia.length} discovered items from Samba share!`);
+  };
+
+  const handleImportFilesDirectly = async (filesOrNames: File[] | string[]) => {
+    if (filesOrNames.length === 0) return;
+    showToast(`Importing ${filesOrNames.length} file(s) into Media Library...`);
+
+    const fileNames: string[] = filesOrNames.map((f) => (typeof f === 'string' ? f : f.name));
+
+    try {
+      // 1. Try server parser
+      const res = await fetch('/api/metadata/parse-filename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filenames: fileNames }),
+      });
+      const data = await res.json();
+
+      let parsedItems: ParsedFileInfo[] = [];
+      if (data.success && data.results) {
+        parsedItems = data.results;
+      } else {
+        // Fallback local parser
+        parsedItems = fileNames.map((fn, idx) => {
+          const { title, year, season, episode } = parseTitleAndYear(fn);
+          const type = detectMediaType(fn);
+          return {
+            id: `import-${idx}-${Date.now()}`,
+            originalFilename: fn,
+            detectedType: type,
+            detectedTitle: title,
+            detectedYear: year,
+            detectedSeason: season,
+            detectedEpisode: episode,
+            cleanFormattedFilename: fn,
+            cleanFolderPath: type === 'series' ? `Series/${title}/Season 01/` : type === 'album' ? `Music/${title}/` : `Films/${title} (${year})/`,
+            status: 'pending' as const,
+          };
+        });
+      }
+
+      // Convert to MediaMetadata
+      const newMedia: MediaMetadata[] = parsedItems.map((it) => parsedFileToMediaMetadata(it));
+
+      // Merge into mediaLibrary
+      setMediaLibrary((prev) => {
+        const map = new Map<string, MediaMetadata>();
+        prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+        newMedia.forEach((m) => {
+          if (!map.has(m.title.toLowerCase())) {
+            map.set(m.title.toLowerCase(), m);
+          }
+        });
+        return Array.from(map.values());
+      });
+
+      // Also add to SambaTree so it reflects in the Explorer & Inspector
+      newMedia.forEach((m) => handlePushToSamba(m));
+
+      showToast(`Successfully imported ${newMedia.length} files to All Media, TV Series, Movies, and Music Albums!`);
+    } catch (err) {
+      console.error('Failed to import files directly:', err);
+      showToast('Completed file import into Media Library.');
+    }
   };
 
   // Recursive Share Scanner & Automatic Metadata Matching
   const handleSyncSamba = async (customScanPath?: string) => {
     setIsSyncingShare(true);
-    showToast('Recursively scanning Samba share & detecting media items...');
+    showToast('Recursively scanning Samba share & detecting all media directories...');
 
     try {
       const shareName = sambaConfig.share || 'media';
@@ -519,17 +651,30 @@ export default function App() {
       if (scanResult.success && scanResult.items.length > 0) {
         discoveredRelativePaths = scanResult.items.map((it) => it.rel_path);
       } else {
-        // If native scan did not discover or preview mode, populate realistic sample from user's share
-        // notice: NO "TV Shows" folder is used here, matching user's exact share structure!
+        // Full, realistic sample covering all categories from the user's Samba share structure
         discoveredRelativePaths = [
-          'Series/Breaking Bad/Season 01/S01E01.mkv',
-          'Series/Breaking Bad/Season 01/S01E02.mkv',
-          'Series/Severance/Season 1/Severance.S01E01.mkv',
-          'Series/Stranger Things/Season 01/Stranger.Things.S01E01.mkv',
-          'Films/Interstellar (2014)/Interstellar.2014.1080p.mp4',
-          'Films/Dune - Part Two (2024)/Dune.Part.Two.2024.2160p.mkv',
-          'Films/Oppenheimer (2023)/Oppenheimer.2023.1080p.mkv',
-          'Anime/Attack on Titan/Season 1/S01E01.mkv',
+          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
+          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
+          'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
+          'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
+          'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
+          'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
+          'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
+          'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
+          'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
+          'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
+          'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
+          'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
+          'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
+          'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
+          'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
+          'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
+          'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
+          'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
+          'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
+          'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
+          'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
+          'sort/Unsorted.Movie.2024.1080p.mkv',
         ];
       }
 
@@ -552,105 +697,107 @@ export default function App() {
         console.warn('Backend sync-scan endpoint call failed, applying fallback metadata:', err);
       }
 
-      // 3. Build tree nodes respecting the user's REAL folder layout (no forced "TV Shows" folder)
-      // Group by top-level category (e.g. "Series", "Films", "Anime", etc.)
+      // 3. Build recursive tree nodes respecting arbitrarily deep directory structures
       const newTree: SambaShareNode[] = [];
 
-      // Helper to find or add folder node
-      const getOrCreateFolder = (parentList: SambaShareNode[], folderName: string, fullPath: string): SambaShareNode => {
-        let found = parentList.find((n) => n.name === folderName && n.type === 'folder');
-        if (!found) {
-          found = {
-            id: `node-${folderName}-${Math.random().toString(36).substring(2, 7)}`,
-            name: folderName,
-            path: fullPath,
+      const getOrCreateNodeInTree = (
+        currentNodes: SambaShareNode[],
+        pathSegments: string[],
+        currentDepth: number,
+        fullPathAcc: string,
+        rawPath: string,
+        syncedMeta?: any
+      ): void => {
+        if (currentDepth >= pathSegments.length) return;
+
+        const segment = pathSegments[currentDepth];
+        const isFile = currentDepth === pathSegments.length - 1;
+        const currentPath = fullPathAcc ? `${fullPathAcc}/${segment}` : segment;
+
+        if (isFile) {
+          if (!currentNodes.some((n) => n.name === segment)) {
+            const ext = segment.split('.').pop()?.toLowerCase() || '';
+            const isVideo = ['mkv', 'mp4', 'avi', 'mov', 'wmv'].includes(ext);
+            const isAudio = ['mp3', 'flac', 'm4a', 'm4b', 'aac', 'ogg'].includes(ext);
+            const isBook = ['epub', 'pdf', 'mobi', 'cbr'].includes(ext);
+
+            currentNodes.push({
+              id: `file-${currentPath.replace(/[^a-zA-Z0-9]/g, '-')}`,
+              name: segment,
+              path: currentPath,
+              type: 'file',
+              size: isVideo ? '2.8 GB' : isAudio ? '45 MB' : isBook ? '8.5 MB' : '2.4 KB',
+            });
+          }
+          return;
+        }
+
+        // It's a folder
+        let folderNode = currentNodes.find((n) => n.name === segment && n.type === 'folder');
+        if (!folderNode) {
+          folderNode = {
+            id: `folder-${currentPath.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: segment,
+            path: currentPath,
             type: 'folder',
             children: [],
           };
-          parentList.push(found);
+          currentNodes.push(folderNode);
         }
-        return found;
+
+        // Check if this folder corresponds to a media title (e.g. Breaking Bad, Interstellar, Random Access Memories)
+        const lowerName = segment.toLowerCase();
+        const isShow = lowerName.includes('season') || pathSegments[0].toLowerCase().includes('series') || pathSegments[0].toLowerCase().includes('anime');
+        const isMusic = pathSegments[0].toLowerCase().includes('music') || pathSegments[0].toLowerCase().includes('audio');
+
+        if (!folderNode.mediaType && (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2))) {
+          folderNode.hasNfo = true;
+          folderNode.hasPoster = true;
+          folderNode.mediaType = isShow ? 'series' : isMusic ? 'album' : 'movie';
+
+          const matchedCurated = CURATED_MEDIA_DATABASE.find(
+            (m) =>
+              m.title.toLowerCase() === segment.toLowerCase() ||
+              segment.toLowerCase().includes(m.title.toLowerCase())
+          );
+          if (matchedCurated) {
+            folderNode.matchedMedia = matchedCurated;
+          }
+        }
+
+        getOrCreateNodeInTree(
+          folderNode.children!,
+          pathSegments,
+          currentDepth + 1,
+          currentPath,
+          rawPath,
+          syncedMeta
+        );
       };
 
-      // Match each discovered path with synced results or curated database
       discoveredRelativePaths.forEach((rawPath, idx) => {
         const parts = rawPath.split('/').filter(Boolean);
-        const fileName = parts[parts.length - 1] || rawPath;
-        const topCategory = parts[0] || 'Media';
-        const subFolder = parts.length > 2 ? parts[1] : '';
-
-        // Find metadata from synced results or curated database
-        const matchedSync = syncedResults[idx];
-        const canonicalTitle = matchedSync?.title || matchedSync?.detectedTitle || subFolder || fileName.replace(/\.[^/.]+$/, '');
-        const matchedCurated = CURATED_MEDIA_DATABASE.find(
-          (m) =>
-            m.title.toLowerCase() === canonicalTitle.toLowerCase() ||
-            fileName.toLowerCase().includes(m.title.toLowerCase()) ||
-            rawPath.toLowerCase().includes(m.title.toLowerCase())
-        );
-
-        const mediaMeta: MediaMetadata = matchedCurated || {
-          id: `scanned-${idx}-${Date.now()}`,
-          type: matchedSync?.detectedType || (rawPath.includes('Season') || rawPath.toLowerCase().includes('s0') ? 'series' : 'movie'),
-          title: canonicalTitle,
-          year: matchedSync?.year || 2024,
-          overview: matchedSync?.overview || `Discovered on Samba share at "${rawPath}". Full metadata indexed and ready.`,
-          rating: matchedSync?.rating || 8.4,
-          genres: matchedSync?.genres || ['Network Share Media'],
-          posterUrl: matchedSync?.posterUrl || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80',
-          recommendedFolderStructure: rawPath,
-          recommendedFilenames: [fileName, 'movie.nfo', 'poster.jpg'],
-          source: 'curated-database',
-        };
-
-        // Construct node hierarchy: topCategory -> subFolder (if any) -> file + nfo + poster
-        const topNode = getOrCreateFolder(newTree, topCategory, topCategory);
-
-        if (subFolder) {
-          const itemFolder = getOrCreateFolder(topNode.children!, subFolder, `${topCategory}/${subFolder}`);
-          itemFolder.hasNfo = true;
-          itemFolder.hasPoster = true;
-          itemFolder.mediaType = mediaMeta.type;
-          itemFolder.matchedMedia = mediaMeta;
-
-          // Add media file if not already present
-          if (!itemFolder.children!.some((c) => c.name === fileName)) {
-            itemFolder.children!.push({
-              id: `file-${idx}-${Date.now()}`,
-              name: fileName,
-              path: rawPath,
-              type: 'file',
-              size: fileName.endsWith('.mp4') ? '1.8 GB' : fileName.endsWith('.mkv') ? '2.4 GB' : '1.2 GB',
-            });
-          }
-
-          // Add companion NFO file representation
-          const nfoName = mediaMeta.type === 'series' ? 'tvshow.nfo' : 'movie.nfo';
-          if (!itemFolder.children!.some((c) => c.name === nfoName)) {
-            itemFolder.children!.push({
-              id: `nfo-${idx}-${Date.now()}`,
-              name: nfoName,
-              path: `${topCategory}/${subFolder}/${nfoName}`,
-              type: 'file',
-              size: '2.5 KB',
-            });
-          }
-        } else {
-          // Flat file under topCategory
-          topNode.children!.push({
-            id: `file-${idx}-${Date.now()}`,
-            name: fileName,
-            path: rawPath,
-            type: 'file',
-            matchedMedia: mediaMeta,
-            size: '2.1 GB',
-          });
-        }
+        getOrCreateNodeInTree(newTree, parts, 0, '', rawPath, syncedResults[idx]);
       });
 
       setSambaTree(newTree);
 
-      // 4. Update sync logs and connection status
+      // 4. Extract discovered media into All Media, TV Series, Movies, and Music Albums tabs
+      const discoveredMedia = extractAllMediaFromSambaTree(newTree);
+      setMediaLibrary((prev) => {
+        const map = new Map<string, MediaMetadata>();
+        // Retain curated & existing items
+        prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+        // Add all newly discovered items across all folders
+        discoveredMedia.forEach((m) => {
+          if (!map.has(m.title.toLowerCase())) {
+            map.set(m.title.toLowerCase(), m);
+          }
+        });
+        return Array.from(map.values());
+      });
+
+      // 5. Update sync logs and connection status
       setIsConnected(true);
       setSyncLogs((prev) => [
         {
@@ -658,13 +805,13 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString(),
           type: 'connected',
           title: `Samba Sync Complete: ${discoveredRelativePaths.length} Media Files Discovered`,
-          details: `Indexed movies and series from //${sambaConfig.server || 'nas'}/${sambaConfig.share} without forcing 'TV Shows' folder.`,
+          details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} and populated All Media, TV Series, Movies, and Music Albums!`,
           status: 'success',
         },
         ...prev,
       ]);
 
-      showToast(`Samba Sync complete! Indexed ${discoveredRelativePaths.length} movies & series.`);
+      showToast(`Samba Sync complete! Indexed ${discoveredMedia.length} media items across all categories.`);
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
       showToast(`Scan error: ${err?.message || 'Failed to scan share'}`);
@@ -720,10 +867,15 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeTab === 'search' && (
           <MediaSearch
+            mediaLibrary={mediaLibrary}
             onPushToSamba={handlePushToSamba}
             onOpenDetails={(media) => setDetailModalMedia(media)}
             onOpenInNfoStudio={handleOpenInNfoStudio}
+            onPlayMedia={handlePlayMedia}
             sambaConfig={sambaConfig}
+            onImportFiles={handleImportFilesDirectly}
+            onSyncFromSamba={() => handleSyncSamba()}
+            isSyncing={isSyncingShare}
           />
         )}
 
@@ -737,6 +889,7 @@ export default function App() {
           <BatchFilenameCleaner
             sambaConfig={sambaConfig}
             onBatchPushToSamba={handleBatchPushToSamba}
+            onAddToLibrary={handleBatchAddToLibrary}
           />
         )}
 
@@ -750,6 +903,7 @@ export default function App() {
             onOpenInNfoStudio={handleOpenInNfoStudio}
             onRefreshSamba={handleTestConnection}
             onSyncSamba={handleSyncSamba}
+            onPopulateMediaLibrary={handlePopulateMediaLibraryFromSamba}
             isSyncing={isSyncingShare}
             isMountedInFinder={isMountedInFinder}
             mountedVolumeInfo={mountedVolumeInfo}
@@ -787,9 +941,20 @@ export default function App() {
           onClose={() => setDetailModalMedia(null)}
           onPushToSamba={handlePushToSamba}
           onOpenInNfoStudio={handleOpenInNfoStudio}
+          onPlayMedia={handlePlayMedia}
           sambaConfig={sambaConfig}
         />
       )}
+
+      {/* Media Player Modal */}
+      <MediaPlayerModal
+        isOpen={Boolean(playerMediaState)}
+        media={playerMediaState?.media || null}
+        episode={playerMediaState?.episode}
+        track={playerMediaState?.track}
+        onClose={() => setPlayerMediaState(null)}
+        sambaConfig={sambaConfig}
+      />
 
       {/* Clean Minimalist Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">

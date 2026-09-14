@@ -10,6 +10,7 @@ import { NfoStudio } from './components/NfoStudio';
 import { MediaDetailModal } from './components/MediaDetailModal';
 import { MediaPlayerModal } from './components/MediaPlayerModal';
 import { SqliteVault } from './components/SqliteVault';
+import { FolderClassifierModal } from './components/FolderClassifierModal';
 import {
   MediaMetadata,
   EpisodeMetadata,
@@ -18,6 +19,8 @@ import {
   SambaShareNode,
   SyncLog,
   ParsedFileInfo,
+  ClassifierSettings,
+  FolderScanClassification,
 } from './types';
 import { CURATED_MEDIA_DATABASE } from './data/curatedMedia';
 import {
@@ -26,6 +29,10 @@ import {
   parseTitleAndYear,
   detectMediaType,
 } from './utils/mediaExtractor';
+import {
+  classifyAllDiscoveredPaths,
+  DEFAULT_CLASSIFIER_SETTINGS,
+} from './utils/folderClassifier';
 import {
   isTauriEnvironment,
   checkMacVolume,
@@ -319,6 +326,13 @@ export default function App() {
     track?: TrackMetadata;
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Folder Classification and Regex Rule Engine State
+  const [classifierSettings, setClassifierSettings] = useState<ClassifierSettings>(DEFAULT_CLASSIFIER_SETTINGS);
+  const [isClassifierModalOpen, setIsClassifierModalOpen] = useState(false);
+  const [folderClassifications, setFolderClassifications] = useState<FolderScanClassification[]>([]);
+  const [lastDiscoveredPaths, setLastDiscoveredPaths] = useState<string[]>([]);
+  const [activeScanPath, setActiveScanPath] = useState<string>('');
 
   // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
@@ -636,6 +650,183 @@ export default function App() {
     }
   };
 
+  // Open Smart Classifier and Folder Review Modal
+  const handleOpenClassifierModal = async (customScanPath?: string) => {
+    const shareName = sambaConfig.share || 'media';
+    setActiveScanPath(customScanPath || `//${sambaConfig.server || 'nas'}/${shareName}`);
+
+    let discoveredPaths = lastDiscoveredPaths;
+    if (discoveredPaths.length === 0) {
+      const scanResult = await scanSambaVolume(shareName, customScanPath);
+      if (scanResult.success && scanResult.items.length > 0) {
+        discoveredPaths = scanResult.items.map((it) => it.rel_path);
+      } else {
+        discoveredPaths = [
+          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
+          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
+          'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
+          'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
+          'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
+          'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
+          'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
+          'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
+          'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
+          'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
+          'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
+          'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
+          'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
+          'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
+          'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
+          'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
+          'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
+          'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
+          'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
+          'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
+          'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
+          'sort/Unsorted.Movie.2024.1080p.mkv',
+        ];
+      }
+      setLastDiscoveredPaths(discoveredPaths);
+    }
+
+    const classifications = classifyAllDiscoveredPaths(
+      discoveredPaths,
+      classifierSettings.rules,
+      classifierSettings.confidenceThreshold
+    );
+    setFolderClassifications(classifications);
+    setIsClassifierModalOpen(true);
+  };
+
+  // Confirm and Apply Selected Folder Classifications into Media Library & Samba Tree
+  const handleConfirmClassifiedImport = async (
+    updatedClassifications: FolderScanClassification[],
+    updatedSettings: ClassifierSettings
+  ) => {
+    setClassifierSettings(updatedSettings);
+    const selectedFoldersMap = new Map<string, FolderScanClassification>();
+    updatedClassifications.forEach((c) => {
+      if (c.selectedForImport && c.targetType !== 'ignore') {
+        selectedFoldersMap.set(c.folderName.toLowerCase(), c);
+      }
+    });
+
+    const filteredPaths = (lastDiscoveredPaths.length > 0 ? lastDiscoveredPaths : [
+      'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
+      'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
+      'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
+      'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
+      'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
+      'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
+    ]).filter((p) => {
+      const top = (p.split('/')[0] || '').toLowerCase();
+      return selectedFoldersMap.has(top);
+    });
+
+    const newTree: SambaShareNode[] = [];
+
+    const getOrCreateNode = (
+      currentNodes: SambaShareNode[],
+      pathSegments: string[],
+      currentDepth: number,
+      fullPathAcc: string,
+      rawPath: string
+    ) => {
+      if (currentDepth >= pathSegments.length) return;
+      const segment = pathSegments[currentDepth];
+      const isFile = currentDepth === pathSegments.length - 1;
+      const currentPath = fullPathAcc ? `${fullPathAcc}/${segment}` : segment;
+
+      if (isFile) {
+        if (!currentNodes.some((n) => n.name === segment)) {
+          const ext = segment.split('.').pop()?.toLowerCase() || '';
+          const isVideo = ['mkv', 'mp4', 'avi', 'mov', 'wmv'].includes(ext);
+          const isAudio = ['mp3', 'flac', 'm4a', 'm4b', 'aac', 'ogg'].includes(ext);
+          currentNodes.push({
+            id: `file-${currentPath.replace(/[^a-zA-Z0-9]/g, '-')}`,
+            name: segment,
+            path: currentPath,
+            type: 'file',
+            size: isVideo ? '2.8 GB' : isAudio ? '45 MB' : '1.2 GB',
+          });
+        }
+        return;
+      }
+
+      let folderNode = currentNodes.find((n) => n.name === segment && n.type === 'folder');
+      if (!folderNode) {
+        folderNode = {
+          id: `folder-${currentPath.replace(/[^a-zA-Z0-9]/g, '-')}`,
+          name: segment,
+          path: currentPath,
+          type: 'folder',
+          children: [],
+        };
+        currentNodes.push(folderNode);
+      }
+
+      const topFolder = (pathSegments[0] || '').toLowerCase();
+      const classifiedFolder = selectedFoldersMap.get(topFolder);
+      const targetType = classifiedFolder ? classifiedFolder.targetType : 'movie';
+
+      if (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2)) {
+        folderNode.hasNfo = true;
+        folderNode.hasPoster = true;
+        folderNode.mediaType = targetType !== 'ignore' ? targetType : 'movie';
+
+        const matchedCurated = CURATED_MEDIA_DATABASE.find(
+          (m) =>
+            m.title.toLowerCase() === segment.toLowerCase() ||
+            segment.toLowerCase().includes(m.title.toLowerCase())
+        );
+        if (matchedCurated) {
+          folderNode.matchedMedia = matchedCurated;
+        }
+      }
+
+      getOrCreateNode(
+        folderNode.children!,
+        pathSegments,
+        currentDepth + 1,
+        currentPath,
+        rawPath
+      );
+    };
+
+    filteredPaths.forEach((rawPath) => {
+      const parts = rawPath.split('/').filter(Boolean);
+      getOrCreateNode(newTree, parts, 0, '', rawPath);
+    });
+
+    setSambaTree(newTree);
+    const discoveredMedia = extractAllMediaFromSambaTree(newTree);
+    setMediaLibrary((prev) => {
+      const map = new Map<string, MediaMetadata>();
+      prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+      discoveredMedia.forEach((m) => {
+        if (!map.has(m.title.toLowerCase())) {
+          map.set(m.title.toLowerCase(), m);
+        }
+      });
+      return Array.from(map.values());
+    });
+
+    setIsConnected(true);
+    setSyncLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'connected',
+        title: `Regex Classifier Applied: ${selectedFoldersMap.size} Folders Imported`,
+        details: `Imported ${filteredPaths.length} items across ${selectedFoldersMap.size} classified folders into All Media, TV Series, Movies, and Albums.`,
+        status: 'success',
+      },
+      ...prev,
+    ]);
+
+    showToast(`Classified Import Complete: ${selectedFoldersMap.size} folders imported into Media Library!`);
+  };
+
   // Recursive Share Scanner & Automatic Metadata Matching
   const handleSyncSamba = async (customScanPath?: string) => {
     setIsSyncingShare(true);
@@ -643,6 +834,8 @@ export default function App() {
 
     try {
       const shareName = sambaConfig.share || 'media';
+      setActiveScanPath(customScanPath || `//${sambaConfig.server || 'nas'}/${shareName}`);
+
       // 1. Scan filesystem using native Tauri bridge if desktop or fallback mock
       const scanResult = await scanSambaVolume(shareName, customScanPath);
 
@@ -676,6 +869,25 @@ export default function App() {
           'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
           'sort/Unsorted.Movie.2024.1080p.mkv',
         ];
+      }
+
+      setLastDiscoveredPaths(discoveredRelativePaths);
+
+      // Run Regex Folder Classification
+      const classifications = classifyAllDiscoveredPaths(
+        discoveredRelativePaths,
+        classifierSettings.rules,
+        classifierSettings.confidenceThreshold
+      );
+      setFolderClassifications(classifications);
+
+      const hasUncertainFolders = classifications.some((c) => !c.isConfident);
+
+      // If user configured to always review OR if there are uncertain folders and not auto-importing everything
+      if (classifierSettings.alwaysPromptReview || (hasUncertainFolders && !classifierSettings.autoImportConfident)) {
+        setIsClassifierModalOpen(true);
+        showToast(`Discovered ${classifications.length} folders. Review and confirm category mappings.`);
+        return;
       }
 
       // 2. Query the sync-scan endpoint for canonical titles, overview, ratings, and artwork
@@ -811,7 +1023,8 @@ export default function App() {
         ...prev,
       ]);
 
-      showToast(`Samba Sync complete! Indexed ${discoveredMedia.length} media items across all categories.`);
+      const confidentCount = classifications.filter((c) => c.isConfident).length;
+      showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
       showToast(`Scan error: ${err?.message || 'Failed to scan share'}`);
@@ -819,6 +1032,7 @@ export default function App() {
       setIsSyncingShare(false);
     }
   };
+
 
   const handlePushNfoToSamba = (media: MediaMetadata, customXml: string) => {
     setSyncLogs((prev) => [
@@ -903,6 +1117,7 @@ export default function App() {
             onOpenInNfoStudio={handleOpenInNfoStudio}
             onRefreshSamba={handleTestConnection}
             onSyncSamba={handleSyncSamba}
+            onOpenClassifierModal={() => handleOpenClassifierModal()}
             onPopulateMediaLibrary={handlePopulateMediaLibraryFromSamba}
             isSyncing={isSyncingShare}
             isMountedInFinder={isMountedInFinder}
@@ -957,6 +1172,18 @@ export default function App() {
           sambaConfig={sambaConfig}
         />
       )}
+
+      {/* Smart Share Scanner & Regex Classifier Modal */}
+      <FolderClassifierModal
+        isOpen={isClassifierModalOpen}
+        onClose={() => setIsClassifierModalOpen(false)}
+        folderClassifications={folderClassifications}
+        onConfirmImport={handleConfirmClassifiedImport}
+        settings={classifierSettings}
+        onUpdateSettings={(newSettings) => setClassifierSettings(newSettings)}
+        sambaConfig={sambaConfig}
+        customScanPath={activeScanPath}
+      />
 
       {/* Clean Minimalist Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">

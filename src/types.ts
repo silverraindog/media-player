@@ -172,3 +172,36 @@ export interface SqliteStats {
   totalWatchedHistory: number;
 }
 
+export interface RegexCategoryRule {
+  id: string;
+  name: string;
+  targetType: MediaType;
+  pattern: string; // regex pattern string e.g. "^(series|tv[\\s_-]?shows?|anime|dramas?|shows?|television)"
+  priority: number;
+  confidenceScore: number; // 0.0 - 1.0 (e.g. 0.95)
+  description?: string;
+}
+
+export interface FolderScanClassification {
+  id: string;
+  folderName: string;
+  relativePath: string;
+  itemCount: number;
+  detectedType: MediaType;
+  targetType: MediaType | 'ignore';
+  confidence: number; // 0.0 to 1.0 (e.g. 0.95)
+  isConfident: boolean; // confidence >= threshold
+  matchedRuleName: string;
+  matchedRegexPattern: string;
+  sampleFiles: string[];
+  selectedForImport: boolean;
+}
+
+export interface ClassifierSettings {
+  confidenceThreshold: number; // default 0.85
+  autoImportConfident: boolean; // default true
+  alwaysPromptReview: boolean; // default false
+  rules: RegexCategoryRule[];
+}
+
+

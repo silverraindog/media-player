@@ -36,6 +36,7 @@ interface SambaExplorerProps {
   onOpenInNfoStudio: (media: MediaMetadata) => void;
   onRefreshSamba: () => void;
   onSyncSamba?: (customScanPath?: string) => Promise<void>;
+  onOpenClassifierModal?: () => void;
   onPopulateMediaLibrary?: () => void;
   isSyncing?: boolean;
   isMountedInFinder?: boolean;
@@ -51,6 +52,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onOpenInNfoStudio,
   onRefreshSamba,
   onSyncSamba,
+  onOpenClassifierModal,
   onPopulateMediaLibrary,
   isSyncing = false,
   isMountedInFinder = false,
@@ -166,6 +168,19 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <span className={`w-2 h-2 rounded-full ${isMountedInFinder ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
               <span>{isMountedInFinder ? `Mounted in /Volumes/${sambaConfig.share}` : 'Not in /Volumes'}</span>
             </span>
+
+            {/* Smart Classifier & Folder Review Button */}
+            {onOpenClassifierModal && (
+              <button
+                id="samba-open-classifier-btn"
+                onClick={onOpenClassifierModal}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-950/60 hover:bg-purple-900/80 text-purple-200 border border-purple-800/50 text-xs font-semibold shadow transition cursor-pointer"
+                title="Review regex category detection rules, confidence thresholds, and select specific folders to import"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                <span>Classify Folders & Rules</span>
+              </button>
+            )}
 
             {/* Sync Share Media Button */}
             <button

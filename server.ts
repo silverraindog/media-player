@@ -541,6 +541,136 @@ Return a valid JSON array of objects with the structure:
   }
 });
 
+// Endpoint for recursive folder classification and regex-based category detection
+app.post('/api/samba/classify-folders', async (req: Request, res: Response) => {
+  try {
+    const { items, rules, threshold = 0.85 } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items array is required' });
+    }
+
+    const defaultRules = [
+      {
+        id: 'rule-series',
+        name: 'TV Series & Shows',
+        targetType: 'series',
+        pattern: '^(series|tv[\\s_-]?shows?|anime|dramas?|shows?|television|animation)',
+        confidence: 0.96,
+      },
+      {
+        id: 'rule-movies',
+        name: 'Movies & Cinema',
+        targetType: 'movie',
+        pattern: '^(movies?|films?|cinema|features?|4k[\\s_-]?movies?|vod)',
+        confidence: 0.96,
+      },
+      {
+        id: 'rule-documentaries',
+        name: 'Documentaries',
+        targetType: 'series',
+        pattern: '^(documentaries|documentary|docu[\\s_-]?series|docu)',
+        confidence: 0.92,
+      },
+      {
+        id: 'rule-music',
+        name: 'Music & Audio Albums',
+        targetType: 'album',
+        pattern: '^(music|soundtracks?|audio|flac|lossless|albums?|discography)',
+        confidence: 0.95,
+      },
+      {
+        id: 'rule-audiobooks',
+        name: 'Audiobooks',
+        targetType: 'album',
+        pattern: '^(audio[\\s_-]?books?|audiobooks?|spoken[\\s_-]?word)',
+        confidence: 0.90,
+      },
+      {
+        id: 'rule-franchises',
+        name: 'Franchises',
+        targetType: 'movie',
+        pattern: '^(franchises?|collections?|box[\\s_-]?sets?|sagas?)',
+        confidence: 0.88,
+      },
+      {
+        id: 'rule-unsorted',
+        name: 'Unsorted / Staging',
+        targetType: 'movie',
+        pattern: '^(sort|unsorted|in[\\s_-]?flight|downloads?|incoming|temp|staging)',
+        confidence: 0.55,
+      },
+    ];
+
+    const activeRules = rules && Array.isArray(rules) && rules.length > 0 ? rules : defaultRules;
+    const folderGroups = new Map<string, string[]>();
+
+    items.forEach((p: string) => {
+      const parts = p.split('/').filter(Boolean);
+      const top = parts[0] || 'Media';
+      const existing = folderGroups.get(top) || [];
+      existing.push(p);
+      folderGroups.set(top, existing);
+    });
+
+    const classifications: any[] = [];
+
+    folderGroups.forEach((files, folderName) => {
+      let matchedRule = activeRules.find((r: any) => {
+        try {
+          return new RegExp(r.pattern, 'i').test(folderName);
+        } catch {
+          return false;
+        }
+      });
+
+      let detectedType = matchedRule ? matchedRule.targetType : 'movie';
+      let confidence = matchedRule ? matchedRule.confidence || 0.85 : 0.60;
+
+      // Adjust with file heuristic
+      const hasAudio = files.some((f) => /\.(flac|mp3|m4a|m4b)$/i.test(f));
+      const hasSeason = files.some((f) => /s\d{1,2}e\d{1,2}|season\s*\d/i.test(f));
+      if (!matchedRule) {
+        if (hasAudio) {
+          detectedType = 'album';
+          confidence = 0.78;
+        } else if (hasSeason) {
+          detectedType = 'series';
+          confidence = 0.82;
+        }
+      }
+
+      const isConfident = confidence >= threshold;
+
+      classifications.push({
+        id: `folder-${folderName.replace(/[^a-zA-Z0-9]/g, '-')}`,
+        folderName,
+        relativePath: folderName,
+        itemCount: files.length,
+        detectedType,
+        targetType: detectedType,
+        confidence,
+        isConfident,
+        matchedRuleName: matchedRule ? matchedRule.name : 'Heuristic Guess',
+        matchedRegexPattern: matchedRule ? matchedRule.pattern : '.*',
+        sampleFiles: files.slice(0, 5),
+        selectedForImport: isConfident,
+      });
+    });
+
+    return res.json({
+      success: true,
+      threshold,
+      classifications,
+      totalFolders: classifications.length,
+      confidentFolders: classifications.filter((c) => c.isConfident).length,
+    });
+  } catch (err: any) {
+    console.error('Folder classification error:', err);
+    return res.status(500).json({ error: 'Failed to classify folders', message: err.message });
+  }
+});
+
+
 // ==========================================
 // SQLITE DATABASE & SERIES PROGRESS ROUTES
 // ==========================================

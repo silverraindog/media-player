@@ -947,14 +947,16 @@ export default function App() {
       )}
 
       {/* Media Player Modal */}
-      <MediaPlayerModal
-        isOpen={Boolean(playerMediaState)}
-        media={playerMediaState?.media || null}
-        episode={playerMediaState?.episode}
-        track={playerMediaState?.track}
-        onClose={() => setPlayerMediaState(null)}
-        sambaConfig={sambaConfig}
-      />
+      {playerMediaState && playerMediaState.media && (
+        <MediaPlayerModal
+          isOpen={Boolean(playerMediaState)}
+          media={playerMediaState.media}
+          initialEpisode={playerMediaState.episode}
+          initialTrack={playerMediaState.track}
+          onClose={() => setPlayerMediaState(null)}
+          sambaConfig={sambaConfig}
+        />
+      )}
 
       {/* Clean Minimalist Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">

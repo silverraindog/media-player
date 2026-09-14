@@ -62,3 +62,11 @@ for (let i = 0; i < 256; i++) {
 const pngBuffer = createPng(512, 512, 15, 23, 42);
 fs.writeFileSync('src-tauri/icon.png', pngBuffer);
 console.log('Valid 512x512 PNG icon generated successfully.');
+
+const { execSync } = require('child_process');
+try {
+  execSync('npx tauri icon src-tauri/icon.png', { stdio: 'inherit' });
+  console.log('Tauri icon suite generated successfully.');
+} catch (e) {
+  console.warn('Failed to invoke tauri icon command automatically:', e.message);
+}

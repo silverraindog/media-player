@@ -26,7 +26,7 @@ import {
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
 
 interface MediaPlayerModalProps {
-  media: MediaMetadata;
+  media: MediaMetadata | null;
   isOpen: boolean;
   onClose: () => void;
   sambaConfig: SambaConfig;
@@ -57,25 +57,28 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   // Series Episode Tracking
   const [selectedSeasonNum, setSelectedSeasonNum] = useState<number>(
-    initialEpisode?.seasonNumber || media.seasons?.[0]?.seasonNumber || 1
+    initialEpisode?.seasonNumber || media?.seasons?.[0]?.seasonNumber || 1
   );
   const [selectedEpisode, setSelectedEpisode] = useState<EpisodeMetadata | undefined>(
-    initialEpisode || media.seasons?.[0]?.episodes?.[0]
+    initialEpisode || media?.seasons?.[0]?.episodes?.[0]
   );
 
   // Track tracking for Music Albums / Audiobooks
   const [selectedTrack, setSelectedTrack] = useState<TrackMetadata | undefined>(
-    initialTrack || media.tracks?.[0]
+    initialTrack || media?.tracks?.[0]
   );
 
-  const isAudio = media.type === 'album' || media.recommendedFolderStructure.toLowerCase().includes('audio books');
+  const isAudio = Boolean(
+    media?.type === 'album' ||
+    media?.recommendedFolderStructure?.toLowerCase().includes('audio books')
+  );
 
   // Determine active streaming/playback source
   const currentStreamUrl =
-    media.localBlobUrl ||
+    media?.localBlobUrl ||
     selectedEpisode?.playbackUrl ||
     selectedTrack?.playbackUrl ||
-    media.playbackUrl ||
+    media?.playbackUrl ||
     (isAudio
       ? 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'
       : 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
@@ -97,14 +100,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     if (initialEpisode) {
       setSelectedSeasonNum(initialEpisode.seasonNumber);
       setSelectedEpisode(initialEpisode);
-    } else if (media.seasons?.[0]?.episodes?.[0]) {
+    } else if (media?.seasons?.[0]?.episodes?.[0]) {
       setSelectedSeasonNum(media.seasons[0].seasonNumber);
       setSelectedEpisode(media.seasons[0].episodes[0]);
     }
 
     if (initialTrack) {
       setSelectedTrack(initialTrack);
-    } else if (media.tracks?.[0]) {
+    } else if (media?.tracks?.[0]) {
       setSelectedTrack(media.tracks[0]);
     }
 
@@ -146,6 +149,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   // Save playback progress to SQLite
   const handleSaveWhereLeftOff = async () => {
+    if (!media) return;
     try {
       const epNumber = selectedEpisode ? selectedEpisode.episodeNumber : undefined;
       const progressPayload = {
@@ -174,6 +178,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
   };
 
+  if (!isOpen || !media) return null;
+
   // Build direct Samba full path
   const fullNetworkPath = `smb://${sambaConfig.server}/${sambaConfig.share}/${media.recommendedFolderStructure}`;
 
@@ -182,8 +188,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     setCopiedUrl(true);
     setTimeout(() => setCopiedUrl(false), 2500);
   };
-
-  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">

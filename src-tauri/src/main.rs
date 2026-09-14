@@ -389,6 +389,7 @@ fn mount_samba_share(
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
+        let _ = target_port;
         let remote = format!("\\\\{}\\{}", server, share);
         let mut cmd = Command::new("net");
         cmd.arg("use").arg("*").arg(&remote);

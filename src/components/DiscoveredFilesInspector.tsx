@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import * as ReactWindow from 'react-window';
-const FixedSizeList = (ReactWindow as any).FixedSizeList || (ReactWindow as any).default?.FixedSizeList;
+import { List } from 'react-window';
 import {
   FolderTree,
   FileVideo,
@@ -28,6 +27,81 @@ interface DiscoveredFilesInspectorProps {
   onPopulateMediaLibrary?: () => void;
   isImporting?: boolean;
 }
+
+interface DiscoveredFileItem {
+  node: SambaShareNode;
+  category: string;
+  fullPath: string;
+  extension: string;
+  fileCat: string | null;
+}
+
+interface DiscoveredRowProps {
+  files: DiscoveredFileItem[];
+  onSelectNode?: (node: SambaShareNode) => void;
+  getFormatBadgeStyle: (cat: string | null) => string;
+}
+
+const DiscoveredFileRow: React.FC<{
+  index: number;
+  style: React.CSSProperties;
+} & DiscoveredRowProps> = ({ index, style, files, onSelectNode, getFormatBadgeStyle }) => {
+  const item = files[index];
+  if (!item) return null;
+
+  const { node, category, fullPath, extension, fileCat } = item;
+  const thumb = thumbnailStorage.get(fullPath) || thumbnailStorage.resolveForNode(node, fullPath);
+
+  return (
+    <div
+      style={style}
+      onClick={() => onSelectNode && onSelectNode(node)}
+      className="px-4 py-2 flex items-center justify-between hover:bg-slate-900/80 transition cursor-pointer text-slate-300 group border-b border-slate-900 bg-slate-950 box-border"
+    >
+      <div className="flex items-center gap-3 truncate pr-4">
+        {/* Mini Cached Thumbnail Avatar */}
+        <div
+          className="w-7 h-10 rounded bg-slate-900 border border-slate-800 shrink-0 overflow-hidden relative shadow-sm"
+          style={{ backgroundColor: thumb.colorDominant || '#1e293b' }}
+          title={`Cached Thumbnail: ${thumb.title} (${thumb.resolutionLabel})`}
+        >
+          <img
+            src={thumb.thumbnailUrl}
+            alt={thumb.title}
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            className="w-full h-full object-cover"
+          />
+          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center pointer-events-none">
+            <Zap className="w-3 h-3 text-emerald-400" />
+          </div>
+        </div>
+
+        <div className="truncate flex items-center gap-2">
+          <div className="font-semibold text-slate-200 truncate">{node.name}</div>
+          {extension && (
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border uppercase shrink-0 ${getFormatBadgeStyle(fileCat)}`}
+            >
+              {extension}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-4 shrink-0 text-slate-400">
+        <span className="hidden sm:inline px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300">
+          {category}
+        </span>
+        <span className="hidden md:inline text-[11px]">{node.size || '1.4 GB'}</span>
+        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px]">
+          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+          <span>Indexed</span>
+        </span>
+      </div>
+    </div>
+  );
+};
 
 export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> = ({
   sambaTree,
@@ -261,65 +335,17 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
               <p>No files match the active category and extension filters.</p>
             </div>
           ) : (
-            <FixedSizeList
-              height={288}
-              itemCount={filteredFiles.length}
-              itemSize={56}
-              width="100%"
-              itemData={filteredFiles}
-            >
-              {({ index, style }) => {
-                const { node, category, fullPath, extension, fileCat } = filteredFiles[index];
-                const thumb = thumbnailStorage.get(fullPath) || thumbnailStorage.resolveForNode(node, fullPath);
-                return (
-                  <div
-                    style={style}
-                    onClick={() => onSelectNode && onSelectNode(node)}
-                    className="px-4 py-2 flex items-center justify-between hover:bg-slate-900/80 transition cursor-pointer text-slate-300 group border-b border-slate-900 bg-slate-950"
-                  >
-                    <div className="flex items-center gap-3 truncate pr-4">
-                      {/* Mini Cached Thumbnail Avatar */}
-                      <div
-                        className="w-7 h-10 rounded bg-slate-900 border border-slate-800 shrink-0 overflow-hidden relative shadow-sm"
-                        style={{ backgroundColor: thumb.colorDominant || '#1e293b' }}
-                        title={`Cached Thumbnail: ${thumb.title} (${thumb.resolutionLabel})`}
-                      >
-                        <img
-                          src={thumb.thumbnailUrl}
-                          alt={thumb.title}
-                          referrerPolicy="no-referrer"
-                          loading="lazy"
-                          className="w-full h-full object-cover"
-                        />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center pointer-events-none">
-                          <Zap className="w-3 h-3 text-emerald-400" />
-                        </div>
-                      </div>
-
-                      <div className="truncate flex items-center gap-2">
-                        <div className="font-semibold text-slate-200 truncate">{node.name}</div>
-                        {extension && (
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border uppercase shrink-0 ${getFormatBadgeStyle(fileCat)}`}>
-                            {extension}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-4 shrink-0 text-slate-400">
-                      <span className="hidden sm:inline px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-300">
-                        {category}
-                      </span>
-                      <span className="hidden md:inline text-[11px]">{node.size || '1.4 GB'}</span>
-                      <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px]">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                        <span>Indexed</span>
-                      </span>
-                    </div>
-                  </div>
-                );
+            <List
+              rowCount={filteredFiles.length}
+              rowHeight={56}
+              rowComponent={DiscoveredFileRow}
+              rowProps={{
+                files: filteredFiles,
+                onSelectNode,
+                getFormatBadgeStyle,
               }}
-            </FixedSizeList>
+              style={{ height: 288, width: '100%' }}
+            />
           )}
         </div>
       </div>

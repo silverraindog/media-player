@@ -275,7 +275,8 @@ class ThumbnailStorageService {
   public resolveForNode(
     node: SambaShareNode,
     parentPath: string = '',
-    curatedList: MediaMetadata[] = CURATED_MEDIA_DATABASE
+    curatedList: MediaMetadata[] = CURATED_MEDIA_DATABASE,
+    skipImmediatePersist: boolean = false
   ): ThumbnailMetadata {
     const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
     const cached = this.get(fullPath);
@@ -407,8 +408,10 @@ class ThumbnailStorageService {
     // Cache in memory and schedule persistence without triggering render storms
     const key = this.normalizeKey(fullPath);
     this.memoryCache.set(key, meta);
-    this.scheduleLocalStoragePersist();
-    this.scheduleBackendSync(meta);
+    if (!skipImmediatePersist) {
+      this.scheduleLocalStoragePersist();
+      this.scheduleBackendSync(meta);
+    }
     return meta;
   }
 
@@ -435,29 +438,35 @@ class ThumbnailStorageService {
     // Cancel any in-flight prewarm run for previous tree
     const currentToken = ++this.activePrewarmToken;
     let index = 0;
-    const chunkSize = 25;
+    const chunkSize = 20;
 
-    // Time-sliced non-blocking background queue
+    // Time-sliced non-blocking background queue with microtask yielding
     const processChunk = () => {
       if (currentToken !== this.activePrewarmToken) return;
 
       const end = Math.min(index + chunkSize, candidates.length);
       for (let i = index; i < end; i++) {
         const item = candidates[i];
-        this.resolveForNode(item.node, item.parentPath, curatedList);
+        this.resolveForNode(item.node, item.parentPath, curatedList, true);
       }
       index = end;
 
       if (index < candidates.length) {
         // Yield to the browser main thread
-        setTimeout(processChunk, 0);
+        if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+          window.requestIdleCallback(() => processChunk(), { timeout: 60 });
+        } else {
+          setTimeout(processChunk, 16);
+        }
       } else {
+        // When prewarm completes, schedule ONE single debounced persist and notify listeners
+        this.scheduleLocalStoragePersist();
         this.notifyListeners();
       }
     };
 
     // Kick off time-sliced processing asynchronously
-    setTimeout(processChunk, 0);
+    setTimeout(processChunk, 50);
 
     return { cached: this.memoryCache.size, totalScanned: candidates.length };
   }

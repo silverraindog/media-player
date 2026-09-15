@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { MenuBar } from './components/MenuBar';
 import {
   Header,
 } from './components/Header';
@@ -13,6 +14,7 @@ import { SqliteVault } from './components/SqliteVault';
 import { FolderClassifierModal } from './components/FolderClassifierModal';
 import {
   MediaMetadata,
+  MediaType,
   EpisodeMetadata,
   TrackMetadata,
   SambaConfig,
@@ -44,6 +46,7 @@ import {
   scanSambaVolume,
   VolumeMountInfo,
 } from './utils/tauriBridge';
+import { thumbnailStorage } from './utils/thumbnailStorage';
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   server: '',
@@ -399,6 +402,8 @@ export default function App() {
     track?: TrackMetadata;
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [selectedMediaType, setSelectedMediaType] = useState<'all' | MediaType>('all');
+  const [isAllTreeExpanded, setIsAllTreeExpanded] = useState(true);
 
   // Folder Classification and Regex Rule Engine State
   const [classifierSettings, setClassifierSettings] = useState<ClassifierSettings>(DEFAULT_CLASSIFIER_SETTINGS);
@@ -408,6 +413,28 @@ export default function App() {
   const [activeScanPath, setActiveScanPath] = useState<string>('');
   const [mediaExtensionConfig, setMediaExtensionConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
   const [isImportingShare, setIsImportingShare] = useState(false);
+
+  // Export full JSON backup
+  const handleExportJsonBackup = () => {
+    try {
+      const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(mediaLibrary, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute('href', dataStr);
+      downloadAnchor.setAttribute('download', `sambavault-media-backup-${new Date().toISOString().split('T')[0]}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      showToast('Exported Media Library Backup (.json)!');
+    } catch (e) {
+      showToast('Failed exporting JSON backup');
+    }
+  };
+
+  // Clear thumbnail and memory cache
+  const handleClearThumbnailCache = async () => {
+    await thumbnailStorage.clearCache();
+    showToast('Cleared thumbnail storage and in-memory caches.');
+  };
 
   // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
@@ -1093,10 +1120,18 @@ export default function App() {
 
         // Check if this folder corresponds to a media title (e.g. Breaking Bad, Interstellar, Random Access Memories)
         const lowerName = segment.toLowerCase();
-        const isShow = lowerName.includes('season') || pathSegments[0].toLowerCase().includes('series') || pathSegments[0].toLowerCase().includes('anime');
-        const isMusic = pathSegments[0].toLowerCase().includes('music') || pathSegments[0].toLowerCase().includes('audio');
+        const detectedType = detectMediaType(rawPath);
+        const isShow =
+          detectedType === 'series' ||
+          lowerName.includes('season') ||
+          lowerName.includes('staffel') ||
+          lowerName.includes('saison') ||
+          pathSegments.some((p) => /series|tv|shows|anime|drama|television|kdrama/i.test(p));
+        const isMusic =
+          detectedType === 'album' ||
+          pathSegments.some((p) => /music|audio|books|albums|soundtracks/i.test(p));
 
-        if (!folderNode.mediaType && (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2))) {
+        if (!folderNode.mediaType && (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2) || isShow)) {
           folderNode.hasNfo = true;
           folderNode.hasPoster = true;
           folderNode.mediaType = isShow ? 'series' : isMusic ? 'album' : 'movie';
@@ -1203,6 +1238,34 @@ export default function App() {
         </div>
       )}
 
+      {/* Desktop App Menu Bar (File, Edit, View, Help) */}
+      <MenuBar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        onSelectViewMediaType={(type) => {
+          setSelectedMediaType(type);
+          if (activeTab !== 'search') {
+            setActiveTab('search');
+          }
+        }}
+        selectedMediaType={selectedMediaType}
+        sambaConfig={sambaConfig}
+        isConnected={isConnected}
+        onScanSamba={() => handleSyncSamba()}
+        onOpenClassifierModal={() => handleOpenClassifierModal()}
+        onOpenQuickMount={() => setActiveTab('samba-mount')}
+        onClearThumbnailCache={handleClearThumbnailCache}
+        onTriggerLocalImport={() => {
+          setActiveTab('search');
+          const input = document.getElementById('media-import-file-input');
+          if (input) input.click();
+        }}
+        onExportLibraryBackup={handleExportJsonBackup}
+        onRefreshStatus={handleTestConnection}
+        onToggleExpandAll={() => setIsAllTreeExpanded((prev) => !prev)}
+        isAllExpanded={isAllTreeExpanded}
+      />
+
       {/* Main Header */}
       <Header
         activeTab={activeTab}
@@ -1226,6 +1289,8 @@ export default function App() {
             onImportFiles={handleImportFilesDirectly}
             onSyncFromSamba={() => handleSyncSamba()}
             isSyncing={isSyncingShare}
+            selectedMediaType={selectedMediaType}
+            onSelectMediaType={setSelectedMediaType}
           />
         )}
 

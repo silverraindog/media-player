@@ -38,6 +38,8 @@ interface MediaSearchProps {
   onImportFiles?: (files: File[] | string[]) => Promise<void> | void;
   onSyncFromSamba?: () => void;
   isSyncing?: boolean;
+  selectedMediaType?: 'all' | MediaType;
+  onSelectMediaType?: (type: 'all' | MediaType) => void;
 }
 
 export const MediaSearch: React.FC<MediaSearchProps> = ({
@@ -50,9 +52,18 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   onImportFiles,
   onSyncFromSamba,
   isSyncing = false,
+  selectedMediaType,
+  onSelectMediaType,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedType, setSelectedType] = useState<'all' | MediaType>('all');
+  const [internalSelectedType, setInternalSelectedType] = useState<'all' | MediaType>('all');
+  const selectedType = selectedMediaType !== undefined ? selectedMediaType : internalSelectedType;
+  const setSelectedType = (type: 'all' | MediaType) => {
+    setInternalSelectedType(type);
+    if (onSelectMediaType) {
+      onSelectMediaType(type);
+    }
+  };
   const [originFilter, setOriginFilter] = useState<'all' | 'imported' | 'curated'>('all');
   const [isLoading, setIsLoading] = useState(false);
   const [pushedIds, setPushedIds] = useState<Record<string, boolean>>({});

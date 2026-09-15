@@ -126,7 +126,7 @@ export const SAMPLE_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/Soun
 
 // Helper to determine media type from path and filename across all media extensions
 export function detectMediaType(filePath: string): MediaType {
-  const lower = filePath.toLowerCase();
+  const lower = filePath.toLowerCase().replace(/\\/g, '/');
   const ext = getFileExtension(filePath);
 
   // Audio & Audiobook formats
@@ -137,7 +137,9 @@ export function detectMediaType(filePath: string): MediaType {
     lower.startsWith('audio books/') ||
     lower.includes('/audio books/') ||
     lower.includes('audiobook') ||
-    lower.includes('album')
+    lower.includes('album') ||
+    lower.includes('soundtrack') ||
+    lower.includes('discography')
   ) {
     return 'album';
   }
@@ -153,20 +155,32 @@ export function detectMediaType(filePath: string): MediaType {
     return 'album';
   }
 
-  // TV Series checks
+  // TV Series checks: Detect any series keyword, season folder, episode pattern, or TV terminology
   if (
     lower.startsWith('series/') ||
     lower.includes('/series/') ||
     lower.startsWith('tv shows/') ||
     lower.includes('/tv shows/') ||
     lower.startsWith('tv/') ||
+    lower.includes('/tv/') ||
+    lower.startsWith('shows/') ||
+    lower.includes('/shows/') ||
     lower.startsWith('anime/') ||
+    lower.includes('/anime/') ||
     lower.startsWith('documentaries/') ||
+    lower.includes('/documentaries/') ||
     lower.includes('/season ') ||
+    lower.includes('/season_') ||
+    lower.includes('/season-') ||
+    lower.includes('/staffel') ||
+    lower.includes('/saison') ||
     lower.includes('/specials') ||
     /s\d{1,2}e\d{1,2}/i.test(lower) ||
-    /season\s*\d+/i.test(lower) ||
-    /ep\d{1,2}/i.test(lower)
+    /\d{1,2}x\d{1,2}/i.test(lower) ||
+    /season[\s._-]?\d+/i.test(lower) ||
+    /ep[\s._-]?\d{1,3}/i.test(lower) ||
+    /episode[\s._-]?\d+/i.test(lower) ||
+    /\b(series|serien|show|shows|tvshow|tvshows|television|kdrama|docus|miniseries)\b/i.test(lower)
   ) {
     return 'series';
   }
@@ -341,12 +355,15 @@ export function extractAllMediaFromSambaTree(
         const hasMediaChildren = node.children?.some(c => 
           c.type === 'file' && isMediaFile(c.name, config)
         );
+        const hasSeasonFolderChildren = node.children?.some(c =>
+          c.type === 'folder' && (/^season[\s._-]?\d+$/i.test(c.name.trim()) || /^staffel[\s._-]?\d+$/i.test(c.name.trim()) || /^specials$/i.test(c.name.trim()) || /^s\d+$/i.test(c.name.trim()))
+        );
 
         // Don't treat top container roots (Movies, Series, Franchises, Audio books, Books, Music, sort) as single items
-        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows'].includes(node.name.toLowerCase());
-        const isSeasonFolder = /^season\s*\d+$/i.test(node.name.trim());
+        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows'].includes(node.name.toLowerCase());
+        const isSeasonFolder = /^season[\s._-]?\d+$/i.test(node.name.trim()) || /^staffel[\s._-]?\d+$/i.test(node.name.trim()) || /^specials$/i.test(node.name.trim()) || /^s\d+$/i.test(node.name.trim());
 
-        if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren)) {
+        if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
           const item = nodeToMediaMetadata(node, parentPath);
           if (item) {
             mediaMap.set(item.title.toLowerCase(), item);
@@ -404,6 +421,14 @@ export async function extractAllMediaFromSambaTreeAsync(
       const hasMediaChildren = node.children?.some(
         (c) => c.type === 'file' && isMediaFile(c.name, config)
       );
+      const hasSeasonFolderChildren = node.children?.some(
+        (c) =>
+          c.type === 'folder' &&
+          (/^season[\s._-]?\d+$/i.test(c.name.trim()) ||
+            /^staffel[\s._-]?\d+$/i.test(c.name.trim()) ||
+            /^specials$/i.test(c.name.trim()) ||
+            /^s\d+$/i.test(c.name.trim()))
+      );
 
       const isRootContainer = [
         'movies',
@@ -417,10 +442,16 @@ export async function extractAllMediaFromSambaTreeAsync(
         'anime',
         'documentaries',
         'tv shows',
+        'tv',
+        'shows',
       ].includes(node.name.toLowerCase());
-      const isSeasonFolder = /^season\s*\d+$/i.test(node.name.trim());
+      const isSeasonFolder =
+        /^season[\s._-]?\d+$/i.test(node.name.trim()) ||
+        /^staffel[\s._-]?\d+$/i.test(node.name.trim()) ||
+        /^specials$/i.test(node.name.trim()) ||
+        /^s\d+$/i.test(node.name.trim());
 
-      if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren)) {
+      if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
         const item = nodeToMediaMetadata(node, parentPath);
         if (item) {
           mediaMap.set(item.title.toLowerCase(), item);

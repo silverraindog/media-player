@@ -204,4 +204,75 @@ export interface ClassifierSettings {
   rules: RegexCategoryRule[];
 }
 
+export type MediaExtensionCategory =
+  | 'video'
+  | 'audio'
+  | 'books'
+  | 'disc_images'
+  | 'subtitles'
+  | 'artwork'
+  | 'metadata';
+
+export interface MediaScanExtensionConfig {
+  searchAllExtensions: boolean;
+  enabledCategories: {
+    video: boolean;
+    audio: boolean;
+    books: boolean;
+    disc_images: boolean;
+    subtitles: boolean;
+    artwork: boolean;
+    metadata: boolean;
+  };
+  customExtensions: string[];
+  includeSubtitlesAndNfo: boolean;
+  ignoreHiddenFiles: boolean;
+}
+
+export type ThumbnailSource =
+  | 'sidecar_poster'
+  | 'embedded_nfo'
+  | 'matched_media'
+  | 'curated_library'
+  | 'generated_fallback';
+
+export type ThumbnailAspectRatio = 'poster' | 'fanart' | 'square' | 'banner';
+
+export type ThumbnailCacheTier = 'memory_lru' | 'persistent_local' | 'sqlite_backend';
+
+export interface ThumbnailMetadata {
+  id: string; // unique key (path or sanitized id)
+  mediaPath: string; // relative path in samba share
+  title: string;
+  mediaType: MediaType | 'book' | 'disc_image' | 'generic';
+  thumbnailUrl: string;
+  fanartUrl?: string;
+  width: number;
+  height: number;
+  aspectRatio: ThumbnailAspectRatio;
+  colorDominant: string; // Hex color code for layout-stable blur placeholder
+  source: ThumbnailSource;
+  fileSizeBytes: number;
+  format: 'jpg' | 'png' | 'webp' | 'svg';
+  cachedAt: number; // timestamp
+  lastAccessedAt: number; // timestamp
+  hitCount: number;
+  cacheTier: ThumbnailCacheTier;
+  resolutionLabel: string; // e.g. "800 × 1200 (2:3)"
+  isSidecarLocal?: boolean;
+}
+
+export interface ThumbnailCacheStats {
+  totalCached: number;
+  hitCount: number;
+  missCount: number;
+  hitRatio: number; // 0.0 - 1.0 (e.g. 0.96)
+  avgLoadTimeMs: number;
+  storageSizeBytes: number;
+  memoryTierCount: number;
+  localTierCount: number;
+  sqliteTierCount: number;
+  lastSyncedAt?: number;
+}
+
 

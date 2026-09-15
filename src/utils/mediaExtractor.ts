@@ -1,5 +1,117 @@
-import { MediaMetadata, MediaType, SambaShareNode, ParsedFileInfo } from '../types';
+import {
+  MediaMetadata,
+  MediaType,
+  SambaShareNode,
+  ParsedFileInfo,
+  MediaExtensionCategory,
+  MediaScanExtensionConfig,
+} from '../types';
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
+
+// Comprehensive Media Extension Definitions
+export const SUPPORTED_VIDEO_EXTENSIONS = [
+  'mkv', 'mp4', 'm4v', 'avi', 'mov', 'wmv', 'webm', 'flv', 'f4v',
+  'ts', 'm2ts', 'mts', 'vob', 'ogv', '3gp', 'rm', 'rmvb', 'divx', 'asf'
+];
+
+export const SUPPORTED_DISC_EXTENSIONS = [
+  'iso', 'img', 'bin', 'nrg'
+];
+
+export const SUPPORTED_AUDIO_EXTENSIONS = [
+  'flac', 'mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'wav',
+  'aiff', 'aif', 'alac', 'wma', 'ape', 'wv', 'dsf', 'dff', 'mid', 'midi'
+];
+
+export const SUPPORTED_BOOK_EXTENSIONS = [
+  'epub', 'pdf', 'mobi', 'azw', 'azw3', 'cbr', 'cbz', 'djvu', 'fb2'
+];
+
+export const SUPPORTED_SUBTITLE_EXTENSIONS = [
+  'srt', 'vtt', 'ass', 'ssa', 'sub', 'idx', 'sup'
+];
+
+export const SUPPORTED_ARTWORK_EXTENSIONS = [
+  'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'svg', 'tbn'
+];
+
+export const SUPPORTED_METADATA_EXTENSIONS = [
+  'nfo', 'xml', 'json', 'm3u', 'm3u8', 'cue', 'pls'
+];
+
+export const ALL_MEDIA_EXTENSIONS_LIST = [
+  ...SUPPORTED_VIDEO_EXTENSIONS,
+  ...SUPPORTED_DISC_EXTENSIONS,
+  ...SUPPORTED_AUDIO_EXTENSIONS,
+  ...SUPPORTED_BOOK_EXTENSIONS,
+  ...SUPPORTED_SUBTITLE_EXTENSIONS,
+  ...SUPPORTED_ARTWORK_EXTENSIONS,
+  ...SUPPORTED_METADATA_EXTENSIONS,
+];
+
+export const DEFAULT_MEDIA_SCAN_CONFIG: MediaScanExtensionConfig = {
+  searchAllExtensions: true,
+  enabledCategories: {
+    video: true,
+    audio: true,
+    books: true,
+    disc_images: true,
+    subtitles: true,
+    artwork: true,
+    metadata: true,
+  },
+  customExtensions: [],
+  includeSubtitlesAndNfo: true,
+  ignoreHiddenFiles: true,
+};
+
+export function getFileExtension(filePath: string): string {
+  const clean = filePath.split('?')[0].split('#')[0];
+  const lastDot = clean.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === clean.length - 1) return '';
+  return clean.slice(lastDot + 1).toLowerCase();
+}
+
+export function getFileCategory(filePath: string): MediaExtensionCategory | null {
+  const ext = getFileExtension(filePath);
+  if (!ext) return null;
+  if (SUPPORTED_VIDEO_EXTENSIONS.includes(ext)) return 'video';
+  if (SUPPORTED_DISC_EXTENSIONS.includes(ext)) return 'disc_images';
+  if (SUPPORTED_AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+  if (SUPPORTED_BOOK_EXTENSIONS.includes(ext)) return 'books';
+  if (SUPPORTED_SUBTITLE_EXTENSIONS.includes(ext)) return 'subtitles';
+  if (SUPPORTED_ARTWORK_EXTENSIONS.includes(ext)) return 'artwork';
+  if (SUPPORTED_METADATA_EXTENSIONS.includes(ext)) return 'metadata';
+  return null;
+}
+
+export function isMediaFile(
+  fileNameOrPath: string,
+  config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG
+): boolean {
+  const ext = getFileExtension(fileNameOrPath);
+  if (!ext) return false;
+
+  // Custom extension match
+  if (config.customExtensions && config.customExtensions.some((ce) => ce.toLowerCase().replace(/^\./, '') === ext)) {
+    return true;
+  }
+
+  // If searchAllExtensions is enabled, match any playable or catalogable media
+  if (config.searchAllExtensions) {
+    return (
+      SUPPORTED_VIDEO_EXTENSIONS.includes(ext) ||
+      SUPPORTED_DISC_EXTENSIONS.includes(ext) ||
+      SUPPORTED_AUDIO_EXTENSIONS.includes(ext) ||
+      SUPPORTED_BOOK_EXTENSIONS.includes(ext) ||
+      (config.includeSubtitlesAndNfo && (SUPPORTED_SUBTITLE_EXTENSIONS.includes(ext) || SUPPORTED_METADATA_EXTENSIONS.includes(ext)))
+    );
+  }
+
+  const cat = getFileCategory(fileNameOrPath);
+  if (!cat) return false;
+  return !!config.enabledCategories[cat];
+}
 
 // Sample streaming URLs for in-app video & audio player
 export const SAMPLE_VIDEO_STREAMS = {
@@ -12,25 +124,31 @@ export const SAMPLE_VIDEO_STREAMS = {
 
 export const SAMPLE_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
 
-// Helper to determine media type from path and filename
+// Helper to determine media type from path and filename across all media extensions
 export function detectMediaType(filePath: string): MediaType {
   const lower = filePath.toLowerCase();
-  
-  // Audio & Audiobook checks
+  const ext = getFileExtension(filePath);
+
+  // Audio & Audiobook formats
   if (
-    lower.endsWith('.mp3') ||
-    lower.endsWith('.flac') ||
-    lower.endsWith('.m4a') ||
-    lower.endsWith('.m4b') ||
-    lower.endsWith('.wav') ||
-    lower.endsWith('.aac') ||
-    lower.endsWith('.ogg') ||
+    SUPPORTED_AUDIO_EXTENSIONS.includes(ext) ||
     lower.startsWith('music/') ||
     lower.includes('/music/') ||
     lower.startsWith('audio books/') ||
     lower.includes('/audio books/') ||
     lower.includes('audiobook') ||
     lower.includes('album')
+  ) {
+    return 'album';
+  }
+
+  // Books & Comics formats (cataloged under album/media)
+  if (
+    SUPPORTED_BOOK_EXTENSIONS.includes(ext) ||
+    lower.startsWith('books/') ||
+    lower.includes('/books/') ||
+    lower.includes('comic') ||
+    lower.includes('manga')
   ) {
     return 'album';
   }
@@ -53,9 +171,10 @@ export function detectMediaType(filePath: string): MediaType {
     return 'series';
   }
 
-  // Default to movie
+  // Default to movie for video files and disc images
   return 'movie';
 }
+
 
 // Clean title and year from path or filename
 export function parseTitleAndYear(rawName: string): { title: string; year: number; season?: number; episode?: number } {
@@ -199,8 +318,11 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   };
 }
 
-// Recursively traverse Samba nodes and extract all unique MediaMetadata items
-export function extractAllMediaFromSambaTree(nodes: SambaShareNode[]): MediaMetadata[] {
+// Recursively traverse Samba nodes and extract all unique MediaMetadata items across all media extensions
+export function extractAllMediaFromSambaTree(
+  nodes: SambaShareNode[],
+  config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG
+): MediaMetadata[] {
   const mediaMap = new Map<string, MediaMetadata>();
 
   function traverse(nodeList: SambaShareNode[], parentPath: string = '') {
@@ -217,15 +339,7 @@ export function extractAllMediaFromSambaTree(nodes: SambaShareNode[]): MediaMeta
       // If node is a media folder with direct media files or NFO or marked as media
       else if (node.type === 'folder') {
         const hasMediaChildren = node.children?.some(c => 
-          c.type === 'file' && (
-            c.name.endsWith('.mkv') || 
-            c.name.endsWith('.mp4') || 
-            c.name.endsWith('.avi') || 
-            c.name.endsWith('.flac') || 
-            c.name.endsWith('.mp3') || 
-            c.name.endsWith('.m4a') || 
-            c.name.endsWith('.m4b')
-          )
+          c.type === 'file' && isMediaFile(c.name, config)
         );
 
         // Don't treat top container roots (Movies, Series, Franchises, Audio books, Books, Music, sort) as single items
@@ -241,17 +355,7 @@ export function extractAllMediaFromSambaTree(nodes: SambaShareNode[]): MediaMeta
       } 
       // If node is a standalone media file
       else if (node.type === 'file') {
-        const isMediaFile = 
-          node.name.endsWith('.mkv') || 
-          node.name.endsWith('.mp4') || 
-          node.name.endsWith('.avi') || 
-          node.name.endsWith('.flac') || 
-          node.name.endsWith('.mp3') || 
-          node.name.endsWith('.m4a') || 
-          node.name.endsWith('.m4b') ||
-          node.name.endsWith('.epub');
-
-        if (isMediaFile) {
+        if (isMediaFile(node.name, config)) {
           const item = nodeToMediaMetadata(node, parentPath);
           if (item && !mediaMap.has(item.title.toLowerCase())) {
             mediaMap.set(item.title.toLowerCase(), item);

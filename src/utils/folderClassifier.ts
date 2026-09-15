@@ -104,13 +104,14 @@ export function classifyFolder(
       if (regex.test(trimmed)) {
         // Adjust confidence slightly based on sample files content
         let confidenceBonus = 0;
-        const hasVideoFiles = sampleFiles.some((f) => /\.(mkv|mp4|avi|mov|wmv)$/i.test(f));
-        const hasAudioFiles = sampleFiles.some((f) => /\.(flac|mp3|m4a|m4b|aac|ogg|wav)$/i.test(f));
+        const hasVideoFiles = sampleFiles.some((f) => /\.(mkv|mp4|m4v|avi|mov|wmv|webm|flv|f4v|ts|m2ts|mts|vob|ogv|3gp|rm|rmvb|divx|asf|iso|img)$/i.test(f));
+        const hasAudioFiles = sampleFiles.some((f) => /\.(flac|mp3|m4a|m4b|aac|ogg|oga|opus|wav|aiff|alac|wma|ape|wv|dsf|dff|mid)$/i.test(f));
+        const hasBookFiles = sampleFiles.some((f) => /\.(epub|pdf|mobi|azw|azw3|cbr|cbz|djvu|fb2)$/i.test(f));
         const hasSeasonEpisodes = sampleFiles.some((f) => /s\d{1,2}e\d{1,2}|season\s*\d/i.test(f));
 
         if (rule.targetType === 'series' && hasSeasonEpisodes) {
           confidenceBonus += 0.03;
-        } else if (rule.targetType === 'album' && hasAudioFiles) {
+        } else if (rule.targetType === 'album' && (hasAudioFiles || hasBookFiles)) {
           confidenceBonus += 0.03;
         } else if (rule.targetType === 'movie' && hasVideoFiles && !hasSeasonEpisodes) {
           confidenceBonus += 0.02;
@@ -131,16 +132,27 @@ export function classifyFolder(
   }
 
   // Fallback if no specific rule matched: inspect sample files
-  const hasAudio = sampleFiles.some((f) => /\.(flac|mp3|m4a|m4b)$/i.test(f));
+  const hasAudio = sampleFiles.some((f) => /\.(flac|mp3|m4a|m4b|aac|ogg|oga|opus|wav|aiff|alac|wma|ape|wv|dsf|dff)$/i.test(f));
+  const hasBooks = sampleFiles.some((f) => /\.(epub|pdf|mobi|azw|azw3|cbr|cbz|djvu|fb2)$/i.test(f));
   const hasSeasonEp = sampleFiles.some((f) => /s\d{1,2}e\d{1,2}|season\s*\d/i.test(f));
 
   if (hasAudio) {
     return {
       detectedType: 'album',
+      confidence: 0.78,
+      isConfident: 0.78 >= threshold,
+      matchedRuleName: 'File Heuristic: Audio / Music Files',
+      matchedRegexPattern: '.*\\.(flac|mp3|m4a|m4b|aac|ogg|opus|wav)',
+    };
+  }
+
+  if (hasBooks) {
+    return {
+      detectedType: 'album',
       confidence: 0.75,
       isConfident: 0.75 >= threshold,
-      matchedRuleName: 'File Heuristic: Audio Files',
-      matchedRegexPattern: '.*\\.(flac|mp3|m4a|m4b)',
+      matchedRuleName: 'File Heuristic: Books & Comics',
+      matchedRegexPattern: '.*\\.(epub|pdf|mobi|cbr|cbz)',
     };
   }
 

@@ -122,6 +122,28 @@ export async function getDatabase(): Promise<Database> {
       episode_title TEXT,
       watched_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS thumbnail_metadata_cache (
+      id TEXT PRIMARY KEY,
+      media_path TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      thumbnail_url TEXT NOT NULL,
+      fanart_url TEXT,
+      width INTEGER DEFAULT 600,
+      height INTEGER DEFAULT 900,
+      aspect_ratio TEXT DEFAULT 'poster',
+      color_dominant TEXT DEFAULT '#1e293b',
+      source TEXT DEFAULT 'matched_media',
+      file_size_bytes INTEGER DEFAULT 0,
+      format TEXT DEFAULT 'jpg',
+      resolution_label TEXT DEFAULT '600 × 900 (2:3)',
+      cached_at INTEGER NOT NULL,
+      last_accessed_at INTEGER NOT NULL,
+      hit_count INTEGER DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_thumb_media_path ON thumbnail_metadata_cache(media_path);
   `);
 
   // Seed default items if empty
@@ -443,5 +465,203 @@ export async function getDbStats(): Promise<{
     totalMediaItems: mediaCount,
     totalSeriesTracked: seriesTracked,
     totalWatchedHistory: historyCount
+  };
+}
+
+// ==========================================
+// THUMBNAIL METADATA CACHE OPERATIONS
+// ==========================================
+
+export interface ThumbnailDbRecord {
+  id: string;
+  media_path: string;
+  title: string;
+  media_type: string;
+  thumbnail_url: string;
+  fanart_url?: string;
+  width: number;
+  height: number;
+  aspect_ratio: string;
+  color_dominant: string;
+  source: string;
+  file_size_bytes: number;
+  format: string;
+  resolution_label: string;
+  cached_at: number;
+  last_accessed_at: number;
+  hit_count: number;
+}
+
+export async function getAllCachedThumbnailsFromDb(): Promise<ThumbnailDbRecord[]> {
+  const db = await getDatabase();
+  const res = db.exec(`SELECT * FROM thumbnail_metadata_cache ORDER BY last_accessed_at DESC`);
+  if (res.length === 0) return [];
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as ThumbnailDbRecord;
+  });
+}
+
+export async function getCachedThumbnailByPath(mediaPath: string): Promise<ThumbnailDbRecord | null> {
+  const db = await getDatabase();
+  const res = db.exec(`SELECT * FROM thumbnail_metadata_cache WHERE media_path = ? LIMIT 1`, [mediaPath]);
+  if (res.length === 0 || res[0].values.length === 0) return null;
+  const columns = res[0].columns;
+  const row = res[0].values[0];
+  const item: any = {};
+  columns.forEach((col, idx) => {
+    item[col] = row[idx];
+  });
+  return item as ThumbnailDbRecord;
+}
+
+export async function saveThumbnailToDb(thumb: ThumbnailDbRecord): Promise<void> {
+  const db = await getDatabase();
+  db.run(
+    `INSERT INTO thumbnail_metadata_cache (
+      id, media_path, title, media_type, thumbnail_url, fanart_url, width, height, aspect_ratio,
+      color_dominant, source, file_size_bytes, format, resolution_label, cached_at, last_accessed_at, hit_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(media_path) DO UPDATE SET
+      title = excluded.title,
+      media_type = excluded.media_type,
+      thumbnail_url = excluded.thumbnail_url,
+      fanart_url = excluded.fanart_url,
+      width = excluded.width,
+      height = excluded.height,
+      aspect_ratio = excluded.aspect_ratio,
+      color_dominant = excluded.color_dominant,
+      source = excluded.source,
+      file_size_bytes = excluded.file_size_bytes,
+      format = excluded.format,
+      resolution_label = excluded.resolution_label,
+      last_accessed_at = excluded.last_accessed_at,
+      hit_count = thumbnail_metadata_cache.hit_count + 1`,
+    [
+      thumb.id,
+      thumb.media_path,
+      thumb.title,
+      thumb.media_type,
+      thumb.thumbnail_url,
+      thumb.fanart_url || null,
+      thumb.width || 600,
+      thumb.height || 900,
+      thumb.aspect_ratio || 'poster',
+      thumb.color_dominant || '#1e293b',
+      thumb.source || 'matched_media',
+      thumb.file_size_bytes || 0,
+      thumb.format || 'jpg',
+      thumb.resolution_label || '600 × 900 (2:3)',
+      thumb.cached_at || Date.now(),
+      thumb.last_accessed_at || Date.now(),
+      thumb.hit_count || 1,
+    ]
+  );
+  persistDbToDisk();
+}
+
+export async function batchSaveThumbnailsToDb(thumbs: ThumbnailDbRecord[]): Promise<number> {
+  const db = await getDatabase();
+  let count = 0;
+  for (const thumb of thumbs) {
+    try {
+      db.run(
+        `INSERT INTO thumbnail_metadata_cache (
+          id, media_path, title, media_type, thumbnail_url, fanart_url, width, height, aspect_ratio,
+          color_dominant, source, file_size_bytes, format, resolution_label, cached_at, last_accessed_at, hit_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(media_path) DO UPDATE SET
+          title = excluded.title,
+          media_type = excluded.media_type,
+          thumbnail_url = excluded.thumbnail_url,
+          fanart_url = excluded.fanart_url,
+          width = excluded.width,
+          height = excluded.height,
+          aspect_ratio = excluded.aspect_ratio,
+          color_dominant = excluded.color_dominant,
+          source = excluded.source,
+          file_size_bytes = excluded.file_size_bytes,
+          format = excluded.format,
+          resolution_label = excluded.resolution_label,
+          last_accessed_at = excluded.last_accessed_at,
+          hit_count = thumbnail_metadata_cache.hit_count + 1`,
+        [
+          thumb.id,
+          thumb.media_path,
+          thumb.title,
+          thumb.media_type,
+          thumb.thumbnail_url,
+          thumb.fanart_url || null,
+          thumb.width || 600,
+          thumb.height || 900,
+          thumb.aspect_ratio || 'poster',
+          thumb.color_dominant || '#1e293b',
+          thumb.source || 'matched_media',
+          thumb.file_size_bytes || 0,
+          thumb.format || 'jpg',
+          thumb.resolution_label || '600 × 900 (2:3)',
+          thumb.cached_at || Date.now(),
+          thumb.last_accessed_at || Date.now(),
+          thumb.hit_count || 1,
+        ]
+      );
+      count++;
+    } catch (e) {
+      console.warn('Failed saving thumbnail record:', thumb.media_path, e);
+    }
+  }
+  persistDbToDisk();
+  return count;
+}
+
+export async function incrementThumbnailHitInDb(mediaPathOrId: string): Promise<void> {
+  const db = await getDatabase();
+  db.run(
+    `UPDATE thumbnail_metadata_cache 
+     SET hit_count = hit_count + 1, last_accessed_at = ? 
+     WHERE media_path = ? OR id = ?`,
+    [Date.now(), mediaPathOrId, mediaPathOrId]
+  );
+  persistDbToDisk();
+}
+
+export async function clearThumbnailCacheInDb(idOrPath?: string): Promise<void> {
+  const db = await getDatabase();
+  if (idOrPath) {
+    db.run(`DELETE FROM thumbnail_metadata_cache WHERE id = ? OR media_path = ?`, [idOrPath, idOrPath]);
+  } else {
+    db.run(`DELETE FROM thumbnail_metadata_cache`);
+  }
+  persistDbToDisk();
+}
+
+export async function getThumbnailCacheDbStats(): Promise<{
+  totalCached: number;
+  totalHits: number;
+  oldestTimestamp: number;
+  newestTimestamp: number;
+}> {
+  const db = await getDatabase();
+  const res = db.exec(`
+    SELECT 
+      COUNT(*) as total, 
+      COALESCE(SUM(hit_count), 0) as hits,
+      COALESCE(MIN(cached_at), 0) as oldest,
+      COALESCE(MAX(last_accessed_at), 0) as newest
+    FROM thumbnail_metadata_cache
+  `);
+  if (res.length === 0 || res[0].values.length === 0) {
+    return { totalCached: 0, totalHits: 0, oldestTimestamp: 0, newestTimestamp: 0 };
+  }
+  const row = res[0].values[0];
+  return {
+    totalCached: Number(row[0] || 0),
+    totalHits: Number(row[1] || 0),
+    oldestTimestamp: Number(row[2] || 0),
+    newestTimestamp: Number(row[3] || 0),
   };
 }

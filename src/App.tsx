@@ -21,6 +21,7 @@ import {
   ParsedFileInfo,
   ClassifierSettings,
   FolderScanClassification,
+  MediaScanExtensionConfig,
 } from './types';
 import { CURATED_MEDIA_DATABASE } from './data/curatedMedia';
 import {
@@ -28,6 +29,7 @@ import {
   parsedFileToMediaMetadata,
   parseTitleAndYear,
   detectMediaType,
+  DEFAULT_MEDIA_SCAN_CONFIG,
 } from './utils/mediaExtractor';
 import {
   classifyAllDiscoveredPaths,
@@ -131,6 +133,31 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
             path: 'Movies/Dune - Part Two (2024)/poster.jpg',
             type: 'file',
             size: '420 KB',
+          },
+        ],
+      },
+      {
+        id: 'folder-avatar-two',
+        name: 'Avatar - The Way of Water (2022)',
+        path: 'Movies/Avatar - The Way of Water (2022)',
+        type: 'folder',
+        hasNfo: true,
+        hasPoster: true,
+        mediaType: 'movie',
+        children: [
+          {
+            id: 'file-avatar-iso',
+            name: 'Avatar.The.Way.of.Water.2022.iso',
+            path: 'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.iso',
+            type: 'file',
+            size: '48.2 GB',
+          },
+          {
+            id: 'file-avatar-nfo',
+            name: 'movie.nfo',
+            path: 'Movies/Avatar - The Way of Water (2022)/movie.nfo',
+            type: 'file',
+            size: '3.1 KB',
           },
         ],
       },
@@ -286,6 +313,51 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
       },
     ],
   },
+  {
+    id: 'root-books',
+    name: 'Books',
+    path: 'Books',
+    type: 'folder',
+    children: [
+      {
+        id: 'folder-scifi-books',
+        name: 'Sci-Fi Literature',
+        path: 'Books/Sci-Fi Literature',
+        type: 'folder',
+        children: [
+          {
+            id: 'file-dune-epub',
+            name: 'Dune - Frank Herbert (1965).epub',
+            path: 'Books/Sci-Fi Literature/Dune - Frank Herbert (1965).epub',
+            type: 'file',
+            size: '4.8 MB',
+          },
+          {
+            id: 'file-thinking-pdf',
+            name: 'Thinking Fast and Slow - Daniel Kahneman.pdf',
+            path: 'Books/Sci-Fi Literature/Thinking Fast and Slow - Daniel Kahneman.pdf',
+            type: 'file',
+            size: '14.2 MB',
+          },
+        ],
+      },
+      {
+        id: 'folder-comics',
+        name: 'Comics & Graphic Novels',
+        path: 'Books/Comics & Graphic Novels',
+        type: 'folder',
+        children: [
+          {
+            id: 'file-watchmen-cbz',
+            name: 'Watchmen (1986).cbz',
+            path: 'Books/Comics & Graphic Novels/Watchmen (1986).cbz',
+            type: 'file',
+            size: '280 MB',
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 const INITIAL_SYNC_LOGS: SyncLog[] = [
@@ -333,10 +405,11 @@ export default function App() {
   const [folderClassifications, setFolderClassifications] = useState<FolderScanClassification[]>([]);
   const [lastDiscoveredPaths, setLastDiscoveredPaths] = useState<string[]>([]);
   const [activeScanPath, setActiveScanPath] = useState<string>('');
+  const [mediaExtensionConfig, setMediaExtensionConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
 
   // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
-    const sambaMedia = extractAllMediaFromSambaTree(INITIAL_SAMBA_TREE);
+    const sambaMedia = extractAllMediaFromSambaTree(INITIAL_SAMBA_TREE, DEFAULT_MEDIA_SCAN_CONFIG);
     const map = new Map<string, MediaMetadata>();
     CURATED_MEDIA_DATABASE.forEach((m) => map.set(m.title.toLowerCase(), m));
     sambaMedia.forEach((m) => {
@@ -853,16 +926,19 @@ export default function App() {
           'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
           'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
           'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
+          'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.iso',
           'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
           'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
           'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
           'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
           'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
+          'Music/Radiohead/OK Computer (1997)/01 - Airbag.opus',
           'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
           'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
           'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
           'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
           'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
+          'Books/Comics/Watchmen (1986).cbz',
           'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
           'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
           'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
@@ -995,7 +1071,7 @@ export default function App() {
       setSambaTree(newTree);
 
       // 4. Extract discovered media into All Media, TV Series, Movies, and Music Albums tabs
-      const discoveredMedia = extractAllMediaFromSambaTree(newTree);
+      const discoveredMedia = extractAllMediaFromSambaTree(newTree, mediaExtensionConfig);
       setMediaLibrary((prev) => {
         const map = new Map<string, MediaMetadata>();
         // Retain curated & existing items
@@ -1122,6 +1198,8 @@ export default function App() {
             isSyncing={isSyncingShare}
             isMountedInFinder={isMountedInFinder}
             mountedVolumeInfo={mountedVolumeInfo}
+            extensionConfig={mediaExtensionConfig}
+            onUpdateExtensionConfig={setMediaExtensionConfig}
           />
         )}
 

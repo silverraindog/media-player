@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   HardDrive,
   Folder,
@@ -22,10 +22,23 @@ import {
   RotateCw,
   FolderSearch,
   Terminal,
+  Disc,
+  BookOpen,
+  FileText,
+  Zap,
 } from 'lucide-react';
-import { SambaConfig, SambaShareNode, SyncLog, MediaMetadata } from '../types';
+import { SambaConfig, SambaShareNode, SyncLog, MediaMetadata, MediaScanExtensionConfig } from '../types';
 import { DiscoveredFilesInspector } from './DiscoveredFilesInspector';
 import { ConsoleLogSection } from './ConsoleLogSection';
+import { MediaExtensionManager } from './MediaExtensionManager';
+import { ThumbnailCacheBar } from './ThumbnailCacheBar';
+import { CachedThumbnail } from './CachedThumbnail';
+import { thumbnailStorage } from '../utils/thumbnailStorage';
+import {
+  DEFAULT_MEDIA_SCAN_CONFIG,
+  getFileCategory,
+  getFileExtension,
+} from '../utils/mediaExtractor';
 
 interface SambaExplorerProps {
   sambaConfig: SambaConfig;
@@ -41,6 +54,8 @@ interface SambaExplorerProps {
   isSyncing?: boolean;
   isMountedInFinder?: boolean;
   mountedVolumeInfo?: any;
+  extensionConfig?: MediaScanExtensionConfig;
+  onUpdateExtensionConfig?: (config: MediaScanExtensionConfig) => void;
 }
 
 export const SambaExplorer: React.FC<SambaExplorerProps> = ({
@@ -57,6 +72,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   isSyncing = false,
   isMountedInFinder = false,
   mountedVolumeInfo = null,
+  extensionConfig,
+  onUpdateExtensionConfig,
 }) => {
   const [selectedNode, setSelectedNode] = useState<SambaShareNode | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({
@@ -65,11 +82,45 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     'root-music': true,
     'root-documentaries': true,
     'root-anime': true,
+    'root-books': true,
   });
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [customScanPath, setCustomScanPath] = useState('');
   const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs'>('explorer');
+
+  // Extension scan configuration & active filter state
+  const [localExtConfig, setLocalExtConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
+  const activeExtConfig = extensionConfig || localExtConfig;
+  const handleUpdateExtConfig = onUpdateExtensionConfig || setLocalExtConfig;
+  const [activeFilterExtension, setActiveFilterExtension] = useState<string | null>(null);
+
+  // Automatically pre-warm thumbnail storage layer on mount / tree change
+  useEffect(() => {
+    if (sambaTree && sambaTree.length > 0) {
+      thumbnailStorage.prewarmSambaTree(sambaTree);
+    }
+  }, [sambaTree]);
+
+  // Compute live discovered extension counts
+  const discoveredExtensionCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    const walk = (nodes: SambaShareNode[]) => {
+      nodes.forEach((n) => {
+        if (n.type === 'file') {
+          const ext = getFileExtension(n.name);
+          if (ext) {
+            counts[ext] = (counts[ext] || 0) + 1;
+          }
+        }
+        if (n.children && n.children.length > 0) {
+          walk(n.children);
+        }
+      });
+    };
+    walk(sambaTree);
+    return counts;
+  }, [sambaTree]);
 
   const toggleFolder = (id: string) => {
     setExpandedFolderIds((prev) => ({
@@ -78,11 +129,40 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     }));
   };
 
+  const renderFileIcon = (fileName: string) => {
+    const category = getFileCategory(fileName);
+    switch (category) {
+      case 'video':
+        return <FileVideo className="w-4 h-4 text-indigo-400 shrink-0" />;
+      case 'disc_images':
+        return <Disc className="w-4 h-4 text-rose-400 shrink-0" />;
+      case 'audio':
+        return <FileAudio className="w-4 h-4 text-cyan-400 shrink-0" />;
+      case 'books':
+        return <BookOpen className="w-4 h-4 text-amber-400 shrink-0" />;
+      case 'subtitles':
+        return <FileText className="w-4 h-4 text-emerald-400 shrink-0" />;
+      case 'artwork':
+        return <Image className="w-4 h-4 text-fuchsia-400 shrink-0" />;
+      case 'metadata':
+        return <FileCode2 className="w-4 h-4 text-purple-400 shrink-0" />;
+      default:
+        return <FileVideo className="w-4 h-4 text-slate-400 shrink-0" />;
+    }
+  };
+
   // Render tree node recursive
   const renderNode = (node: SambaShareNode, depth: number = 0) => {
     const isExpanded = expandedFolderIds[node.id];
     const isSelected = selectedNode?.id === node.id;
     const isFolder = node.type === 'folder';
+    const ext = !isFolder ? getFileExtension(node.name) : null;
+    const matchesActiveExt = activeFilterExtension ? ext === activeFilterExtension : true;
+    const category = !isFolder ? getFileCategory(node.name) : null;
+    const isMediaFile = ['video', 'disc_images', 'audio', 'books'].includes(category || '');
+    const thumb = (!isFolder && isMediaFile) || node.hasPoster || node.matchedMedia
+      ? thumbnailStorage.get(node.path || node.name)
+      : null;
 
     return (
       <div key={node.id} className="select-none text-xs">
@@ -96,6 +176,10 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           className={`flex items-center justify-between py-1.5 pr-3 rounded-lg cursor-pointer transition ${
             isSelected
               ? 'bg-indigo-600/30 text-white border border-indigo-500/40'
+              : !isFolder && activeFilterExtension && !matchesActiveExt
+              ? 'opacity-40 hover:opacity-80 hover:bg-slate-800/50 text-slate-400'
+              : !isFolder && activeFilterExtension && matchesActiveExt
+              ? 'bg-emerald-950/40 text-emerald-200 border border-emerald-500/40 font-semibold'
               : 'hover:bg-slate-800/80 text-slate-300'
           }`}
         >
@@ -106,21 +190,41 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               ) : (
                 <Folder className="w-4 h-4 text-amber-400 shrink-0" />
               )
-            ) : node.name.endsWith('.nfo') || node.name.endsWith('.xml') ? (
-              <FileCode2 className="w-4 h-4 text-purple-400 shrink-0" />
-            ) : node.name.endsWith('.jpg') || node.name.endsWith('.png') ? (
-              <Image className="w-4 h-4 text-emerald-400 shrink-0" />
-            ) : node.name.endsWith('.mp3') || node.name.endsWith('.flac') ? (
-              <FileAudio className="w-4 h-4 text-cyan-400 shrink-0" />
+            ) : thumb ? (
+              <div
+                className="w-3.5 h-4.5 rounded overflow-hidden bg-slate-800 shrink-0 border border-slate-700/60 shadow-xs"
+                title={`Cached Thumbnail: ${thumb.title}`}
+              >
+                <img
+                  src={thumb.thumbnailUrl}
+                  alt=""
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                />
+              </div>
             ) : (
-              <FileVideo className="w-4 h-4 text-indigo-400 shrink-0" />
+              renderFileIcon(node.name)
             )}
 
             <span className="font-mono truncate">{node.name}</span>
 
+            {ext && !isFolder && (
+              <span className="px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 text-[10px] font-mono border border-slate-800 uppercase">
+                .{ext}
+              </span>
+            )}
+
             {node.hasNfo && (
               <span className="px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 text-[10px] font-bold border border-purple-800/40">
                 NFO
+              </span>
+            )}
+
+            {node.hasPoster && (
+              <span className="px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 text-[9px] font-bold border border-emerald-800/40 flex items-center gap-0.5">
+                <Zap className="w-2.5 h-2.5 text-emerald-400" />
+                <span>POSTER</span>
               </span>
             )}
           </div>
@@ -138,6 +242,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       </div>
     );
   };
+
 
   return (
     <div className="space-y-6">
@@ -227,6 +332,16 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         </div>
       </div>
 
+      {/* Media Format & Extension Controller */}
+      <MediaExtensionManager
+        config={activeExtConfig}
+        onChangeConfig={handleUpdateExtConfig}
+        activeFilterExtension={activeFilterExtension}
+        onSelectFilterExtension={setActiveFilterExtension}
+        discoveredExtensionCounts={discoveredExtensionCounts}
+        onTriggerScan={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
+      />
+
       {/* Sub-navigation for Discovered Files, Directory Explorer, and Console Logs */}
       <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
         <button
@@ -298,6 +413,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             onSyncTrigger={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
           />
 
+          {/* Dedicated Thumbnail Metadata Storage Layer Telemetry & Control Bar */}
+          <ThumbnailCacheBar
+            sambaTree={sambaTree}
+            onSelectNode={(node) => setSelectedNode(node)}
+          />
+
           {/* Explorer Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Left: Directory Tree */}
@@ -333,20 +454,31 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
             {/* Right: Selected Node Details & Console Logs */}
             <div className="lg:col-span-5 space-y-6">
-              {/* Selected Item Inspector */}
+              {/* Selected Item Inspector with Cached Thumbnail Storage Preview */}
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-800">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <Folder className="w-4 h-4 text-cyan-400" />
                     <span>Selected Object Details</span>
                   </h3>
+                  {selectedNode && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                      ID: {selectedNode.id}
+                    </span>
+                  )}
                 </div>
 
                 {selectedNode ? (
-                  <div className="space-y-3 text-xs">
+                  <div className="space-y-3.5 text-xs">
+                    {/* Path & Technical Info */}
                     <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
-                      <div className="text-slate-200 font-bold font-mono text-sm break-all">
-                        {selectedNode.name}
+                      <div className="text-slate-200 font-bold font-mono text-sm break-all flex items-start justify-between gap-2">
+                        <span>{selectedNode.name}</span>
+                        {selectedNode.type === 'file' && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400 font-mono uppercase shrink-0">
+                            .{getFileExtension(selectedNode.name)}
+                          </span>
+                        )}
                       </div>
                       <div className="text-slate-400 font-mono text-[11px] break-all">
                         Path: <span className="text-indigo-300">//{sambaConfig.server}/{sambaConfig.share}/{selectedNode.path}</span>
@@ -357,35 +489,113 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                       </div>
                     </div>
 
-                    {selectedNode.matchedMedia && (
-                      <div className="p-3 bg-indigo-950/30 border border-indigo-800/40 rounded-xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-white">
-                            {selectedNode.matchedMedia.title} ({selectedNode.matchedMedia.year})
-                          </span>
-                          <span className="px-2 py-0.5 rounded bg-indigo-900/60 text-indigo-300 text-[10px] font-bold">
-                            ★ {selectedNode.matchedMedia.rating}
-                          </span>
+                    {/* Cached Thumbnail Storage Card */}
+                    {(() => {
+                      const thumb = thumbnailStorage.resolveForNode(selectedNode);
+                      return (
+                        <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-3">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+                            <div className="flex items-center gap-1.5 text-slate-200 font-semibold text-xs">
+                              <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Storage Layer Thumbnail</span>
+                            </div>
+                            <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono font-bold border border-emerald-800/40">
+                              ⚡ Cached (0ms)
+                            </span>
+                          </div>
+
+                          <div className="flex gap-3.5 items-start">
+                            <CachedThumbnail
+                              node={selectedNode}
+                              size="md"
+                              showBadge={true}
+                              showMetadata={false}
+                              onClick={() => {
+                                if (selectedNode.matchedMedia) {
+                                  onOpenDetails(selectedNode.matchedMedia);
+                                }
+                              }}
+                            />
+
+                            <div className="flex-1 space-y-2 min-w-0">
+                              <div>
+                                <h5 className="font-bold text-white text-sm truncate font-sans">
+                                  {thumb.title}
+                                </h5>
+                                <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                                  Resolution: <span className="text-slate-200">{thumb.resolutionLabel}</span>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                                <div className="p-1.5 rounded bg-slate-900 border border-slate-800">
+                                  <span className="text-slate-500 block text-[9px] uppercase">Format</span>
+                                  <span className="text-slate-300 uppercase">{thumb.format}</span>
+                                </div>
+                                <div className="p-1.5 rounded bg-slate-900 border border-slate-800">
+                                  <span className="text-slate-500 block text-[9px] uppercase">Source</span>
+                                  <span className="text-indigo-300 truncate block capitalize">
+                                    {thumb.source.replace('_', ' ')}
+                                  </span>
+                                </div>
+                                <div className="p-1.5 rounded bg-slate-900 border border-slate-800">
+                                  <span className="text-slate-500 block text-[9px] uppercase">Tier</span>
+                                  <span className="text-emerald-300 truncate block">
+                                    {thumb.cacheTier === 'memory_lru' ? 'Memory LRU' : thumb.cacheTier === 'persistent_local' ? 'LocalStorage' : 'SQLite DB'}
+                                  </span>
+                                </div>
+                                <div className="p-1.5 rounded bg-slate-900 border border-slate-800">
+                                  <span className="text-slate-500 block text-[9px] uppercase">Hits</span>
+                                  <span className="text-white font-bold">{thumb.hitCount}</span>
+                                </div>
+                              </div>
+
+                              {/* Dominant Color Swatch */}
+                              <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                <span>Color:</span>
+                                <span
+                                  className="w-3.5 h-3.5 rounded-full border border-slate-700 shadow-sm"
+                                  style={{ backgroundColor: thumb.colorDominant }}
+                                  title={`Dominant Color: ${thumb.colorDominant}`}
+                                />
+                                <span className="font-mono text-[10px] text-slate-300">{thumb.colorDominant}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Quick Actions */}
+                          <div className="flex gap-2 pt-2 border-t border-slate-800/80">
+                            {selectedNode.matchedMedia ? (
+                              <>
+                                <button
+                                  onClick={() => onOpenDetails(selectedNode.matchedMedia!)}
+                                  className="flex-1 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition cursor-pointer"
+                                >
+                                  Inspect Full Metadata
+                                </button>
+                                <button
+                                  onClick={() => onOpenInNfoStudio(selectedNode.matchedMedia!)}
+                                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition cursor-pointer"
+                                >
+                                  XML Studio
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  thumbnailStorage.resolveForNode(selectedNode);
+                                  setSelectedNode({ ...selectedNode });
+                                }}
+                                className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
+                              >
+                                <RefreshCw className="w-3 h-3 text-slate-400" />
+                                <span>Re-cache Thumbnail Metadata</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <p className="text-[11px] text-slate-400 line-clamp-2">
-                          {selectedNode.matchedMedia.overview}
-                        </p>
-                        <div className="flex gap-2 pt-1">
-                          <button
-                            onClick={() => onOpenDetails(selectedNode.matchedMedia!)}
-                            className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium transition cursor-pointer"
-                          >
-                            Inspect Full Metadata
-                          </button>
-                          <button
-                            onClick={() => onOpenInNfoStudio(selectedNode.matchedMedia!)}
-                            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium transition cursor-pointer"
-                          >
-                            Edit in XML Studio
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 ) : (
                   <div className="p-6 text-center text-slate-500 text-xs bg-slate-950/40 border border-slate-800 rounded-xl">

@@ -13,6 +13,14 @@ import {
   updateWatchProgressInDb,
   executeRawSqlQuery,
   getDbStats,
+  getAllCachedThumbnailsFromDb,
+  getCachedThumbnailByPath,
+  saveThumbnailToDb,
+  batchSaveThumbnailsToDb,
+  incrementThumbnailHitInDb,
+  clearThumbnailCacheInDb,
+  getThumbnailCacheDbStats,
+  ThumbnailDbRecord,
 } from './src/server/database';
 
 dotenv.config();
@@ -393,7 +401,11 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
         let detectedSeason: number | undefined;
         let detectedEpisode: number | undefined;
 
-        // Determine type based on topCategory or filename
+        // Determine type based on topCategory or filename across all media extensions
+        const isAudioExt = /\.(flac|mp3|m4a|m4b|aac|ogg|oga|opus|wav|aiff|alac|wma|ape|wv|dsf|dff|mid)$/i.test(fileName);
+        const isBookExt = /\.(epub|pdf|mobi|azw|azw3|cbr|cbz|djvu|fb2)$/i.test(fileName);
+        const isVideoExt = /\.(mkv|mp4|m4v|avi|mov|wmv|webm|flv|f4v|ts|m2ts|mts|vob|ogv|3gp|rm|rmvb|divx|asf|iso|img)$/i.test(fileName);
+
         if (
           topCategory.includes('series') ||
           topCategory.includes('show') ||
@@ -405,10 +417,9 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
           topCategory.includes('music') ||
           topCategory.includes('audio') ||
           topCategory.includes('album') ||
-          fileName.endsWith('.flac') ||
-          fileName.endsWith('.mp3') ||
-          fileName.endsWith('.m4a') ||
-          fileName.endsWith('.m4b')
+          topCategory.includes('book') ||
+          isAudioExt ||
+          isBookExt
         ) {
           detectedType = 'album';
         } else {
@@ -626,13 +637,14 @@ app.post('/api/samba/classify-folders', async (req: Request, res: Response) => {
       let detectedType = matchedRule ? matchedRule.targetType : 'movie';
       let confidence = matchedRule ? matchedRule.confidence || 0.85 : 0.60;
 
-      // Adjust with file heuristic
-      const hasAudio = files.some((f) => /\.(flac|mp3|m4a|m4b)$/i.test(f));
+      // Adjust with file heuristic across all media extensions
+      const hasAudio = files.some((f) => /\.(flac|mp3|m4a|m4b|aac|ogg|oga|opus|wav|aiff|alac|wma|ape|wv|dsf|dff|mid)$/i.test(f));
+      const hasBooks = files.some((f) => /\.(epub|pdf|mobi|azw|azw3|cbr|cbz|djvu|fb2)$/i.test(f));
       const hasSeason = files.some((f) => /s\d{1,2}e\d{1,2}|season\s*\d/i.test(f));
       if (!matchedRule) {
-        if (hasAudio) {
+        if (hasAudio || hasBooks) {
           detectedType = 'album';
-          confidence = 0.78;
+          confidence = 0.80;
         } else if (hasSeason) {
           detectedType = 'series';
           confidence = 0.82;
@@ -669,6 +681,35 @@ app.post('/api/samba/classify-folders', async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Failed to classify folders', message: err.message });
   }
 });
+
+// Endpoint to retrieve all supported media extension definitions and categories
+app.get('/api/samba/supported-extensions', (req: Request, res: Response) => {
+  const extensionCategories = {
+    video: [
+      'mkv', 'mp4', 'm4v', 'avi', 'mov', 'wmv', 'webm', 'flv', 'f4v',
+      'ts', 'm2ts', 'mts', 'vob', 'ogv', '3gp', 'rm', 'rmvb', 'divx', 'asf'
+    ],
+    disc_images: ['iso', 'img', 'bin', 'nrg'],
+    audio: [
+      'flac', 'mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'wav',
+      'aiff', 'aif', 'alac', 'wma', 'ape', 'wv', 'dsf', 'dff', 'mid', 'midi'
+    ],
+    books: ['epub', 'pdf', 'mobi', 'azw', 'azw3', 'cbr', 'cbz', 'djvu', 'fb2'],
+    subtitles: ['srt', 'vtt', 'ass', 'ssa', 'sub', 'idx', 'sup'],
+    artwork: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff', 'svg', 'tbn'],
+    metadata: ['nfo', 'xml', 'json', 'm3u', 'm3u8', 'cue', 'pls'],
+  };
+
+  const totalExtensions = Object.values(extensionCategories).flat().length;
+
+  res.json({
+    success: true,
+    totalExtensions,
+    categories: extensionCategories,
+    allExtensions: Object.values(extensionCategories).flat(),
+  });
+});
+
 
 
 // ==========================================
@@ -817,6 +858,93 @@ app.get('/api/db/stats', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error getting SQLite stats:', error);
     res.status(500).json({ error: 'Failed to get stats', message: error?.message });
+  }
+});
+
+// ==========================================
+// THUMBNAIL METADATA CACHE STORAGE API
+// ==========================================
+
+// Get all or single cached thumbnail metadata
+app.get('/api/thumbnails/cache', async (req: Request, res: Response) => {
+  try {
+    const { path: mediaPath } = req.query;
+    if (mediaPath && typeof mediaPath === 'string') {
+      const item = await getCachedThumbnailByPath(mediaPath);
+      if (item) {
+        await incrementThumbnailHitInDb(item.id);
+      }
+      return res.json({ success: true, item: item || null });
+    }
+
+    const items = await getAllCachedThumbnailsFromDb();
+    const stats = await getThumbnailCacheDbStats();
+    res.json({ success: true, count: items.length, items, stats });
+  } catch (error: any) {
+    console.error('Error fetching thumbnail cache:', error);
+    res.status(500).json({ error: 'Failed to fetch thumbnail cache', message: error?.message });
+  }
+});
+
+// Save single or batch thumbnail metadata to SQLite cache
+app.post('/api/thumbnails/cache', async (req: Request, res: Response) => {
+  try {
+    const body = req.body;
+    if (Array.isArray(body)) {
+      const count = await batchSaveThumbnailsToDb(body);
+      return res.json({ success: true, message: `Batch saved ${count} thumbnails to SQLite cache`, count });
+    }
+
+    if (!body || !body.media_path || !body.thumbnail_url) {
+      return res.status(400).json({ error: 'media_path and thumbnail_url are required' });
+    }
+
+    await saveThumbnailToDb(body);
+    res.json({ success: true, message: `Cached thumbnail metadata for ${body.media_path}` });
+  } catch (error: any) {
+    console.error('Error saving thumbnail metadata to SQLite cache:', error);
+    res.status(500).json({ error: 'Failed to save thumbnail metadata', message: error?.message });
+  }
+});
+
+// Increment hit count for thumbnail
+app.post('/api/thumbnails/cache/hit', async (req: Request, res: Response) => {
+  try {
+    const { path: mediaPath, id } = req.body;
+    if (!mediaPath && !id) {
+      return res.status(400).json({ error: 'path or id is required' });
+    }
+    await incrementThumbnailHitInDb(mediaPath || id);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to increment hit', message: error?.message });
+  }
+});
+
+// Clear or purge thumbnail cache
+app.delete('/api/thumbnails/cache', async (req: Request, res: Response) => {
+  try {
+    const { path: mediaPath, id } = req.query;
+    const target = (mediaPath as string) || (id as string);
+    await clearThumbnailCacheInDb(target);
+    res.json({
+      success: true,
+      message: target ? `Evicted thumbnail ${target} from cache` : 'Thumbnail cache cleared successfully',
+    });
+  } catch (error: any) {
+    console.error('Error clearing thumbnail cache:', error);
+    res.status(500).json({ error: 'Failed to clear thumbnail cache', message: error?.message });
+  }
+});
+
+// Get cache stats
+app.get('/api/thumbnails/stats', async (req: Request, res: Response) => {
+  try {
+    const stats = await getThumbnailCacheDbStats();
+    res.json({ success: true, stats });
+  } catch (error: any) {
+    console.error('Error fetching thumbnail cache stats:', error);
+    res.status(500).json({ error: 'Failed to fetch cache stats', message: error?.message });
   }
 });
 

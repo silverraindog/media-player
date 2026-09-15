@@ -40,6 +40,7 @@ interface MenuBarProps {
   onScanSamba: () => void;
   onOpenClassifierModal: () => void;
   onOpenQuickMount: () => void;
+  onOpenManualMatch?: () => void;
   onClearThumbnailCache: () => void;
   onTriggerLocalImport: () => void;
   onExportLibraryBackup: () => void;
@@ -58,6 +59,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onScanSamba,
   onOpenClassifierModal,
   onOpenQuickMount,
+  onOpenManualMatch,
   onClearThumbnailCache,
   onTriggerLocalImport,
   onExportLibraryBackup,
@@ -191,6 +193,23 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                     </span>
                     <span className="text-[10px] text-slate-400 font-mono">⌘O</span>
                   </button>
+
+                  {onOpenManualMatch && (
+                    <button
+                      onClick={() =>
+                        executeAction(() => {
+                          onOpenManualMatch();
+                        })
+                      }
+                      className="w-full px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex items-center justify-between text-xs transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Manual Match & AI Synopsis...</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">⌘M</span>
+                    </button>
+                  )}
 
                   <button
                     onClick={() =>

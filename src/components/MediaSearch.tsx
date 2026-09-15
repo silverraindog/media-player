@@ -37,6 +37,7 @@ interface MediaSearchProps {
   sambaConfig: SambaConfig;
   onImportFiles?: (files: File[] | string[]) => Promise<void> | void;
   onSyncFromSamba?: () => void;
+  onOpenManualMatch?: (rawPathOrName?: string, mediaType?: MediaType) => void;
   isSyncing?: boolean;
   selectedMediaType?: 'all' | MediaType;
   onSelectMediaType?: (type: 'all' | MediaType) => void;
@@ -51,6 +52,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   sambaConfig,
   onImportFiles,
   onSyncFromSamba,
+  onOpenManualMatch,
   isSyncing = false,
   selectedMediaType,
   onSelectMediaType,
@@ -522,20 +524,29 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             No media matches your current filter ({selectedType}) and search query. You can drop files
             here to import them or click "Sync from Samba Share".
           </p>
-          <div className="flex items-center justify-center gap-3 pt-2">
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
             <button
               onClick={() => {
                 setSearchQuery('');
                 setSelectedType('all');
                 setOriginFilter('all');
               }}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
             >
               Reset Filters
             </button>
+            {onOpenManualMatch && (
+              <button
+                onClick={() => onOpenManualMatch(searchQuery, selectedType !== 'all' ? selectedType : undefined)}
+                className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-md shadow-purple-600/20 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Enter Name Manually & Fetch Synopsis</span>
+              </button>
+            )}
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition"
+              className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition cursor-pointer"
             >
               Import Files Now
             </button>

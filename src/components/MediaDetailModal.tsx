@@ -19,6 +19,9 @@ import {
   Database,
   Bookmark,
   Play,
+  Edit3,
+  Wand2,
+  Info,
 } from 'lucide-react';
 import { MediaMetadata, SambaConfig, EpisodeMetadata, TrackMetadata } from '../types';
 import { downloadMediaBundleZip, downloadTextFile } from '../utils/zipDownloader';
@@ -30,26 +33,37 @@ interface MediaDetailModalProps {
   onPushToSamba: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
   onPlayMedia?: (media: MediaMetadata, episode?: EpisodeMetadata, track?: TrackMetadata) => void;
+  onUpdateMedia?: (media: MediaMetadata) => void;
+  onOpenManualMatcher?: (media: MediaMetadata) => void;
   sambaConfig: SambaConfig;
 }
 
 export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
-  media,
+  media: initialMedia,
   onClose,
   onPushToSamba,
   onOpenInNfoStudio,
   onPlayMedia,
+  onUpdateMedia,
+  onOpenManualMatcher,
   sambaConfig,
 }) => {
-  if (!media) return null;
+  if (!initialMedia) return null;
 
+  const [media, setMedia] = useState<MediaMetadata>(initialMedia);
   const [activeSeasonTab, setActiveSeasonTab] = useState<number>(
-    media.seasons && media.seasons.length > 0 ? media.seasons[0].seasonNumber : 1
+    initialMedia.seasons && initialMedia.seasons.length > 0 ? initialMedia.seasons[0].seasonNumber : 1
   );
   const [copiedNfo, setCopiedNfo] = useState(false);
   const [isPushed, setIsPushed] = useState(false);
   const [isSavedSqlite, setIsSavedSqlite] = useState(false);
   const [trackedEpNum, setTrackedEpNum] = useState<number | null>(null);
+
+  // Synopsis generator states
+  const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false);
+  const [generatingEpNum, setGeneratingEpNum] = useState<number | null>(null);
+  const [editingEpNum, setEditingEpNum] = useState<number | null>(null);
+  const [customEpPlot, setCustomEpPlot] = useState<string>('');
 
   const handleCopyNfo = () => {
     const xml = generateMetadataFile(media);
@@ -111,6 +125,118 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     }
   };
 
+  // Generate or enrich main overview/synopsis with AI
+  const handleRegenerateMainSynopsis = async () => {
+    setIsGeneratingSynopsis(true);
+    try {
+      const res = await fetch('/api/metadata/generate-synopsis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: media.title,
+          type: media.type,
+          year: media.year,
+        }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const updated: MediaMetadata = {
+            ...media,
+            overview: json.data.overview || media.overview,
+            tagline: json.data.tagline || media.tagline,
+            genres: json.data.genres || media.genres,
+            rating: json.data.rating || media.rating,
+          };
+          setMedia(updated);
+          if (onUpdateMedia) onUpdateMedia(updated);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to regenerate main synopsis:', err);
+    } finally {
+      setIsGeneratingSynopsis(false);
+    }
+  };
+
+  // Generate or enrich a specific episode synopsis
+  const handleGenerateEpisodeSynopsis = async (ep: EpisodeMetadata) => {
+    setGeneratingEpNum(ep.episodeNumber);
+    try {
+      const res = await fetch('/api/metadata/generate-synopsis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: media.title,
+          type: 'series',
+          year: media.year,
+          seasonNumber: activeSeasonTab,
+          episodeNumber: ep.episodeNumber,
+          episodeTitle: ep.title,
+        }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const newPlot = json.data.plot || json.data.overview;
+          const updatedSeasons = media.seasons?.map((s) => {
+            if (s.seasonNumber !== activeSeasonTab) return s;
+            return {
+              ...s,
+              episodes: s.episodes?.map((e) => {
+                if (e.episodeNumber !== ep.episodeNumber) return e;
+                return {
+                  ...e,
+                  plot: newPlot,
+                  title: json.data.episodeTitle || e.title,
+                  rating: json.data.rating || e.rating,
+                };
+              }),
+            };
+          });
+
+          const updated: MediaMetadata = {
+            ...media,
+            seasons: updatedSeasons,
+          };
+          setMedia(updated);
+          if (onUpdateMedia) onUpdateMedia(updated);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to generate episode synopsis:', err);
+    } finally {
+      setGeneratingEpNum(null);
+    }
+  };
+
+  // Save manual edit for episode plot
+  const handleSaveCustomEpisodePlot = (ep: EpisodeMetadata) => {
+    const updatedSeasons = media.seasons?.map((s) => {
+      if (s.seasonNumber !== activeSeasonTab) return s;
+      return {
+        ...s,
+        episodes: s.episodes?.map((e) => {
+          if (e.episodeNumber !== ep.episodeNumber) return e;
+          return {
+            ...e,
+            plot: customEpPlot.trim() || e.plot,
+          };
+        }),
+      };
+    });
+
+    const updated: MediaMetadata = {
+      ...media,
+      seasons: updatedSeasons,
+    };
+    setMedia(updated);
+    if (onUpdateMedia) onUpdateMedia(updated);
+    setEditingEpNum(null);
+  };
+
   const currentSeason = media.seasons?.find((s) => s.seasonNumber === activeSeasonTab);
 
   return (
@@ -137,16 +263,31 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent"></div>
 
-          {/* Quick Play Banner Button */}
-          {onPlayMedia && (
-            <button
-              onClick={() => onPlayMedia(media)}
-              className="absolute top-4 left-6 z-20 flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition cursor-pointer"
-            >
-              <Play className="w-4 h-4 fill-white" />
-              <span>{media.type === 'album' ? 'Play Album Audio' : 'Play Video Stream'}</span>
-            </button>
-          )}
+          {/* Top action buttons */}
+          <div className="absolute top-4 left-6 z-20 flex items-center gap-2">
+            {onPlayMedia && (
+              <button
+                onClick={() => onPlayMedia(media)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-white" />
+                <span>{media.type === 'album' ? 'Play Album Audio' : 'Play Video Stream'}</span>
+              </button>
+            )}
+
+            {onOpenManualMatcher && (
+              <button
+                onClick={() => {
+                  onOpenManualMatcher(media);
+                  onClose();
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-purple-300 text-xs font-semibold border border-purple-500/40 backdrop-blur-sm transition cursor-pointer"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Manual Match / Resolve</span>
+              </button>
+            )}
+          </div>
 
           {/* Content inside header */}
           <div className="absolute bottom-4 left-6 right-6 flex items-end gap-5">
@@ -216,14 +357,32 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
 
         {/* Modal Body - Scrollable */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
-          {/* Overview & Tagline */}
-          <div className="space-y-2">
+          {/* Overview & Synopsis Section */}
+          <div className="space-y-2.5 bg-slate-950/60 p-4 rounded-xl border border-slate-800">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                <Info className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{media.type === 'series' ? 'TV Show Synopsis & Overview' : media.type === 'movie' ? 'Movie Synopsis & Overview' : 'Album Overview'}</span>
+              </span>
+
+              <button
+                type="button"
+                disabled={isGeneratingSynopsis}
+                onClick={handleRegenerateMainSynopsis}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 text-[11px] font-semibold border border-indigo-500/30 transition cursor-pointer"
+              >
+                <Wand2 className={`w-3 h-3 ${isGeneratingSynopsis ? 'animate-spin' : ''}`} />
+                <span>{isGeneratingSynopsis ? 'Generating Synopsis...' : 'Enrich Synopsis with AI'}</span>
+              </button>
+            </div>
+
             {media.tagline && (
-              <p className="text-slate-300 italic font-medium text-sm">
+              <p className="text-indigo-300 italic font-medium text-xs">
                 "{media.tagline}"
               </p>
             )}
-            <p className="text-slate-300 leading-relaxed text-sm">
+
+            <p className="text-slate-200 leading-relaxed text-xs sm:text-sm font-normal">
               {media.overview}
             </p>
 
@@ -232,7 +391,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
               {media.genres.map((g, i) => (
                 <span
                   key={i}
-                  className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700/60"
+                  className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700/60 text-[11px]"
                 >
                   {g}
                 </span>
@@ -240,13 +399,13 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             </div>
           </div>
 
-          {/* TV Series Seasons & Episodes Breakdown */}
+          {/* TV Series Seasons & Episodes Breakdown with Episode Synopses */}
           {media.type === 'series' && media.seasons && media.seasons.length > 0 && (
             <div className="space-y-3 pt-2 border-t border-slate-800">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <Tv className="w-4 h-4 text-purple-400" />
-                  <span>Seasons & Episode Guide</span>
+                  <span>Seasons & Episode Synopsis Guide</span>
                 </h3>
 
                 {/* Season Tabs */}
@@ -255,7 +414,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                     <button
                       key={s.seasonNumber}
                       onClick={() => setActiveSeasonTab(s.seasonNumber)}
-                      className={`px-3 py-1 rounded text-xs font-semibold transition ${
+                      className={`px-3 py-1 rounded text-xs font-semibold transition cursor-pointer ${
                         activeSeasonTab === s.seasonNumber
                           ? 'bg-purple-600 text-white'
                           : 'text-slate-400 hover:text-white'
@@ -267,40 +426,78 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                 </div>
               </div>
 
-              {/* Episode List */}
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {/* Episode List with Detailed Synopses */}
+              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
                 {currentSeason?.episodes?.map((ep) => {
                   const isTracked = trackedEpNum === ep.episodeNumber;
+                  const isGen = generatingEpNum === ep.episodeNumber;
+                  const isEditing = editingEpNum === ep.episodeNumber;
 
                   return (
                     <div
                       key={ep.episodeNumber}
-                      className="p-3 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl space-y-1.5 transition"
+                      className="p-3.5 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl space-y-2 transition"
                     >
                       <div className="flex items-center justify-between font-medium">
-                        <span className="text-white font-semibold">
-                          E{String(ep.episodeNumber).padStart(2, '0')} - {ep.title}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded bg-purple-950/80 border border-purple-800/80 text-purple-300 font-mono text-[11px] font-bold flex items-center justify-center">
+                            {String(ep.episodeNumber).padStart(2, '0')}
+                          </span>
+                          <span className="text-white font-semibold text-xs sm:text-sm">
+                            {ep.title}
+                          </span>
+                        </div>
+
                         <div className="flex items-center gap-2">
                           {onPlayMedia && (
                             <button
                               onClick={() => onPlayMedia(media, ep)}
-                              className="flex items-center gap-1 px-2.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition cursor-pointer shadow-sm"
+                              className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold transition cursor-pointer shadow-sm"
                               title="Play this episode"
                             >
                               <Play className="w-3 h-3 fill-white" />
                               <span>Play Ep</span>
                             </button>
                           )}
+
+                          <button
+                            type="button"
+                            disabled={isGen}
+                            onClick={() => handleGenerateEpisodeSynopsis(ep)}
+                            className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer"
+                            title="Generate/Refine AI episode synopsis"
+                          >
+                            <Sparkles className={`w-3 h-3 ${isGen ? 'animate-spin' : ''}`} />
+                            <span>{isGen ? '...' : 'AI Synopsis'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isEditing) {
+                                handleSaveCustomEpisodePlot(ep);
+                              } else {
+                                setEditingEpNum(ep.episodeNumber);
+                                setCustomEpPlot(ep.plot || '');
+                              }
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium border border-slate-700 transition cursor-pointer"
+                            title="Edit episode plot manually"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>{isEditing ? 'Save' : 'Edit'}</span>
+                          </button>
+
                           {ep.rating && (
                             <span className="text-amber-400 font-bold text-[11px]">
                               ★ {ep.rating}
                             </span>
                           )}
+
                           <button
                             id={`btn-track-ep-${ep.episodeNumber}`}
                             onClick={() => handleTrackEpisodeProgress(ep)}
-                            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold transition ${
+                            className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-semibold transition ${
                               isTracked
                                 ? 'bg-emerald-600 text-white'
                                 : 'bg-slate-800 hover:bg-indigo-600 text-indigo-300 hover:text-white'
@@ -310,23 +507,41 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                             {isTracked ? (
                               <>
                                 <Check className="w-3 h-3" />
-                                <span>Left Off Spot Saved!</span>
+                                <span>Saved!</span>
                               </>
                             ) : (
                               <>
                                 <Bookmark className="w-3 h-3" />
-                                <span>Mark Where I Left Off</span>
+                                <span>Left Off</span>
                               </>
                             )}
                           </button>
                         </div>
                       </div>
-                      {ep.plot && (
-                        <p className="text-slate-400 text-xs leading-relaxed">{ep.plot}</p>
+
+                      {/* Episode Synopsis */}
+                      {isEditing ? (
+                        <div className="space-y-1.5 pt-1">
+                          <textarea
+                            rows={3}
+                            value={customEpPlot}
+                            onChange={(e) => setCustomEpPlot(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white text-xs focus:outline-none focus:border-indigo-500"
+                            placeholder="Enter episode synopsis / plot summary..."
+                          />
+                        </div>
+                      ) : (
+                        <p className="text-slate-300 text-xs leading-relaxed bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/60">
+                          {ep.plot || `Episode ${ep.episodeNumber} of ${media.title}. Click 'AI Synopsis' to generate detailed plot.`}
+                        </p>
                       )}
-                      <div className="text-[10px] text-slate-500 font-mono">
-                        File: {media.title} - S{String(activeSeasonTab).padStart(2, '0')}E
-                        {String(ep.episodeNumber).padStart(2, '0')} - {ep.title}.mkv
+
+                      <div className="text-[10px] text-slate-500 font-mono flex items-center justify-between">
+                        <span>
+                          File: {media.title} - S{String(activeSeasonTab).padStart(2, '0')}E
+                          {String(ep.episodeNumber).padStart(2, '0')} - {ep.title}.mkv
+                        </span>
+                        {ep.airDate && <span>Air Date: {ep.airDate}</span>}
                       </div>
                     </div>
                   );
@@ -398,7 +613,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             <button
               id="modal-btn-copy-nfo"
               onClick={handleCopyNfo}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition cursor-pointer"
             >
               {copiedNfo ? (
                 <>
@@ -416,7 +631,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             <button
               id="modal-btn-sqlite"
               onClick={handleSaveToSqlite}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition ${
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
                 isSavedSqlite
                   ? 'bg-emerald-600 border-emerald-500 text-white'
                   : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border-slate-700'
@@ -442,7 +657,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                 onOpenInNfoStudio(media);
                 onClose();
               }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-purple-300 text-xs font-semibold border border-slate-700 transition"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-purple-300 text-xs font-semibold border border-slate-700 transition cursor-pointer"
             >
               <FileCode2 className="w-3.5 h-3.5" />
               <span>Edit in Studio</span>
@@ -453,7 +668,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             <button
               id="modal-btn-push-samba"
               onClick={handlePush}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition ${
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
                 isPushed
                   ? 'bg-emerald-600 text-white'
                   : 'bg-emerald-700 hover:bg-emerald-600 text-white shadow-md shadow-emerald-700/20'
@@ -475,7 +690,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             <button
               id="modal-btn-download-bundle"
               onClick={() => downloadMediaBundleZip(media)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md shadow-indigo-600/20"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md shadow-indigo-600/20 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Download Bundle (ZIP)</span>

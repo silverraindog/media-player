@@ -12,6 +12,7 @@ import { MediaDetailModal } from './components/MediaDetailModal';
 import { MediaPlayerModal } from './components/MediaPlayerModal';
 import { SqliteVault } from './components/SqliteVault';
 import { FolderClassifierModal } from './components/FolderClassifierModal';
+import { ManualMatchModal } from './components/ManualMatchModal';
 import {
   MediaMetadata,
   MediaType,
@@ -408,11 +409,37 @@ export default function App() {
   // Folder Classification and Regex Rule Engine State
   const [classifierSettings, setClassifierSettings] = useState<ClassifierSettings>(DEFAULT_CLASSIFIER_SETTINGS);
   const [isClassifierModalOpen, setIsClassifierModalOpen] = useState(false);
+  const [manualMatchModalState, setManualMatchModalState] = useState<{
+    isOpen: boolean;
+    rawPathOrName?: string;
+    mediaType?: MediaType;
+  } | null>(null);
   const [folderClassifications, setFolderClassifications] = useState<FolderScanClassification[]>([]);
   const [lastDiscoveredPaths, setLastDiscoveredPaths] = useState<string[]>([]);
   const [activeScanPath, setActiveScanPath] = useState<string>('');
   const [mediaExtensionConfig, setMediaExtensionConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
   const [isImportingShare, setIsImportingShare] = useState(false);
+
+  const handleOpenManualMatch = (rawPathOrName?: string, mediaType?: MediaType) => {
+    setManualMatchModalState({
+      isOpen: true,
+      rawPathOrName: rawPathOrName || '',
+      mediaType: mediaType || (selectedMediaType !== 'all' ? selectedMediaType : 'series'),
+    });
+  };
+
+  const handleSaveMatchedMedia = (matched: MediaMetadata) => {
+    setMediaLibrary((prev) => {
+      const filtered = prev.filter(
+        (m) => m.id !== matched.id && m.title.toLowerCase() !== matched.title.toLowerCase()
+      );
+      return [matched, ...filtered];
+    });
+    batchPushToSambaTree([matched]);
+    setManualMatchModalState(null);
+    setDetailModalMedia(matched);
+    showToast(`Saved and cataloged "${matched.title}" with AI synopsis!`);
+  };
 
   // Export full JSON backup
   const handleExportJsonBackup = () => {
@@ -1254,6 +1281,7 @@ export default function App() {
         onScanSamba={() => handleSyncSamba()}
         onOpenClassifierModal={() => handleOpenClassifierModal()}
         onOpenQuickMount={() => setActiveTab('samba-mount')}
+        onOpenManualMatch={() => handleOpenManualMatch()}
         onClearThumbnailCache={handleClearThumbnailCache}
         onTriggerLocalImport={() => {
           setActiveTab('search');
@@ -1288,6 +1316,7 @@ export default function App() {
             sambaConfig={sambaConfig}
             onImportFiles={handleImportFilesDirectly}
             onSyncFromSamba={() => handleSyncSamba()}
+            onOpenManualMatch={handleOpenManualMatch}
             isSyncing={isSyncingShare}
             selectedMediaType={selectedMediaType}
             onSelectMediaType={setSelectedMediaType}
@@ -1388,6 +1417,17 @@ export default function App() {
         sambaConfig={sambaConfig}
         customScanPath={activeScanPath}
       />
+
+      {/* Manual Match & Gemini Synopsis Resolver Modal */}
+      {manualMatchModalState?.isOpen && (
+        <ManualMatchModal
+          isOpen={manualMatchModalState.isOpen}
+          rawPathOrName={manualMatchModalState.rawPathOrName}
+          initialMediaType={manualMatchModalState.mediaType}
+          onClose={() => setManualMatchModalState(null)}
+          onSaveMatchedMedia={handleSaveMatchedMedia}
+        />
+      )}
 
       {/* Clean Minimalist Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">

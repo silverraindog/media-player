@@ -373,6 +373,84 @@ export function extractAllMediaFromSambaTree(
   return Array.from(mediaMap.values());
 }
 
+// Asynchronous, time-sliced tree extractor to guarantee zero UI lockup during large Samba share imports
+export async function extractAllMediaFromSambaTreeAsync(
+  nodes: SambaShareNode[],
+  config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG,
+  chunkSize: number = 30
+): Promise<MediaMetadata[]> {
+  const mediaMap = new Map<string, MediaMetadata>();
+
+  // Iterative work queue avoids stack overflow and allows non-blocking slicing
+  const queue: Array<{ node: SambaShareNode; parentPath: string }> = [];
+  nodes.forEach((n) => queue.push({ node: n, parentPath: '' }));
+
+  let processedCount = 0;
+
+  while (queue.length > 0) {
+    const { node, parentPath } = queue.shift()!;
+    processedCount++;
+
+    const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+
+    if (node.matchedMedia) {
+      mediaMap.set(node.matchedMedia.title.toLowerCase(), {
+        ...node.matchedMedia,
+        playbackUrl:
+          node.matchedMedia.playbackUrl ||
+          (node.matchedMedia.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie),
+      });
+    } else if (node.type === 'folder') {
+      const hasMediaChildren = node.children?.some(
+        (c) => c.type === 'file' && isMediaFile(c.name, config)
+      );
+
+      const isRootContainer = [
+        'movies',
+        'series',
+        'franchises',
+        'audio books',
+        'books',
+        'music',
+        'sort',
+        'lost+found',
+        'anime',
+        'documentaries',
+        'tv shows',
+      ].includes(node.name.toLowerCase());
+      const isSeasonFolder = /^season\s*\d+$/i.test(node.name.trim());
+
+      if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren)) {
+        const item = nodeToMediaMetadata(node, parentPath);
+        if (item) {
+          mediaMap.set(item.title.toLowerCase(), item);
+        }
+      }
+    } else if (node.type === 'file') {
+      if (isMediaFile(node.name, config)) {
+        const item = nodeToMediaMetadata(node, parentPath);
+        if (item && !mediaMap.has(item.title.toLowerCase())) {
+          mediaMap.set(item.title.toLowerCase(), item);
+        }
+      }
+    }
+
+    if (node.children && node.children.length > 0) {
+      for (const child of node.children) {
+        queue.push({ node: child, parentPath: fullPath });
+      }
+    }
+
+    // Yield to the browser main thread after every chunk
+    if (processedCount % chunkSize === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  return Array.from(mediaMap.values());
+}
+
+
 // Convert parsed cleaner files into MediaMetadata
 export function parsedFileToMediaMetadata(item: ParsedFileInfo): MediaMetadata {
   const type = item.detectedType || 'movie';

@@ -52,6 +52,7 @@ interface SambaExplorerProps {
   onOpenClassifierModal?: () => void;
   onPopulateMediaLibrary?: () => void;
   isSyncing?: boolean;
+  isImporting?: boolean;
   isMountedInFinder?: boolean;
   mountedVolumeInfo?: any;
   extensionConfig?: MediaScanExtensionConfig;
@@ -70,6 +71,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onOpenClassifierModal,
   onPopulateMediaLibrary,
   isSyncing = false,
+  isImporting = false,
   isMountedInFinder = false,
   mountedVolumeInfo = null,
   extensionConfig,
@@ -95,10 +97,13 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const handleUpdateExtConfig = onUpdateExtensionConfig || setLocalExtConfig;
   const [activeFilterExtension, setActiveFilterExtension] = useState<string | null>(null);
 
-  // Automatically pre-warm thumbnail storage layer on mount / tree change
+  // Debounced pre-warm of thumbnail storage layer on mount / tree change
   useEffect(() => {
     if (sambaTree && sambaTree.length > 0) {
-      thumbnailStorage.prewarmSambaTree(sambaTree);
+      const timer = setTimeout(() => {
+        thumbnailStorage.prewarmSambaTree(sambaTree);
+      }, 300);
+      return () => clearTimeout(timer);
     }
   }, [sambaTree]);
 
@@ -392,6 +397,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           }}
           onSyncTrigger={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
           onPopulateMediaLibrary={onPopulateMediaLibrary}
+          isImporting={isImporting}
         />
       )}
 
@@ -411,6 +417,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               }
             }}
             onSyncTrigger={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
+            onPopulateMediaLibrary={onPopulateMediaLibrary}
+            isImporting={isImporting}
           />
 
           {/* Dedicated Thumbnail Metadata Storage Layer Telemetry & Control Bar */}

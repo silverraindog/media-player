@@ -36,6 +36,9 @@ class ThumbnailStorageService {
   private isInitialized: boolean = false;
   private pendingBackendSync: ThumbnailMetadata[] = [];
   private syncTimer: any = null;
+  private notifyTimeout: any = null;
+  private localStorageTimer: any = null;
+  private activePrewarmToken: number = 0;
 
   constructor() {
     this.initFromLocalStorage();
@@ -156,6 +159,14 @@ class ThumbnailStorageService {
     }
   }
 
+  // Debounced LocalStorage persist to keep UI smooth and non-blocking
+  private scheduleLocalStoragePersist() {
+    if (this.localStorageTimer) clearTimeout(this.localStorageTimer);
+    this.localStorageTimer = setTimeout(() => {
+      this.persistToLocalStorage();
+    }, 500);
+  }
+
   // Queue thumbnail metadata for persistence to SQLite backend
   private scheduleBackendSync(thumb: ThumbnailMetadata) {
     this.pendingBackendSync.push(thumb);
@@ -206,7 +217,7 @@ class ThumbnailStorageService {
     return mediaPath.trim().replace(/^(\/\/|[\\/])+/, '').replace(/\\/g, '/');
   }
 
-  // Instant synchronous lookup from memory / local cache
+  // Instant synchronous lookup from memory / local cache - purely non-reactive to avoid render storms
   public get(mediaPath: string): ThumbnailMetadata | null {
     const t0 = performance.now();
     const key = this.normalizeKey(mediaPath);
@@ -218,14 +229,12 @@ class ThumbnailStorageService {
       this.hitCount++;
       const duration = performance.now() - t0;
       this.totalLookupDurationMs += duration;
-      this.notifyListeners();
       return item;
     }
 
     this.missCount++;
     const duration = performance.now() - t0;
     this.totalLookupDurationMs += duration;
-    this.notifyListeners();
     return null;
   }
 
@@ -244,19 +253,20 @@ class ThumbnailStorageService {
     }
 
     this.memoryCache.set(key, metadata);
-    this.persistToLocalStorage();
+    this.scheduleLocalStoragePersist();
     this.scheduleBackendSync(metadata);
     this.notifyListeners();
   }
 
-  // Batch store multiple thumbnails
+  // Batch store multiple thumbnails efficiently
   public setBatch(items: ThumbnailMetadata[]): void {
+    if (items.length === 0) return;
     items.forEach((item) => {
       const key = this.normalizeKey(item.mediaPath);
       this.memoryCache.set(key, item);
       this.pendingBackendSync.push(item);
     });
-    this.persistToLocalStorage();
+    this.scheduleLocalStoragePersist();
     this.scheduleBackendSync(items[0]);
     this.notifyListeners();
   }
@@ -278,9 +288,11 @@ class ThumbnailStorageService {
     const mediaType = node.mediaType || detectMediaType(fullPath);
     const category = getFileCategory(node.name);
 
+    let meta: ThumbnailMetadata;
+
     // 1. Check if node has matchedMedia
     if (node.matchedMedia && node.matchedMedia.posterUrl) {
-      const meta: ThumbnailMetadata = {
+      meta = {
         id: `thumb-${node.id || Math.random().toString(36).substring(2, 9)}`,
         mediaPath: fullPath,
         title: node.matchedMedia.title,
@@ -301,133 +313,153 @@ class ThumbnailStorageService {
         cacheTier: 'memory_lru',
         isSidecarLocal: Boolean(node.hasPoster),
       };
-      this.set(meta);
-      return meta;
+    } else {
+      // 2. Check match against Curated Database
+      const matchedCurated = curatedList.find((c) => {
+        const lower = c.title.toLowerCase();
+        const nodeLower = node.name.toLowerCase();
+        return (
+          nodeLower.includes(lower) ||
+          lower.includes(parsedTitle.toLowerCase()) ||
+          (parsedYear && c.year === parsedYear && nodeLower.includes(lower))
+        );
+      });
+
+      if (matchedCurated && matchedCurated.posterUrl) {
+        meta = {
+          id: `thumb-curated-${matchedCurated.id}-${node.id}`,
+          mediaPath: fullPath,
+          title: matchedCurated.title,
+          mediaType: matchedCurated.type,
+          thumbnailUrl: matchedCurated.posterUrl,
+          fanartUrl: matchedCurated.fanartUrl,
+          width: 800,
+          height: 1200,
+          aspectRatio: matchedCurated.type === 'album' ? 'square' : 'poster',
+          colorDominant: matchedCurated.type === 'album' ? '#164e63' : '#1e1b4b',
+          source: 'curated_library',
+          fileSizeBytes: 380000,
+          format: 'jpg',
+          resolutionLabel: matchedCurated.type === 'album' ? '800 × 800 (1:1)' : '800 × 1200 (2:3)',
+          cachedAt: Date.now(),
+          lastAccessedAt: Date.now(),
+          hitCount: 1,
+          cacheTier: 'memory_lru',
+          isSidecarLocal: Boolean(node.hasPoster),
+        };
+      } else {
+        // 3. Fallback based on format and category
+        let chosenPoster = DEFAULT_FALLBACK_POSTERS.movie;
+        let chosenAspect: 'poster' | 'fanart' | 'square' = 'poster';
+        let chosenDominant = DOMINANT_COLORS_BY_GENRE.default;
+        let label = '600 × 900 (2:3)';
+        let thumbType: 'movie' | 'series' | 'album' | 'book' | 'disc_image' = 'movie';
+
+        if (category === 'disc_images' || node.name.endsWith('.iso')) {
+          chosenPoster = DEFAULT_FALLBACK_POSTERS.disc;
+          chosenAspect = 'poster';
+          chosenDominant = DOMINANT_COLORS_BY_GENRE.disc;
+          label = '800 × 1200 (2:3)';
+          thumbType = 'disc_image';
+        } else if (category === 'books' || fullPath.toLowerCase().includes('book')) {
+          chosenPoster = DEFAULT_FALLBACK_POSTERS.book;
+          chosenAspect = 'poster';
+          chosenDominant = DOMINANT_COLORS_BY_GENRE.book;
+          label = '600 × 900 (2:3)';
+          thumbType = 'book';
+        } else if (category === 'audio' || mediaType === 'album') {
+          chosenPoster = DEFAULT_FALLBACK_POSTERS.album;
+          chosenAspect = 'square';
+          chosenDominant = DOMINANT_COLORS_BY_GENRE.music;
+          label = '600 × 600 (1:1)';
+          thumbType = 'album';
+        } else if (mediaType === 'series' || fullPath.toLowerCase().includes('series')) {
+          chosenPoster = DEFAULT_FALLBACK_POSTERS.series;
+          chosenAspect = 'poster';
+          chosenDominant = DOMINANT_COLORS_BY_GENRE.series;
+          label = '800 × 1200 (2:3)';
+          thumbType = 'series';
+        }
+
+        meta = {
+          id: `thumb-gen-${Math.random().toString(36).substring(2, 9)}`,
+          mediaPath: fullPath,
+          title: parsedTitle || node.name,
+          mediaType: thumbType as any,
+          thumbnailUrl: chosenPoster,
+          width: chosenAspect === 'square' ? 600 : 800,
+          height: chosenAspect === 'square' ? 600 : 1200,
+          aspectRatio: chosenAspect,
+          colorDominant: chosenDominant,
+          source: node.hasPoster ? 'sidecar_poster' : 'generated_fallback',
+          fileSizeBytes: 240000,
+          format: 'jpg',
+          resolutionLabel: label,
+          cachedAt: Date.now(),
+          lastAccessedAt: Date.now(),
+          hitCount: 1,
+          cacheTier: 'memory_lru',
+          isSidecarLocal: Boolean(node.hasPoster),
+        };
+      }
     }
 
-    // 2. Check match against Curated Database
-    const matchedCurated = curatedList.find((c) => {
-      const lower = c.title.toLowerCase();
-      const nodeLower = node.name.toLowerCase();
-      return (
-        nodeLower.includes(lower) ||
-        lower.includes(parsedTitle.toLowerCase()) ||
-        (parsedYear && c.year === parsedYear && nodeLower.includes(lower))
-      );
-    });
-
-    if (matchedCurated && matchedCurated.posterUrl) {
-      const meta: ThumbnailMetadata = {
-        id: `thumb-curated-${matchedCurated.id}-${node.id}`,
-        mediaPath: fullPath,
-        title: matchedCurated.title,
-        mediaType: matchedCurated.type,
-        thumbnailUrl: matchedCurated.posterUrl,
-        fanartUrl: matchedCurated.fanartUrl,
-        width: 800,
-        height: 1200,
-        aspectRatio: matchedCurated.type === 'album' ? 'square' : 'poster',
-        colorDominant: matchedCurated.type === 'album' ? '#164e63' : '#1e1b4b',
-        source: 'curated_library',
-        fileSizeBytes: 380000,
-        format: 'jpg',
-        resolutionLabel: matchedCurated.type === 'album' ? '800 × 800 (1:1)' : '800 × 1200 (2:3)',
-        cachedAt: Date.now(),
-        lastAccessedAt: Date.now(),
-        hitCount: 1,
-        cacheTier: 'memory_lru',
-        isSidecarLocal: Boolean(node.hasPoster),
-      };
-      this.set(meta);
-      return meta;
-    }
-
-    // 3. Fallback based on format and category
-    let chosenPoster = DEFAULT_FALLBACK_POSTERS.movie;
-    let chosenAspect: 'poster' | 'fanart' | 'square' = 'poster';
-    let chosenDominant = DOMINANT_COLORS_BY_GENRE.default;
-    let label = '600 × 900 (2:3)';
-    let thumbType: 'movie' | 'series' | 'album' | 'book' | 'disc_image' = 'movie';
-
-    if (category === 'disc_images' || node.name.endsWith('.iso')) {
-      chosenPoster = DEFAULT_FALLBACK_POSTERS.disc;
-      chosenAspect = 'poster';
-      chosenDominant = DOMINANT_COLORS_BY_GENRE.disc;
-      label = '800 × 1200 (2:3)';
-      thumbType = 'disc_image';
-    } else if (category === 'books' || fullPath.toLowerCase().includes('book')) {
-      chosenPoster = DEFAULT_FALLBACK_POSTERS.book;
-      chosenAspect = 'poster';
-      chosenDominant = DOMINANT_COLORS_BY_GENRE.book;
-      label = '600 × 900 (2:3)';
-      thumbType = 'book';
-    } else if (category === 'audio' || mediaType === 'album') {
-      chosenPoster = DEFAULT_FALLBACK_POSTERS.album;
-      chosenAspect = 'square';
-      chosenDominant = DOMINANT_COLORS_BY_GENRE.music;
-      label = '600 × 600 (1:1)';
-      thumbType = 'album';
-    } else if (mediaType === 'series' || fullPath.toLowerCase().includes('series')) {
-      chosenPoster = DEFAULT_FALLBACK_POSTERS.series;
-      chosenAspect = 'poster';
-      chosenDominant = DOMINANT_COLORS_BY_GENRE.series;
-      label = '800 × 1200 (2:3)';
-      thumbType = 'series';
-    }
-
-    const newThumb: ThumbnailMetadata = {
-      id: `thumb-gen-${Math.random().toString(36).substring(2, 9)}`,
-      mediaPath: fullPath,
-      title: parsedTitle || node.name,
-      mediaType: thumbType as any,
-      thumbnailUrl: chosenPoster,
-      width: chosenAspect === 'square' ? 600 : 800,
-      height: chosenAspect === 'square' ? 600 : 1200,
-      aspectRatio: chosenAspect,
-      colorDominant: chosenDominant,
-      source: node.hasPoster ? 'sidecar_poster' : 'generated_fallback',
-      fileSizeBytes: 240000,
-      format: 'jpg',
-      resolutionLabel: label,
-      cachedAt: Date.now(),
-      lastAccessedAt: Date.now(),
-      hitCount: 1,
-      cacheTier: 'memory_lru',
-      isSidecarLocal: Boolean(node.hasPoster),
-    };
-
-    this.set(newThumb);
-    return newThumb;
+    // Cache in memory and schedule persistence without triggering render storms
+    const key = this.normalizeKey(fullPath);
+    this.memoryCache.set(key, meta);
+    this.scheduleLocalStoragePersist();
+    this.scheduleBackendSync(meta);
+    return meta;
   }
 
-  // Pre-warm thumbnail cache for all discovered media files and folders in the Samba share
+  // Pre-warm thumbnail cache for all discovered media files and folders without blocking the UI thread
   public prewarmSambaTree(
     tree: SambaShareNode[],
     curatedList: MediaMetadata[] = CURATED_MEDIA_DATABASE
   ): { cached: number; totalScanned: number } {
-    let cachedCount = 0;
-    let totalScanned = 0;
-
+    // 1. Traverse tree quickly to collect candidate nodes
+    const candidates: { node: SambaShareNode; parentPath: string }[] = [];
     const traverse = (nodes: SambaShareNode[], parentPath: string = '') => {
       nodes.forEach((node) => {
-        totalScanned++;
         const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
-
-        // Pre-resolve media items or folders with posters / media children
         if (node.type === 'file' || node.matchedMedia || node.hasPoster || node.hasNfo) {
-          const res = this.resolveForNode(node, parentPath, curatedList);
-          if (res) cachedCount++;
+          candidates.push({ node, parentPath });
         }
-
         if (node.children && node.children.length > 0) {
           traverse(node.children, fullPath);
         }
       });
     };
-
     traverse(tree);
-    this.notifyListeners();
-    return { cached: cachedCount, totalScanned };
+
+    // Cancel any in-flight prewarm run for previous tree
+    const currentToken = ++this.activePrewarmToken;
+    let index = 0;
+    const chunkSize = 25;
+
+    // Time-sliced non-blocking background queue
+    const processChunk = () => {
+      if (currentToken !== this.activePrewarmToken) return;
+
+      const end = Math.min(index + chunkSize, candidates.length);
+      for (let i = index; i < end; i++) {
+        const item = candidates[i];
+        this.resolveForNode(item.node, item.parentPath, curatedList);
+      }
+      index = end;
+
+      if (index < candidates.length) {
+        // Yield to the browser main thread
+        setTimeout(processChunk, 0);
+      } else {
+        this.notifyListeners();
+      }
+    };
+
+    // Kick off time-sliced processing asynchronously
+    setTimeout(processChunk, 0);
+
+    return { cached: this.memoryCache.size, totalScanned: candidates.length };
   }
 
   // Evict single item or clear entire cache

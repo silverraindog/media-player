@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   FolderTree,
   FileVideo,
@@ -13,6 +13,7 @@ import {
   FileText,
   Filter,
   Zap,
+  RotateCw,
 } from 'lucide-react';
 import { SambaShareNode } from '../types';
 import { getFileCategory, getFileExtension } from '../utils/mediaExtractor';
@@ -23,6 +24,7 @@ interface DiscoveredFilesInspectorProps {
   onSelectNode?: (node: SambaShareNode) => void;
   onSyncTrigger?: () => void;
   onPopulateMediaLibrary?: () => void;
+  isImporting?: boolean;
 }
 
 export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> = ({
@@ -30,32 +32,35 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
   onSelectNode,
   onSyncTrigger,
   onPopulateMediaLibrary,
+  isImporting = false,
 }) => {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [extensionFilter, setExtensionFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // Flatten tree to get all discovered files
-  const extractFiles = (
-    nodes: SambaShareNode[],
-    parentCategory: string = 'General'
-  ): Array<{ node: SambaShareNode; category: string; fullPath: string; extension: string; fileCat: string | null }> => {
-    let results: Array<{ node: SambaShareNode; category: string; fullPath: string; extension: string; fileCat: string | null }> = [];
-    nodes.forEach((node) => {
-      const cat = parentCategory === 'General' ? node.name : parentCategory;
-      if (node.type === 'file') {
-        const ext = getFileExtension(node.name);
-        const fileCat = getFileCategory(node.name);
-        results.push({ node, category: cat, fullPath: node.path, extension: ext, fileCat });
-      }
-      if (node.children && node.children.length > 0) {
-        results = results.concat(extractFiles(node.children, cat));
-      }
-    });
-    return results;
-  };
+  // Flatten tree to get all discovered files with memoization
+  const allDiscoveredFiles = useMemo(() => {
+    const results: Array<{ node: SambaShareNode; category: string; fullPath: string; extension: string; fileCat: string | null }> = [];
+    const stack: Array<{ nodes: SambaShareNode[]; parentCategory: string }> = [
+      { nodes: sambaTree, parentCategory: 'General' },
+    ];
 
-  const allDiscoveredFiles = extractFiles(sambaTree);
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      for (const node of current.nodes) {
+        const cat = current.parentCategory === 'General' ? node.name : current.parentCategory;
+        if (node.type === 'file') {
+          const ext = getFileExtension(node.name);
+          const fileCat = getFileCategory(node.name);
+          results.push({ node, category: cat, fullPath: node.path, extension: ext, fileCat });
+        }
+        if (node.children && node.children.length > 0) {
+          stack.push({ nodes: node.children, parentCategory: cat });
+        }
+      }
+    }
+    return results;
+  }, [sambaTree]);
 
   const categories = ['all', ...Array.from(new Set(allDiscoveredFiles.map((f) => f.category)))];
   const uniqueExtensions = Array.from(new Set(allDiscoveredFiles.map((f) => f.extension).filter(Boolean)));
@@ -137,11 +142,16 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
             <button
               id="inspector-populate-all-media-btn"
               onClick={onPopulateMediaLibrary}
-              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition cursor-pointer"
+              disabled={isImporting}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               title="Populate All Media, TV Series, Movies, and Music Albums tabs with these discovered files"
             >
-              <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-              <span>Import to All Media</span>
+              {isImporting ? (
+                <RotateCw className="w-3.5 h-3.5 text-white animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+              )}
+              <span>{isImporting ? 'Importing Media...' : 'Import to All Media'}</span>
             </button>
           )}
 
@@ -250,7 +260,7 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
             </div>
           ) : (
             filteredFiles.map(({ node, category, fullPath, extension, fileCat }, idx) => {
-              const thumb = thumbnailStorage.resolveForNode(node, fullPath);
+              const thumb = thumbnailStorage.get(fullPath) || thumbnailStorage.resolveForNode(node, fullPath);
               return (
                 <div
                   key={node.id || idx}

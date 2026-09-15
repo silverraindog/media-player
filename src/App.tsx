@@ -26,6 +26,7 @@ import {
 import { CURATED_MEDIA_DATABASE } from './data/curatedMedia';
 import {
   extractAllMediaFromSambaTree,
+  extractAllMediaFromSambaTreeAsync,
   parsedFileToMediaMetadata,
   parseTitleAndYear,
   detectMediaType,
@@ -406,6 +407,7 @@ export default function App() {
   const [lastDiscoveredPaths, setLastDiscoveredPaths] = useState<string[]>([]);
   const [activeScanPath, setActiveScanPath] = useState<string>('');
   const [mediaExtensionConfig, setMediaExtensionConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
+  const [isImportingShare, setIsImportingShare] = useState(false);
 
   // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
@@ -535,59 +537,82 @@ export default function App() {
     }
   };
 
-  const handlePushToSamba = (media: MediaMetadata) => {
-    const rootCategory =
-      media.type === 'movie' ? 'Movies' : media.type === 'series' ? 'TV Shows' : 'Music';
-    const folderTitle = `${media.title} (${media.year})`;
+  const batchPushToSambaTree = (mediaItems: MediaMetadata[]) => {
+    if (mediaItems.length === 0) return;
 
     setSambaTree((prevTree) => {
+      const rootCategories = new Set(
+        mediaItems.map((m) =>
+          m.type === 'movie' ? 'Movies' : m.type === 'series' ? 'TV Shows' : 'Music'
+        )
+      );
+
       return prevTree.map((rootNode) => {
-        if (rootNode.name !== rootCategory) return rootNode;
+        if (!rootCategories.has(rootNode.name)) return rootNode;
 
-        // Check if item folder already exists
-        const exists = rootNode.children?.some((c) => c.name.includes(media.title));
-        if (exists) return rootNode;
+        const currentChildren = [...(rootNode.children || [])];
+        const newFolderNodes: SambaShareNode[] = [];
 
-        const newFolderNode: SambaShareNode = {
-          id: `folder-${media.id}-${Date.now()}`,
-          name: folderTitle,
-          path: `${rootCategory}/${folderTitle}`,
-          type: 'folder',
-          hasNfo: true,
-          hasPoster: true,
-          mediaType: media.type,
-          matchedMedia: media,
-          children: [
-            {
-              id: `file-nfo-${media.id}`,
-              name: media.type === 'movie' ? 'movie.nfo' : media.type === 'series' ? 'tvshow.nfo' : 'album.nfo',
-              path: `${rootCategory}/${folderTitle}/${media.type === 'movie' ? 'movie.nfo' : media.type === 'series' ? 'tvshow.nfo' : 'album.nfo'}`,
-              type: 'file',
-              size: '2.5 KB',
-            },
-            {
-              id: `file-poster-${media.id}`,
-              name: media.type === 'album' ? 'folder.jpg' : 'poster.jpg',
-              path: `${rootCategory}/${folderTitle}/${media.type === 'album' ? 'folder.jpg' : 'poster.jpg'}`,
-              type: 'file',
-              size: '410 KB',
-            },
-            ...media.recommendedFilenames.map((fn, idx) => ({
-              id: `file-media-${media.id}-${idx}`,
-              name: fn,
-              path: `${rootCategory}/${folderTitle}/${fn}`,
-              type: 'file' as const,
-              size: media.type === 'album' ? '28.4 MB' : '2.1 GB',
-            })),
-          ],
-        };
+        mediaItems.forEach((media) => {
+          const rootCategory =
+            media.type === 'movie' ? 'Movies' : media.type === 'series' ? 'TV Shows' : 'Music';
+          if (rootNode.name !== rootCategory) return;
+
+          const folderTitle = `${media.title} (${media.year})`;
+          const exists = currentChildren.some((c) => c.name.includes(media.title));
+          if (exists) return;
+
+          const newFolderNode: SambaShareNode = {
+            id: `folder-${media.id}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            name: folderTitle,
+            path: `${rootCategory}/${folderTitle}`,
+            type: 'folder',
+            hasNfo: true,
+            hasPoster: true,
+            mediaType: media.type,
+            matchedMedia: media,
+            children: [
+              {
+                id: `file-nfo-${media.id}`,
+                name: media.type === 'movie' ? 'movie.nfo' : media.type === 'series' ? 'tvshow.nfo' : 'album.nfo',
+                path: `${rootCategory}/${folderTitle}/${media.type === 'movie' ? 'movie.nfo' : media.type === 'series' ? 'tvshow.nfo' : 'album.nfo'}`,
+                type: 'file',
+                size: '2.5 KB',
+              },
+              {
+                id: `file-poster-${media.id}`,
+                name: media.type === 'album' ? 'folder.jpg' : 'poster.jpg',
+                path: `${rootCategory}/${folderTitle}/${media.type === 'album' ? 'folder.jpg' : 'poster.jpg'}`,
+                type: 'file',
+                size: '410 KB',
+              },
+              ...media.recommendedFilenames.map((fn, idx) => ({
+                id: `file-media-${media.id}-${idx}`,
+                name: fn,
+                path: `${rootCategory}/${folderTitle}/${fn}`,
+                type: 'file' as const,
+                size: media.type === 'album' ? '28.4 MB' : '2.1 GB',
+              })),
+            ],
+          };
+          newFolderNodes.push(newFolderNode);
+        });
+
+        if (newFolderNodes.length === 0) return rootNode;
 
         return {
           ...rootNode,
-          children: [newFolderNode, ...(rootNode.children || [])],
+          children: [...newFolderNodes, ...currentChildren],
         };
       });
     });
+  };
+
+  const handlePushToSamba = (media: MediaMetadata) => {
+    batchPushToSambaTree([media]);
+    const rootCategory =
+      media.type === 'movie' ? 'Movies' : media.type === 'series' ? 'TV Shows' : 'Music';
+    const folderTitle = `${media.title} (${media.year})`;
 
     setSyncLogs((prev) => [
       {
@@ -605,14 +630,9 @@ export default function App() {
   };
 
   const handleBatchPushToSamba = (items: ParsedFileInfo[]) => {
-    const newMediaItems: MediaMetadata[] = [];
-    items.forEach((item) => {
-      const syntheticMedia: MediaMetadata = parsedFileToMediaMetadata(item);
-      newMediaItems.push(syntheticMedia);
-      handlePushToSamba(syntheticMedia);
-    });
+    const newMediaItems: MediaMetadata[] = items.map((it) => parsedFileToMediaMetadata(it));
+    batchPushToSambaTree(newMediaItems);
 
-    // Also populate All Media, TV Series, Movies, and Music Albums
     setMediaLibrary((prev) => {
       const map = new Map<string, MediaMetadata>();
       prev.forEach((m) => map.set(m.title.toLowerCase(), m));
@@ -623,6 +643,18 @@ export default function App() {
       });
       return Array.from(map.values());
     });
+
+    setSyncLogs((prev) => [
+      {
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'samba_pushed',
+        title: `Pushed ${newMediaItems.length} items to Samba`,
+        details: `Batch pushed ${newMediaItems.length} media items with metadata to Samba share`,
+        status: 'success',
+      },
+      ...prev,
+    ]);
 
     showToast(`Organized & pushed ${items.length} files to Samba share & All Media!`);
     setActiveTab('explorer');
@@ -644,20 +676,33 @@ export default function App() {
     showToast(`Added ${items.length} items to All Media, TV Series, Movies, and Music Albums!`);
   };
 
-  const handlePopulateMediaLibraryFromSamba = () => {
-    const discoveredMedia = extractAllMediaFromSambaTree(sambaTree);
-    setMediaLibrary((prev) => {
-      const map = new Map<string, MediaMetadata>();
-      prev.forEach((m) => map.set(m.title.toLowerCase(), m));
-      discoveredMedia.forEach((m) => {
-        if (!map.has(m.title.toLowerCase())) {
-          map.set(m.title.toLowerCase(), m);
-        }
-      });
-      return Array.from(map.values());
-    });
+  const handlePopulateMediaLibraryFromSamba = async () => {
+    if (isImportingShare) return;
+    setIsImportingShare(true);
+    showToast('Importing media catalog from Samba share...');
+    // Allow UI to render loading state before heavy processing
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
-    showToast(`Populated All Media with ${discoveredMedia.length} discovered items from Samba share!`);
+    try {
+      const discoveredMedia = await extractAllMediaFromSambaTreeAsync(sambaTree, mediaExtensionConfig);
+      setMediaLibrary((prev) => {
+        const map = new Map<string, MediaMetadata>();
+        prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+        discoveredMedia.forEach((m) => {
+          if (!map.has(m.title.toLowerCase())) {
+            map.set(m.title.toLowerCase(), m);
+          }
+        });
+        return Array.from(map.values());
+      });
+
+      showToast(`Populated All Media with ${discoveredMedia.length} discovered items from Samba share!`);
+    } catch (err: any) {
+      console.error('Error importing from Samba share:', err);
+      showToast('Error importing media from share');
+    } finally {
+      setIsImportingShare(false);
+    }
   };
 
   const handleImportFilesDirectly = async (filesOrNames: File[] | string[]) => {
@@ -713,8 +758,20 @@ export default function App() {
         return Array.from(map.values());
       });
 
-      // Also add to SambaTree so it reflects in the Explorer & Inspector
-      newMedia.forEach((m) => handlePushToSamba(m));
+      // Batch add to SambaTree so it reflects in the Explorer & Inspector in ONE single update
+      batchPushToSambaTree(newMedia);
+
+      setSyncLogs((prev) => [
+        {
+          id: `log-${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'samba_pushed',
+          title: `Imported ${newMedia.length} files to Samba`,
+          details: `Added ${newMedia.length} files with .nfo and artwork to Samba share`,
+          status: 'success',
+        },
+        ...prev,
+      ]);
 
       showToast(`Successfully imported ${newMedia.length} files to All Media, TV Series, Movies, and Music Albums!`);
     } catch (err) {
@@ -872,7 +929,8 @@ export default function App() {
     });
 
     setSambaTree(newTree);
-    const discoveredMedia = extractAllMediaFromSambaTree(newTree);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const discoveredMedia = await extractAllMediaFromSambaTreeAsync(newTree, mediaExtensionConfig);
     setMediaLibrary((prev) => {
       const map = new Map<string, MediaMetadata>();
       prev.forEach((m) => map.set(m.title.toLowerCase(), m));
@@ -1069,9 +1127,11 @@ export default function App() {
       });
 
       setSambaTree(newTree);
+      // Yield to let React render tree before extraction
+      await new Promise((resolve) => setTimeout(resolve, 20));
 
       // 4. Extract discovered media into All Media, TV Series, Movies, and Music Albums tabs
-      const discoveredMedia = extractAllMediaFromSambaTree(newTree, mediaExtensionConfig);
+      const discoveredMedia = await extractAllMediaFromSambaTreeAsync(newTree, mediaExtensionConfig);
       setMediaLibrary((prev) => {
         const map = new Map<string, MediaMetadata>();
         // Retain curated & existing items
@@ -1196,6 +1256,7 @@ export default function App() {
             onOpenClassifierModal={() => handleOpenClassifierModal()}
             onPopulateMediaLibrary={handlePopulateMediaLibraryFromSamba}
             isSyncing={isSyncingShare}
+            isImporting={isImportingShare}
             isMountedInFinder={isMountedInFinder}
             mountedVolumeInfo={mountedVolumeInfo}
             extensionConfig={mediaExtensionConfig}

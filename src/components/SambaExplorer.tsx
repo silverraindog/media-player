@@ -250,7 +250,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 flex-1 flex flex-col min-h-0 w-full">
       {/* Top Banner */}
       <div className="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -336,6 +336,22 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Live Sync / Import Progress Indicator Banner */}
+      {(isSyncing || isImporting) && (
+        <div className="bg-indigo-950/60 border border-indigo-500/30 rounded-2xl p-4 shadow-lg space-y-2">
+          <div className="flex items-center justify-between text-xs font-semibold text-indigo-200">
+            <span className="flex items-center gap-2">
+              <RotateCw className="w-4 h-4 text-indigo-400 animate-spin" />
+              <span>{isSyncing ? 'Scanning Samba network share and indexing files...' : 'Importing media structure and warming thumbnail cache...'}</span>
+            </span>
+            <span className="font-mono text-[11px] text-emerald-400">Time-sliced async processing active</span>
+          </div>
+          <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-indigo-500/20">
+            <div className="bg-gradient-to-r from-indigo-500 via-emerald-500 to-indigo-500 h-full w-full animate-pulse rounded-full"></div>
+          </div>
+        </div>
+      )}
 
       {/* Media Format & Extension Controller */}
       <MediaExtensionManager

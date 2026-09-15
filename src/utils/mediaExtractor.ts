@@ -373,11 +373,11 @@ export function extractAllMediaFromSambaTree(
   return Array.from(mediaMap.values());
 }
 
-// Asynchronous, time-sliced tree extractor to guarantee zero UI lockup during large Samba share imports
+// Asynchronous, time-sliced tree extractor using requestIdleCallback to guarantee zero UI lockup during large Samba share imports
 export async function extractAllMediaFromSambaTreeAsync(
   nodes: SambaShareNode[],
   config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG,
-  chunkSize: number = 30
+  chunkSize: number = 40
 ): Promise<MediaMetadata[]> {
   const mediaMap = new Map<string, MediaMetadata>();
 
@@ -441,9 +441,15 @@ export async function extractAllMediaFromSambaTreeAsync(
       }
     }
 
-    // Yield to the browser main thread after every chunk
+    // Yield to the browser main thread using requestIdleCallback / setTimeout after every chunk
     if (processedCount % chunkSize === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => {
+        if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+          window.requestIdleCallback(() => resolve(), { timeout: 50 });
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
     }
   }
 

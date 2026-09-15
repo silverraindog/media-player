@@ -173,28 +173,50 @@ Ensure high factual accuracy for real movies, series, or albums. If it's a TV sh
 // Parse messy release filenames (e.g. Breaking.Bad.S01E01.720p.BluRay.x264.mkv)
 app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => {
   try {
-    const { filenames } = req.body;
+    const { filenames, useAi = false } = req.body;
     if (!filenames || !Array.isArray(filenames)) {
       return res.status(400).json({ error: 'filenames array is required' });
     }
 
     const ai = getGenAI();
-    if (!ai) {
-      // Regex-based fallback parser
+    // Fast regex/rule parser handles files in <2ms without network/LLM bottleneck
+    if (!useAi || !ai) {
       const parsed = filenames.map((fn: string, index: number) => {
         let detectedType: 'movie' | 'series' | 'album' = 'movie';
-        let title = fn.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ');
+        let cleanName = fn.replace(/\.[^/.]+$/, '');
+        let title = cleanName.replace(/[\._]/g, ' ');
         let year: number | undefined;
         let season: number | undefined;
         let episode: number | undefined;
+        let detectedResolution = '1080p';
+        let detectedCodec = 'x264';
+        let detectedAudio = 'AAC';
 
-        // Check for S01E02 pattern
-        const sMatch = fn.match(/s(\d{1,2})e(\d{1,2})/i);
+        // Detect resolution
+        if (/2160p|4k|uhd/i.test(fn)) detectedResolution = '2160p';
+        else if (/1080p/i.test(fn)) detectedResolution = '1080p';
+        else if (/720p/i.test(fn)) detectedResolution = '720p';
+        else if (/480p|dvd/i.test(fn)) detectedResolution = '480p';
+
+        // Detect codec
+        if (/x265|hevc|h\.?265/i.test(fn)) detectedCodec = 'HEVC';
+        else if (/x264|h\.?264|avc/i.test(fn)) detectedCodec = 'x264';
+        else if (/flac/i.test(fn)) detectedCodec = 'FLAC';
+        else if (/mp3/i.test(fn)) detectedCodec = 'MP3';
+
+        // Detect audio
+        if (/atmos|dts-hd|truehd/i.test(fn)) detectedAudio = 'Dolby Atmos / DTS-HD';
+        else if (/dts/i.test(fn)) detectedAudio = 'DTS 5.1';
+        else if (/ddp|eac3|dd\+/i.test(fn)) detectedAudio = 'Dolby Digital Plus';
+        else if (/flac/i.test(fn)) detectedAudio = 'Lossless 24-bit';
+
+        // Check for S01E02 pattern or 1x02
+        const sMatch = fn.match(/s(\d{1,2})e(\d{1,2})/i) || fn.match(/(\d{1,2})x(\d{1,2})/i);
         if (sMatch) {
           detectedType = 'series';
           season = parseInt(sMatch[1], 10);
           episode = parseInt(sMatch[2], 10);
-          title = title.split(/s\d{1,2}e\d{1,2}/i)[0].trim();
+          title = title.split(/s\d{1,2}e\d{1,2}|\d{1,2}x\d{1,2}/i)[0].trim();
         }
 
         // Check for year
@@ -208,10 +230,17 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
 
         // Check for audio track
         const trackMatch = fn.match(/^(\d{1,2})[\s._-]+(.+)/);
-        if (trackMatch && (fn.endsWith('.mp3') || fn.endsWith('.flac') || fn.endsWith('.m4a'))) {
+        if (trackMatch && (fn.endsWith('.mp3') || fn.endsWith('.flac') || fn.endsWith('.m4a') || fn.endsWith('.wav'))) {
           detectedType = 'album';
-          title = trackMatch[2].replace(/\.[^/.]+$/, '').trim();
+          title = trackMatch[2].replace(/\.[^/.]+$/, '').replace(/[\._]/g, ' ').trim();
         }
+
+        // Strip release tags from title
+        title = title
+          .replace(/(1080p|2160p|720p|480p|bluray|web-dl|webrip|hdr|dts|x264|x265|hevc|aac|remux|imax|extended|yts|rovers|extreme)/gi, '')
+          .replace(/[-–\[\]\(\)]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
 
         const ext = fn.includes('.') ? fn.split('.').pop() : 'mkv';
 
@@ -232,17 +261,20 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
           id: `file-${index}-${Date.now()}`,
           originalFilename: fn,
           detectedType,
-          detectedTitle: title || 'Unknown Title',
+          detectedTitle: title || fn.replace(/\.[^/.]+$/, ''),
           detectedYear: year,
           detectedSeason: season,
           detectedEpisode: episode,
+          detectedResolution,
+          detectedCodec,
+          detectedAudio,
           cleanFormattedFilename: cleanFormatted,
           cleanFolderPath: cleanFolder,
           status: 'pending',
         };
       });
 
-      return res.json({ success: true, results: parsed, source: 'regex-parser' });
+      return res.json({ success: true, results: parsed, source: 'instant-regex-parser' });
     }
 
     const prompt = `You are an automated media file tagger and Plex/Jellyfin/Kodi organizer.

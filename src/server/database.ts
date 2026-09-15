@@ -48,18 +48,23 @@ export interface WatchHistoryLogDb {
   watched_at: string;
 }
 
+let persistTimer: NodeJS.Timeout | null = null;
+
 function persistDbToDisk() {
   if (!dbInstance) return;
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const binaryArray = dbInstance!.export();
+      const buffer = Buffer.from(binaryArray);
+      fs.writeFileSync(DB_PATH, buffer);
+    } catch (err) {
+      console.error('Error persisting SQLite database to disk:', err);
     }
-    const binaryArray = dbInstance.export();
-    const buffer = Buffer.from(binaryArray);
-    fs.writeFileSync(DB_PATH, buffer);
-  } catch (err) {
-    console.error('Error persisting SQLite database to disk:', err);
-  }
+  }, 250);
 }
 
 export async function getDatabase(): Promise<Database> {

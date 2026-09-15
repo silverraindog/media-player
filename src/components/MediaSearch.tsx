@@ -58,6 +58,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   onSelectMediaType,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedGenre, setSelectedGenre] = useState<string>('all');
+  const [selectedYear, setSelectedYear] = useState<string>('all');
   const [internalSelectedType, setInternalSelectedType] = useState<'all' | MediaType>('all');
   const selectedType = selectedMediaType !== undefined ? selectedMediaType : internalSelectedType;
   const setSelectedType = (type: 'all' | MediaType) => {
@@ -84,7 +86,38 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     (m) => m.id.startsWith('imported-') || m.id.startsWith('batch-') || m.matchedFilename
   ).length;
 
-  // Filter items based on type, origin, and query
+  // Extract all available genres with item counts
+  const availableGenres = useMemo(() => {
+    const genreMap = new Map<string, number>();
+    mediaLibrary.forEach((m) => {
+      if (selectedType !== 'all' && m.type !== selectedType) return;
+      m.genres?.forEach((g) => {
+        const trimmed = g.trim();
+        if (trimmed) {
+          genreMap.set(trimmed, (genreMap.get(trimmed) || 0) + 1);
+        }
+      });
+    });
+    return Array.from(genreMap.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }));
+  }, [mediaLibrary, selectedType]);
+
+  // Extract all available release years with item counts
+  const availableYears = useMemo(() => {
+    const yearMap = new Map<number, number>();
+    mediaLibrary.forEach((m) => {
+      if (selectedType !== 'all' && m.type !== selectedType) return;
+      if (m.year) {
+        yearMap.set(m.year, (yearMap.get(m.year) || 0) + 1);
+      }
+    });
+    return Array.from(yearMap.entries())
+      .sort((a, b) => b[0] - a[0])
+      .map(([year, count]) => ({ year, count }));
+  }, [mediaLibrary, selectedType]);
+
+  // Filter items based on type, origin, genre, release year, and search query
   const filteredMedia = useMemo(() => {
     return mediaLibrary.filter((media) => {
       // Type filter
@@ -100,28 +133,71 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       if (originFilter === 'imported' && !isImported) return false;
       if (originFilter === 'curated' && isImported) return false;
 
-      // Search Query
+      // Direct Genre filter
+      if (selectedGenre !== 'all') {
+        const hasGenre = media.genres?.some(
+          (g) => g.toLowerCase() === selectedGenre.toLowerCase()
+        );
+        if (!hasGenre) return false;
+      }
+
+      // Direct Year filter
+      if (selectedYear !== 'all') {
+        if (selectedYear === '2020s') {
+          if (!media.year || media.year < 2020) return false;
+        } else if (selectedYear === '2010s') {
+          if (!media.year || media.year < 2010 || media.year > 2019) return false;
+        } else if (selectedYear === 'classic') {
+          if (!media.year || media.year >= 2010) return false;
+        } else {
+          const targetYear = Number(selectedYear);
+          if (media.year !== targetYear) return false;
+        }
+      }
+
+      // Search Query (Supports plain text or specialized tags like 'genre:scifi' or 'year:2024')
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
+
+        // Check if query is an explicit genre tag
+        const genreTagMatch = q.match(/^genre[:=]\s*(.+)$/i);
+        if (genreTagMatch) {
+          const targetG = genreTagMatch[1].trim();
+          return media.genres?.some((g) => g.toLowerCase().includes(targetG));
+        }
+
+        // Check if query is an explicit year tag
+        const yearTagMatch = q.match(/^year[:=]\s*(\d{4})$/i);
+        if (yearTagMatch) {
+          return media.year === parseInt(yearTagMatch[1], 10);
+        }
+
         const matchesTitle = media.title.toLowerCase().includes(q);
+        const matchesOriginalTitle = media.originalTitle?.toLowerCase().includes(q);
         const matchesGenre = media.genres.some((g) => g.toLowerCase().includes(q));
+        const matchesYear = media.year ? String(media.year).includes(q) : false;
         const matchesArtist = media.artists?.some((a) => a.toLowerCase().includes(q));
         const matchesDirector = media.directors?.some((d) => d.toLowerCase().includes(q));
         const matchesFolder = media.recommendedFolderStructure.toLowerCase().includes(q);
         const matchesFilename = media.matchedFilename?.toLowerCase().includes(q);
+        const matchesOverview = media.overview?.toLowerCase().includes(q);
+
         return (
           matchesTitle ||
+          matchesOriginalTitle ||
           matchesGenre ||
+          matchesYear ||
           matchesArtist ||
           matchesDirector ||
           matchesFolder ||
-          matchesFilename
+          matchesFilename ||
+          matchesOverview
         );
       }
 
       return true;
     });
-  }, [mediaLibrary, selectedType, originFilter, searchQuery]);
+  }, [mediaLibrary, selectedType, originFilter, selectedGenre, selectedYear, searchQuery]);
 
   const handleSaveToSqlite = async (media: MediaMetadata) => {
     try {
@@ -463,7 +539,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search across all imported media, files, genres, tags..."
+              placeholder="Search title, genre (e.g. 'Sci-Fi'), year (e.g. '2024'), files..."
               className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
@@ -486,6 +562,117 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             )}
           </button>
         </form>
+      </div>
+
+      {/* Quick Filter Bar: Genre & Release Year Selectors */}
+      <div className="bg-slate-900/90 border border-slate-800/90 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-inner">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Genre Filter Dropdown & Quick Badges */}
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-semibold flex items-center gap-1">
+              <Filter className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Genre:</span>
+            </span>
+            <select
+              id="filter-genre-select"
+              value={selectedGenre}
+              onChange={(e) => setSelectedGenre(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 font-medium focus:outline-none focus:border-indigo-500 cursor-pointer text-xs"
+            >
+              <option value="all">All Genres ({mediaLibrary.length})</option>
+              {availableGenres.map((g) => (
+                <option key={g.name} value={g.name}>
+                  {g.name} ({g.count})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Release Year Filter Dropdown */}
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 font-semibold flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Year:</span>
+            </span>
+            <select
+              id="filter-year-select"
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(e.target.value)}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 font-medium focus:outline-none focus:border-cyan-500 cursor-pointer text-xs"
+            >
+              <option value="all">All Years</option>
+              <option value="2020s">2020s Decade</option>
+              <option value="2010s">2010s Decade</option>
+              <option value="classic">Classic (&lt; 2010)</option>
+              {availableYears.map((y) => (
+                <option key={y.year} value={String(y.year)}>
+                  {y.year} ({y.count})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Quick Popular Genre Pills */}
+          <div className="hidden sm:flex items-center gap-1.5 pl-2 border-l border-slate-800">
+            {availableGenres.slice(0, 5).map((g) => {
+              const isPillActive = selectedGenre.toLowerCase() === g.name.toLowerCase();
+              return (
+                <button
+                  key={g.name}
+                  id={`quick-genre-${g.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
+                  onClick={() => setSelectedGenre(isPillActive ? 'all' : g.name)}
+                  className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition cursor-pointer ${
+                    isPillActive
+                      ? 'bg-indigo-600 text-white font-bold'
+                      : 'bg-slate-850 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  {g.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Active Filter Badges & Reset */}
+        {(selectedGenre !== 'all' || selectedYear !== 'all' || searchQuery.trim()) && (
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 text-[11px]">Active:</span>
+            {selectedGenre !== 'all' && (
+              <span className="px-2 py-0.5 rounded-md bg-indigo-950 border border-indigo-700/60 text-indigo-300 text-[11px] flex items-center gap-1">
+                <span>Genre: {selectedGenre}</span>
+                <button
+                  onClick={() => setSelectedGenre('all')}
+                  className="hover:text-white ml-0.5 cursor-pointer"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {selectedYear !== 'all' && (
+              <span className="px-2 py-0.5 rounded-md bg-cyan-950 border border-cyan-700/60 text-cyan-300 text-[11px] flex items-center gap-1">
+                <span>Year: {selectedYear}</span>
+                <button
+                  onClick={() => setSelectedYear('all')}
+                  className="hover:text-white ml-0.5 cursor-pointer"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            <button
+              id="btn-reset-media-filters"
+              onClick={() => {
+                setSelectedGenre('all');
+                setSelectedYear('all');
+                setSearchQuery('');
+              }}
+              className="text-[11px] text-rose-400 hover:text-rose-300 font-medium underline cursor-pointer ml-1"
+            >
+              Reset Filters
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Results Header Status */}

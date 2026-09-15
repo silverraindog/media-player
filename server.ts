@@ -10,6 +10,7 @@ import {
   deleteMediaFromDb,
   getAllWatchProgress,
   getSeriesProgress,
+  getAllProgressForSeries,
   updateWatchProgressInDb,
   executeRawSqlQuery,
   getDbStats,
@@ -985,12 +986,28 @@ app.get('/api/db/progress', async (req: Request, res: Response) => {
   }
 });
 
-// Get progress for a specific series
+// Get progress for a specific series and all its episodes
 app.get('/api/db/progress/:seriesId', async (req: Request, res: Response) => {
   try {
     const { seriesId } = req.params;
     const progress = await getSeriesProgress(seriesId);
-    res.json({ success: true, progress });
+    const allProgressList = await getAllProgressForSeries(seriesId);
+    
+    // Map of "S{season}E{episode}" -> progress
+    const episodeMap: Record<string, any> = {};
+    allProgressList.forEach((p) => {
+      if (p.season_number && p.episode_number) {
+        const key = `s${p.season_number}-e${p.episode_number}`;
+        episodeMap[key] = p;
+      }
+    });
+
+    res.json({
+      success: true,
+      progress,
+      allProgress: allProgressList,
+      episodeMap,
+    });
   } catch (error: any) {
     console.error('Error fetching series progress:', error);
     res.status(500).json({ error: 'Failed to fetch series progress', message: error?.message });

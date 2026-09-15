@@ -124,6 +124,18 @@ export const SAMPLE_VIDEO_STREAMS = {
 
 export const SAMPLE_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
 
+// Robust Season Directory Checker (e.g., 'Season 1', 'S01', 'Season_02', 'S02', 'Staffel 3', 'Series 1', 'Specials', etc.)
+export function isSeasonDirectory(folderName: string): boolean {
+  const clean = folderName.trim().toLowerCase();
+  return (
+    /^(?:season|staffel|saison|temporada|stagione|series)[\s._-]?\d+/i.test(clean) ||
+    /^s\d{1,2}(?:[\s._-].*)?$/i.test(clean) ||
+    /^(?:specials|special|extras|bonus|sp)$/i.test(clean) ||
+    /^s\d{1,2}$/i.test(clean) ||
+    /^season\s*\d+/i.test(clean)
+  );
+}
+
 // Helper to determine media type from path and filename across all media extensions
 export function detectMediaType(filePath: string): MediaType {
   const lower = filePath.toLowerCase().replace(/\\/g, '/');
@@ -156,6 +168,7 @@ export function detectMediaType(filePath: string): MediaType {
   }
 
   // TV Series checks: Detect any series keyword, season folder, episode pattern, or TV terminology
+  // Check for 'season', 'S01', 'S02', etc. anywhere in path segments even if root folder isn't standard
   if (
     lower.startsWith('series/') ||
     lower.includes('/series/') ||
@@ -169,17 +182,13 @@ export function detectMediaType(filePath: string): MediaType {
     lower.includes('/anime/') ||
     lower.startsWith('documentaries/') ||
     lower.includes('/documentaries/') ||
-    lower.includes('/season ') ||
-    lower.includes('/season_') ||
-    lower.includes('/season-') ||
-    lower.includes('/staffel') ||
-    lower.includes('/saison') ||
-    lower.includes('/specials') ||
+    /(?:^|\/|[._ -])(?:season|staffel|saison|temporada|stagione|series)[\s._-]?\d+/i.test(lower) ||
+    /(?:^|\/|[._ -])s\d{1,2}(?:e\d{1,2}|[\s._\-\/\[\]]|$)/i.test(lower) ||
     /s\d{1,2}e\d{1,2}/i.test(lower) ||
     /\d{1,2}x\d{1,2}/i.test(lower) ||
-    /season[\s._-]?\d+/i.test(lower) ||
-    /ep[\s._-]?\d{1,3}/i.test(lower) ||
-    /episode[\s._-]?\d+/i.test(lower) ||
+    /(?:^|\/)(?:specials|special|extras|bonus)(?:\/|$)/i.test(lower) ||
+    /(?:^|\/|[._ -])ep[\s._-]?\d{1,3}/i.test(lower) ||
+    /(?:^|\/|[._ -])episode[\s._-]?\d+/i.test(lower) ||
     /\b(series|serien|show|shows|tvshow|tvshows|television|kdrama|docus|miniseries)\b/i.test(lower)
   ) {
     return 'series';
@@ -235,19 +244,20 @@ export function parseTitleAndYear(rawName: string): { title: string; year: numbe
   return { title, year, season, episode };
 }
 
-// Extract Season number from directory or path string (e.g. "Season 1", "S02", "Staffel 3", "Specials")
+// Extract Season number from directory or path string (e.g. "Season 1", "S01", "S02", "Staffel 3", "Series 2", "Specials")
 export function extractSeasonNumberFromPath(folderOrPath: string): number | undefined {
   const normalized = folderOrPath.replace(/\\/g, '/');
   const segments = normalized.split('/').map((s) => s.trim());
 
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
-    if (/^specials$/i.test(seg)) {
+    if (/^(?:specials|special|extras|bonus|sp)$/i.test(seg)) {
       return 0;
     }
+    // Check for 'Season 01', 'Season1', 'S01', 'S1', 'Staffel 2', 'Series 1', 'Temporada 3'
     const match =
-      seg.match(/(?:season|staffel|saison|s)[\s._-]?(\d{1,2})/i) ||
-      seg.match(/^s(\d{1,2})$/i);
+      seg.match(/(?:season|staffel|saison|temporada|stagione|series)[\s._-]?(\d{1,2})/i) ||
+      seg.match(/^s(\d{1,2})(?:[\s._-].*)?$/i);
     if (match) {
       return parseInt(match[1], 10);
     }
@@ -330,13 +340,16 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   // For series files, check if parent folder represents the show title
   if (mediaType === 'series') {
     const segments = fullPath.replace(/\\/g, '/').split('/').filter(Boolean);
-    const rootContainers = ['series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort'];
+    const rootContainers = [
+      'series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort',
+      'downloads', 'complete', 'share', 'storage', 'video', 'movies', 'nas', 'public', 'disk1', 'disk2'
+    ];
     
     // Find the nearest folder that isn't a root container and isn't a season folder
     let seriesFolderName = '';
     for (let i = segments.length - (node.type === 'file' ? 2 : 1); i >= 0; i--) {
       const seg = segments[i].trim();
-      const isSeasonSeg = /^season[\s._-]?\d+$/i.test(seg) || /^staffel[\s._-]?\d+$/i.test(seg) || /^specials$/i.test(seg) || /^s\d+$/i.test(seg);
+      const isSeasonSeg = isSeasonDirectory(seg);
       const isRootSeg = rootContainers.includes(seg.toLowerCase());
       if (!isSeasonSeg && !isRootSeg) {
         seriesFolderName = seg;
@@ -494,11 +507,11 @@ export function extractAllMediaFromSambaTree(
           c.type === 'file' && isMediaFile(c.name, config)
         );
         const hasSeasonFolderChildren = node.children?.some(c =>
-          c.type === 'folder' && (/^season[\s._-]?\d+$/i.test(c.name.trim()) || /^staffel[\s._-]?\d+$/i.test(c.name.trim()) || /^specials$/i.test(c.name.trim()) || /^s\d+$/i.test(c.name.trim()))
+          c.type === 'folder' && isSeasonDirectory(c.name)
         );
 
-        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows'].includes(node.name.toLowerCase());
-        const isSeasonFolder = /^season[\s._-]?\d+$/i.test(node.name.trim()) || /^staffel[\s._-]?\d+$/i.test(node.name.trim()) || /^specials$/i.test(node.name.trim()) || /^s\d+$/i.test(node.name.trim());
+        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage'].includes(node.name.toLowerCase());
+        const isSeasonFolder = isSeasonDirectory(node.name);
 
         if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
           const item = nodeToMediaMetadata(node, parentPath);
@@ -587,12 +600,7 @@ export async function extractAllMediaFromSambaTreeAsync(
         (c) => c.type === 'file' && isMediaFile(c.name, config)
       );
       const hasSeasonFolderChildren = node.children?.some(
-        (c) =>
-          c.type === 'folder' &&
-          (/^season[\s._-]?\d+$/i.test(c.name.trim()) ||
-            /^staffel[\s._-]?\d+$/i.test(c.name.trim()) ||
-            /^specials$/i.test(c.name.trim()) ||
-            /^s\d+$/i.test(c.name.trim()))
+        (c) => c.type === 'folder' && isSeasonDirectory(c.name)
       );
 
       const isRootContainer = [
@@ -609,12 +617,11 @@ export async function extractAllMediaFromSambaTreeAsync(
         'tv shows',
         'tv',
         'shows',
+        'downloads',
+        'share',
+        'storage',
       ].includes(node.name.toLowerCase());
-      const isSeasonFolder =
-        /^season[\s._-]?\d+$/i.test(node.name.trim()) ||
-        /^staffel[\s._-]?\d+$/i.test(node.name.trim()) ||
-        /^specials$/i.test(node.name.trim()) ||
-        /^s\d+$/i.test(node.name.trim());
+      const isSeasonFolder = isSeasonDirectory(node.name);
 
       if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
         const item = nodeToMediaMetadata(node, parentPath);

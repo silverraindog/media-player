@@ -351,7 +351,10 @@ export async function getAllWatchProgress(): Promise<WatchProgressDb[]> {
 
 export async function getSeriesProgress(seriesId: string): Promise<WatchProgressDb | null> {
   const db = await getDatabase();
-  const res = db.exec(`SELECT * FROM series_watch_progress WHERE series_id = ? LIMIT 1`, [seriesId]);
+  const res = db.exec(
+    `SELECT * FROM series_watch_progress WHERE series_id = ? OR id = ? ORDER BY last_watched_at DESC LIMIT 1`,
+    [seriesId, `prog-${seriesId}`]
+  );
   if (res.length === 0 || res[0].values.length === 0) return null;
   const columns = res[0].columns;
   const row = res[0].values[0];
@@ -360,6 +363,23 @@ export async function getSeriesProgress(seriesId: string): Promise<WatchProgress
     item[col] = row[idx];
   });
   return item as WatchProgressDb;
+}
+
+export async function getAllProgressForSeries(seriesId: string): Promise<WatchProgressDb[]> {
+  const db = await getDatabase();
+  const res = db.exec(
+    `SELECT * FROM series_watch_progress WHERE series_id = ? OR id LIKE ? ORDER BY season_number ASC, episode_number ASC`,
+    [seriesId, `prog-${seriesId}%`]
+  );
+  if (res.length === 0) return [];
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as WatchProgressDb;
+  });
 }
 
 export async function updateWatchProgressInDb(progress: {
@@ -375,14 +395,14 @@ export async function updateWatchProgressInDb(progress: {
   notes?: string;
 }): Promise<void> {
   const db = await getDatabase();
-  const id = `prog-${progress.series_id}`;
-  const pos = progress.playback_position_seconds || 0;
-  const total = progress.total_duration_seconds || 3000;
+  const episodeId = `prog-${progress.series_id}-s${progress.season_number}-e${progress.episode_number}`;
+  const seriesSummaryId = `prog-${progress.series_id}`;
+  const pos = progress.playback_position_seconds !== undefined ? progress.playback_position_seconds : 0;
+  const total = progress.total_duration_seconds && progress.total_duration_seconds > 0 ? progress.total_duration_seconds : 2880;
   const percent = progress.progress_percentage !== undefined ? progress.progress_percentage : (total > 0 ? (pos / total) * 100 : 0);
   const completed = progress.is_completed ? 1 : (percent >= 90 ? 1 : 0);
 
-  db.run(
-    `INSERT INTO series_watch_progress (id, series_id, series_title, season_number, episode_number, episode_title, playback_position_seconds, total_duration_seconds, progress_percentage, is_completed, last_watched_at, notes)
+  const stmt = `INSERT INTO series_watch_progress (id, series_id, series_title, season_number, episode_number, episode_title, playback_position_seconds, total_duration_seconds, progress_percentage, is_completed, last_watched_at, notes)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
      ON CONFLICT(id) DO UPDATE SET
        series_title = excluded.series_title,
@@ -394,21 +414,37 @@ export async function updateWatchProgressInDb(progress: {
        progress_percentage = excluded.progress_percentage,
        is_completed = excluded.is_completed,
        last_watched_at = datetime('now'),
-       notes = excluded.notes`,
-    [
-      id,
-      progress.series_id,
-      progress.series_title,
-      progress.season_number,
-      progress.episode_number,
-      progress.episode_title,
-      pos,
-      total,
-      percent,
-      completed,
-      progress.notes || null
-    ]
-  );
+       notes = excluded.notes`;
+
+  // Upsert episode-specific record
+  db.run(stmt, [
+    episodeId,
+    progress.series_id,
+    progress.series_title,
+    progress.season_number,
+    progress.episode_number,
+    progress.episode_title,
+    pos,
+    total,
+    percent,
+    completed,
+    progress.notes || null,
+  ]);
+
+  // Upsert overall series summary record (left off pointer)
+  db.run(stmt, [
+    seriesSummaryId,
+    progress.series_id,
+    progress.series_title,
+    progress.season_number,
+    progress.episode_number,
+    progress.episode_title,
+    pos,
+    total,
+    percent,
+    completed,
+    progress.notes || null,
+  ]);
 
   // If marked completed, add to watch history log
   if (completed) {
@@ -421,7 +457,7 @@ export async function updateWatchProgressInDb(progress: {
         progress.series_title,
         progress.season_number,
         progress.episode_number,
-        progress.episode_title
+        progress.episode_title,
       ]
     );
   }

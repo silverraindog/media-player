@@ -19,6 +19,7 @@ export interface MediaItemDb {
   genres?: string; // JSON array
   recommended_folder?: string;
   raw_data?: string; // JSON string
+  file_size_bytes?: number;
   created_at?: string;
   updated_at?: string;
 }
@@ -148,8 +149,29 @@ export async function getDatabase(): Promise<Database> {
       hit_count INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS user_watchlist (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      year INTEGER,
+      rating REAL,
+      poster_url TEXT,
+      genres TEXT,
+      synopsis TEXT,
+      added_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_thumb_media_path ON thumbnail_metadata_cache(media_path);
+    CREATE INDEX IF NOT EXISTS idx_watchlist_media_id ON user_watchlist(media_id);
   `);
+
+  // Migration: ensure file_size_bytes exists on media_items
+  try {
+    dbInstance.run(`ALTER TABLE media_items ADD COLUMN file_size_bytes INTEGER DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
 
   // Seed default items if empty
   const countResult = dbInstance.exec(`SELECT COUNT(*) as count FROM media_items`);
@@ -157,6 +179,9 @@ export async function getDatabase(): Promise<Database> {
 
   if (count === 0) {
     seedInitialSqliteData(dbInstance);
+  } else {
+    // Ensure richer catalog has items populated
+    seedExtraCuratedIfMissing(dbInstance);
   }
 
   persistDbToDisk();
@@ -219,6 +244,165 @@ function seedInitialSqliteData(db: Database) {
     ]
   );
 
+  db.run(
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-5 hours'))`,
+    [
+      'movie-dune-two',
+      'movie',
+      'Dune - Part Two',
+      'Dune: Part Two',
+      'Paul Atreides unites with Chani and the Fremen while seeking revenge against the conspirators who destroyed his family. Facing a choice between the love of his life and the fate of the known universe, he endeavors to prevent a terrible future only he can foresee.',
+      2024,
+      8.6,
+      'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
+      JSON.stringify(['Action', 'Adventure', 'Sci-Fi', 'Drama']),
+      'Movies/Dune - Part Two (2024)/'
+    ]
+  );
+
+  db.run(
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-8 hours'))`,
+    [
+      'series-ted-lasso',
+      'series',
+      'Ted Lasso',
+      'Ted Lasso',
+      'An American college football coach is hired to manage a British soccer team. What he lacks in knowledge, he makes up for with optimism, determination... and biscuits.',
+      2020,
+      8.8,
+      'https://images.unsplash.com/photo-1522778119026-d647f0596c20?w=800&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=1600&auto=format&fit=crop&q=80',
+      JSON.stringify(['Comedy', 'Drama', 'Sport']),
+      'TV Shows/Ted Lasso (2020)/Season 01/'
+    ]
+  );
+
+  db.run(
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-12 hours'))`,
+    [
+      'movie-dark-knight',
+      'movie',
+      'The Dark Knight',
+      'The Dark Knight',
+      'When the menace known as the Joker wreaks havoc and chaos on the people of Gotham, Batman must accept one of the greatest psychological and physical tests of his ability to fight injustice.',
+      2008,
+      9.0,
+      'https://images.unsplash.com/photo-1509281373149-e957c6296406?w=800&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?w=1600&auto=format&fit=crop&q=80',
+      JSON.stringify(['Action', 'Crime', 'Drama', 'Thriller']),
+      'Movies/The Dark Knight (2008)/'
+    ]
+  );
+
+  db.run(
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-18 hours'))`,
+    [
+      'series-succession',
+      'series',
+      'Succession',
+      'Succession',
+      'The Roy family is known for controlling the biggest media and entertainment company in the world. However, their world changes when their aging father steps down from the company.',
+      2018,
+      8.9,
+      'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=1600&auto=format&fit=crop&q=80',
+      JSON.stringify(['Drama']),
+      'TV Shows/Succession (2018)/Season 01/'
+    ]
+  );
+
+  db.run(
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 day'))`,
+    [
+      'series-edgerunners',
+      'series',
+      'Cyberpunk: Edgerunners',
+      'Cyberpunk: Edgerunners',
+      'A street kid trying to survive in a technology and body modification-obsessed city of the future. Having everything to lose, he chooses to stay alive by becoming an edgerunner: a mercenary outlaw also known as a cyberpunk.',
+      2022,
+      8.3,
+      'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
+      JSON.stringify(['Animation', 'Action', 'Sci-Fi']),
+      'Anime/Cyberpunk Edgerunners (2022)/Season 01/'
+    ]
+  );
+
+  db.run(
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 days'))`,
+    [
+      'album-daft-punk',
+      'album',
+      'Random Access Memories',
+      'Random Access Memories',
+      'The fourth and final studio album by French electronic music duo Daft Punk. Paying tribute to late 1970s and early 1980s American music, featuring live instrumentation with session musicians.',
+      2013,
+      9.1,
+      'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1600&auto=format&fit=crop&q=80',
+      JSON.stringify(['Electronic', 'Disco', 'Funk']),
+      'Music/Daft Punk - Random Access Memories (2013)/'
+    ]
+  );
+
+  db.run(
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-3 days'))`,
+    [
+      'series-planet-earth-3',
+      'series',
+      'Planet Earth III',
+      'Planet Earth III',
+      'Sir David Attenborough narrates this landmark natural history series celebrating the wonders of our natural world from the deepest oceans to the highest mountains.',
+      2023,
+      9.2,
+      'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=800&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1600&auto=format&fit=crop&q=80',
+      JSON.stringify(['Documentary']),
+      'Documentaries/Planet Earth III (2023)/Season 01/'
+    ]
+  );
+
+  // Seed default watchlist items
+  db.run(
+    `INSERT INTO user_watchlist (id, media_id, title, media_type, year, rating, poster_url, genres, synopsis, added_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 hour'))`,
+    [
+      'wl-seed-1',
+      'series-severance',
+      'Severance',
+      'series',
+      2022,
+      8.7,
+      'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=800&auto=format&fit=crop&q=80',
+      JSON.stringify(['Drama', 'Mystery', 'Sci-Fi', 'Thriller']),
+      'Mark leads a team of office workers whose memories have been surgically divided between their work and personal lives.'
+    ]
+  );
+
+  db.run(
+    `INSERT INTO user_watchlist (id, media_id, title, media_type, year, rating, poster_url, genres, synopsis, added_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 hours'))`,
+    [
+      'wl-seed-2',
+      'movie-interstellar',
+      'Interstellar',
+      'movie',
+      2014,
+      8.7,
+      'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop&q=80',
+      JSON.stringify(['Adventure', 'Drama', 'Sci-Fi']),
+      'When Earth becomes uninhabitable in the future, a farmer and ex-NASA pilot is tasked to find a new planet for humans.'
+    ]
+  );
+
   // Seed "Where you left off in the series" records
   db.run(
     `INSERT INTO series_watch_progress (id, series_id, series_title, season_number, episode_number, episode_title, playback_position_seconds, total_duration_seconds, progress_percentage, is_completed, last_watched_at, notes)
@@ -269,6 +453,100 @@ function seedInitialSqliteData(db: Database) {
   );
 }
 
+function seedExtraCuratedIfMissing(db: Database) {
+  const existingRes = db.exec(`SELECT id FROM media_items`);
+  const existingIds = new Set<string>();
+  if (existingRes.length > 0 && existingRes[0].values) {
+    existingRes[0].values.forEach((r) => existingIds.add(String(r[0])));
+  }
+
+  const extraItems = [
+    {
+      id: 'movie-oppenheimer',
+      media_type: 'movie',
+      title: 'Oppenheimer',
+      original_title: 'Oppenheimer',
+      synopsis: 'The story of American scientist J. Robert Oppenheimer and his role in the development of the atomic bomb during World War II.',
+      year: 2023,
+      rating: 8.9,
+      poster_url: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=800&auto=format&fit=crop&q=80',
+      fanart_url: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=1600&auto=format&fit=crop&q=80',
+      genres: JSON.stringify(['Biography', 'Drama', 'History']),
+      recommended_folder: 'Movies/Oppenheimer (2023)/',
+      file_size_bytes: 26500000000 // 26.5 GB
+    },
+    {
+      id: 'series-stranger-things',
+      media_type: 'series',
+      title: 'Stranger Things',
+      original_title: 'Stranger Things',
+      synopsis: 'When a young boy vanishes, a small town uncovers a mystery involving secret experiments, terrifying supernatural forces and one strange little girl.',
+      year: 2016,
+      rating: 8.7,
+      poster_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
+      fanart_url: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1600&auto=format&fit=crop&q=80',
+      genres: JSON.stringify(['Drama', 'Fantasy', 'Horror', 'Sci-Fi']),
+      recommended_folder: 'TV Shows/Stranger Things (2016)/Season 01/',
+      file_size_bytes: 38600000000 // 38.6 GB
+    },
+    {
+      id: 'album-pink-floyd-dsotm',
+      media_type: 'album',
+      title: 'The Dark Side of the Moon',
+      original_title: 'The Dark Side of the Moon',
+      synopsis: 'The Dark Side of the Moon is the eighth studio album by English rock band Pink Floyd. A landmark concept album exploring themes such as conflict, greed, time, and death.',
+      year: 1973,
+      rating: 9.8,
+      poster_url: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=800&auto=format&fit=crop&q=80',
+      fanart_url: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?w=1600&auto=format&fit=crop&q=80',
+      genres: JSON.stringify(['Progressive Rock', 'Psychedelic Rock', 'Art Rock']),
+      recommended_folder: 'Music/Pink Floyd/The Dark Side of the Moon (1973)/',
+      file_size_bytes: 1120000000 // 1.12 GB
+    },
+    {
+      id: 'album-abbey-road',
+      media_type: 'album',
+      title: 'Abbey Road',
+      original_title: 'Abbey Road',
+      synopsis: 'Abbey Road is the eleventh studio album by the English rock band the Beatles, featuring timeless tracks like Come Together, Something, and Here Comes the Sun.',
+      year: 1969,
+      rating: 9.7,
+      poster_url: 'https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=800&auto=format&fit=crop&q=80',
+      fanart_url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1600&auto=format&fit=crop&q=80',
+      genres: JSON.stringify(['Rock', 'Pop Rock', 'Psychedelic Pop']),
+      recommended_folder: 'Music/The Beatles/Abbey Road (1969)/',
+      file_size_bytes: 980000000 // 980 MB
+    }
+  ];
+
+  for (const item of extraItems) {
+    if (!existingIds.has(item.id)) {
+      try {
+        db.run(
+          `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, file_size_bytes, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 days'))`,
+          [
+            item.id,
+            item.media_type,
+            item.title,
+            item.original_title,
+            item.synopsis,
+            item.year,
+            item.rating,
+            item.poster_url,
+            item.fanart_url,
+            item.genres,
+            item.recommended_folder,
+            item.file_size_bytes
+          ]
+        );
+      } catch (err) {
+        console.error('Error inserting extra curated item:', err);
+      }
+    }
+  }
+}
+
 // ==========================================
 // SQLITE OPERATIONS
 // ==========================================
@@ -287,11 +565,119 @@ export async function getAllMediaFromDb(): Promise<MediaItemDb[]> {
   });
 }
 
+export async function getRecentlyAddedMediaFromDb(limit: number = 10): Promise<MediaItemDb[]> {
+  const db = await getDatabase();
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50));
+  const res = db.exec(`SELECT * FROM media_items ORDER BY datetime(created_at) DESC, datetime(updated_at) DESC LIMIT ${safeLimit}`);
+  if (res.length === 0) return [];
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as MediaItemDb;
+  });
+}
+
+export interface WatchlistItemDb {
+  id: string;
+  media_id: string;
+  title: string;
+  media_type: string;
+  year?: number;
+  rating?: number;
+  poster_url?: string;
+  genres?: string;
+  synopsis?: string;
+  added_at: string;
+}
+
+export async function getAllWatchlistFromDb(): Promise<WatchlistItemDb[]> {
+  const db = await getDatabase();
+  const res = db.exec(`SELECT * FROM user_watchlist ORDER BY datetime(added_at) DESC`);
+  if (res.length === 0) return [];
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as WatchlistItemDb;
+  });
+}
+
+export async function toggleWatchlistInDb(item: {
+  mediaId: string;
+  title: string;
+  mediaType: string;
+  year?: number;
+  rating?: number;
+  posterUrl?: string;
+  genres?: string[] | string;
+  synopsis?: string;
+}): Promise<{ inWatchlist: boolean; item?: WatchlistItemDb }> {
+  const db = await getDatabase();
+  const safeId = (item.mediaId || '').replace(/'/g, "''");
+  const existing = db.exec(`SELECT id FROM user_watchlist WHERE media_id = '${safeId}'`);
+
+  if (existing.length > 0 && existing[0].values.length > 0) {
+    db.run(`DELETE FROM user_watchlist WHERE media_id = ?`, [item.mediaId]);
+    persistDbToDisk();
+    return { inWatchlist: false };
+  } else {
+    const id = `wl-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const genresStr = Array.isArray(item.genres) ? JSON.stringify(item.genres) : (item.genres || '[]');
+    db.run(
+      `INSERT INTO user_watchlist (id, media_id, title, media_type, year, rating, poster_url, genres, synopsis, added_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+      [
+        id,
+        item.mediaId,
+        item.title,
+        item.mediaType,
+        item.year || null,
+        item.rating || null,
+        item.posterUrl || null,
+        genresStr,
+        item.synopsis || '',
+      ]
+    );
+    persistDbToDisk();
+    return {
+      inWatchlist: true,
+      item: {
+        id,
+        media_id: item.mediaId,
+        title: item.title,
+        media_type: item.mediaType,
+        year: item.year,
+        rating: item.rating,
+        poster_url: item.posterUrl,
+        genres: genresStr,
+        synopsis: item.synopsis,
+        added_at: new Date().toISOString(),
+      },
+    };
+  }
+}
+
+export async function removeWatchlistInDb(mediaId: string): Promise<boolean> {
+  const db = await getDatabase();
+  db.run(`DELETE FROM user_watchlist WHERE media_id = ? OR id = ?`, [mediaId, mediaId]);
+  persistDbToDisk();
+  return true;
+}
+
 export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
   const db = await getDatabase();
+  const calculatedSize = media.file_size_bytes && media.file_size_bytes > 0
+    ? media.file_size_bytes
+    : calculateMediaSizeBytes(media);
+
   db.run(
-    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, file_size_bytes, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        media_type = excluded.media_type,
        title = excluded.title,
@@ -304,6 +690,7 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
        genres = excluded.genres,
        recommended_folder = excluded.recommended_folder,
        raw_data = excluded.raw_data,
+       file_size_bytes = excluded.file_size_bytes,
        updated_at = datetime('now')`,
     [
       media.id,
@@ -317,7 +704,8 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
       media.fanart_url || null,
       media.genres || null,
       media.recommended_folder || null,
-      media.raw_data || null
+      media.raw_data || null,
+      calculatedSize
     ]
   );
   persistDbToDisk();
@@ -506,6 +894,295 @@ export async function getDbStats(): Promise<{
     totalMediaItems: mediaCount,
     totalSeriesTracked: seriesTracked,
     totalWatchedHistory: historyCount
+  };
+}
+
+export function calculateMediaSizeBytes(m: {
+  media_type: string;
+  title: string;
+  raw_data?: string;
+  file_size_bytes?: number;
+}): number {
+  if (m.file_size_bytes && m.file_size_bytes > 0) return m.file_size_bytes;
+
+  if (m.raw_data) {
+    try {
+      const raw = JSON.parse(m.raw_data);
+      if (raw.fileSizeBytes && typeof raw.fileSizeBytes === 'number') return raw.fileSizeBytes;
+      if (raw.seasons && Array.isArray(raw.seasons)) {
+        let epCount = 0;
+        raw.seasons.forEach((s: any) => {
+          epCount += (s.episodes?.length || s.episodeCount || 8);
+        });
+        return Math.max(1, epCount) * 2900000000; // ~2.9 GB per episode
+      }
+    } catch {}
+  }
+
+  const titleLower = (m.title || '').toLowerCase();
+  if (m.media_type === 'album') {
+    if (titleLower.includes('random access')) return 1450000000; // 1.45 GB
+    if (titleLower.includes('dark side')) return 1120000000; // 1.12 GB
+    if (titleLower.includes('abbey road')) return 980000000; // 0.98 GB
+    return 880000000; // 880 MB
+  }
+
+  if (m.media_type === 'series') {
+    if (titleLower.includes('breaking bad')) return 44500000000; // 44.5 GB
+    if (titleLower.includes('severance')) return 12800000000; // 12.8 GB
+    if (titleLower.includes('stranger things')) return 38600000000; // 38.6 GB
+    if (titleLower.includes('ted lasso')) return 24200000000; // 24.2 GB
+    if (titleLower.includes('succession')) return 36400000000; // 36.4 GB
+    if (titleLower.includes('planet earth')) return 32000000000; // 32.0 GB (4K HDR)
+    if (titleLower.includes('cyberpunk') || titleLower.includes('edgerunners')) return 8500000000; // 8.5 GB
+    return 26000000000; // 26.0 GB
+  }
+
+  // Movie
+  if (titleLower.includes('interstellar')) return 22400000000; // 22.4 GB
+  if (titleLower.includes('dune')) return 24800000000; // 24.8 GB
+  if (titleLower.includes('dark knight')) return 21200000000; // 21.2 GB
+  if (titleLower.includes('oppenheimer')) return 26500000000; // 26.5 GB
+  if (titleLower.includes('spirited away')) return 8400000000; // 8.4 GB
+  return 14500000000; // 14.5 GB
+}
+
+export async function getMediaDistributionStatsFromDb() {
+  const allMedia = await getAllMediaFromDb();
+
+  let totalSizeBytes = 0;
+  let movieCount = 0;
+  let movieSizeBytes = 0;
+  let seriesCount = 0;
+  let seriesSizeBytes = 0;
+  let albumCount = 0;
+  let albumSizeBytes = 0;
+  let totalRatingSum = 0;
+  let ratedCount = 0;
+
+  const genreMap = new Map<string, {
+    genre: string;
+    totalCount: number;
+    movieCount: number;
+    seriesCount: number;
+    albumCount: number;
+    totalBytes: number;
+    ratingSum: number;
+    ratingCount: number;
+  }>();
+
+  const decadeMap = new Map<string, {
+    decade: string;
+    count: number;
+    movieCount: number;
+    seriesCount: number;
+    albumCount: number;
+    totalBytes: number;
+  }>();
+
+  const largestItemsList: {
+    id: string;
+    title: string;
+    mediaType: 'movie' | 'series' | 'album';
+    year?: number;
+    rating?: number;
+    totalGB: number;
+    genres: string[];
+    posterUrl?: string;
+    folderPath?: string;
+  }[] = [];
+
+  for (const item of allMedia) {
+    const sizeBytes = calculateMediaSizeBytes(item);
+    totalSizeBytes += sizeBytes;
+
+    if (item.rating) {
+      totalRatingSum += item.rating;
+      ratedCount++;
+    }
+
+    if (item.media_type === 'movie') {
+      movieCount++;
+      movieSizeBytes += sizeBytes;
+    } else if (item.media_type === 'series') {
+      seriesCount++;
+      seriesSizeBytes += sizeBytes;
+    } else if (item.media_type === 'album') {
+      albumCount++;
+      albumSizeBytes += sizeBytes;
+    }
+
+    // Parse genres
+    let genres: string[] = [];
+    if (item.genres) {
+      try {
+        genres = JSON.parse(item.genres);
+      } catch {
+        genres = item.genres.split(',').map((g) => g.trim());
+      }
+    }
+    if (!Array.isArray(genres) || genres.length === 0) {
+      genres = [item.media_type === 'series' ? 'TV Show' : item.media_type === 'movie' ? 'Cinema' : 'Music'];
+    }
+
+    genres.forEach((g) => {
+      const cleanG = g.trim();
+      if (!cleanG) return;
+      const existing = genreMap.get(cleanG) || {
+        genre: cleanG,
+        totalCount: 0,
+        movieCount: 0,
+        seriesCount: 0,
+        albumCount: 0,
+        totalBytes: 0,
+        ratingSum: 0,
+        ratingCount: 0,
+      };
+      existing.totalCount++;
+      if (item.media_type === 'movie') existing.movieCount++;
+      else if (item.media_type === 'series') existing.seriesCount++;
+      else if (item.media_type === 'album') existing.albumCount++;
+
+      existing.totalBytes += sizeBytes;
+      if (item.rating) {
+        existing.ratingSum += item.rating;
+        existing.ratingCount++;
+      }
+      genreMap.set(cleanG, existing);
+    });
+
+    // Decade grouping
+    const yr = item.year || 2024;
+    let decadeLabel = '2020s';
+    if (yr < 1980) decadeLabel = '1960s-1970s';
+    else if (yr < 1990) decadeLabel = '1980s';
+    else if (yr < 2000) decadeLabel = '1990s';
+    else if (yr < 2010) decadeLabel = '2000s';
+    else if (yr < 2020) decadeLabel = '2010s';
+    else decadeLabel = '2020s';
+
+    const dec = decadeMap.get(decadeLabel) || {
+      decade: decadeLabel,
+      count: 0,
+      movieCount: 0,
+      seriesCount: 0,
+      albumCount: 0,
+      totalBytes: 0,
+    };
+    dec.count++;
+    if (item.media_type === 'movie') dec.movieCount++;
+    else if (item.media_type === 'series') dec.seriesCount++;
+    else if (item.media_type === 'album') dec.albumCount++;
+    dec.totalBytes += sizeBytes;
+    decadeMap.set(decadeLabel, dec);
+
+    const sizeGB = Number((sizeBytes / (1024 * 1024 * 1024)).toFixed(2));
+    largestItemsList.push({
+      id: item.id,
+      title: item.title,
+      mediaType: item.media_type as 'movie' | 'series' | 'album',
+      year: item.year,
+      rating: item.rating,
+      totalGB: sizeGB,
+      genres,
+      posterUrl: item.poster_url,
+      folderPath: item.recommended_folder,
+    });
+  }
+
+  // Sort largest items descending
+  largestItemsList.sort((a, b) => b.totalGB - a.totalGB);
+
+  const totalGB = Number((totalSizeBytes / (1024 * 1024 * 1024)).toFixed(2));
+  const movieSizeGB = Number((movieSizeBytes / (1024 * 1024 * 1024)).toFixed(2));
+  const seriesSizeGB = Number((seriesSizeBytes / (1024 * 1024 * 1024)).toFixed(2));
+  const albumSizeGB = Number((albumSizeBytes / (1024 * 1024 * 1024)).toFixed(2));
+
+  // Convert genreMap to array, sorted by totalGB desc
+  const genreDistribution = Array.from(genreMap.values())
+    .map((g) => {
+      const gGB = Number((g.totalBytes / (1024 * 1024 * 1024)).toFixed(2));
+      const percent = totalSizeBytes > 0 ? Number(((g.totalBytes / totalSizeBytes) * 100).toFixed(1)) : 0;
+      const avgR = g.ratingCount > 0 ? Number((g.ratingSum / g.ratingCount).toFixed(1)) : 0;
+      return {
+        genre: g.genre,
+        totalCount: g.totalCount,
+        movieCount: g.movieCount,
+        seriesCount: g.seriesCount,
+        albumCount: g.albumCount,
+        totalBytes: g.totalBytes,
+        totalGB: gGB,
+        avgRating: avgR,
+        percentOfStorage: percent,
+      };
+    })
+    .sort((a, b) => b.totalGB - a.totalGB);
+
+  const totalCount = allMedia.length;
+
+  const mediaTypeDistribution = [
+    {
+      name: 'Movies',
+      typeKey: 'movie' as const,
+      count: movieCount,
+      totalGB: movieSizeGB,
+      percent: totalCount > 0 ? Number(((movieCount / totalCount) * 100).toFixed(1)) : 0,
+      color: '#6366f1',
+    },
+    {
+      name: 'TV Series',
+      typeKey: 'series' as const,
+      count: seriesCount,
+      totalGB: seriesSizeGB,
+      percent: totalCount > 0 ? Number(((seriesCount / totalCount) * 100).toFixed(1)) : 0,
+      color: '#a855f7',
+    },
+    {
+      name: 'Music Albums',
+      typeKey: 'album' as const,
+      count: albumCount,
+      totalGB: albumSizeGB,
+      percent: totalCount > 0 ? Number(((albumCount / totalCount) * 100).toFixed(1)) : 0,
+      color: '#06b6d4',
+    },
+  ];
+
+  const orderedDecades = ['1960s-1970s', '1980s', '1990s', '2000s', '2010s', '2020s'];
+  const decadeDistribution = orderedDecades.map((d) => {
+    const item = decadeMap.get(d) || { decade: d, count: 0, movieCount: 0, seriesCount: 0, albumCount: 0, totalBytes: 0 };
+    return {
+      decade: item.decade,
+      count: item.count,
+      movieCount: item.movieCount,
+      seriesCount: item.seriesCount,
+      albumCount: item.albumCount,
+      totalGB: Number((item.totalBytes / (1024 * 1024 * 1024)).toFixed(2)),
+    };
+  });
+
+  const dbStats = await getDbStats();
+
+  return {
+    success: true,
+    summary: {
+      totalMediaItems: totalCount,
+      totalSizeBytes,
+      totalSizeGB: totalGB,
+      movieCount,
+      movieSizeGB,
+      seriesCount,
+      seriesSizeGB,
+      albumCount,
+      albumSizeGB,
+      uniqueGenresCount: genreMap.size,
+      avgRating: ratedCount > 0 ? Number((totalRatingSum / ratedCount).toFixed(1)) : 0,
+      dbFileSizeBytes: dbStats.fileSizeBytes,
+      totalWatchProgressTracked: dbStats.totalSeriesTracked,
+    },
+    genreDistribution,
+    mediaTypeDistribution,
+    decadeDistribution,
+    largestItems: largestItemsList.slice(0, 10),
   };
 }
 

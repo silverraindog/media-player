@@ -72,7 +72,7 @@ export interface MediaMetadata {
   recommendedFolderStructure: string;
   recommendedFilenames: string[];
   matchedFilename?: string;
-  source: 'gemini-ai' | 'curated-database';
+  source?: 'gemini-ai' | 'curated-database' | 'sqlite-watchlist' | 'sqlite-recent' | 'local-scan' | string;
 }
 
 export interface SambaConfig {
@@ -273,6 +273,97 @@ export interface ThumbnailCacheStats {
   localTierCount: number;
   sqliteTierCount: number;
   lastSyncedAt?: number;
+}
+
+export type AppTab =
+  | 'search'
+  | 'watchlist'
+  | 'stats'
+  | 'cleaner'
+  | 'samba-mount'
+  | 'explorer'
+  | 'nfo-studio'
+  | 'sqlite-vault';
+
+export interface WatchlistItem {
+  id: string;
+  media_id: string;
+  title: string;
+  media_type: MediaType;
+  year?: number;
+  rating?: number;
+  poster_url?: string;
+  genres?: string;
+  synopsis?: string;
+  added_at: string;
+}
+
+export interface GenreDistributionItem {
+  genre: string;
+  totalCount: number;
+  movieCount: number;
+  seriesCount: number;
+  albumCount: number;
+  totalBytes: number;
+  totalGB: number;
+  avgRating: number;
+  percentOfStorage: number;
+}
+
+export interface MediaTypeDistributionItem {
+  name: string;
+  typeKey: MediaType;
+  count: number;
+  totalGB: number;
+  percent: number;
+  color: string;
+}
+
+export interface DecadeDistributionItem {
+  decade: string;
+  count: number;
+  movieCount: number;
+  seriesCount: number;
+  albumCount: number;
+  totalGB: number;
+}
+
+export interface LargestMediaItem {
+  id: string;
+  title: string;
+  mediaType: MediaType;
+  year?: number;
+  rating?: number;
+  totalGB: number;
+  genres: string[];
+  posterUrl?: string;
+  folderPath?: string;
+}
+
+export interface LibraryStatsSummary {
+  totalMediaItems: number;
+  totalSizeBytes: number;
+  totalSizeGB: number;
+  movieCount: number;
+  movieSizeGB: number;
+  seriesCount: number;
+  seriesSizeGB: number;
+  albumCount: number;
+  albumSizeGB: number;
+  uniqueGenresCount: number;
+  avgRating: number;
+  dbFileSizeBytes: number;
+  totalWatchProgressTracked: number;
+}
+
+export interface LibraryDistributionStatsResponse {
+  success: boolean;
+  summary: LibraryStatsSummary;
+  genreDistribution: GenreDistributionItem[];
+  mediaTypeDistribution: MediaTypeDistributionItem[];
+  decadeDistribution: DecadeDistributionItem[];
+  largestItems: LargestMediaItem[];
+  cachedThumbnailsCount?: number;
 }
 
 

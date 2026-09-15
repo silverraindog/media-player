@@ -33,9 +33,10 @@ import {
 interface SqliteVaultProps {
   onOpenDetails: (media: MediaMetadata) => void;
   onRefreshTrigger?: () => void;
+  onNavigateToStats?: () => void;
 }
 
-export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefreshTrigger }) => {
+export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefreshTrigger, onNavigateToStats }) => {
   const [activeSubTab, setActiveSubTab] = useState<'progress' | 'database' | 'query'>('progress');
   const [mediaItems, setMediaItems] = useState<SqliteMediaItem[]>([]);
   const [watchProgressList, setWatchProgressList] = useState<SeriesWatchProgress[]>([]);
@@ -240,6 +241,17 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
           </div>
 
           <div className="flex items-center gap-2">
+            {onNavigateToStats && (
+              <button
+                id="btn-goto-library-stats"
+                onClick={onNavigateToStats}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition"
+              >
+                <BarChart2 className="w-3.5 h-3.5" />
+                <span>Library Stats (Recharts)</span>
+              </button>
+            )}
+
             <button
               id="btn-refresh-sqlite"
               onClick={fetchDatabaseData}

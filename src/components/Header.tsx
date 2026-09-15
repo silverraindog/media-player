@@ -14,16 +14,18 @@ import {
   Laptop,
   Database,
   Bookmark,
+  BarChart3,
 } from 'lucide-react';
-import { SambaConfig } from '../types';
+import { SambaConfig, AppTab } from '../types';
 
 interface HeaderProps {
-  activeTab: 'search' | 'cleaner' | 'samba-mount' | 'explorer' | 'nfo-studio' | 'sqlite-vault';
-  setActiveTab: (tab: 'search' | 'cleaner' | 'samba-mount' | 'explorer' | 'nfo-studio' | 'sqlite-vault') => void;
+  activeTab: AppTab;
+  setActiveTab: (tab: AppTab) => void;
   sambaConfig: SambaConfig;
   setSambaConfig: React.Dispatch<React.SetStateAction<SambaConfig>>;
   isConnected: boolean;
   onOpenQuickMount: () => void;
+  watchlistCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -33,6 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
   setSambaConfig,
   isConnected,
   onOpenQuickMount,
+  watchlistCount = 0,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 shadow-md">
@@ -170,6 +173,24 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <button
+            id="tab-watchlist"
+            onClick={() => setActiveTab('watchlist')}
+            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+              activeTab === 'watchlist'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Bookmark className={`w-4 h-4 ${activeTab === 'watchlist' ? 'text-amber-200 fill-amber-200' : 'text-amber-400'}`} />
+            <span>My Watchlist</span>
+            {watchlistCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                {watchlistCount}
+              </span>
+            )}
+          </button>
+
+          <button
             id="tab-sqlite-vault"
             onClick={() => setActiveTab('sqlite-vault')}
             className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
@@ -180,6 +201,19 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Database className="w-4 h-4 text-emerald-400" />
             <span>SQLite Vault & Watch Progress</span>
+          </button>
+
+          <button
+            id="tab-stats"
+            onClick={() => setActiveTab('stats')}
+            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+              activeTab === 'stats'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 text-cyan-400" />
+            <span>Library Stats</span>
           </button>
 
           <button

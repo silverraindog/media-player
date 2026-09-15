@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   X,
   Play,
@@ -22,6 +22,10 @@ import {
   Radio,
   FileVideo,
   FileAudio,
+  FolderOpen,
+  AlertCircle,
+  RefreshCw,
+  Layers,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
 
@@ -34,6 +38,69 @@ interface MediaPlayerModalProps {
   initialTrack?: TrackMetadata;
 }
 
+interface StreamOption {
+  id: string;
+  name: string;
+  url: string;
+  badge: string;
+  type: 'video' | 'audio';
+}
+
+const SAMPLE_VIDEO_STREAMS: StreamOption[] = [
+  {
+    id: 'sintel-1080p',
+    name: 'Sintel Cinema (4K/1080p Master)',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
+    badge: '1080p HDR',
+    type: 'video',
+  },
+  {
+    id: 'tears-of-steel',
+    name: 'Tears of Steel (Sci-Fi VFX)',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+    badge: 'Sci-Fi 1080p',
+    type: 'video',
+  },
+  {
+    id: 'big-buck-bunny',
+    name: 'Big Buck Bunny (Animation Cinema)',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+    badge: 'Animation',
+    type: 'video',
+  },
+  {
+    id: 'elephants-dream',
+    name: 'Elephants Dream (Sci-Fi CGI)',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+    badge: 'Sci-Fi CGI',
+    type: 'video',
+  },
+  {
+    id: 'for-bigger-blazes',
+    name: 'Action Trailer Showcase (4K)',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    badge: 'Action Showcase',
+    type: 'video',
+  },
+];
+
+const SAMPLE_AUDIO_STREAMS: StreamOption[] = [
+  {
+    id: 'soundhelix-1',
+    name: 'SoundHelix Acoustic Master (Lossless)',
+    url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+    badge: '320kbps MP3',
+    type: 'audio',
+  },
+  {
+    id: 'soundhelix-2',
+    name: 'SoundHelix Electronic Ambient',
+    url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+    badge: 'Lossless Audio',
+    type: 'audio',
+  },
+];
+
 export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   media,
   isOpen,
@@ -44,8 +111,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const localFileInputRef = useRef<HTMLInputElement>(null);
 
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.85);
@@ -54,6 +123,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [savedProgress, setSavedProgress] = useState(false);
   const [activeSpeedMenu, setActiveSpeedMenu] = useState(false);
+  const [activeSourceMenu, setActiveSourceMenu] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
+  const [customLocalBlobUrl, setCustomLocalBlobUrl] = useState<string | null>(null);
 
   // Series Episode Tracking
   const [selectedSeasonNum, setSelectedSeasonNum] = useState<number>(
@@ -73,15 +146,21 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     media?.recommendedFolderStructure?.toLowerCase().includes('audio books')
   );
 
+  // Selected stream source preset
+  const [selectedStreamId, setSelectedStreamId] = useState<string>(
+    isAudio ? SAMPLE_AUDIO_STREAMS[0].id : SAMPLE_VIDEO_STREAMS[0].id
+  );
+
   // Determine active streaming/playback source
   const currentStreamUrl =
+    customLocalBlobUrl ||
     media?.localBlobUrl ||
     selectedEpisode?.playbackUrl ||
     selectedTrack?.playbackUrl ||
     media?.playbackUrl ||
     (isAudio
-      ? 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'
-      : 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+      ? (SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId)?.url || SAMPLE_AUDIO_STREAMS[0].url)
+      : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId)?.url || SAMPLE_VIDEO_STREAMS[0].url));
 
   // Sync volume to element
   useEffect(() => {
@@ -95,8 +174,31 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     if (audioRef.current) audioRef.current.playbackRate = playbackRate;
   }, [playbackRate]);
 
-  // Reset state when media changes
+  // Safe playback starter that handles browser autoplay policies cleanly
+  const startPlayback = useCallback(() => {
+    const el = isAudio ? audioRef.current : videoRef.current;
+    if (!el) return;
+
+    setPlaybackError(null);
+    const playPromise = el.play();
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          setIsPlaying(true);
+          setAutoplayBlocked(false);
+        })
+        .catch((err) => {
+          console.warn('Autoplay prevented by browser or user interaction required:', err);
+          setIsPlaying(false);
+          setAutoplayBlocked(true);
+        });
+    }
+  }, [isAudio]);
+
+  // Reset state when media changes & trigger playback
   useEffect(() => {
+    if (!isOpen || !media) return;
+
     if (initialEpisode) {
       setSelectedSeasonNum(initialEpisode.seasonNumber);
       setSelectedEpisode(initialEpisode);
@@ -112,30 +214,100 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
 
     setCurrentTime(0);
-    setIsPlaying(true);
-  }, [media, initialEpisode, initialTrack]);
+    setPlaybackError(null);
 
-  // Handle Play/Pause
+    // Give element a short tick to load source then trigger safe play
+    const timer = setTimeout(() => {
+      startPlayback();
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [media, initialEpisode, initialTrack, isOpen, startPlayback]);
+
+  // Handle Play/Pause toggle
   const togglePlay = () => {
     const el = isAudio ? audioRef.current : videoRef.current;
     if (!el) return;
-    if (el.paused) {
-      el.play().catch(() => {});
-      setIsPlaying(true);
+
+    if (el.paused || !isPlaying) {
+      setPlaybackError(null);
+      el.play()
+        .then(() => {
+          setIsPlaying(true);
+          setAutoplayBlocked(false);
+        })
+        .catch((err) => {
+          console.error('Play failed:', err);
+          setAutoplayBlocked(true);
+        });
     } else {
       el.pause();
       setIsPlaying(false);
     }
   };
 
-  // Skip 10 seconds
+  // Skip seconds
   const handleSkip = (seconds: number) => {
     const el = isAudio ? audioRef.current : videoRef.current;
     if (!el) return;
     el.currentTime = Math.max(0, Math.min(el.duration || 0, el.currentTime + seconds));
   };
 
-  // Time format helper (00:00 or 00:00:00)
+  // Keyboard shortcut listener
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if typing in an input
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        handleSkip(-10);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        handleSkip(10);
+      } else if (e.code === 'KeyM') {
+        e.preventDefault();
+        setIsMuted((prev) => !prev);
+      } else if (e.code === 'KeyF') {
+        e.preventDefault();
+        if (videoRef.current && videoRef.current.requestFullscreen) {
+          videoRef.current.requestFullscreen().catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isPlaying, isAudio]);
+
+  // Local file chooser
+  const handleLocalFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (customLocalBlobUrl) {
+      URL.revokeObjectURL(customLocalBlobUrl);
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    setLocalVideoFile(file);
+    setCustomLocalBlobUrl(objectUrl);
+    setCurrentTime(0);
+    setPlaybackError(null);
+
+    setTimeout(() => {
+      startPlayback();
+    }, 100);
+  };
+
+  // Format time (00:00 or 00:00:00)
   const formatTime = (timeInSec: number) => {
     if (isNaN(timeInSec)) return '00:00';
     const h = Math.floor(timeInSec / 3600);
@@ -190,13 +362,22 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
+      {/* Hidden local file input */}
+      <input
+        ref={localFileInputRef}
+        type="file"
+        accept="video/*,audio/*,.mkv,.mp4,.avi,.mov,.webm,.flac,.mp3,.m4a"
+        className="hidden"
+        onChange={handleLocalFileSelect}
+      />
+
       <div className="relative w-full max-w-5xl bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Top Header Bar */}
         <div className="flex items-center justify-between px-5 py-3.5 bg-slate-900 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-3 truncate">
             <span
-              className={`p-1.5 rounded-lg text-white ${
+              className={`p-2 rounded-lg text-white ${
                 isAudio
                   ? 'bg-emerald-600'
                   : media.type === 'series'
@@ -216,6 +397,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               <h2 className="text-sm sm:text-base font-bold text-white truncate flex items-center gap-2">
                 <span>{media.title}</span>
                 <span className="text-xs text-slate-400 font-normal">({media.year})</span>
+                {localVideoFile && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-700/60 text-emerald-300 text-[10px] font-mono">
+                    Local: {localVideoFile.name}
+                  </span>
+                )}
               </h2>
               {selectedEpisode && (
                 <p className="text-xs text-purple-400 font-medium truncate">
@@ -231,6 +417,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Pick Local Video/Audio File Button */}
+            <button
+              id="player-btn-open-local"
+              onClick={() => localFileInputRef.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 transition cursor-pointer"
+              title="Select and play any local video/audio file from your computer or mounted Samba volume"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Play Local File</span>
+            </button>
+
+            {/* Save Watch Progress Button */}
             <button
               id="player-btn-save-progress"
               onClick={handleSaveWhereLeftOff}
@@ -244,18 +442,23 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               {savedProgress ? (
                 <>
                   <Check className="w-3.5 h-3.5" />
-                  <span>Position Saved!</span>
+                  <span>Saved to DB!</span>
                 </>
               ) : (
                 <>
                   <Bookmark className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Save Where I Left Off</span>
+                  <span className="hidden sm:inline">Save Timestamp</span>
                 </>
               )}
             </button>
 
             <button
-              onClick={onClose}
+              onClick={() => {
+                if (customLocalBlobUrl) {
+                  URL.revokeObjectURL(customLocalBlobUrl);
+                }
+                onClose();
+              }}
               className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
             >
               <X className="w-5 h-5" />
@@ -264,7 +467,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         </div>
 
         {/* Player Stage (Video or Audio) */}
-        <div className="relative bg-black flex items-center justify-center overflow-hidden min-h-[260px] sm:min-h-[380px] max-h-[500px]">
+        <div className="relative bg-black flex items-center justify-center overflow-hidden min-h-[280px] sm:min-h-[400px] max-h-[520px]">
           {isAudio ? (
             /* Audio Visualizer Stage */
             <div className="w-full py-12 px-6 flex flex-col items-center justify-center space-y-6 bg-gradient-to-b from-slate-900 via-slate-950 to-black">
@@ -274,9 +477,16 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   alt={media.title}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                 />
-                <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
-                  <div className="w-14 h-14 rounded-full bg-emerald-500/90 text-white flex items-center justify-center shadow-lg animate-pulse">
-                    <Music className="w-7 h-7" />
+                <div
+                  onClick={togglePlay}
+                  className="absolute inset-0 bg-black/40 flex items-center justify-center cursor-pointer group-hover:bg-black/20 transition-all"
+                >
+                  <div
+                    className={`w-14 h-14 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-lg transition-transform ${
+                      isPlaying ? 'scale-90 animate-pulse' : 'scale-100 hover:scale-110'
+                    }`}
+                  >
+                    {isPlaying ? <Pause className="w-7 h-7 fill-white" /> : <Play className="w-7 h-7 fill-white ml-0.5" />}
                   </div>
                 </div>
               </div>
@@ -288,6 +498,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 <p className="text-xs text-emerald-400 font-medium">
                   {media.artists?.join(', ') || 'Lossless Audio Master'}
                 </p>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  {formatTime(currentTime)} / {formatTime(duration)}
+                </p>
               </div>
 
               <audio
@@ -295,28 +508,96 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 src={currentStreamUrl}
                 autoPlay
                 onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+                onLoadedMetadata={(e) => {
+                  setDuration(e.currentTarget.duration);
+                  setPlaybackError(null);
+                }}
+                onError={() => {
+                  setPlaybackError('Audio stream error. Select an alternate source or load a local file.');
+                  setIsPlaying(false);
+                }}
                 onEnded={() => setIsPlaying(false)}
-                onPlay={() => setIsPlaying(true)}
+                onPlay={() => {
+                  setIsPlaying(true);
+                  setAutoplayBlocked(false);
+                }}
                 onPause={() => setIsPlaying(false)}
               />
             </div>
           ) : (
             /* Video Stage */
-            <div className="w-full h-full flex items-center justify-center">
+            <div className="relative w-full h-full flex items-center justify-center bg-black min-h-[300px]">
               <video
                 ref={videoRef}
                 src={currentStreamUrl}
-                autoPlay
                 playsInline
-                className="w-full max-h-[480px] object-contain"
+                className="w-full max-h-[480px] object-contain bg-black"
                 onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+                onLoadedMetadata={(e) => {
+                  setDuration(e.currentTarget.duration);
+                  setPlaybackError(null);
+                }}
+                onError={() => {
+                  setPlaybackError('Network stream load error. Switch stream below or load your local file.');
+                  setIsPlaying(false);
+                }}
                 onEnded={() => setIsPlaying(false)}
-                onPlay={() => setIsPlaying(true)}
+                onPlay={() => {
+                  setIsPlaying(true);
+                  setAutoplayBlocked(false);
+                }}
                 onPause={() => setIsPlaying(false)}
                 onClick={togglePlay}
               />
+
+              {/* Autoplay / Click-to-Play Overlay (Ensures guaranteed playback on browser policies) */}
+              {(!isPlaying || autoplayBlocked) && !playbackError && (
+                <div
+                  onClick={togglePlay}
+                  className="absolute inset-0 bg-black/50 backdrop-blur-[2px] flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-black/40 group"
+                >
+                  <div className="relative flex items-center justify-center mb-3">
+                    <div className="absolute w-20 h-20 rounded-full bg-indigo-500/30 animate-ping"></div>
+                    <div className="w-16 h-16 rounded-full bg-indigo-600 group-hover:bg-indigo-500 text-white flex items-center justify-center shadow-2xl transition-transform group-hover:scale-110">
+                      <Play className="w-8 h-8 fill-white ml-1" />
+                    </div>
+                  </div>
+                  <span className="text-sm font-bold text-white tracking-wide drop-shadow-md">
+                    Click to Start Playback
+                  </span>
+                  <span className="text-xs text-slate-300 mt-1">
+                    Space to Play • Arrows to Seek • M to Mute
+                  </span>
+                </div>
+              )}
+
+              {/* Error banner with fallback options */}
+              {playbackError && (
+                <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center p-6 text-center space-y-3 z-20">
+                  <AlertCircle className="w-10 h-10 text-amber-400 animate-pulse" />
+                  <h4 className="text-base font-bold text-white">Stream Source Notice</h4>
+                  <p className="text-xs text-slate-300 max-w-md">{playbackError}</p>
+                  <div className="flex flex-wrap items-center gap-2 pt-2">
+                    <button
+                      onClick={() => {
+                        setSelectedStreamId(SAMPLE_VIDEO_STREAMS[1].id);
+                        setPlaybackError(null);
+                        setTimeout(startPlayback, 100);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      Try Alternate CDN Source
+                    </button>
+                    <button
+                      onClick={() => localFileInputRef.current?.click()}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span>Select Local File (.mkv/.mp4)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -325,13 +606,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         <div className="px-5 py-3.5 bg-slate-900/95 border-t border-slate-800 space-y-2.5">
           {/* Progress Slider */}
           <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-slate-400 w-12 text-right">
+            <span className="text-xs font-mono text-slate-400 w-14 text-right">
               {formatTime(currentTime)}
             </span>
             <input
               type="range"
               min={0}
               max={duration || 100}
+              step={0.1}
               value={currentTime}
               onChange={(e) => {
                 const newTime = parseFloat(e.target.value);
@@ -341,7 +623,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               }}
               className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition"
             />
-            <span className="text-xs font-mono text-slate-400 w-12">
+            <span className="text-xs font-mono text-slate-400 w-14">
               {formatTime(duration)}
             </span>
           </div>
@@ -353,7 +635,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               <button
                 onClick={() => handleSkip(-10)}
                 className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
-                title="Rewind 10 seconds"
+                title="Rewind 10 seconds (← Arrow)"
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
@@ -362,7 +644,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 id="player-btn-toggle-play"
                 onClick={togglePlay}
                 className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition shadow-md shadow-indigo-600/30 cursor-pointer"
-                title={isPlaying ? 'Pause' : 'Play'}
+                title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
               >
                 {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white ml-0.5" />}
               </button>
@@ -370,7 +652,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               <button
                 onClick={() => handleSkip(10)}
                 className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
-                title="Fast-forward 10 seconds"
+                title="Fast-forward 10 seconds (→ Arrow)"
               >
                 <RotateCw className="w-4 h-4" />
               </button>
@@ -379,7 +661,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               <div className="flex items-center gap-1.5 ml-2">
                 <button
                   onClick={() => setIsMuted(!isMuted)}
-                  className="p-2 text-slate-400 hover:text-white transition"
+                  className="p-2 text-slate-400 hover:text-white transition cursor-pointer"
+                  title="Mute/Unmute (M)"
                 >
                   {isMuted || volume === 0 ? (
                     <VolumeX className="w-4 h-4 text-rose-400" />
@@ -402,13 +685,83 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               </div>
             </div>
 
-            {/* Right: Playback Speed, Fullscreen, Open in VLC / IINA */}
+            {/* Right Controls: Stream Source Switcher, Speed Menu, Fullscreen */}
             <div className="flex items-center gap-2 text-xs">
-              {/* Speed Switcher */}
+              {/* Stream Source Selector Dropdown */}
+              <div className="relative">
+                <button
+                  id="player-btn-source-menu"
+                  onClick={() => setActiveSourceMenu(!activeSourceMenu)}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-medium flex items-center gap-1.5 transition cursor-pointer"
+                  title="Switch video streaming source or local file"
+                >
+                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="hidden sm:inline">Source:</span>
+                  <span className="font-semibold truncate max-w-[100px]">
+                    {customLocalBlobUrl
+                      ? 'Local File'
+                      : isAudio
+                      ? SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId)?.name || 'Audio'
+                      : SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId)?.name.split(' ')[0] || 'CDN'}
+                  </span>
+                </button>
+
+                {activeSourceMenu && (
+                  <div className="absolute bottom-full mb-2 right-0 bg-slate-900 border border-slate-800 rounded-xl p-1.5 shadow-2xl space-y-1 z-30 w-64 animate-in fade-in zoom-in-95">
+                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                      Select Playback Source
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        localFileInputRef.current?.click();
+                        setActiveSourceMenu(false);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-300 hover:bg-emerald-950/50 flex items-center justify-between transition cursor-pointer"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <FolderOpen className="w-3.5 h-3.5" />
+                        <span>Open Local File...</span>
+                      </span>
+                      <span className="text-[10px] px-1 bg-emerald-900/60 rounded">Disk</span>
+                    </button>
+
+                    {(isAudio ? SAMPLE_AUDIO_STREAMS : SAMPLE_VIDEO_STREAMS).map((stream) => (
+                      <button
+                        key={stream.id}
+                        onClick={() => {
+                          if (customLocalBlobUrl) {
+                            URL.revokeObjectURL(customLocalBlobUrl);
+                            setCustomLocalBlobUrl(null);
+                            setLocalVideoFile(null);
+                          }
+                          setSelectedStreamId(stream.id);
+                          setActiveSourceMenu(false);
+                          setCurrentTime(0);
+                          setPlaybackError(null);
+                          setTimeout(startPlayback, 100);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition cursor-pointer ${
+                          selectedStreamId === stream.id && !customLocalBlobUrl
+                            ? 'bg-indigo-600 text-white font-bold'
+                            : 'text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="truncate">{stream.name}</span>
+                        <span className="text-[10px] opacity-75 font-mono ml-2 shrink-0">
+                          {stream.badge}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Playback Speed Switcher */}
               <div className="relative">
                 <button
                   onClick={() => setActiveSpeedMenu(!activeSpeedMenu)}
-                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold flex items-center gap-1 transition"
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold flex items-center gap-1 transition cursor-pointer"
                 >
                   <Sliders className="w-3.5 h-3.5 text-indigo-400" />
                   <span>{playbackRate}x</span>
@@ -423,7 +776,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                           setPlaybackRate(rate);
                           setActiveSpeedMenu(false);
                         }}
-                        className={`w-full text-left px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                        className={`w-full text-left px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
                           playbackRate === rate
                             ? 'bg-indigo-600 text-white'
                             : 'text-slate-300 hover:bg-slate-800'
@@ -440,14 +793,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               {!isAudio && (
                 <button
                   onClick={() => {
-                    if (videoRef.current) {
-                      if (videoRef.current.requestFullscreen) {
-                        videoRef.current.requestFullscreen();
-                      }
+                    if (videoRef.current && videoRef.current.requestFullscreen) {
+                      videoRef.current.requestFullscreen().catch(() => {});
                     }
                   }}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-                  title="Fullscreen"
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                  title="Fullscreen (F)"
                 >
                   <Maximize className="w-4 h-4" />
                 </button>
@@ -471,7 +822,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     <button
                       key={s.seasonNumber}
                       onClick={() => setSelectedSeasonNum(s.seasonNumber)}
-                      className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                      className={`px-2 py-0.5 rounded text-[11px] font-bold cursor-pointer ${
                         selectedSeasonNum === s.seasonNumber
                           ? 'bg-purple-600 text-white'
                           : 'bg-slate-900 text-slate-400 hover:text-white'
@@ -494,8 +845,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                         onClick={() => {
                           setSelectedEpisode(ep);
                           setCurrentTime(0);
+                          setTimeout(startPlayback, 100);
                         }}
-                        className={`text-left p-2 rounded-lg border transition text-xs flex items-center justify-between ${
+                        className={`text-left p-2 rounded-lg border transition text-xs flex items-center justify-between cursor-pointer ${
                           isSelected
                             ? 'bg-purple-950/60 border-purple-500 text-white font-semibold'
                             : 'bg-slate-900 border-slate-800 hover:border-slate-700 text-slate-300'
@@ -528,8 +880,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       onClick={() => {
                         setSelectedTrack(track);
                         setCurrentTime(0);
+                        setTimeout(startPlayback, 100);
                       }}
-                      className={`text-left p-2 rounded-lg border transition text-xs flex items-center justify-between ${
+                      className={`text-left p-2 rounded-lg border transition text-xs flex items-center justify-between cursor-pointer ${
                         isSelected
                           ? 'bg-emerald-950/60 border-emerald-500 text-white font-semibold'
                           : 'bg-slate-900 border-slate-800 hover:border-slate-700 text-slate-300'

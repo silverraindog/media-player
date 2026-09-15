@@ -38,6 +38,14 @@ interface XmlSyntaxError {
   rawText?: string;
 }
 
+export interface RequiredTagWarning {
+  tag: string;
+  label: string;
+  description: string;
+  severity: 'required' | 'recommended';
+  exampleSnippet: string;
+}
+
 export const NfoStudio: React.FC<NfoStudioProps> = ({
   initialMedia,
   sambaConfig,
@@ -56,6 +64,7 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
     isValid: true,
     errors: [],
   });
+  const [missingTags, setMissingTags] = useState<RequiredTagWarning[]>([]);
   const [showPushConfirm, setShowPushConfirm] = useState(false);
 
   useEffect(() => {
@@ -118,14 +127,119 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
           message: `Unrecognized root tag <${rootElement.tagName}>. Recommended: <movie>, <tvshow>, <episodedetails>, or <album>`,
         });
       }
+
+      // Check required XML tags for Kodi and Jellyfin compatibility
+      if (rootElement && !parserError) {
+        const warnings: RequiredTagWarning[] = [];
+        const rootTag = rootElement.tagName.toLowerCase();
+
+        const getTagValue = (tagName: string) => {
+          const el = doc.querySelector(tagName);
+          return el && el.textContent ? el.textContent.trim() : null;
+        };
+
+        // 1. <plot> check
+        if (!getTagValue('plot')) {
+          warnings.push({
+            tag: 'plot',
+            label: '<plot>',
+            description: 'Required by Kodi & Jellyfin scrapers to display the storyline synopsis and plot overview.',
+            severity: 'required',
+            exampleSnippet: `<plot>${selectedMedia.overview || 'A compelling storyline overview goes here.'}</plot>`,
+          });
+        }
+
+        // 2. <rating> check
+        if (!getTagValue('rating')) {
+          warnings.push({
+            tag: 'rating',
+            label: '<rating>',
+            description: 'Required by Kodi & Jellyfin to calculate and render star ratings and community score badges.',
+            severity: 'required',
+            exampleSnippet: `<rating>${selectedMedia.rating ? selectedMedia.rating.toFixed(1) : '8.5'}</rating>`,
+          });
+        }
+
+        // 3. <title> check
+        if (!getTagValue('title')) {
+          warnings.push({
+            tag: 'title',
+            label: '<title>',
+            description: 'Required tag to identify and index the primary media title.',
+            severity: 'required',
+            exampleSnippet: `<title>${selectedMedia.title || 'Title'}</title>`,
+          });
+        }
+
+        // 4. <year> or <premiered> check
+        if (['movie', 'tvshow'].includes(rootTag) && !getTagValue('year') && !getTagValue('premiered')) {
+          warnings.push({
+            tag: 'year',
+            label: '<year>',
+            description: 'Recommended by Kodi & Jellyfin for timeline ordering, release year filters, and folder sorting.',
+            severity: 'recommended',
+            exampleSnippet: `<year>${selectedMedia.year || new Date().getFullYear()}</year>`,
+          });
+        }
+
+        // 5. <genre> check
+        if (['movie', 'tvshow'].includes(rootTag) && !getTagValue('genre')) {
+          const firstGenre = selectedMedia.genres && selectedMedia.genres[0] ? selectedMedia.genres[0] : 'Drama';
+          warnings.push({
+            tag: 'genre',
+            label: '<genre>',
+            description: 'Recommended by Kodi & Jellyfin for genre browsing and category indexation.',
+            severity: 'recommended',
+            exampleSnippet: `<genre>${firstGenre}</genre>`,
+          });
+        }
+
+        setMissingTags(warnings);
+      } else {
+        setMissingTags([]);
+      }
     } catch (err: any) {
       errors.push({ message: err.message || 'XML Parsing exception' });
+      setMissingTags([]);
     }
 
     setXmlValidation({
       isValid: errors.length === 0,
       errors,
     });
+  };
+
+  // Insert a specific missing tag into the XML document before the closing root tag
+  const handleInsertMissingTag = (warning: RequiredTagWarning) => {
+    const closingRegex = /(<\/(movie|tvshow|episodedetails|album|musicvideo)>)/i;
+    const match = xmlCode.match(closingRegex);
+    if (match && match.index !== undefined) {
+      const tagToInsert = `  ${warning.exampleSnippet}\n`;
+      const updated = xmlCode.slice(0, match.index) + tagToInsert + xmlCode.slice(match.index);
+      setXmlCode(updated);
+      validateXmlContent(updated);
+    } else {
+      const updated = xmlCode + `\n  ${warning.exampleSnippet}`;
+      setXmlCode(updated);
+      validateXmlContent(updated);
+    }
+  };
+
+  // Insert all missing required tags at once
+  const handleInsertAllMissingTags = () => {
+    if (missingTags.length === 0) return;
+    const closingRegex = /(<\/(movie|tvshow|episodedetails|album|musicvideo)>)/i;
+    const match = xmlCode.match(closingRegex);
+    const tagsStr = missingTags.map((t) => `  ${t.exampleSnippet}`).join('\n') + '\n';
+    if (match && match.index !== undefined) {
+      const updated = xmlCode.slice(0, match.index) + tagsStr + xmlCode.slice(match.index);
+      setXmlCode(updated);
+      validateXmlContent(updated);
+    } else {
+      const updated = xmlCode + `\n` + tagsStr;
+      setXmlCode(updated);
+      validateXmlContent(updated);
+    }
   };
 
   const handleXmlChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -164,7 +278,7 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
   };
 
   const handlePushSafely = () => {
-    if (!xmlValidation.isValid) {
+    if (!xmlValidation.isValid || missingTags.length > 0) {
       setShowPushConfirm(true);
       return;
     }
@@ -425,6 +539,65 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
                 ))}
               </div>
             )}
+
+            {/* Kodi & Jellyfin Compatibility Warning Indicator (Missing Required Tags) */}
+            {missingTags.length > 0 && (
+              <div
+                id="kodi-jellyfin-xml-warning-indicator"
+                className="p-3.5 bg-amber-950/40 border-2 border-amber-500/60 rounded-xl space-y-2 text-xs text-amber-200 shadow-lg animate-in fade-in duration-200"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+                    <span className="font-bold text-white text-xs">
+                      Kodi & Jellyfin Compatibility Warning
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/30 text-amber-300 text-[10px] font-bold border border-amber-500/40">
+                    {missingTags.length} Missing Tag{missingTags.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                  Real-time validator detected missing tags required by Kodi and Jellyfin media scrapers:
+                </p>
+
+                <div className="space-y-1.5 pt-1">
+                  {missingTags.map((warn) => (
+                    <div
+                      key={warn.tag}
+                      id={`warning-missing-tag-${warn.tag}`}
+                      className="p-2 rounded-lg bg-slate-950/80 border border-amber-500/30 flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-start gap-1.5 min-w-0">
+                        <span className="font-mono text-amber-400 font-bold text-xs shrink-0">
+                          {warn.label}
+                        </span>
+                        <span className="text-[11px] text-slate-300 truncate">
+                          {warn.description}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleInsertMissingTag(warn)}
+                        className="px-2 py-1 rounded bg-amber-600/80 hover:bg-amber-500 text-white text-[10px] font-semibold transition cursor-pointer shrink-0"
+                        title={`Insert ${warn.label} into XML`}
+                      >
+                        + Insert Tag
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  id="btn-insert-all-missing-tags"
+                  onClick={handleInsertAllMissingTags}
+                  className="w-full mt-1 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Insert All Required Kodi/Jellyfin Tags</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -518,17 +691,33 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
                   <span>Download .nfo</span>
                 </button>
 
+                {missingTags.length > 0 && (
+                  <span
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-950/70 border border-amber-500/40 text-amber-300 text-xs font-semibold cursor-help"
+                    title={`Missing ${missingTags.length} required/recommended Kodi/Jellyfin tag(s): ${missingTags.map((t) => t.label).join(', ')}`}
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{missingTags.length} Tag Warning</span>
+                  </span>
+                )}
+
                 <button
                   id="btn-nfo-push-samba"
                   onClick={handlePushSafely}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-xs font-semibold transition cursor-pointer ${
-                    !xmlValidation.isValid
+                    !xmlValidation.isValid || missingTags.length > 0
                       ? 'bg-amber-600 hover:bg-amber-500 shadow-md shadow-amber-600/20'
                       : 'bg-emerald-600 hover:bg-emerald-500 shadow-md shadow-emerald-600/20'
                   }`}
-                  title={!xmlValidation.isValid ? 'Warning: XML contains syntax errors' : 'Push clean XML NFO to Samba share'}
+                  title={
+                    !xmlValidation.isValid
+                      ? 'Warning: XML contains syntax errors'
+                      : missingTags.length > 0
+                      ? `Warning: XML missing ${missingTags.length} Kodi/Jellyfin required tags`
+                      : 'Push clean XML NFO to Samba share'
+                  }
                 >
-                  {!xmlValidation.isValid ? (
+                  {!xmlValidation.isValid || missingTags.length > 0 ? (
                     <AlertTriangle className="w-3.5 h-3.5" />
                   ) : (
                     <FolderPlus className="w-3.5 h-3.5" />
@@ -538,34 +727,59 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
               </div>
             </div>
 
-            {/* Confirmation Dialog for pushing XML with syntax errors */}
+            {/* Confirmation Dialog for pushing XML with syntax errors or missing required tags */}
             {showPushConfirm && (
-              <div className="mt-3 p-3 bg-amber-950/80 border border-amber-800/80 rounded-xl text-xs text-amber-200 flex items-center justify-between gap-3 animate-in fade-in">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>
-                    XML markup contains syntax errors. Push anyway or auto-fix syntax first?
-                  </span>
+              <div className="mt-3 p-3.5 bg-amber-950/90 border border-amber-500/80 rounded-xl text-xs text-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-3 animate-in fade-in">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-white block">
+                      Kodi / Jellyfin NFO Warning Before Pushing
+                    </span>
+                    <span className="text-[11px] text-amber-200/90">
+                      {!xmlValidation.isValid
+                        ? 'XML markup contains syntax errors.'
+                        : ''}{' '}
+                      {missingTags.length > 0
+                        ? `Missing required tag(s): ${missingTags.map((t) => t.label).join(', ')}.`
+                        : ''}{' '}
+                      Would you like to auto-insert tags & fix before pushing?
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={handleAutoFixSyntax}
-                    className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] cursor-pointer"
-                  >
-                    Auto-Fix & Continue
-                  </button>
+                <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
+                  {missingTags.length > 0 && (
+                    <button
+                      onClick={() => {
+                        handleInsertAllMissingTags();
+                        if (!xmlValidation.isValid) handleAutoFixSyntax();
+                        setShowPushConfirm(false);
+                      }}
+                      className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] cursor-pointer"
+                    >
+                      Insert Missing & Fix
+                    </button>
+                  )}
+                  {!xmlValidation.isValid && missingTags.length === 0 && (
+                    <button
+                      onClick={handleAutoFixSyntax}
+                      className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] cursor-pointer"
+                    >
+                      Auto-Fix Syntax
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setShowPushConfirm(false);
                       onPushNfoToSamba(selectedMedia, xmlCode);
                     }}
-                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[11px] cursor-pointer"
+                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 text-[11px] font-medium cursor-pointer"
                   >
                     Push As-Is
                   </button>
                   <button
                     onClick={() => setShowPushConfirm(false)}
-                    className="text-slate-400 hover:text-white text-[11px] cursor-pointer"
+                    className="text-slate-400 hover:text-white text-[11px] cursor-pointer px-1"
                   >
                     Cancel
                   </button>

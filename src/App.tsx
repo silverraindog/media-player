@@ -11,11 +11,14 @@ import { NfoStudio } from './components/NfoStudio';
 import { MediaDetailModal } from './components/MediaDetailModal';
 import { MediaPlayerModal } from './components/MediaPlayerModal';
 import { SqliteVault } from './components/SqliteVault';
+import { LibraryStatsTab } from './components/LibraryStatsTab';
 import { FolderClassifierModal } from './components/FolderClassifierModal';
 import { ManualMatchModal } from './components/ManualMatchModal';
+import { WatchlistTab } from './components/WatchlistTab';
 import {
   MediaMetadata,
   MediaType,
+  AppTab,
   EpisodeMetadata,
   TrackMetadata,
   SambaConfig,
@@ -385,9 +388,24 @@ const INITIAL_SYNC_LOGS: SyncLog[] = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<
-    'search' | 'cleaner' | 'samba-mount' | 'explorer' | 'nfo-studio' | 'sqlite-vault'
-  >('search');
+  const [activeTab, setActiveTab] = useState<AppTab>('search');
+  const [watchlistCount, setWatchlistCount] = useState<number>(0);
+
+  // Sync watchlist count from SQLite
+  useEffect(() => {
+    const checkCount = async () => {
+      try {
+        const res = await fetch('/api/db/watchlist');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.watchlist)) {
+          setWatchlistCount(data.watchlist.length);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    checkCount();
+  }, [activeTab]);
   const [sambaConfig, setSambaConfig] = useState<SambaConfig>(INITIAL_SAMBA_CONFIG);
   const [isConnected, setIsConnected] = useState(false);
   const [isTestingConn, setIsTestingConn] = useState(false);
@@ -1301,11 +1319,21 @@ export default function App() {
         sambaConfig={sambaConfig}
         setSambaConfig={setSambaConfig}
         isConnected={isConnected}
+        watchlistCount={watchlistCount}
         onOpenQuickMount={() => setActiveTab('samba-mount')}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {activeTab === 'watchlist' && (
+          <WatchlistTab
+            onPlayMedia={handlePlayMedia}
+            onOpenDetails={(media) => setDetailModalMedia(media)}
+            onOpenInNfoStudio={handleOpenInNfoStudio}
+            onWatchlistCountChange={setWatchlistCount}
+          />
+        )}
+
         {activeTab === 'search' && (
           <MediaSearch
             mediaLibrary={mediaLibrary}
@@ -1317,6 +1345,26 @@ export default function App() {
             onImportFiles={handleImportFilesDirectly}
             onSyncFromSamba={() => handleSyncSamba()}
             onOpenManualMatch={handleOpenManualMatch}
+            onSaveCategorizedMedia={(media) => {
+              setMediaLibrary((prev) => {
+                const idx = prev.findIndex(
+                  (m) => m.id === media.id || m.title.toLowerCase() === media.title.toLowerCase()
+                );
+                if (idx >= 0) {
+                  const copy = [...prev];
+                  copy[idx] = { ...copy[idx], ...media };
+                  return copy;
+                }
+                return [media, ...prev];
+              });
+              // Persist to SQLite
+              fetch('/api/db/media', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(media),
+              }).catch(() => {});
+              showToast(`Categorized "${media.title}" (${(media.genres || []).join(', ')})`);
+            }}
             isSyncing={isSyncingShare}
             selectedMediaType={selectedMediaType}
             onSelectMediaType={setSelectedMediaType}
@@ -1325,6 +1373,14 @@ export default function App() {
 
         {activeTab === 'sqlite-vault' && (
           <SqliteVault
+            onOpenDetails={(media) => setDetailModalMedia(media)}
+            onNavigateToStats={() => setActiveTab('stats')}
+          />
+        )}
+
+        {activeTab === 'stats' && (
+          <LibraryStatsTab
+            onNavigateToVault={() => setActiveTab('sqlite-vault')}
             onOpenDetails={(media) => setDetailModalMedia(media)}
           />
         )}

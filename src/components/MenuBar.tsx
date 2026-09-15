@@ -28,11 +28,12 @@ import {
   Settings,
   FolderSearch,
 } from 'lucide-react';
-import { SambaConfig, MediaType } from '../types';
+import { SambaConfig, MediaType, AppTab } from '../types';
+import { Bookmark, BarChart3 } from 'lucide-react';
 
 interface MenuBarProps {
-  activeTab: 'search' | 'cleaner' | 'samba-mount' | 'explorer' | 'nfo-studio' | 'sqlite-vault';
-  setActiveTab: (tab: 'search' | 'cleaner' | 'samba-mount' | 'explorer' | 'nfo-studio' | 'sqlite-vault') => void;
+  activeTab: AppTab;
+  setActiveTab: (tab: AppTab) => void;
   onSelectViewMediaType?: (type: 'all' | MediaType) => void;
   selectedMediaType?: 'all' | MediaType;
   sambaConfig: SambaConfig;
@@ -116,6 +117,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
       } else if ((e.metaKey || e.ctrlKey) && e.key === '6') {
         e.preventDefault();
         setActiveTab('sqlite-vault');
+      } else if ((e.metaKey || e.ctrlKey) && e.key === '7') {
+        e.preventDefault();
+        setActiveTab('stats');
       }
     };
 
@@ -452,6 +456,25 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                     <span className="text-[10px] text-slate-400 font-mono">⌘4</span>
                   </button>
 
+                  {/* Watchlist view under VIEW menu */}
+                  <button
+                    id="view-menu-watchlist-btn"
+                    onClick={() =>
+                      executeAction(() => {
+                        setActiveTab('watchlist');
+                      })
+                    }
+                    className={`w-full px-3 py-1.5 text-left hover:bg-amber-600 hover:text-white flex items-center justify-between text-xs transition-colors ${
+                      activeTab === 'watchlist' ? 'bg-amber-950/80 text-amber-200 font-semibold' : ''
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Bookmark className="w-3.5 h-3.5 text-amber-400" />
+                      <span>My Watchlist (Saved Titles)</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">⌘W</span>
+                  </button>
+
                   <div className="my-1 border-t border-slate-800" />
 
                   <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
@@ -492,6 +515,24 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                       <span>SQLite Vault & Watch Progress</span>
                     </span>
                     <span className="text-[10px] text-slate-400 font-mono">⌘6</span>
+                  </button>
+
+                  <button
+                    id="view-menu-stats-btn"
+                    onClick={() =>
+                      executeAction(() => {
+                        setActiveTab('stats');
+                      })
+                    }
+                    className={`w-full px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex items-center justify-between text-xs transition-colors ${
+                      activeTab === 'stats' ? 'bg-indigo-950/80 text-indigo-200 font-semibold' : ''
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <BarChart3 className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Library Stats & Media Distribution</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">⌘7</span>
                   </button>
 
                   <button

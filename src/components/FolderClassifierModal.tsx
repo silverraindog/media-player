@@ -93,6 +93,24 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
     setClassifications((prev) => prev.map((c) => ({ ...c, selectedForImport: false })));
   };
 
+  const massApplyTargetType = (newType: MediaType | 'ignore') => {
+    setClassifications((prev) =>
+      prev.map((c) => (c.selectedForImport ? { ...c, targetType: newType } : c))
+    );
+  };
+
+  const allSelected = classifications.length > 0 && classifications.every((c) => c.selectedForImport);
+  const someSelected = classifications.some((c) => c.selectedForImport) && !allSelected;
+  const selectedCount = classifications.filter((c) => c.selectedForImport).length;
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      deselectAll();
+    } else {
+      selectAll();
+    }
+  };
+
   const selectedFolders = classifications.filter((c) => c.selectedForImport && c.targetType !== 'ignore');
   const totalSelectedItems = selectedFolders.reduce((acc, curr) => acc + curr.itemCount, 0);
   const confidentFoldersCount = classifications.filter((c) => c.confidence >= confidenceThreshold).length;
@@ -239,6 +257,84 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {activeTab === 'review' && (
             <div className="space-y-3">
+              {/* Master Select All Checkbox & Mass Category Application Bar */}
+              <div
+                id="mass-category-apply-bar"
+                className="p-3.5 bg-slate-900/90 border border-slate-700/80 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-sm"
+              >
+                <label className="flex items-center gap-2.5 text-xs font-semibold text-white cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    id="master-select-all-folders-checkbox"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelected;
+                    }}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <span className="text-slate-200">Select All Folders</span>
+                  <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[11px] font-mono border border-slate-700">
+                    {selectedCount} of {classifications.length} selected
+                  </span>
+                </label>
+
+                {selectedCount > 0 ? (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[11px] text-slate-400 font-medium mr-1">
+                      Mass-Apply to Selected:
+                    </span>
+                    <button
+                      id="btn-mass-apply-movie"
+                      type="button"
+                      onClick={() => massApplyTargetType('movie')}
+                      className="px-2.5 py-1 rounded-lg bg-indigo-950/90 hover:bg-indigo-900 text-indigo-200 text-xs font-semibold border border-indigo-700/80 transition flex items-center gap-1.5 cursor-pointer shadow-sm hover:scale-[1.02] active:scale-[0.98]"
+                      title={`Set target category to Movie for all ${selectedCount} selected folders`}
+                    >
+                      <Film className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Movie</span>
+                    </button>
+
+                    <button
+                      id="btn-mass-apply-series"
+                      type="button"
+                      onClick={() => massApplyTargetType('series')}
+                      className="px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-900 text-purple-200 text-xs font-semibold border border-purple-700/80 transition flex items-center gap-1.5 cursor-pointer shadow-sm hover:scale-[1.02] active:scale-[0.98]"
+                      title={`Set target category to TV Series for all ${selectedCount} selected folders`}
+                    >
+                      <Tv className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Series</span>
+                    </button>
+
+                    <button
+                      id="btn-mass-apply-ignore"
+                      type="button"
+                      onClick={() => massApplyTargetType('ignore')}
+                      className="px-2.5 py-1 rounded-lg bg-rose-950/90 hover:bg-rose-900 text-rose-200 text-xs font-semibold border border-rose-700/80 transition flex items-center gap-1.5 cursor-pointer shadow-sm hover:scale-[1.02] active:scale-[0.98]"
+                      title={`Ignore / skip all ${selectedCount} selected folders`}
+                    >
+                      <X className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Ignore</span>
+                    </button>
+
+                    <button
+                      id="btn-mass-apply-music"
+                      type="button"
+                      onClick={() => massApplyTargetType('album')}
+                      className="px-2.5 py-1 rounded-lg bg-cyan-950/90 hover:bg-cyan-900 text-cyan-200 text-xs font-semibold border border-cyan-700/80 transition flex items-center gap-1.5 cursor-pointer shadow-sm hover:scale-[1.02] active:scale-[0.98]"
+                      title={`Set target category to Music Album for all ${selectedCount} selected folders`}
+                    >
+                      <Music className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Music</span>
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-slate-500 italic">
+                    Check folders to mass-apply Movie, Series, or Ignore
+                  </span>
+                )}
+              </div>
+
               {uncertainFoldersCount > 0 && (
                 <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-3">
                   <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />

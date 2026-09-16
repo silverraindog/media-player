@@ -39,6 +39,8 @@ interface MediaPlayerModalProps {
   sambaConfig: SambaConfig;
   initialEpisode?: EpisodeMetadata;
   initialTrack?: TrackMetadata;
+  mediaLibrary?: MediaMetadata[];
+  onSelectMedia?: (media: MediaMetadata) => void;
 }
 
 interface StreamOption {
@@ -245,9 +247,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const nextEpInfo = media?.type === 'series' ? getNextEpisode() : null;
   const isNearEnd = duration > 0 && currentTime >= duration - 30;
 
-  // Selected stream source preset
+  // Selected stream source preset - default to sintel-trailer for series
   const [selectedStreamId, setSelectedStreamId] = useState<string>(
-    isAudio ? SAMPLE_AUDIO_STREAMS[0].id : SAMPLE_VIDEO_STREAMS[0].id
+    isAudio ? SAMPLE_AUDIO_STREAMS[0].id : media?.type === 'series' ? 'sintel-trailer' : SAMPLE_VIDEO_STREAMS[0].id
   );
 
   // Calculate default fallback stream URL

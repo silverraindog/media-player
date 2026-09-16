@@ -1538,6 +1538,8 @@ export default function App() {
           onOpenInNfoStudio={handleOpenInNfoStudio}
           onPlayMedia={handlePlayMedia}
           sambaConfig={sambaConfig}
+          mediaLibrary={mediaLibrary}
+          onSelectMedia={(m) => setDetailModalMedia(m)}
         />
       )}
 
@@ -1550,6 +1552,8 @@ export default function App() {
           initialTrack={playerMediaState.track}
           onClose={() => setPlayerMediaState(null)}
           sambaConfig={sambaConfig}
+          mediaLibrary={mediaLibrary}
+          onSelectMedia={(m) => setPlayerMediaState({ media: m })}
         />
       )}
 

@@ -172,6 +172,45 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     media?.recommendedFolderStructure?.toLowerCase().includes('audio books')
   );
 
+  const handleSubtitleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const newTrack = {
+      name: file.name,
+      url,
+      lang: 'en',
+    };
+    setSubtitleTracks((prev) => [...prev, newTrack]);
+    setActiveSubtitleIndex(subtitleTracks.length);
+  };
+
+  const recordWatchHistory = () => {
+    try {
+      const pos = videoRef.current?.currentTime || currentTime || 0;
+      const dur = videoRef.current?.duration || duration || 0;
+      const pct = dur > 0 ? Number(((pos / dur) * 100).toFixed(1)) : 0;
+      fetch('/api/db/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          media_id: media?.id,
+          series_id: media?.type === 'series' ? media.id : undefined,
+          media_type: media?.type || 'movie',
+          title: selectedEpisode ? `${media?.title} - S${selectedSeasonNum}E${selectedEpisode.episodeNumber}` : (media?.title || 'Unknown Media'),
+          season_number: selectedSeasonNum,
+          episode_number: selectedEpisode?.episodeNumber,
+          episode_title: selectedEpisode?.title,
+          poster_url: media?.posterUrl,
+          duration_seconds: dur,
+          playback_position_seconds: pos,
+          progress_percentage: pct,
+          is_completed: pct >= 90 ? 1 : 0,
+        }),
+      }).catch(() => {});
+    } catch {}
+  };
+
   // Selected stream source preset
   const [selectedStreamId, setSelectedStreamId] = useState<string>(
     isAudio ? SAMPLE_AUDIO_STREAMS[0].id : SAMPLE_VIDEO_STREAMS[0].id

@@ -407,12 +407,42 @@ export default function App() {
     };
     checkCount();
   }, [activeTab]);
-  const [sambaConfig, setSambaConfig] = useState<SambaConfig>(INITIAL_SAMBA_CONFIG);
+  const [sambaConfig, setSambaConfig] = useState<SambaConfig>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_config');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return INITIAL_SAMBA_CONFIG;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('samba_vault_config', JSON.stringify(sambaConfig));
+    } catch {}
+  }, [sambaConfig]);
+
   const [isConnected, setIsConnected] = useState(false);
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
   const [connectionDetails, setConnectionDetails] = useState<any>(null);
-  const [sambaTree, setSambaTree] = useState<SambaShareNode[]>(INITIAL_SAMBA_TREE);
+
+  const [sambaTree, setSambaTree] = useState<SambaShareNode[]>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_tree');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_SAMBA_TREE;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('samba_vault_tree', JSON.stringify(sambaTree));
+    } catch {}
+  }, [sambaTree]);
+
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
   const [detailModalMedia, setDetailModalMedia] = useState<MediaMetadata | null>(null);
   const [nfoStudioMedia, setNfoStudioMedia] = useState<MediaMetadata | null>(null);
@@ -426,7 +456,20 @@ export default function App() {
   const [isAllTreeExpanded, setIsAllTreeExpanded] = useState(true);
 
   // Folder Classification and Regex Rule Engine State
-  const [classifierSettings, setClassifierSettings] = useState<ClassifierSettings>(DEFAULT_CLASSIFIER_SETTINGS);
+  const [classifierSettings, setClassifierSettings] = useState<ClassifierSettings>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_classifier');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return DEFAULT_CLASSIFIER_SETTINGS;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('samba_vault_classifier', JSON.stringify(classifierSettings));
+    } catch {}
+  }, [classifierSettings]);
+
   const [isClassifierModalOpen, setIsClassifierModalOpen] = useState(false);
   const [manualMatchModalState, setManualMatchModalState] = useState<{
     isOpen: boolean;
@@ -436,7 +479,21 @@ export default function App() {
   const [folderClassifications, setFolderClassifications] = useState<FolderScanClassification[]>([]);
   const [lastDiscoveredPaths, setLastDiscoveredPaths] = useState<string[]>([]);
   const [activeScanPath, setActiveScanPath] = useState<string>('');
-  const [mediaExtensionConfig, setMediaExtensionConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
+  
+  const [mediaExtensionConfig, setMediaExtensionConfig] = useState<MediaScanExtensionConfig>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_extensions');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return DEFAULT_MEDIA_SCAN_CONFIG;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('samba_vault_extensions', JSON.stringify(mediaExtensionConfig));
+    } catch {}
+  }, [mediaExtensionConfig]);
+
   const [isImportingShare, setIsImportingShare] = useState(false);
 
   const handleOpenManualMatch = (rawPathOrName?: string, mediaType?: MediaType) => {
@@ -482,8 +539,16 @@ export default function App() {
     showToast('Cleared thumbnail storage and in-memory caches.');
   };
 
-  // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports
+  // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports + localStorage
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_library');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+
     const sambaMedia = extractAllMediaFromSambaTree(INITIAL_SAMBA_TREE, DEFAULT_MEDIA_SCAN_CONFIG);
     const map = new Map<string, MediaMetadata>();
     CURATED_MEDIA_DATABASE.forEach((m) => map.set(m.title.toLowerCase(), m));
@@ -494,6 +559,12 @@ export default function App() {
     });
     return Array.from(map.values());
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('samba_vault_library', JSON.stringify(mediaLibrary));
+    } catch {}
+  }, [mediaLibrary]);
 
   const handlePlayMedia = (
     media: MediaMetadata,

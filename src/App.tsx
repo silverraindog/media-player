@@ -15,6 +15,7 @@ import { LibraryStatsTab } from './components/LibraryStatsTab';
 import { FolderClassifierModal } from './components/FolderClassifierModal';
 import { ManualMatchModal } from './components/ManualMatchModal';
 import { WatchlistTab } from './components/WatchlistTab';
+import { WatchHistoryTab } from './components/WatchHistoryTab';
 import {
   MediaMetadata,
   MediaType,
@@ -1331,6 +1332,15 @@ export default function App() {
             onOpenDetails={(media) => setDetailModalMedia(media)}
             onOpenInNfoStudio={handleOpenInNfoStudio}
             onWatchlistCountChange={setWatchlistCount}
+          />
+        )}
+
+        {activeTab === 'history' && (
+          <WatchHistoryTab
+            onOpenDetails={(mediaId) => {
+              const found = mediaLibrary.find((m) => m.id === mediaId);
+              if (found) setDetailModalMedia(found);
+            }}
           />
         )}
 

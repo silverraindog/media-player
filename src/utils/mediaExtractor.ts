@@ -115,11 +115,11 @@ export function isMediaFile(
 
 // Sample streaming URLs for in-app video & audio player
 export const SAMPLE_VIDEO_STREAMS = {
-  movie: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-  scifi: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-  series: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-  action: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-  nature: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+  movie: '/api/media/sample-video',
+  scifi: '/api/media/sintel-trailer',
+  series: 'https://vjs.zencdn.net/v/oceans.mp4',
+  action: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+  nature: 'https://media.w3.org/2010/05/bunny/trailer.mp4',
 };
 
 export const SAMPLE_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';

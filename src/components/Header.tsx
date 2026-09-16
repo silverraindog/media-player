@@ -15,6 +15,7 @@ import {
   Database,
   Bookmark,
   BarChart3,
+  History,
 } from 'lucide-react';
 import { SambaConfig, AppTab } from '../types';
 
@@ -188,6 +189,19 @@ export const Header: React.FC<HeaderProps> = ({
                 {watchlistCount}
               </span>
             )}
+          </button>
+
+          <button
+            id="tab-history"
+            onClick={() => setActiveTab('history')}
+            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+              activeTab === 'history'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <History className="w-4 h-4 text-indigo-300" />
+            <span>Watch History</span>
           </button>
 
           <button

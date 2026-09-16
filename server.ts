@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 import net from 'net';
 import { GoogleGenAI } from '@google/genai';
@@ -16,6 +17,11 @@ import {
   getSeriesProgress,
   getAllProgressForSeries,
   updateWatchProgressInDb,
+  getWatchHistoryFromDb,
+  recordWatchHistoryInDb,
+  deleteWatchHistoryItemFromDb,
+  clearWatchHistoryFromDb,
+  getWatchHistoryStats,
   executeRawSqlQuery,
   getDbStats,
   getAllCachedThumbnailsFromDb,
@@ -1389,6 +1395,65 @@ app.post('/api/db/progress', async (req: Request, res: Response) => {
   }
 });
 
+// Get watch history log
+app.get('/api/db/history', async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 100;
+    const mediaType = req.query.mediaType as string;
+    const search = req.query.search as string;
+    const history = await getWatchHistoryFromDb({ limit, mediaType, search });
+    res.json({ success: true, history, count: history.length });
+  } catch (error: any) {
+    console.error('Error fetching watch history from SQLite:', error);
+    res.status(500).json({ error: 'Failed to fetch watch history', message: error?.message });
+  }
+});
+
+// Record new watch history item or update existing
+app.post('/api/db/history', async (req: Request, res: Response) => {
+  try {
+    const record = await recordWatchHistoryInDb(req.body);
+    res.json({ success: true, record, message: 'Recorded to watch history' });
+  } catch (error: any) {
+    console.error('Error recording watch history:', error);
+    res.status(500).json({ error: 'Failed to record watch history', message: error?.message });
+  }
+});
+
+// Get watch history statistics
+app.get('/api/db/history/stats', async (req: Request, res: Response) => {
+  try {
+    const stats = await getWatchHistoryStats();
+    res.json({ success: true, stats });
+  } catch (error: any) {
+    console.error('Error getting watch history stats:', error);
+    res.status(500).json({ error: 'Failed to get watch history stats', message: error?.message });
+  }
+});
+
+// Delete specific watch history log entry
+app.delete('/api/db/history/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    await deleteWatchHistoryItemFromDb(id);
+    res.json({ success: true, message: 'Deleted history entry' });
+  } catch (error: any) {
+    console.error('Error deleting watch history item:', error);
+    res.status(500).json({ error: 'Failed to delete history entry', message: error?.message });
+  }
+});
+
+// Clear all watch history
+app.delete('/api/db/history', async (req: Request, res: Response) => {
+  try {
+    await clearWatchHistoryFromDb();
+    res.json({ success: true, message: 'Cleared all watch history' });
+  } catch (error: any) {
+    console.error('Error clearing watch history:', error);
+    res.status(500).json({ error: 'Failed to clear watch history', message: error?.message });
+  }
+});
+
 // Run custom SQL query in SQLite for data exploration
 app.post('/api/db/query', async (req: Request, res: Response) => {
   try {
@@ -1511,6 +1576,31 @@ app.get('/api/thumbnails/stats', async (req: Request, res: Response) => {
     console.error('Error fetching thumbnail cache stats:', error);
     res.status(500).json({ error: 'Failed to fetch cache stats', message: error?.message });
   }
+});
+
+// Serve public static assets (including local sample videos)
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+// Dedicated local sample video streaming endpoint with full HTTP 206 Partial Content / Range support
+app.get('/api/media/sample-video', (req: Request, res: Response) => {
+  const filePath = path.join(process.cwd(), 'public', 'sample-video.mp4');
+  if (fs.existsSync(filePath)) {
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    return res.sendFile(filePath);
+  }
+  res.redirect('https://vjs.zencdn.net/v/oceans.mp4');
+});
+
+// Dedicated local sample trailer streaming endpoint
+app.get('/api/media/sintel-trailer', (req: Request, res: Response) => {
+  const filePath = path.join(process.cwd(), 'public', 'sintel-trailer.mp4');
+  if (fs.existsSync(filePath)) {
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    return res.sendFile(filePath);
+  }
+  res.redirect('https://media.w3.org/2010/05/sintel/trailer.mp4');
 });
 
 // Start Server and Vite Middleware

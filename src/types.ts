@@ -278,12 +278,41 @@ export interface ThumbnailCacheStats {
 export type AppTab =
   | 'search'
   | 'watchlist'
+  | 'history'
   | 'stats'
   | 'cleaner'
   | 'samba-mount'
   | 'explorer'
   | 'nfo-studio'
   | 'sqlite-vault';
+
+export interface WatchHistoryItem {
+  id: string;
+  media_id?: string;
+  series_id?: string;
+  media_type: MediaType;
+  title: string;
+  season_number?: number;
+  episode_number?: number;
+  episode_title?: string;
+  poster_url?: string;
+  duration_seconds?: number;
+  playback_position_seconds?: number;
+  progress_percentage?: number;
+  is_completed?: number | boolean;
+  watched_at: string;
+  formatted_date?: string;
+}
+
+export interface WatchHistoryStats {
+  totalWatched: number;
+  moviesWatched: number;
+  seriesEpisodesWatched: number;
+  albumsPlayed: number;
+  completedCount: number;
+  totalSecondsWatched: number;
+  totalHoursWatched: number;
+}
 
 export interface WatchlistItem {
   id: string;

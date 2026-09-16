@@ -121,11 +121,18 @@ export async function getDatabase(): Promise<Database> {
 
     CREATE TABLE IF NOT EXISTS watch_history_log (
       id TEXT PRIMARY KEY,
+      media_id TEXT,
       series_id TEXT,
+      media_type TEXT DEFAULT 'movie',
       title TEXT NOT NULL,
       season_number INTEGER,
       episode_number INTEGER,
       episode_title TEXT,
+      poster_url TEXT,
+      duration_seconds INTEGER DEFAULT 0,
+      playback_position_seconds INTEGER DEFAULT 0,
+      progress_percentage REAL DEFAULT 0.0,
+      is_completed INTEGER DEFAULT 0,
       watched_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -171,6 +178,24 @@ export async function getDatabase(): Promise<Database> {
     dbInstance.run(`ALTER TABLE media_items ADD COLUMN file_size_bytes INTEGER DEFAULT 0`);
   } catch {
     // Column already exists
+  }
+
+  // Migration: ensure all watch_history_log columns exist for existing databases
+  const historyColumnsToAdd = [
+    `ALTER TABLE watch_history_log ADD COLUMN media_id TEXT`,
+    `ALTER TABLE watch_history_log ADD COLUMN media_type TEXT DEFAULT 'movie'`,
+    `ALTER TABLE watch_history_log ADD COLUMN poster_url TEXT`,
+    `ALTER TABLE watch_history_log ADD COLUMN duration_seconds INTEGER DEFAULT 0`,
+    `ALTER TABLE watch_history_log ADD COLUMN playback_position_seconds INTEGER DEFAULT 0`,
+    `ALTER TABLE watch_history_log ADD COLUMN progress_percentage REAL DEFAULT 0.0`,
+    `ALTER TABLE watch_history_log ADD COLUMN is_completed INTEGER DEFAULT 0`,
+  ];
+  for (const query of historyColumnsToAdd) {
+    try {
+      dbInstance.run(query);
+    } catch {
+      // Column already exists
+    }
   }
 
   // Seed default items if empty
@@ -442,14 +467,80 @@ function seedInitialSqliteData(db: Database) {
 
   // Seed watch history
   db.run(
-    `INSERT INTO watch_history_log (id, series_id, title, season_number, episode_number, episode_title, watched_at)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-2 days'))`,
-    ['hist-1', 'series-breaking-bad', 'Breaking Bad', 1, 1, 'Pilot']
+    `INSERT INTO watch_history_log (id, media_id, series_id, media_type, title, season_number, episode_number, episode_title, poster_url, duration_seconds, playback_position_seconds, progress_percentage, is_completed, watched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 days'))`,
+    [
+      'hist-1',
+      'series-breaking-bad',
+      'series-breaking-bad',
+      'series',
+      'Breaking Bad',
+      1,
+      1,
+      'Pilot',
+      'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=800&auto=format&fit=crop&q=80',
+      3480,
+      3480,
+      100.0,
+      1,
+    ]
   );
   db.run(
-    `INSERT INTO watch_history_log (id, series_id, title, season_number, episode_number, episode_title, watched_at)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now', '-1 day'))`,
-    ['hist-2', 'series-breaking-bad', 'Breaking Bad', 1, 2, "Cat's in the Bag..."]
+    `INSERT INTO watch_history_log (id, media_id, series_id, media_type, title, season_number, episode_number, episode_title, poster_url, duration_seconds, playback_position_seconds, progress_percentage, is_completed, watched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-1 day'))`,
+    [
+      'hist-2',
+      'series-breaking-bad',
+      'series-breaking-bad',
+      'series',
+      'Breaking Bad',
+      1,
+      2,
+      "Cat's in the Bag...",
+      'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=800&auto=format&fit=crop&q=80',
+      2880,
+      2880,
+      100.0,
+      1,
+    ]
+  );
+  db.run(
+    `INSERT INTO watch_history_log (id, media_id, series_id, media_type, title, season_number, episode_number, episode_title, poster_url, duration_seconds, playback_position_seconds, progress_percentage, is_completed, watched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-6 hours'))`,
+    [
+      'hist-3',
+      'movie-interstellar',
+      null,
+      'movie',
+      'Interstellar',
+      null,
+      null,
+      null,
+      'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop&q=80',
+      10140,
+      8920,
+      87.9,
+      0,
+    ]
+  );
+  db.run(
+    `INSERT INTO watch_history_log (id, media_id, series_id, media_type, title, season_number, episode_number, episode_title, poster_url, duration_seconds, playback_position_seconds, progress_percentage, is_completed, watched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '-2 hours'))`,
+    [
+      'hist-4',
+      'series-severance',
+      'series-severance',
+      'series',
+      'Severance',
+      1,
+      1,
+      'Good News About Hell',
+      'https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&auto=format&fit=crop&q=80',
+      3300,
+      3300,
+      100.0,
+      1,
+    ]
   );
 }
 
@@ -836,21 +927,250 @@ export async function updateWatchProgressInDb(progress: {
 
   // If marked completed, add to watch history log
   if (completed) {
+    recordWatchHistoryInDb({
+      series_id: progress.series_id,
+      media_type: 'series',
+      title: progress.series_title,
+      season_number: progress.season_number,
+      episode_number: progress.episode_number,
+      episode_title: progress.episode_title,
+      playback_position_seconds: pos,
+      duration_seconds: total,
+      progress_percentage: percent,
+      is_completed: 1,
+    }).catch((e) => console.warn('Failed recording completed history:', e));
+  }
+
+  persistDbToDisk();
+}
+
+// ==========================================
+// WATCH HISTORY LOG OPERATIONS
+// ==========================================
+
+export interface WatchHistoryDbRecord {
+  id: string;
+  media_id?: string;
+  series_id?: string;
+  media_type: 'movie' | 'series' | 'album';
+  title: string;
+  season_number?: number;
+  episode_number?: number;
+  episode_title?: string;
+  poster_url?: string;
+  duration_seconds?: number;
+  playback_position_seconds?: number;
+  progress_percentage?: number;
+  is_completed?: number;
+  watched_at: string;
+}
+
+export async function getWatchHistoryFromDb(options?: {
+  limit?: number;
+  mediaType?: string;
+  search?: string;
+}): Promise<WatchHistoryDbRecord[]> {
+  const db = await getDatabase();
+  const limit = options?.limit || 100;
+  let query = `SELECT * FROM watch_history_log`;
+  const conditions: string[] = [];
+  const params: any[] = [];
+
+  if (options?.mediaType && options.mediaType !== 'all') {
+    conditions.push(`media_type = ?`);
+    params.push(options.mediaType);
+  }
+
+  if (options?.search && options.search.trim().length > 0) {
+    conditions.push(`(title LIKE ? OR episode_title LIKE ?)`);
+    const term = `%${options.search.trim()}%`;
+    params.push(term, term);
+  }
+
+  if (conditions.length > 0) {
+    query += ` WHERE ` + conditions.join(' AND ');
+  }
+
+  query += ` ORDER BY watched_at DESC LIMIT ?`;
+  params.push(limit);
+
+  const res = db.exec(query, params);
+  if (res.length === 0) return [];
+
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as WatchHistoryDbRecord;
+  });
+}
+
+export async function recordWatchHistoryInDb(item: {
+  id?: string;
+  media_id?: string;
+  series_id?: string;
+  media_type?: 'movie' | 'series' | 'album';
+  title: string;
+  season_number?: number;
+  episode_number?: number;
+  episode_title?: string;
+  poster_url?: string;
+  duration_seconds?: number;
+  playback_position_seconds?: number;
+  progress_percentage?: number;
+  is_completed?: number | boolean;
+}): Promise<WatchHistoryDbRecord> {
+  const db = await getDatabase();
+  const historyId = item.id || `hist-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const mediaType = item.media_type || (item.series_id || item.season_number ? 'series' : 'movie');
+  const pos = Math.max(0, Math.floor(item.playback_position_seconds || 0));
+  const dur = Math.max(0, Math.floor(item.duration_seconds || 0));
+  const pct =
+    item.progress_percentage !== undefined
+      ? Number(item.progress_percentage)
+      : dur > 0
+      ? Number(((pos / dur) * 100).toFixed(1))
+      : 0;
+  const completed = item.is_completed ? 1 : pct >= 90 ? 1 : 0;
+
+  // If a recent entry for this exact movie/episode exists in the last 60 minutes, update it rather than creating a duplicate
+  const checkSql = item.series_id && item.season_number && item.episode_number
+    ? `SELECT id FROM watch_history_log WHERE series_id = ? AND season_number = ? AND episode_number = ? ORDER BY watched_at DESC LIMIT 1`
+    : item.media_id
+    ? `SELECT id FROM watch_history_log WHERE media_id = ? ORDER BY watched_at DESC LIMIT 1`
+    : `SELECT id FROM watch_history_log WHERE title = ? ORDER BY watched_at DESC LIMIT 1`;
+  
+  const checkParams = item.series_id && item.season_number && item.episode_number
+    ? [item.series_id, item.season_number, item.episode_number]
+    : item.media_id
+    ? [item.media_id]
+    : [item.title];
+
+  const checkRes = db.exec(checkSql, checkParams);
+  const existingId = checkRes.length > 0 && checkRes[0].values.length > 0 ? (checkRes[0].values[0][0] as string) : null;
+
+  if (existingId) {
     db.run(
-      `INSERT INTO watch_history_log (id, series_id, title, season_number, episode_number, episode_title, watched_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+      `UPDATE watch_history_log 
+       SET playback_position_seconds = ?, 
+           duration_seconds = ?, 
+           progress_percentage = ?, 
+           is_completed = ?, 
+           poster_url = COALESCE(?, poster_url),
+           watched_at = datetime('now')
+       WHERE id = ?`,
+      [pos, dur, pct, completed, item.poster_url || null, existingId]
+    );
+  } else {
+    db.run(
+      `INSERT INTO watch_history_log (
+        id, media_id, series_id, media_type, title, season_number, episode_number, 
+        episode_title, poster_url, duration_seconds, playback_position_seconds, 
+        progress_percentage, is_completed, watched_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       [
-        `hist-${Date.now()}-${Math.random()}`,
-        progress.series_id,
-        progress.series_title,
-        progress.season_number,
-        progress.episode_number,
-        progress.episode_title,
+        historyId,
+        item.media_id || null,
+        item.series_id || null,
+        mediaType,
+        item.title,
+        item.season_number || null,
+        item.episode_number || null,
+        item.episode_title || null,
+        item.poster_url || null,
+        dur,
+        pos,
+        pct,
+        completed,
       ]
     );
   }
 
   persistDbToDisk();
+
+  return {
+    id: existingId || historyId,
+    media_id: item.media_id,
+    series_id: item.series_id,
+    media_type: mediaType,
+    title: item.title,
+    season_number: item.season_number,
+    episode_number: item.episode_number,
+    episode_title: item.episode_title,
+    poster_url: item.poster_url,
+    duration_seconds: dur,
+    playback_position_seconds: pos,
+    progress_percentage: pct,
+    is_completed: completed,
+    watched_at: new Date().toISOString(),
+  };
+}
+
+export async function deleteWatchHistoryItemFromDb(id: string): Promise<boolean> {
+  const db = await getDatabase();
+  db.run(`DELETE FROM watch_history_log WHERE id = ?`, [id]);
+  persistDbToDisk();
+  return true;
+}
+
+export async function clearWatchHistoryFromDb(): Promise<void> {
+  const db = await getDatabase();
+  db.run(`DELETE FROM watch_history_log`);
+  persistDbToDisk();
+}
+
+export async function getWatchHistoryStats(): Promise<{
+  totalWatched: number;
+  moviesWatched: number;
+  seriesEpisodesWatched: number;
+  albumsPlayed: number;
+  completedCount: number;
+  totalSecondsWatched: number;
+  totalHoursWatched: number;
+}> {
+  const db = await getDatabase();
+  const res = db.exec(`
+    SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN media_type = 'movie' THEN 1 ELSE 0 END) as movies,
+      SUM(CASE WHEN media_type = 'series' THEN 1 ELSE 0 END) as series,
+      SUM(CASE WHEN media_type = 'album' THEN 1 ELSE 0 END) as albums,
+      SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END) as completed,
+      COALESCE(SUM(playback_position_seconds), 0) as total_seconds
+    FROM watch_history_log
+  `);
+
+  if (res.length === 0 || res[0].values.length === 0) {
+    return {
+      totalWatched: 0,
+      moviesWatched: 0,
+      seriesEpisodesWatched: 0,
+      albumsPlayed: 0,
+      completedCount: 0,
+      totalSecondsWatched: 0,
+      totalHoursWatched: 0,
+    };
+  }
+
+  const row = res[0].values[0];
+  const total = Number(row[0] || 0);
+  const movies = Number(row[1] || 0);
+  const series = Number(row[2] || 0);
+  const albums = Number(row[3] || 0);
+  const completed = Number(row[4] || 0);
+  const totalSecs = Number(row[5] || 0);
+
+  return {
+    totalWatched: total,
+    moviesWatched: movies,
+    seriesEpisodesWatched: series,
+    albumsPlayed: albums,
+    completedCount: completed,
+    totalSecondsWatched: totalSecs,
+    totalHoursWatched: Number((totalSecs / 3600).toFixed(1)),
+  };
 }
 
 export async function executeRawSqlQuery(sql: string): Promise<{ columns: string[]; values: any[][] }> {

@@ -29,7 +29,7 @@ import {
   FolderSearch,
 } from 'lucide-react';
 import { SambaConfig, MediaType, AppTab } from '../types';
-import { Bookmark, BarChart3 } from 'lucide-react';
+import { Bookmark, BarChart3, History } from 'lucide-react';
 
 interface MenuBarProps {
   activeTab: AppTab;
@@ -473,6 +473,24 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                       <span>My Watchlist (Saved Titles)</span>
                     </span>
                     <span className="text-[10px] text-slate-400 font-mono">⌘W</span>
+                  </button>
+
+                  <button
+                    id="view-menu-history-btn"
+                    onClick={() =>
+                      executeAction(() => {
+                        setActiveTab('history');
+                      })
+                    }
+                    className={`w-full px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex items-center justify-between text-xs transition-colors ${
+                      activeTab === 'history' ? 'bg-indigo-950/80 text-indigo-200 font-semibold' : ''
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <History className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Watch History & Log</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">⌘H</span>
                   </button>
 
                   <div className="my-1 border-t border-slate-800" />

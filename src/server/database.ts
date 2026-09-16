@@ -806,6 +806,65 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
   persistDbToDisk();
 }
 
+export async function batchSaveMediaToDb(items: MediaItemDb[]): Promise<number> {
+  if (!items || items.length === 0) return 0;
+  const db = await getDatabase();
+
+  try {
+    db.run('BEGIN TRANSACTION;');
+
+    for (const media of items) {
+      const calculatedSize = media.file_size_bytes && media.file_size_bytes > 0
+        ? media.file_size_bytes
+        : calculateMediaSizeBytes(media);
+
+      db.run(
+        `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, file_size_bytes, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(id) DO UPDATE SET
+           media_type = excluded.media_type,
+           title = excluded.title,
+           original_title = excluded.original_title,
+           synopsis = excluded.synopsis,
+           year = excluded.year,
+           rating = excluded.rating,
+           poster_url = excluded.poster_url,
+           fanart_url = excluded.fanart_url,
+           genres = excluded.genres,
+           recommended_folder = excluded.recommended_folder,
+           raw_data = excluded.raw_data,
+           file_size_bytes = excluded.file_size_bytes,
+           updated_at = datetime('now')`,
+        [
+          media.id,
+          media.media_type,
+          media.title,
+          media.original_title || media.title,
+          media.synopsis,
+          media.year || null,
+          media.rating || null,
+          media.poster_url || null,
+          media.fanart_url || null,
+          media.genres || null,
+          media.recommended_folder || null,
+          media.raw_data || null,
+          calculatedSize
+        ]
+      );
+    }
+
+    db.run('COMMIT;');
+    persistDbToDisk();
+    return items.length;
+  } catch (err) {
+    try {
+      db.run('ROLLBACK;');
+    } catch {}
+    console.error('Failed to batch save media to SQLite:', err);
+    throw err;
+  }
+}
+
 export async function deleteMediaFromDb(id: string): Promise<void> {
   const db = await getDatabase();
   db.run(`DELETE FROM media_items WHERE id = ?`, [id]);

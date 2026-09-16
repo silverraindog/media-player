@@ -53,6 +53,8 @@ import {
   VolumeMountInfo,
 } from './utils/tauriBridge';
 import { thumbnailStorage } from './utils/thumbnailStorage';
+import { detectDuplicatesAndVersionBranches } from './utils/duplicateDetector';
+import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   server: '',
@@ -540,32 +542,91 @@ export default function App() {
     showToast('Cleared thumbnail storage and in-memory caches.');
   };
 
-  // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports + localStorage
+  // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports + Persistent Cache
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
+    let initialList: MediaMetadata[] = [];
     try {
-      const saved = localStorage.getItem('samba_vault_library');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      const cached = sqliteBatchWriter.getCachedMedia();
+      if (cached && cached.length > 0) {
+        initialList = cached;
+      } else {
+        const saved = localStorage.getItem('samba_vault_library');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) initialList = parsed;
+        }
       }
     } catch {}
 
-    const sambaMedia = extractAllMediaFromSambaTree(INITIAL_SAMBA_TREE, DEFAULT_MEDIA_SCAN_CONFIG);
-    const map = new Map<string, MediaMetadata>();
-    CURATED_MEDIA_DATABASE.forEach((m) => map.set(m.title.toLowerCase(), m));
-    sambaMedia.forEach((m) => {
-      if (!map.has(m.title.toLowerCase())) {
-        map.set(m.title.toLowerCase(), m);
-      }
-    });
-    return Array.from(map.values());
+    if (initialList.length === 0) {
+      const sambaMedia = extractAllMediaFromSambaTree(INITIAL_SAMBA_TREE, DEFAULT_MEDIA_SCAN_CONFIG);
+      const map = new Map<string, MediaMetadata>();
+      CURATED_MEDIA_DATABASE.forEach((m) => map.set(m.title.toLowerCase(), m));
+      sambaMedia.forEach((m) => {
+        if (!map.has(m.title.toLowerCase())) {
+          map.set(m.title.toLowerCase(), m);
+        }
+      });
+      initialList = Array.from(map.values());
+    }
+
+    // Run duplicate & multi-version detector on initial load
+    const { enrichedItems } = detectDuplicatesAndVersionBranches(initialList);
+    sqliteBatchWriter.updateCache(enrichedItems);
+    return enrichedItems;
   });
 
   useEffect(() => {
     try {
       localStorage.setItem('samba_vault_library', JSON.stringify(mediaLibrary));
+      sqliteBatchWriter.updateCache(mediaLibrary);
     } catch {}
   }, [mediaLibrary]);
+
+  // Background SQLite persistent caching reconciliation
+  useEffect(() => {
+    fetch('/api/db/media')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.items) && data.items.length > 0) {
+          setMediaLibrary((prev) => {
+            const map = new Map<string, MediaMetadata>();
+            prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+            let newItemsAdded = false;
+
+            data.items.forEach((sqliteItem: any) => {
+              if (sqliteItem.title && !map.has(sqliteItem.title.toLowerCase())) {
+                const converted: MediaMetadata = {
+                  id: sqliteItem.id || `sqlite-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                  type: sqliteItem.type || 'series',
+                  title: sqliteItem.title,
+                  year: sqliteItem.year || 2020,
+                  overview: sqliteItem.synopsis || '',
+                  rating: sqliteItem.rating || 8.0,
+                  posterUrl: sqliteItem.poster_url || 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=500&auto=format&fit=crop&q=60',
+                  fanartUrl: sqliteItem.fanart_url,
+                  genres: sqliteItem.genre ? sqliteItem.genre.split(',').map((g: string) => g.trim()) : ['Drama'],
+                  recommendedFolderStructure: sqliteItem.clean_folder_path || `Series/${sqliteItem.title}`,
+                  recommendedFilenames: [],
+                  source: 'sqlite-vault',
+                };
+                map.set(sqliteItem.title.toLowerCase(), converted);
+                newItemsAdded = true;
+              }
+            });
+
+            if (newItemsAdded) {
+              const combined = Array.from(map.values());
+              const { enrichedItems } = detectDuplicatesAndVersionBranches(combined);
+              sqliteBatchWriter.updateCache(enrichedItems);
+              return enrichedItems;
+            }
+            return prev;
+          });
+        }
+      })
+      .catch((err) => console.warn('SQLite hydration:', err));
+  }, []);
 
   const handlePlayMedia = (
     media: MediaMetadata,
@@ -1084,7 +1145,10 @@ export default function App() {
           map.set(m.title.toLowerCase(), m);
         }
       });
-      return Array.from(map.values());
+      const combined = Array.from(map.values());
+      const { enrichedItems } = detectDuplicatesAndVersionBranches(combined, filteredPaths);
+      sqliteBatchWriter.enqueueMany(enrichedItems);
+      return enrichedItems;
     });
 
     setIsConnected(true);
@@ -1285,6 +1349,9 @@ export default function App() {
 
       // 4. Extract discovered media into All Media, TV Series, Movies, and Music Albums tabs
       const discoveredMedia = await extractAllMediaFromSambaTreeAsync(newTree, mediaExtensionConfig);
+      let detectedBranchCount = 0;
+      let detectedFranchiseCount = 0;
+
       setMediaLibrary((prev) => {
         const map = new Map<string, MediaMetadata>();
         // Retain curated & existing items
@@ -1295,7 +1362,20 @@ export default function App() {
             map.set(m.title.toLowerCase(), m);
           }
         });
-        return Array.from(map.values());
+        const combined = Array.from(map.values());
+
+        // Run Duplicate & Multi-Version Detection Algorithm
+        const { enrichedItems, duplicateCount, detectedGroups } = detectDuplicatesAndVersionBranches(
+          combined,
+          discoveredRelativePaths
+        );
+        detectedBranchCount = duplicateCount;
+        detectedFranchiseCount = detectedGroups.length;
+
+        // Queue all items for 30s persistent SQLite batch write
+        sqliteBatchWriter.enqueueMany(enrichedItems);
+
+        return enrichedItems;
       });
 
       // 5. Update sync logs and connection status
@@ -1306,7 +1386,11 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString(),
           type: 'connected',
           title: `Samba Sync Complete: ${discoveredRelativePaths.length} Media Files Discovered`,
-          details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} and populated All Media, TV Series, Movies, and Music Albums!`,
+          details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} and populated All Media, TV Series, Movies, and Music Albums!${
+            detectedBranchCount > 0
+              ? ` Multi-Version Detector linked ${detectedBranchCount} branches across ${detectedFranchiseCount} franchises.`
+              : ''
+          }`,
           status: 'success',
         },
         ...prev,

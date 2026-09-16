@@ -19,6 +19,13 @@ import {
   FolderPlus,
   Compass,
   ArrowRight,
+  ListFilter,
+  AlertCircle,
+  FileQuestion,
+  ImageOff,
+  RefreshCw,
+  Loader2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { MediaMetadata, MediaType } from '../types';
 
@@ -28,6 +35,7 @@ interface WebSearchCategorizerModalProps {
   onSaveCategorizedMedia: (media: MediaMetadata) => void;
   onPlayMedia?: (media: MediaMetadata) => void;
   onOpenInNfoStudio?: (media: MediaMetadata) => void;
+  onOpenManualMatch?: (media: MediaMetadata) => void;
   initialQuery?: string;
   initialType?: MediaType | 'all';
   mediaLibrary?: MediaMetadata[];
@@ -52,10 +60,18 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   onSaveCategorizedMedia,
   onPlayMedia,
   onOpenInNfoStudio,
+  onOpenManualMatch,
   initialQuery = '',
   initialType = 'all',
   mediaLibrary = [],
 }) => {
+  const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
+  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'synopsis' | 'artwork' | 'series' | 'movie'>('all');
+  const [uncatSearchQuery, setUncatSearchQuery] = useState('');
+  const [batchProcessing, setBatchProcessing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+
   const [query, setQuery] = useState(initialQuery);
   const [mediaType, setMediaType] = useState<MediaType | 'all'>(initialType);
   const [yearHint, setYearHint] = useState('');
@@ -67,9 +83,82 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [isSaved, setIsSaved] = useState(false);
   const [showIncompleteList, setShowIncompleteList] = useState(false);
 
+  const isMissingSynopsis = (m: MediaMetadata): boolean => {
+    const text = (m.overview || (m as any).synopsis || '').trim();
+    return !text || text.toLowerCase().includes('placeholder') || text.toLowerCase().includes('no synopsis');
+  };
+
+  const isMissingArtwork = (m: MediaMetadata): boolean => {
+    return !m.posterUrl || m.posterUrl.trim() === '';
+  };
+
   const incompleteItems = mediaLibrary.filter(
-    (m) => !m.synopsis || m.synopsis.trim() === '' || !m.posterUrl || m.posterUrl.trim() === '' || m.synopsis.includes('placeholder')
+    (m) => isMissingSynopsis(m) || isMissingArtwork(m)
   );
+
+  const missingSynopsisCount = incompleteItems.filter(isMissingSynopsis).length;
+  const missingArtworkCount = incompleteItems.filter(isMissingArtwork).length;
+
+  const seriesIncompleteCount = incompleteItems.filter((m) => m.type === 'series').length;
+  const movieIncompleteCount = incompleteItems.filter((m) => m.type === 'movie').length;
+
+  const filteredUncategorized = incompleteItems.filter((item) => {
+    // Text search filter
+    if (uncatSearchQuery.trim()) {
+      const matchText = item.title.toLowerCase().includes(uncatSearchQuery.toLowerCase());
+      if (!matchText) return false;
+    }
+
+    // Sub-category filter
+    if (uncatSubFilter === 'synopsis') {
+      return isMissingSynopsis(item);
+    }
+    if (uncatSubFilter === 'artwork') {
+      return isMissingArtwork(item);
+    }
+    if (uncatSubFilter === 'series') {
+      return item.type === 'series';
+    }
+    if (uncatSubFilter === 'movie') {
+      return item.type === 'movie';
+    }
+    return true;
+  });
+
+  const handleBatchCategorizeAll = async () => {
+    if (incompleteItems.length === 0 || batchProcessing) return;
+    setBatchProcessing(true);
+    setBatchProgress({ current: 0, total: incompleteItems.length });
+    setBatchMessage(null);
+
+    let successCount = 0;
+    for (let i = 0; i < incompleteItems.length; i++) {
+      const item = incompleteItems[i];
+      setBatchProgress({ current: i + 1, total: incompleteItems.length });
+      try {
+        const res = await fetch('/api/metadata/categorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: item.title,
+            type: item.type,
+            year: item.year,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success && data.data) {
+          onSaveCategorizedMedia(data.data);
+          successCount++;
+        }
+      } catch (e) {
+        console.warn(`Failed to auto-categorize ${item.title}:`, e);
+      }
+    }
+
+    setBatchProcessing(false);
+    setBatchMessage(`Batch categorization complete! Updated ${successCount} of ${incompleteItems.length} items.`);
+    setTimeout(() => setBatchMessage(null), 5000);
+  };
 
   if (!isOpen) return null;
 
@@ -158,7 +247,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Enter any Movie or TV Series title to fetch its official categories, genres, synopsis & Kodi/Plex structure.
+                Discover official genres, synopsis & Kodi/Plex file structures, or inspect uncategorized files.
               </p>
             </div>
           </div>
@@ -170,58 +259,311 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           </button>
         </div>
 
+        {/* Modal Top View Switcher Tabs */}
+        <div className="flex items-center gap-2 px-6 pt-3 pb-2.5 bg-slate-900/90 border-b border-slate-800 shrink-0">
+          <button
+            type="button"
+            onClick={() => setActiveTabFilter('search')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+              activeTabFilter === 'search'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>Search & Categorize</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTabFilter('uncategorized')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+              activeTabFilter === 'uncategorized'
+                ? 'bg-amber-600 text-white shadow-xs ring-1 ring-amber-400/50'
+                : 'bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <ListFilter className="w-3.5 h-3.5 text-amber-400" />
+            <span>Uncategorized Media</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                activeTabFilter === 'uncategorized'
+                  ? 'bg-amber-950 text-amber-200'
+                  : 'bg-amber-950/80 text-amber-400 border border-amber-800/60'
+              }`}
+            >
+              {incompleteItems.length}
+            </span>
+          </button>
+        </div>
+
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-6">
-          {/* Incomplete / Missing Synopsis or Poster Items Selector */}
-          {incompleteItems.length > 0 && (
-            <div className="bg-amber-950/20 border border-amber-800/50 rounded-xl p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => setShowIncompleteList((prev) => !prev)}
-                  className="flex items-center gap-2 text-xs font-bold text-amber-300 hover:text-amber-200 transition cursor-pointer w-full text-left"
-                >
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                  <span>{incompleteItems.length} library item(s) missing synopsis or artwork</span>
-                  <span className="ml-auto font-mono text-[11px] underline">
-                    {showIncompleteList ? 'Hide list' : 'Click to select and categorize'}
-                  </span>
-                </button>
+          {/* TAB 1: DEDICATED UNCATEGORIZED MEDIA VIEW */}
+          {activeTabFilter === 'uncategorized' && (
+            <div className="space-y-4">
+              {/* Header explanation & summary */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-amber-950/20 border border-amber-800/40 rounded-xl">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Dedicated View Filter: Uncategorized Media</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    These {incompleteItems.length} files currently lack an official synopsis or artwork. Use one-click triggers to re-categorize or manually match.
+                  </p>
+                </div>
+
+                {incompleteItems.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={batchProcessing}
+                    onClick={handleBatchCategorizeAll}
+                    className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    {batchProcessing ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Processing ({batchProgress.current}/{batchProgress.total})...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Auto-Categorize All ({incompleteItems.length})</span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
-              {showIncompleteList && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 max-h-48 overflow-y-auto pr-1">
-                  {incompleteItems.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        setQuery(item.title);
-                        setMediaType(item.type);
-                        setShowIncompleteList(false);
-                        handleSearch(item.title, item.type);
-                      }}
-                      className="flex items-center justify-between p-2 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-amber-500/50 text-left transition group cursor-pointer"
-                    >
-                      <div className="truncate pr-2">
-                        <div className="text-xs font-semibold text-white group-hover:text-amber-300 truncate">
-                          {item.title}
+              {/* Batch feedback message */}
+              {batchMessage && (
+                <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{batchMessage}</span>
+                </div>
+              )}
+
+              {/* Sub-Filters & Quick Search */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                {/* Filter Pills */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setUncatSubFilter('all')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'all'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    All ({incompleteItems.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUncatSubFilter('synopsis')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'synopsis'
+                        ? 'bg-red-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    No Synopsis ({missingSynopsisCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUncatSubFilter('artwork')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'artwork'
+                        ? 'bg-cyan-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    No Artwork ({missingArtworkCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUncatSubFilter('series')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'series'
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    Series ({seriesIncompleteCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUncatSubFilter('movie')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'movie'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    Movies ({movieIncompleteCount})
+                  </button>
+                </div>
+
+                {/* Search in uncategorized */}
+                <div className="relative min-w-[200px]">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={uncatSearchQuery}
+                    onChange={(e) => setUncatSearchQuery(e.target.value)}
+                    placeholder="Filter by title..."
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Items List */}
+              {filteredUncategorized.length === 0 ? (
+                <div className="p-8 text-center bg-slate-900/50 border border-slate-800 rounded-xl space-y-2">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
+                  <div className="text-xs font-bold text-white">No items found matching this filter!</div>
+                  <p className="text-[11px] text-slate-400">
+                    All scanned library media have complete synopsis and artwork metadata.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+                  {filteredUncategorized.map((item) => {
+                    const isMissingSynopsis =
+                      !item.synopsis ||
+                      item.synopsis.trim() === '' ||
+                      item.synopsis.toLowerCase().includes('placeholder') ||
+                      item.synopsis.toLowerCase().includes('no synopsis');
+                    const isMissingArtwork = !item.posterUrl || item.posterUrl.trim() === '';
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 transition"
+                      >
+                        {/* Media Item Info */}
+                        <div className="flex items-center gap-3 min-w-0">
+                          {/* Thumbnail / Artwork Placeholder */}
+                          <div className="w-11 h-14 rounded-lg bg-slate-950 border border-slate-800 shrink-0 overflow-hidden flex items-center justify-center relative">
+                            {item.posterUrl && !isMissingArtwork ? (
+                              <img
+                                src={item.posterUrl}
+                                alt={item.title}
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center justify-center text-slate-600">
+                                <ImageOff className="w-4 h-4 text-amber-500/70 mb-0.5" />
+                                <span className="text-[8px] font-mono">No Art</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-bold text-white truncate max-w-xs sm:max-w-sm">
+                                {item.title}
+                              </span>
+                              {item.year && (
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  ({item.year})
+                                </span>
+                              )}
+                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase ${
+                                item.type === 'series'
+                                  ? 'bg-purple-950 text-purple-300 border border-purple-800/60'
+                                  : 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
+                              }`}>
+                                {item.type}
+                              </span>
+                            </div>
+
+                            {/* Defect Badges */}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {isMissingSynopsis && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950/80 border border-red-800/70 text-red-300 flex items-center gap-1 font-medium">
+                                  <FileQuestion className="w-3 h-3" />
+                                  <span>Missing Synopsis</span>
+                                </span>
+                              )}
+                              {isMissingArtwork && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950/80 border border-amber-800/70 text-amber-300 flex items-center gap-1 font-medium">
+                                  <ImageOff className="w-3 h-3" />
+                                  <span>Missing Artwork</span>
+                                </span>
+                              )}
+                              {item.recommendedFolderStructure && (
+                                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[200px] hidden md:inline">
+                                  {item.recommendedFolderStructure}
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-[10px] text-slate-400 capitalize">
-                          {item.type} {item.year ? `(${item.year})` : ''} • Missing synopsis/poster
+
+                        {/* One-Click Action Buttons */}
+                        <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0">
+                          {/* 1. One-Click Re-Categorization flow */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTabFilter('search');
+                              setQuery(item.title);
+                              setMediaType(item.type);
+                              if (item.year) setYearHint(item.year.toString());
+                              handleSearch(item.title, item.type);
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                            title="One-click AI Web Search & Categorize"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>Web Categorize</span>
+                          </button>
+
+                          {/* 2. One-Click Manual Match flow */}
+                          {onOpenManualMatch && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenManualMatch(item)}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-[11px] font-semibold transition border border-slate-700 flex items-center gap-1 cursor-pointer"
+                              title="Manual TMDB Match & AI Synopsis"
+                            >
+                              <Tag className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Manual Match</span>
+                            </button>
+                          )}
                         </div>
                       </div>
-                      <span className="shrink-0 px-2 py-1 rounded bg-amber-950/60 border border-amber-700/50 text-[10px] text-amber-300 font-bold">
-                        Categorize
-                      </span>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
           )}
 
-          {/* Search Inputs */}
+          {/* TAB 2: WEB SEARCH & CATEGORIZE VIEW */}
+          {activeTabFilter === 'search' && (
+            <>
+              {/* Reminder banner for uncategorized media if any */}
+              {incompleteItems.length > 0 && (
+                <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-amber-300">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                    <span>{incompleteItems.length} library item(s) currently lack a synopsis or artwork</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTabFilter('uncategorized')}
+                    className="px-2.5 py-1 rounded-md bg-amber-900/60 hover:bg-amber-800/80 border border-amber-700/60 text-amber-200 text-xs font-bold transition cursor-pointer"
+                  >
+                    View Uncategorized Media →
+                  </button>
+                </div>
+              )}
+
+              {/* Search Inputs */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -471,6 +813,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 )}
               </div>
             </div>
+          )}
+            </>
           )}
         </div>
       </div>

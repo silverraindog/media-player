@@ -73,6 +73,22 @@ export interface MediaMetadata {
   recommendedFilenames: string[];
   matchedFilename?: string;
   source?: 'gemini-ai' | 'curated-database' | 'sqlite-watchlist' | 'sqlite-recent' | 'local-scan' | string;
+  versions?: MediaVersionBranch[];
+  selectedVersionId?: string;
+  isMultiVersion?: boolean;
+}
+
+export interface MediaVersionBranch {
+  id: string;
+  title: string;
+  branchName: string; // e.g. "Main Series", "Spin-off: Fear the Walking Dead", "1080p WebRip"
+  year?: number;
+  seasonsCount?: number;
+  rating?: number;
+  posterUrl?: string;
+  overview?: string;
+  folderPath?: string;
+  media?: MediaMetadata;
 }
 
 export interface SambaConfig {

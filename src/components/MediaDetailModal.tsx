@@ -24,10 +24,12 @@ import {
   Info,
   CheckCircle2,
   RotateCcw,
+  GitBranch,
 } from 'lucide-react';
 import { MediaMetadata, SambaConfig, EpisodeMetadata, TrackMetadata } from '../types';
 import { downloadMediaBundleZip, downloadTextFile } from '../utils/zipDownloader';
 import { generateMetadataFile, generateEpisodeNfo } from '../utils/nfoGenerator';
+import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 
 interface MediaDetailModalProps {
   media: MediaMetadata | null;
@@ -136,14 +138,41 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     setTimeout(() => setIsPushed(false), 3000);
   };
 
+  const handleSelectVersionBranch = (versionId: string) => {
+    const selectedBranch = media.versions?.find((v) => v.id === versionId);
+    if (!selectedBranch) return;
+
+    let targetMedia: MediaMetadata | undefined = selectedBranch.media;
+    if (!targetMedia && mediaLibrary) {
+      targetMedia = mediaLibrary.find(
+        (m) => m.id === versionId || m.title.toLowerCase() === selectedBranch.title.toLowerCase()
+      );
+    }
+
+    if (targetMedia) {
+      const updatedMedia: MediaMetadata = {
+        ...targetMedia,
+        versions: media.versions,
+        selectedVersionId: versionId,
+        isMultiVersion: true,
+      };
+      setMedia(updatedMedia);
+      setActiveSeasonTab(updatedMedia.seasons?.[0]?.seasonNumber || 1);
+      if (updatedMedia.seasons?.[0]?.episodes?.[0]) {
+        setSelectedEpisodeNumber(updatedMedia.seasons[0].episodes[0].episodeNumber);
+      }
+      if (onSelectMedia) onSelectMedia(updatedMedia);
+      if (onUpdateMedia) onUpdateMedia(updatedMedia);
+    }
+  };
+
   const handleSaveToSqlite = async () => {
     try {
-      const res = await fetch('/api/db/media', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(media),
-      });
-      if (res.ok) {
+      // 1. Enqueue to persistent cache and SQLite 30s batch writer
+      sqliteBatchWriter.enqueue(media);
+      // 2. Perform flush for immediate persistence confirmation
+      const res = await sqliteBatchWriter.flushNow();
+      if (res.success) {
         setIsSavedSqlite(true);
         setTimeout(() => setIsSavedSqlite(false), 3000);
       }
@@ -421,6 +450,27 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                 {media.title}
               </h2>
 
+              {/* Multi-Version Selector Dropdown */}
+              {media.versions && media.versions.length > 1 && (
+                <div className="flex items-center gap-2 pt-1 pb-0.5">
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-indigo-950/80 border border-indigo-500/50 text-indigo-300 text-[11px] font-bold shrink-0">
+                    <GitBranch className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Multi-Version Branch:</span>
+                  </div>
+                  <select
+                    value={media.selectedVersionId || media.id}
+                    onChange={(e) => handleSelectVersionBranch(e.target.value)}
+                    className="bg-slate-900/90 border border-slate-700 hover:border-indigo-500 rounded-lg px-2.5 py-1 text-xs font-semibold text-white focus:outline-none focus:border-indigo-400 cursor-pointer shadow-sm max-w-xs sm:max-w-md"
+                  >
+                    {media.versions.map((ver) => (
+                      <option key={ver.id} value={ver.id}>
+                        {ver.branchName || ver.title} {ver.year ? `(${ver.year})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
                 <span className="flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5 text-indigo-400" />
@@ -490,6 +540,95 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
               ))}
             </div>
           </div>
+
+          {/* Multi-Version Branches Hub */}
+          {media.versions && media.versions.length > 1 && (
+            <div className="space-y-3 bg-slate-950/90 border border-indigo-500/40 rounded-xl p-4 shadow-md">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-indigo-950 border border-indigo-500/40 text-indigo-400">
+                    <GitBranch className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                      <span>Multi-Version Selector & Series Branches</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-indigo-950 border border-indigo-700/60 text-indigo-300">
+                        {media.versions.length} Detected Branches
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      Select which version branch to load for playback, season inspection, and metadata generation.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="shrink-0 flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-medium">Active:</span>
+                  <span className="px-2 py-0.5 rounded bg-indigo-900/60 border border-indigo-600/50 text-indigo-200 text-xs font-bold truncate max-w-[180px]">
+                    {media.versions.find((v) => v.id === (media.selectedVersionId || media.id))?.branchName || media.title}
+                  </span>
+                </div>
+              </div>
+
+              {/* Version selector cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-1">
+                {media.versions.map((ver) => {
+                  const isActive = ver.id === (media.selectedVersionId || media.id);
+                  return (
+                    <button
+                      key={ver.id}
+                      type="button"
+                      onClick={() => handleSelectVersionBranch(ver.id)}
+                      className={`flex items-center gap-3 p-2.5 rounded-xl border text-left transition cursor-pointer group ${
+                        isActive
+                          ? 'bg-indigo-950/70 border-indigo-500 ring-1 ring-indigo-500 shadow-md'
+                          : 'bg-slate-900 hover:bg-slate-850 border-slate-800 hover:border-indigo-500/50'
+                      }`}
+                    >
+                      <div className="w-10 h-14 rounded-lg overflow-hidden bg-slate-950 shrink-0 border border-slate-700">
+                        <img
+                          src={ver.posterUrl || media.posterUrl}
+                          alt={ver.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition"
+                        />
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-xs font-bold truncate ${isActive ? 'text-indigo-300' : 'text-white'}`}>
+                            {ver.branchName || ver.title}
+                          </span>
+                          {isActive && (
+                            <span className="shrink-0 w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 flex items-center gap-2">
+                          {ver.year && <span>{ver.year}</span>}
+                          {ver.rating && <span>★ {ver.rating.toFixed(1)}</span>}
+                          {ver.seasonsCount && <span className="text-purple-400">{ver.seasonsCount} S</span>}
+                        </div>
+                        <div className="text-[9px] font-mono text-slate-500 truncate">
+                          {ver.folderPath || ver.title}
+                        </div>
+                      </div>
+
+                      <div className="shrink-0">
+                        {isActive ? (
+                          <span className="px-2 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-bold">
+                            Active
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-slate-800 group-hover:bg-indigo-900 text-slate-300 group-hover:text-white text-[10px] font-semibold border border-slate-700">
+                            Switch
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Related Series, Spin-Offs & Sequels Hub */}
           {media.type === 'series' && mediaLibrary && (() => {

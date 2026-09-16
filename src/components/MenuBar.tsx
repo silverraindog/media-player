@@ -146,9 +146,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     <>
       <div
         ref={menuBarRef}
-        className="bg-slate-950 border-b border-slate-800/90 text-xs select-none relative z-50 text-slate-300 font-sans"
+        className="bg-slate-950 border-b border-slate-800 text-xs select-none relative z-50 text-slate-300 font-sans shadow-md"
       >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-7">
+        {/* ROW 1: High-Level Management (Desktop menus + Search, Explorer, Mounts + Server status) */}
+        <div className="border-b border-slate-800/80 bg-slate-950 px-3 sm:px-6 lg:px-8 py-1 flex flex-wrap items-center justify-between gap-2 min-h-[38px]">
           {/* Left Menus: File, Edit, View, Help */}
           <div className="flex items-center space-x-1">
             {/* FILE MENU */}
@@ -686,12 +687,155 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             </div>
           </div>
 
-          {/* Right Status Summary */}
-          <div className="flex items-center space-x-3 text-[11px] text-slate-400 font-mono">
-            <span className="hidden md:inline-flex items-center gap-1">
-              <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-              <span>{sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'No Share Configured'}</span>
+          {/* High-Level Management Navigation (Search, Explorer, Mounts) */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 hidden xl:inline mr-1">
+              Management:
             </span>
+
+            {/* Search & Ingest Button */}
+            <button
+              id="mgmt-nav-search-btn"
+              onClick={() => {
+                setActiveTab('search');
+                if (onSelectViewMediaType) onSelectViewMediaType('all');
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'search' && selectedMediaType === 'all'
+                  ? 'bg-indigo-600 text-white shadow-xs ring-1 ring-indigo-400/50'
+                  : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Search</span>
+            </button>
+
+            {/* Samba Explorer Button */}
+            <button
+              id="mgmt-nav-explorer-btn"
+              onClick={() => setActiveTab('explorer')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'explorer'
+                  ? 'bg-emerald-600 text-white shadow-xs ring-1 ring-emerald-400/50'
+                  : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800'
+              }`}
+            >
+              <FolderTree className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Explorer</span>
+            </button>
+
+            {/* Mounts & Connection Button */}
+            <button
+              id="mgmt-nav-mounts-btn"
+              onClick={() => setActiveTab('samba-mount')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'samba-mount'
+                  ? 'bg-amber-600 text-white shadow-xs ring-1 ring-amber-400/50'
+                  : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800'
+              }`}
+            >
+              <HardDrive className="w-3.5 h-3.5 text-amber-400" />
+              <span>Mounts</span>
+            </button>
+          </div>
+
+          {/* Right Status Summary */}
+          <div className="flex items-center space-x-2 text-[11px] text-slate-400 font-mono">
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900/90 border border-slate-800">
+              <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span className="truncate max-w-[130px] md:max-w-none text-slate-300">
+                {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'No Share Configured'}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        {/* ROW 2: Responsive Grid for Content Categories (Movies, Series, Music, Watchlist, Stats) */}
+        <div className="bg-slate-900/80 px-3 sm:px-6 lg:px-8 py-1 border-t border-slate-850">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-1.5 sm:gap-2">
+            {/* 1. Movies */}
+            <button
+              id="category-nav-movies-btn"
+              onClick={() => {
+                setActiveTab('search');
+                if (onSelectViewMediaType) onSelectViewMediaType('movie');
+              }}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'search' && selectedMediaType === 'movie'
+                  ? 'bg-cyan-600 text-white shadow-xs ring-1 ring-cyan-400/50 font-bold'
+                  : 'bg-slate-950/70 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800/80'
+              }`}
+            >
+              <Film className={`w-3.5 h-3.5 ${activeTab === 'search' && selectedMediaType === 'movie' ? 'text-white' : 'text-cyan-400'}`} />
+              <span>Movies</span>
+              <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘3</span>
+            </button>
+
+            {/* 2. Series */}
+            <button
+              id="category-nav-series-btn"
+              onClick={() => {
+                setActiveTab('search');
+                if (onSelectViewMediaType) onSelectViewMediaType('series');
+              }}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'search' && selectedMediaType === 'series'
+                  ? 'bg-purple-600 text-white shadow-xs ring-1 ring-purple-400/50 font-bold'
+                  : 'bg-slate-950/70 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800/80'
+              }`}
+            >
+              <Tv className={`w-3.5 h-3.5 ${activeTab === 'search' && selectedMediaType === 'series' ? 'text-white' : 'text-purple-400'}`} />
+              <span>Series</span>
+              <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘2</span>
+            </button>
+
+            {/* 3. Music */}
+            <button
+              id="category-nav-music-btn"
+              onClick={() => {
+                setActiveTab('music');
+                if (onSelectViewMediaType) onSelectViewMediaType('album');
+              }}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'music' || (activeTab === 'search' && selectedMediaType === 'album')
+                  ? 'bg-emerald-600 text-white shadow-xs ring-1 ring-emerald-400/50 font-bold'
+                  : 'bg-slate-950/70 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800/80'
+              }`}
+            >
+              <Music className={`w-3.5 h-3.5 ${activeTab === 'music' || (activeTab === 'search' && selectedMediaType === 'album') ? 'text-white' : 'text-emerald-400'}`} />
+              <span>Music</span>
+              <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘4</span>
+            </button>
+
+            {/* 4. Watchlist */}
+            <button
+              id="category-nav-watchlist-btn"
+              onClick={() => setActiveTab('watchlist')}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'watchlist'
+                  ? 'bg-amber-600 text-white shadow-xs ring-1 ring-amber-400/50 font-bold'
+                  : 'bg-slate-950/70 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800/80'
+              }`}
+            >
+              <Bookmark className={`w-3.5 h-3.5 ${activeTab === 'watchlist' ? 'text-white' : 'text-amber-400'}`} />
+              <span>Watchlist</span>
+              <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘W</span>
+            </button>
+
+            {/* 5. Stats */}
+            <button
+              id="category-nav-stats-btn"
+              onClick={() => setActiveTab('stats')}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer col-span-2 sm:col-span-1 ${
+                activeTab === 'stats'
+                  ? 'bg-indigo-600 text-white shadow-xs ring-1 ring-indigo-400/50 font-bold'
+                  : 'bg-slate-950/70 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800/80'
+              }`}
+            >
+              <BarChart3 className={`w-3.5 h-3.5 ${activeTab === 'stats' ? 'text-white' : 'text-indigo-400'}`} />
+              <span>Stats</span>
+              <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘7</span>
+            </button>
           </div>
         </div>
       </div>

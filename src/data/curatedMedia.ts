@@ -60,6 +60,92 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     source: 'curated-database'
   },
   {
+    id: 'series-the-walking-dead',
+    type: 'series',
+    title: 'The Walking Dead',
+    originalTitle: 'The Walking Dead',
+    year: 2010,
+    premiered: '2010-10-31',
+    overview: 'Sheriff Deputy Rick Grimes wakes up from a coma to learn the world is in ruins and must lead a group of survivors to stay alive in a zombie apocalypse.',
+    tagline: 'Fight the dead. Fear the living.',
+    genres: ['Drama', 'Horror', 'Sci-Fi', 'Thriller'],
+    rating: 8.2,
+    votes: 1080000,
+    runtime: '44 min/ep',
+    directors: ['Frank Darabont', 'Greg Nicotero'],
+    studio: 'AMC Studios',
+    certification: 'TV-MA',
+    country: 'United States',
+    language: 'English',
+    imdbId: 'tt1520211',
+    tmdbId: '1402',
+    posterUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80',
+    fanartUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
+    recommendedFolderStructure: 'Series/The Walking Dead (2010)/Season 01/',
+    recommendedFilenames: [
+      'The Walking Dead - S01E01 - Days Gone Bye.mkv',
+      'The Walking Dead - S01E02 - Guts.mkv',
+      'The Walking Dead - S01E03 - Tell It to the Frogs.mkv',
+      'tvshow.nfo',
+      'poster.jpg'
+    ],
+    seasons: [
+      {
+        seasonNumber: 1,
+        name: 'Season 1',
+        episodeCount: 6,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 1, title: 'Days Gone Bye', airDate: '2010-10-31', plot: 'Deputy Sheriff Rick Grimes awakens from a coma to discover an apocalyptic world overrun by flesh-eating zombies.', rating: 9.2 },
+          { episodeNumber: 2, seasonNumber: 1, title: 'Guts', airDate: '2010-11-07', plot: 'In Atlanta, Rick is rescued by a group of survivors, but they soon find themselves trapped inside a department store.', rating: 8.7 },
+          { episodeNumber: 3, seasonNumber: 1, title: 'Tell It to the Frogs', airDate: '2010-11-14', plot: 'Rick returns to the survivor camp outside Atlanta and has an emotional reunion with Lori and Carl.', rating: 8.6 }
+        ]
+      }
+    ],
+    source: 'curated-database'
+  },
+  {
+    id: 'series-fear-the-walking-dead',
+    type: 'series',
+    title: 'Fear the Walking Dead',
+    originalTitle: 'Fear the Walking Dead',
+    year: 2015,
+    premiered: '2015-08-23',
+    overview: 'A sign of the impending zombie apocalypse surfaces in Los Angeles, disrupting a blended family coping with the rapid collapse of civilization.',
+    tagline: 'Fear begins here.',
+    genres: ['Drama', 'Horror', 'Sci-Fi'],
+    rating: 6.8,
+    votes: 140000,
+    runtime: '44 min/ep',
+    directors: ['Dave Erickson', 'Robert Kirkman'],
+    studio: 'AMC Studios',
+    certification: 'TV-MA',
+    country: 'United States',
+    language: 'English',
+    imdbId: 'tt3743822',
+    tmdbId: '62286',
+    posterUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
+    fanartUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1600&auto=format&fit=crop&q=80',
+    recommendedFolderStructure: 'Series/Fear the Walking Dead (2015)/Season 01/',
+    recommendedFilenames: [
+      'Fear the Walking Dead - S01E01 - Pilot.mkv',
+      'Fear the Walking Dead - S01E02 - So Close, Yet So Far.mkv',
+      'tvshow.nfo',
+      'poster.jpg'
+    ],
+    seasons: [
+      {
+        seasonNumber: 1,
+        name: 'Season 1',
+        episodeCount: 6,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 1, title: 'Pilot', airDate: '2015-08-23', plot: 'A highly dysfunctional blended family is forced together when they realize a reported virus is actually the onset of the undead apocalypse.', rating: 7.7 },
+          { episodeNumber: 2, seasonNumber: 1, title: 'So Close, Yet So Far', airDate: '2015-08-30', plot: 'While Madison struggles to keep Nick from sabotaging his recovery, Travis ventures out into the city to find his son.', rating: 7.5 }
+        ]
+      }
+    ],
+    source: 'curated-database'
+  },
+  {
     id: 'series-severance',
     type: 'series',
     title: 'Severance',

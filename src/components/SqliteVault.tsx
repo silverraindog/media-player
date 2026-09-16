@@ -29,6 +29,7 @@ import {
   SqliteStats,
   MediaMetadata,
 } from '../types';
+import { sqliteBatchWriter, SqliteQueueStatus } from '../services/sqliteBatchWriter';
 
 interface SqliteVaultProps {
   onOpenDetails: (media: MediaMetadata) => void;
@@ -43,6 +44,14 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
   const [dbStats, setDbStats] = useState<SqliteStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
+  const [batchStatus, setBatchStatus] = useState<SqliteQueueStatus>(sqliteBatchWriter.getStatus());
+
+  useEffect(() => {
+    const unsub = sqliteBatchWriter.subscribe((status) => {
+      setBatchStatus(status);
+    });
+    return unsub;
+  }, []);
 
   // Editing state for synopsis
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
@@ -285,6 +294,43 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
             </div>
           </div>
         )}
+
+        {/* 30s Persistent Caching & Batch Buffer Indicator */}
+        <div className="mt-3 pt-3 border-t border-slate-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-slate-950/40 p-3 rounded-xl border border-indigo-900/30">
+          <div className="flex items-center gap-2.5">
+            <div className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </div>
+            <div>
+              <span className="font-semibold text-slate-200">Zero-I/O Persistent Cache Active</span>
+              <span className="text-slate-400 ml-2">
+                ({batchStatus.cacheSize} items in cache &middot; {batchStatus.pendingCount} queued for next 30s batch)
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="text-slate-400 font-mono text-[11px]">
+              Next auto-flush in: <strong className="text-indigo-400">{batchStatus.secondsUntilNextFlush}s</strong>
+            </span>
+            <button
+              onClick={async () => {
+                await sqliteBatchWriter.flushNow();
+                fetchDatabaseData();
+              }}
+              disabled={batchStatus.isFlushing || batchStatus.pendingCount === 0}
+              className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 ${
+                batchStatus.pendingCount > 0
+                  ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
+                  : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+              }`}
+            >
+              <RefreshCw className={`w-3 h-3 ${batchStatus.isFlushing ? 'animate-spin' : ''}`} />
+              <span>{batchStatus.isFlushing ? 'Flushing...' : 'Flush Queue Now'}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Sub navigation tabs */}

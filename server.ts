@@ -12,6 +12,7 @@ import {
   toggleWatchlistInDb,
   removeWatchlistInDb,
   saveMediaToDb,
+  batchSaveMediaToDb,
   deleteMediaFromDb,
   getAllWatchProgress,
   getSeriesProgress,
@@ -148,7 +149,7 @@ Return ONLY valid JSON matching this exact structure:
 Ensure high factual accuracy for real movies, series, or albums. If it's a TV show, provide real season and episode titles. If it's a music album, provide the actual track listing.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-flash-latest',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -330,7 +331,7 @@ Return a single JSON object with EXACT structure:
 }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-flash-latest',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -420,7 +421,7 @@ Return a JSON array where each object has:
 ]`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-flash-latest',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -583,7 +584,7 @@ Return a JSON array of objects with:
 ]`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-flash-latest',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -765,7 +766,7 @@ Return ONLY valid JSON matching this exact structure:
     }
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-flash-latest',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -1002,7 +1003,7 @@ Return a valid JSON array of objects with the structure:
 ]`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-flash-latest',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -1298,6 +1299,41 @@ app.post('/api/db/media', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error saving media to SQLite:', error);
     res.status(500).json({ error: 'Failed to save media to SQLite', message: error?.message });
+  }
+});
+
+// Batch save queued media items to SQLite DB (reduces I/O during large sync operations)
+app.post('/api/db/media/batch', async (req: Request, res: Response) => {
+  try {
+    const { items } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Array of media items is required' });
+    }
+
+    const dbItems = items.map((media: any) => ({
+      id: media.id || `media-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      media_type: media.type || media.media_type || 'series',
+      title: media.title,
+      original_title: media.originalTitle || media.original_title || media.title,
+      synopsis: media.overview || media.synopsis || 'No synopsis available',
+      year: media.year,
+      rating: media.rating,
+      poster_url: media.posterUrl || media.poster_url,
+      fanart_url: media.fanartUrl || media.fanart_url,
+      genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres,
+      recommended_folder: media.recommendedFolderStructure || media.recommended_folder,
+      raw_data: JSON.stringify(media),
+    }));
+
+    const count = await batchSaveMediaToDb(dbItems);
+    res.json({
+      success: true,
+      count,
+      message: `Successfully batch-saved ${count} media items to SQLite vault in a single transaction`,
+    });
+  } catch (error: any) {
+    console.error('Error batch-saving media to SQLite:', error);
+    res.status(500).json({ error: 'Failed to batch save media to SQLite', message: error?.message });
   }
 });
 

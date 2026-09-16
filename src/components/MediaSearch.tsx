@@ -570,6 +570,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         }}
         onPlayMedia={onPlayMedia}
         onOpenInNfoStudio={onOpenInNfoStudio}
+        onOpenManualMatch={(media) => {
+          setIsCategorizerModalOpen(false);
+          if (onOpenManualMatch) {
+            onOpenManualMatch(media.title, media.type);
+          }
+        }}
       />
 
       {/* Top Banner & Quick Ingestion */}

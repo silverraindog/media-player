@@ -30,6 +30,7 @@ interface WebSearchCategorizerModalProps {
   onOpenInNfoStudio?: (media: MediaMetadata) => void;
   initialQuery?: string;
   initialType?: MediaType | 'all';
+  mediaLibrary?: MediaMetadata[];
 }
 
 const POPULAR_SEARCH_PRESETS = [
@@ -53,6 +54,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   onOpenInNfoStudio,
   initialQuery = '',
   initialType = 'all',
+  mediaLibrary = [],
 }) => {
   const [query, setQuery] = useState(initialQuery);
   const [mediaType, setMediaType] = useState<MediaType | 'all'>(initialType);
@@ -63,6 +65,11 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [detectedCategories, setDetectedCategories] = useState<string[]>([]);
   const [selectedPrimaryCategory, setSelectedPrimaryCategory] = useState<string>('Drama');
   const [isSaved, setIsSaved] = useState(false);
+  const [showIncompleteList, setShowIncompleteList] = useState(false);
+
+  const incompleteItems = mediaLibrary.filter(
+    (m) => !m.synopsis || m.synopsis.trim() === '' || !m.posterUrl || m.posterUrl.trim() === '' || m.synopsis.includes('placeholder')
+  );
 
   if (!isOpen) return null;
 
@@ -165,6 +172,55 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-6">
+          {/* Incomplete / Missing Synopsis or Poster Items Selector */}
+          {incompleteItems.length > 0 && (
+            <div className="bg-amber-950/20 border border-amber-800/50 rounded-xl p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setShowIncompleteList((prev) => !prev)}
+                  className="flex items-center gap-2 text-xs font-bold text-amber-300 hover:text-amber-200 transition cursor-pointer w-full text-left"
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                  <span>{incompleteItems.length} library item(s) missing synopsis or artwork</span>
+                  <span className="ml-auto font-mono text-[11px] underline">
+                    {showIncompleteList ? 'Hide list' : 'Click to select and categorize'}
+                  </span>
+                </button>
+              </div>
+
+              {showIncompleteList && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 max-h-48 overflow-y-auto pr-1">
+                  {incompleteItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setQuery(item.title);
+                        setMediaType(item.type);
+                        setShowIncompleteList(false);
+                        handleSearch(item.title, item.type);
+                      }}
+                      className="flex items-center justify-between p-2 rounded-lg bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-amber-500/50 text-left transition group cursor-pointer"
+                    >
+                      <div className="truncate pr-2">
+                        <div className="text-xs font-semibold text-white group-hover:text-amber-300 truncate">
+                          {item.title}
+                        </div>
+                        <div className="text-[10px] text-slate-400 capitalize">
+                          {item.type} {item.year ? `(${item.year})` : ''} • Missing synopsis/poster
+                        </div>
+                      </div>
+                      <span className="shrink-0 px-2 py-1 rounded bg-amber-950/60 border border-amber-700/50 text-[10px] text-amber-300 font-bold">
+                        Categorize
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Search Inputs */}
           <form
             onSubmit={(e) => {

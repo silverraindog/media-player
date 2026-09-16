@@ -277,6 +277,7 @@ export interface ThumbnailCacheStats {
 
 export type AppTab =
   | 'search'
+  | 'music'
   | 'watchlist'
   | 'history'
   | 'stats'

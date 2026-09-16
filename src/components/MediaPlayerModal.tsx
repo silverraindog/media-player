@@ -28,6 +28,7 @@ import {
   Layers,
   Info,
   FileText,
+  SkipForward,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
 
@@ -210,6 +211,39 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       }).catch(() => {});
     } catch {}
   };
+
+  // Real-time heartbeat / progress-save signal every 10 seconds while playing
+  useEffect(() => {
+    if (!isPlaying) return;
+    const interval = setInterval(() => {
+      recordWatchHistory();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [isPlaying, currentTime, duration, selectedEpisode, selectedSeasonNum]);
+
+  // Next episode finder helper
+  const getNextEpisode = (): { seasonNum: number; episode: EpisodeMetadata } | null => {
+    if (!media?.seasons || media.seasons.length === 0 || !selectedEpisode) return null;
+    const currentSeason = media.seasons.find((s) => s.seasonNumber === selectedSeasonNum);
+    if (!currentSeason || !currentSeason.episodes) return null;
+
+    const currentEpIndex = currentSeason.episodes.findIndex((e) => e.episodeNumber === selectedEpisode.episodeNumber);
+    if (currentEpIndex !== -1 && currentEpIndex + 1 < currentSeason.episodes.length) {
+      return { seasonNum: selectedSeasonNum, episode: currentSeason.episodes[currentEpIndex + 1] };
+    } else {
+      const seasonIndex = media.seasons.findIndex((s) => s.seasonNumber === selectedSeasonNum);
+      if (seasonIndex !== -1 && seasonIndex + 1 < media.seasons.length) {
+        const nextSeason = media.seasons[seasonIndex + 1];
+        if (nextSeason.episodes && nextSeason.episodes.length > 0) {
+          return { seasonNum: nextSeason.seasonNumber, episode: nextSeason.episodes[0] };
+        }
+      }
+    }
+    return null;
+  };
+
+  const nextEpInfo = media?.type === 'series' ? getNextEpisode() : null;
+  const isNearEnd = duration > 0 && currentTime >= duration - 30;
 
   // Selected stream source preset
   const [selectedStreamId, setSelectedStreamId] = useState<string>(
@@ -873,31 +907,77 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   </p>
                 </div>
               )}
+
+              {/* Next Episode Floating Banner Overlay */}
+              {isNearEnd && nextEpInfo && !playbackError && (
+                <div className="absolute bottom-6 right-6 bg-slate-900/95 backdrop-blur-md border border-purple-500/60 rounded-xl p-4 shadow-2xl z-30 flex items-center gap-4 animate-in slide-in-from-bottom-4 duration-300">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider block">
+                      Up Next
+                    </span>
+                    <h5 className="text-xs font-bold text-white">
+                      S{nextEpInfo.seasonNum}E{nextEpInfo.episode.episodeNumber} - {nextEpInfo.episode.title}
+                    </h5>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSelectedSeasonNum(nextEpInfo.seasonNum);
+                      setSelectedEpisode(nextEpInfo.episode);
+                      setCurrentTime(0);
+                      setTimeout(startPlayback, 100);
+                    }}
+                    className="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-purple-600/40 cursor-pointer transition"
+                  >
+                    <span>Play Next</span>
+                    <SkipForward className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Player Controls Bar */}
         <div className="px-5 py-3.5 bg-slate-900/95 border-t border-slate-800 space-y-2.5">
-          {/* Progress Slider */}
+          {/* Progress Slider with Watch Ticks / Highlights */}
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono text-slate-400 w-14 text-right">
               {formatTime(currentTime)}
             </span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              step={0.1}
-              value={currentTime}
-              onChange={(e) => {
-                const newTime = parseFloat(e.target.value);
-                setCurrentTime(newTime);
-                if (videoRef.current) videoRef.current.currentTime = newTime;
-                if (audioRef.current) audioRef.current.currentTime = newTime;
-              }}
-              className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition"
-            />
+            <div className="relative flex-1 flex items-center">
+              {/* Watch Milestone Ticks */}
+              <div className="absolute inset-x-0 h-1.5 pointer-events-none flex justify-between px-1 z-20">
+                {[0.25, 0.5, 0.75, 0.9].map((ratio) => {
+                  const isReached = (currentTime / (duration || 1)) >= ratio;
+                  return (
+                    <div
+                      key={ratio}
+                      className={`w-1 h-3 rounded-full -top-0.5 transition-all ${
+                        isReached
+                          ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]'
+                          : 'bg-slate-700/80'
+                      }`}
+                      style={{ position: 'absolute', left: `${ratio * 100}%` }}
+                      title={`Milestone ${ratio * 100}%`}
+                    />
+                  );
+                })}
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={duration || 100}
+                step={0.1}
+                value={currentTime}
+                onChange={(e) => {
+                  const newTime = parseFloat(e.target.value);
+                  setCurrentTime(newTime);
+                  if (videoRef.current) videoRef.current.currentTime = newTime;
+                  if (audioRef.current) audioRef.current.currentTime = newTime;
+                }}
+                className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition relative z-10"
+              />
+            </div>
             <span className="text-xs font-mono text-slate-400 w-14">
               {formatTime(duration)}
             </span>

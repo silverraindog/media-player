@@ -171,6 +171,10 @@ export async function getDatabase(): Promise<Database> {
 
     CREATE INDEX IF NOT EXISTS idx_thumb_media_path ON thumbnail_metadata_cache(media_path);
     CREATE INDEX IF NOT EXISTS idx_watchlist_media_id ON user_watchlist(media_id);
+    CREATE INDEX IF NOT EXISTS idx_media_items_title ON media_items(title);
+    CREATE INDEX IF NOT EXISTS idx_media_items_type ON media_items(media_type);
+    CREATE INDEX IF NOT EXISTS idx_watch_history_watched ON watch_history_log(watched_at);
+    CREATE INDEX IF NOT EXISTS idx_watch_progress_series ON series_watch_progress(series_id);
   `);
 
   // Migration: ensure file_size_bytes exists on media_items

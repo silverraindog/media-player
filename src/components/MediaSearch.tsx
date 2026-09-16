@@ -562,6 +562,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         onClose={() => setIsCategorizerModalOpen(false)}
         initialQuery={categorizerInitialQuery}
         initialType={categorizerInitialType}
+        mediaLibrary={mediaLibrary}
         onSaveCategorizedMedia={(media) => {
           if (onSaveCategorizedMedia) {
             onSaveCategorizedMedia(media);

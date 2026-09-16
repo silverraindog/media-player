@@ -158,129 +158,148 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex space-x-1 overflow-x-auto py-2 border-t border-slate-800/80 scrollbar-none text-sm">
-          <button
-            id="tab-search"
-            onClick={() => setActiveTab('search')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'search'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-indigo-300" />
-            <span>Search & Metadata Downloader</span>
-          </button>
+        {/* Tab Navigation (2 Rows) */}
+        <div className="border-t border-slate-800/80 py-2 space-y-1.5 overflow-x-auto scrollbar-none text-xs sm:text-sm">
+          {/* Row 1: Core Media & Discovery */}
+          <div className="flex items-center space-x-1.5 min-w-max">
+            <button
+              id="tab-search"
+              onClick={() => setActiveTab('search')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'search'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-indigo-300" />
+              <span>Search & Metadata</span>
+            </button>
 
-          <button
-            id="tab-watchlist"
-            onClick={() => setActiveTab('watchlist')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'watchlist'
-                ? 'bg-amber-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Bookmark className={`w-4 h-4 ${activeTab === 'watchlist' ? 'text-amber-200 fill-amber-200' : 'text-amber-400'}`} />
-            <span>My Watchlist</span>
-            {watchlistCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                {watchlistCount}
-              </span>
-            )}
-          </button>
+            <button
+              id="tab-music"
+              onClick={() => setActiveTab('music')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'music'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Music className="w-4 h-4 text-emerald-300" />
+              <span>Music & Audio Vault</span>
+            </button>
 
-          <button
-            id="tab-history"
-            onClick={() => setActiveTab('history')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'history'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <History className="w-4 h-4 text-indigo-300" />
-            <span>Watch History</span>
-          </button>
+            <button
+              id="tab-watchlist"
+              onClick={() => setActiveTab('watchlist')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'watchlist'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Bookmark className={`w-4 h-4 ${activeTab === 'watchlist' ? 'text-amber-200 fill-amber-200' : 'text-amber-400'}`} />
+              <span>My Watchlist</span>
+              {watchlistCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  {watchlistCount}
+                </span>
+              )}
+            </button>
 
-          <button
-            id="tab-sqlite-vault"
-            onClick={() => setActiveTab('sqlite-vault')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'sqlite-vault'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Database className="w-4 h-4 text-emerald-400" />
-            <span>SQLite Vault & Watch Progress</span>
-          </button>
+            <button
+              id="tab-history"
+              onClick={() => setActiveTab('history')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'history'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <History className="w-4 h-4 text-indigo-300" />
+              <span>Watch History</span>
+            </button>
 
-          <button
-            id="tab-stats"
-            onClick={() => setActiveTab('stats')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'stats'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4 text-cyan-400" />
-            <span>Library Stats</span>
-          </button>
+            <button
+              id="tab-sqlite-vault"
+              onClick={() => setActiveTab('sqlite-vault')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'sqlite-vault'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Database className="w-4 h-4 text-emerald-400" />
+              <span>SQLite Vault & Progress</span>
+            </button>
+          </div>
 
-          <button
-            id="tab-cleaner"
-            onClick={() => setActiveTab('cleaner')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'cleaner'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <FolderSync className="w-4 h-4 text-cyan-300" />
-            <span>Batch File Cleaner & Tagging</span>
-          </button>
+          {/* Row 2: Advanced Utilities & OS Mount Tools */}
+          <div className="flex items-center space-x-1.5 min-w-max">
+            <button
+              id="tab-stats"
+              onClick={() => setActiveTab('stats')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'stats'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4 text-cyan-400" />
+              <span>Library Stats</span>
+            </button>
 
-          <button
-            id="tab-explorer"
-            onClick={() => setActiveTab('explorer')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'explorer'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <FolderTree className="w-4 h-4 text-emerald-300" />
-            <span>Samba Share Browser & Pusher</span>
-          </button>
+            <button
+              id="tab-cleaner"
+              onClick={() => setActiveTab('cleaner')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'cleaner'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <FolderSync className="w-4 h-4 text-cyan-300" />
+              <span>Batch File Cleaner</span>
+            </button>
 
-          <button
-            id="tab-samba-mount"
-            onClick={() => setActiveTab('samba-mount')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'samba-mount'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <Terminal className="w-4 h-4 text-amber-300" />
-            <span>Cross-Platform Mount (Mac/Linux/Win)</span>
-          </button>
+            <button
+              id="tab-explorer"
+              onClick={() => setActiveTab('explorer')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'explorer'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <FolderTree className="w-4 h-4 text-emerald-300" />
+              <span>Samba Share Browser</span>
+            </button>
 
-          <button
-            id="tab-nfo-studio"
-            onClick={() => setActiveTab('nfo-studio')}
-            className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'nfo-studio'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <FileCode2 className="w-4 h-4 text-purple-300" />
-            <span>NFO / XML Studio</span>
-          </button>
+            <button
+              id="tab-samba-mount"
+              onClick={() => setActiveTab('samba-mount')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'samba-mount'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Terminal className="w-4 h-4 text-amber-300" />
+              <span>Cross-Platform Mount</span>
+            </button>
+
+            <button
+              id="tab-nfo-studio"
+              onClick={() => setActiveTab('nfo-studio')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'nfo-studio'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <FileCode2 className="w-4 h-4 text-purple-300" />
+              <span>NFO / XML Studio</span>
+            </button>
+          </div>
         </div>
       </div>
     </header>

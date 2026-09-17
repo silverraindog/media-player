@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Edit3, Star, Calendar, Clock, GitBranch, RefreshCw } from 'lucide-react';
+import { Play, Edit3, Star, Calendar, Clock, GitBranch, RefreshCw, Wand2 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata } from '../../types';
 
 interface MediaDetailHeaderProps {
@@ -10,6 +10,8 @@ interface MediaDetailHeaderProps {
   handleSelectVersionBranch: (versionId: string) => void;
   onBulkRefresh?: () => void;
   isRefreshing?: boolean;
+  onGenerateFanart?: () => void;
+  isGeneratingFanart?: boolean;
 }
 
 export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
@@ -20,6 +22,8 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
   handleSelectVersionBranch,
   onBulkRefresh,
   isRefreshing = false,
+  onGenerateFanart,
+  isGeneratingFanart = false,
 }) => {
   return (
     <div className="relative h-64 bg-slate-950 shrink-0 overflow-hidden">
@@ -52,6 +56,22 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
           >
             <Edit3 className="w-3.5 h-3.5" />
             <span>Manual Match / Resolve</span>
+          </button>
+        )}
+
+        {onGenerateFanart && (
+          <button
+            disabled={isGeneratingFanart}
+            onClick={onGenerateFanart}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border backdrop-blur-sm transition cursor-pointer ${
+              isGeneratingFanart
+                ? 'bg-slate-800 text-slate-500 border-slate-700'
+                : 'bg-purple-900/40 hover:bg-purple-900/60 text-purple-300 border-purple-500/40'
+            }`}
+            title="Generate custom cinematic fanart using AI"
+          >
+            <Wand2 className={`w-3.5 h-3.5 ${isGeneratingFanart ? 'animate-pulse' : ''}`} />
+            <span>{isGeneratingFanart ? 'Designing Fanart...' : 'Generate AI Fanart'}</span>
           </button>
         )}
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiCall } from '../lib/api';
 import { X, Info, Wand2 } from 'lucide-react';
 import { MediaMetadata, SambaConfig, EpisodeMetadata, TrackMetadata } from '../types';
 import { RelatedContent } from './MediaDetailModal/RelatedContent';
@@ -66,6 +67,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   // Synopsis generator states
   const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false);
   const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
+  const [isGeneratingFanart, setIsGeneratingFanart] = useState(false);
   const [generatingEpNum, setGeneratingEpNum] = useState<number | null>(null);
   const [editingEpNum, setEditingEpNum] = useState<number | null>(null);
   const [customEpPlot, setCustomEpPlot] = useState<string>('');
@@ -357,10 +359,39 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     setEditingEpNum(null);
   };
 
+  const handleGenerateFanart = async () => {
+    setIsGeneratingFanart(true);
+    try {
+      const data = await apiCall<{ success: boolean; url: string }>('/api/media/generate-fanart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: media.title,
+          overview: media.overview,
+          mediaPath: media.path,
+          type: media.type,
+        }),
+      });
+
+      if (data && data.success) {
+        const updated: MediaMetadata = {
+          ...media,
+          fanartUrl: data.url,
+        };
+        setMedia(updated);
+        if (onUpdateMedia) onUpdateMedia(updated);
+      }
+    } catch (err) {
+      console.error('Fanart generation failed:', err);
+    } finally {
+      setIsGeneratingFanart(false);
+    }
+  };
+
   const handleBulkRefresh = async () => {
     setIsBulkRefreshing(true);
     try {
-      const res = await fetch('/api/metadata/generate-synopsis', {
+      const data = await apiCall<any>('/api/metadata/generate-synopsis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -370,28 +401,25 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         }),
       });
 
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          const updated: MediaMetadata = {
-            ...media,
-            overview: json.data.overview || media.overview,
-            tagline: json.data.tagline || media.tagline,
-            genres: json.data.genres || media.genres,
-            rating: json.data.rating || media.rating,
-            runtime: json.data.runtime || media.runtime,
-            certification: json.data.certification || media.certification,
-            seasons: json.data.seasons || media.seasons,
-          };
-          setMedia(updated);
-          if (onUpdateMedia) onUpdateMedia(updated);
-          
-          // Reset season/episode selection if needed
-          if (updated.seasons && updated.seasons.length > 0) {
-            setActiveSeasonTab(updated.seasons[0].seasonNumber);
-            if (updated.seasons[0].episodes && updated.seasons[0].episodes.length > 0) {
-              setSelectedEpisodeNumber(updated.seasons[0].episodes[0].episodeNumber);
-            }
+      if (data) {
+        const updated: MediaMetadata = {
+          ...media,
+          overview: data.overview || media.overview,
+          tagline: data.tagline || media.tagline,
+          genres: data.genres || media.genres,
+          rating: data.rating || media.rating,
+          runtime: data.runtime || media.runtime,
+          certification: data.certification || media.certification,
+          seasons: data.seasons || media.seasons,
+        };
+        setMedia(updated);
+        if (onUpdateMedia) onUpdateMedia(updated);
+        
+        // Reset season/episode selection if needed
+        if (updated.seasons && updated.seasons.length > 0) {
+          setActiveSeasonTab(updated.seasons[0].seasonNumber);
+          if (updated.seasons[0].episodes && updated.seasons[0].episodes.length > 0) {
+            setSelectedEpisodeNumber(updated.seasons[0].episodes[0].episodeNumber);
           }
         }
       }
@@ -425,6 +453,8 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           handleSelectVersionBranch={handleSelectVersionBranch}
           onBulkRefresh={handleBulkRefresh}
           isRefreshing={isBulkRefreshing}
+          onGenerateFanart={handleGenerateFanart}
+          isGeneratingFanart={isGeneratingFanart}
         />
 
         {/* Modal Body - Scrollable */}

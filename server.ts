@@ -1283,6 +1283,71 @@ Return a valid JSON array of objects with the structure:
   }
 });
 
+// Endpoint to generate AI fanart using Gemini
+app.post('/api/media/generate-fanart', async (req: Request, res: Response) => {
+  try {
+    const { title, overview, mediaPath, type } = req.body;
+    const ai = getGenAI();
+    if (!ai) return res.status(500).json({ error: 'Gemini API not configured' });
+
+    // 1. Prepare Prompt
+    const prompt = `Create a high-quality, cinematic, wide-angle 16:9 fanart background banner for the ${type} "${title}". 
+    The style should be atmospheric, artistic, and capture the essence of the plot: ${overview || 'A compelling story'}.
+    Do NOT include any text, logos, or titles in the image. High-contrast, vibrant lighting, professional movie production art style.`;
+
+    // 2. Call Gemini Image Generation Model
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-image',
+      contents: {
+        parts: [{ text: prompt }],
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: '16:9',
+          imageSize: '1K',
+        },
+      },
+    });
+
+    // 3. Extract Image Data
+    let base64Data: string | null = null;
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        base64Data = part.inlineData.data;
+        break;
+      }
+    }
+
+    if (!base64Data) {
+      return res.status(500).json({ error: 'Failed to generate image data' });
+    }
+
+    // 4. Save to Disk if path is provided
+    let savedUrl = `data:image/jpeg;base64,${base64Data}`;
+    if (mediaPath && fs.existsSync(mediaPath)) {
+      try {
+        const stats = fs.statSync(mediaPath);
+        const folderPath = stats.isDirectory() ? mediaPath : path.dirname(mediaPath);
+        const fanartFileName = 'fanart-ai.jpg';
+        const fullPath = path.join(folderPath, fanartFileName);
+        
+        fs.writeFileSync(fullPath, Buffer.from(base64Data, 'base64'));
+        
+        // We return a path that our static server can resolve or just the base64 for immediate feedback
+        // For now, let's keep it as base64 for the UI but acknowledge it's saved
+        console.log(`Saved AI fanart to ${fullPath}`);
+      } catch (err) {
+        console.error('Failed to save fanart to disk:', err);
+      }
+    }
+
+    return res.json({ success: true, url: savedUrl });
+  } catch (error: any) {
+    console.error('Fanart generation error:', error);
+    return res.status(500).json({ error: error?.message || 'Failed to generate fanart' });
+  }
+});
+
 // Endpoint for recursive folder classification and regex-based category detection
 app.post('/api/samba/classify-folders', async (req: Request, res: Response) => {
   try {

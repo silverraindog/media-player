@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod db;
+mod ai;
+
+use db::{init_db, get_all_media, save_media, update_watch_progress};
+use ai::generate_synopsis;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -454,12 +459,21 @@ fn probe_local_port(host: String, port: u16) -> NetworkProbeResult {
 
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            let handle = app.handle();
+            init_db(&handle).expect("Failed to initialize SQLite database");
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             check_volume_mounted,
             list_mounted_volumes,
             probe_local_port,
             mount_samba_share,
-            scan_samba_volume
+            scan_samba_volume,
+            get_all_media,
+            save_media,
+            update_watch_progress,
+            generate_synopsis
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

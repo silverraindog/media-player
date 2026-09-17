@@ -55,6 +55,7 @@ import {
 import { thumbnailStorage } from './utils/thumbnailStorage';
 import { detectDuplicatesAndVersionBranches } from './utils/duplicateDetector';
 import { sqliteBatchWriter } from './services/sqliteBatchWriter';
+import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   server: '',
@@ -628,6 +629,10 @@ export default function App() {
       .catch((err) => console.warn('SQLite hydration:', err));
   }, []);
 
+  useEffect(() => {
+    requestNotificationPermission();
+  }, []);
+
   const handlePlayMedia = (
     media: MediaMetadata,
     episode?: EpisodeMetadata,
@@ -1165,6 +1170,9 @@ export default function App() {
     ]);
 
     showToast(`Classified Import Complete: ${selectedFoldersMap.size} folders imported into Media Library!`);
+    sendDesktopNotification('Samba Folder Classifier Imported', {
+      body: `Successfully imported ${selectedFoldersMap.size} classified folders into Media Library.`,
+    });
   };
 
   // Recursive Share Scanner & Automatic Metadata Matching
@@ -1397,6 +1405,9 @@ export default function App() {
       ]);
 
       const confidentCount = classifications.filter((c) => c.isConfident).length;
+      sendDesktopNotification('Samba Background Sync Complete', {
+        body: `Indexed ${discoveredRelativePaths.length} items (${discoveredMedia.length} media files, ${confidentCount} confident folders).`,
+      });
       showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);

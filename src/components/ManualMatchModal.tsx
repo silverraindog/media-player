@@ -188,8 +188,14 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
       });
 
       if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
+        const text = await res.text();
+        let json: any = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch {
+          json = null;
+        }
+        if (json && json.success && json.data) {
           const d = json.data;
           const overviewText = d.overview || `${titleQuery} synopsis and media package.`;
           const taglineText = d.tagline || 'Original Media Vault Edition';
@@ -282,8 +288,14 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
       });
 
       if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
+        const text = await res.text();
+        let json: any = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch {
+          json = null;
+        }
+        if (json && json.success && json.data) {
           const d = json.data;
           if (d.overview) setCustomOverview(d.overview);
           if (d.tagline) setCustomTagline(d.tagline);
@@ -320,8 +332,14 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
       });
 
       if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
+        const text = await res.text();
+        let json: any = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch {
+          json = null;
+        }
+        if (json && json.success && json.data) {
           const newPlot = json.data.plot || json.data.overview;
           if (newPlot) {
             handleUpdateEpisode(index, 'plot', newPlot);

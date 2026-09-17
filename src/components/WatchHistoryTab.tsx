@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   History,
   Film,
@@ -17,6 +17,9 @@ import {
   AlertCircle,
   Database,
   ArrowRight,
+  Download,
+  Upload,
+  FileJson,
 } from 'lucide-react';
 import { WatchHistoryItem, WatchHistoryStats, MediaType } from '../types';
 
@@ -31,6 +34,52 @@ export const WatchHistoryTab: React.FC<WatchHistoryTabProps> = ({ onOpenDetails 
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedFilterType, setSelectedFilterType] = useState<string>('all');
   const [isClearing, setIsClearing] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExportProgress = () => {
+    const payload = {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      historyItems,
+      historyStats,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `watch-progress-sync-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportProgressFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (parsed.historyItems && Array.isArray(parsed.historyItems)) {
+        for (const item of parsed.historyItems) {
+          await fetch('/api/db/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(item),
+          });
+        }
+        await fetchHistory();
+        alert(`Successfully imported ${parsed.historyItems.length} watch progress records!`);
+      } else {
+        alert('Invalid sync file structure.');
+      }
+    } catch (err) {
+      console.error('Failed to import watch progress:', err);
+      alert('Failed to parse JSON sync file.');
+    } finally {
+      if (e.target) e.target.value = '';
+    }
+  };
 
   const fetchHistory = async () => {
     setLoading(true);
@@ -125,6 +174,29 @@ export const WatchHistoryTab: React.FC<WatchHistoryTabProps> = ({ onOpenDetails 
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImportProgressFile}
+            accept=".json"
+            className="hidden"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-2 border border-slate-700/60 transition cursor-pointer"
+            title="Import watch progress JSON sync-file from another device"
+          >
+            <Upload className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Import Sync</span>
+          </button>
+          <button
+            onClick={handleExportProgress}
+            className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+            title="Export watch history and progress as a JSON file for transferring between devices"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export Progress</span>
+          </button>
           <button
             onClick={fetchHistory}
             className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-2 border border-slate-700/60 transition cursor-pointer"

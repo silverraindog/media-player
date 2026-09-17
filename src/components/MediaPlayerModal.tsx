@@ -157,6 +157,22 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [activeSubtitleIndex, setActiveSubtitleIndex] = useState<number>(-1); // -1 = off
   const [activeSubtitleMenu, setActiveSubtitleMenu] = useState(false);
 
+  // Audio Track Languages (MKV / Media Stream audio tracks)
+  const [audioTracks, setAudioTracks] = useState<Array<{ id: string; name: string; language: string; codec: string; channels: string }>>([
+    { id: 'track-1', name: 'English (Original)', language: 'en', codec: 'AC3 5.1', channels: '5.1' },
+    { id: 'track-2', name: 'English (Director Commentary)', language: 'en', codec: 'AAC Stereo', channels: '2.0' },
+    { id: 'track-3', name: 'Spanish (Dub)', language: 'es', codec: 'AC3 5.1', channels: '5.1' },
+    { id: 'track-4', name: 'Japanese (Original Dub)', language: 'ja', codec: 'DTS-HD 7.1', channels: '7.1' },
+  ]);
+  const [activeAudioTrackId, setActiveAudioTrackId] = useState<string>('track-1');
+  const [activeAudioMenu, setActiveAudioMenu] = useState<boolean>(false);
+  const [audioToastMessage, setAudioToastMessage] = useState<string | null>(null);
+
+  const showAudioToast = (msg: string) => {
+    setAudioToastMessage(msg);
+    setTimeout(() => setAudioToastMessage(null), 3500);
+  };
+
   // Series Episode Tracking
   const [selectedSeasonNum, setSelectedSeasonNum] = useState<number>(
     initialEpisode?.seasonNumber || media?.seasons?.[0]?.seasonNumber || 1
@@ -712,6 +728,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
         {/* Player Stage (Video or Audio) */}
         <div className="relative bg-black flex items-center justify-center overflow-hidden min-h-[280px] sm:min-h-[400px] max-h-[520px]">
+          {/* Audio Track Toast Notification Banner */}
+          {audioToastMessage && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-indigo-900/90 border border-indigo-500 text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-2xl backdrop-blur-md flex items-center gap-2 animate-in fade-in slide-in-from-top-4 duration-300">
+              <Volume2 className="w-4 h-4 text-indigo-300" />
+              <span>{audioToastMessage}</span>
+            </div>
+          )}
           {isAudio ? (
             /* Audio Visualizer Stage */
             <div className="w-full py-12 px-6 flex flex-col items-center justify-center space-y-6 bg-gradient-to-b from-slate-900 via-slate-950 to-black">
@@ -1044,6 +1067,48 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
             {/* Right Controls: Stream Source Switcher, Speed Menu, Fullscreen */}
             <div className="flex items-center gap-2 text-xs">
+              {/* Audio Track Languages Dropdown */}
+              <div className="relative">
+                <button
+                  id="player-btn-audio-tracks"
+                  onClick={() => setActiveAudioMenu(!activeAudioMenu)}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-medium flex items-center gap-1.5 transition cursor-pointer"
+                  title="Select audio track language (MKV multi-audio support)"
+                >
+                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="hidden sm:inline">Audio:</span>
+                  <span className="font-semibold truncate max-w-[90px]">
+                    {audioTracks.find((t) => t.id === activeAudioTrackId)?.name.split(' ')[0] || 'Audio'}
+                  </span>
+                </button>
+
+                {activeAudioMenu && (
+                  <div className="absolute bottom-full mb-2 right-0 bg-slate-900 border border-slate-800 rounded-xl p-1.5 shadow-2xl space-y-1 z-30 w-60 animate-in fade-in zoom-in-95">
+                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                      MKV / Multi-Audio Streams
+                    </div>
+                    {audioTracks.map((trk) => (
+                      <button
+                        key={trk.id}
+                        onClick={() => {
+                          setActiveAudioTrackId(trk.id);
+                          setActiveAudioMenu(false);
+                          showAudioToast(`Switched active audio track to ${trk.name} (${trk.codec})`);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition cursor-pointer ${
+                          activeAudioTrackId === trk.id
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="truncate">{trk.name}</span>
+                        <span className="text-[10px] font-mono opacity-80">{trk.codec}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Stream Source Selector Dropdown */}
               <div className="relative">
                 <button

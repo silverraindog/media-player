@@ -26,6 +26,7 @@ import {
   BookOpen,
   FileText,
   Zap,
+  Layers,
 } from 'lucide-react';
 import { SambaConfig, SambaShareNode, SyncLog, MediaMetadata, MediaScanExtensionConfig } from '../types';
 import { DiscoveredFilesInspector } from './DiscoveredFilesInspector';
@@ -33,6 +34,7 @@ import { ConsoleLogSection } from './ConsoleLogSection';
 import { MediaExtensionManager } from './MediaExtensionManager';
 import { ThumbnailCacheBar } from './ThumbnailCacheBar';
 import { CachedThumbnail } from './CachedThumbnail';
+import { BatchRenamerModal } from './BatchRenamerModal';
 import { thumbnailStorage } from '../utils/thumbnailStorage';
 import {
   DEFAULT_MEDIA_SCAN_CONFIG,
@@ -90,6 +92,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [customScanPath, setCustomScanPath] = useState('');
   const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs'>('explorer');
+  const [isBatchRenamerOpen, setIsBatchRenamerOpen] = useState(false);
 
   // Extension scan configuration & active filter state
   const [localExtConfig, setLocalExtConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
@@ -291,6 +294,17 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 <span>Classify Folders & Rules</span>
               </button>
             )}
+
+            {/* Batch Renamer Utility Button */}
+            <button
+              id="samba-batch-renamer-btn"
+              onClick={() => setIsBatchRenamerOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-200 border border-indigo-800/50 text-xs font-semibold shadow transition cursor-pointer"
+              title="Batch rename multiple files using regex rules and standard patterns"
+            >
+              <Layers className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Batch Renamer</span>
+            </button>
 
             {/* Sync Share Media Button */}
             <button
@@ -634,6 +648,26 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           </div>
         </>
       )}
+
+      {/* Batch Renamer Modal */}
+      <BatchRenamerModal
+        isOpen={isBatchRenamerOpen}
+        onClose={() => setIsBatchRenamerOpen(false)}
+        nodes={sambaTree}
+        onApplyRename={(renamedMap) => {
+          const updateTreeNames = (nodes: SambaShareNode[]): SambaShareNode[] => {
+            return nodes.map((n) => {
+              const newName = renamedMap[n.id];
+              return {
+                ...n,
+                name: newName || n.name,
+                children: n.children ? updateTreeNames(n.children) : undefined,
+              };
+            });
+          };
+          setSambaTree(updateTreeNames(sambaTree));
+        }}
+      />
     </div>
   );
 };

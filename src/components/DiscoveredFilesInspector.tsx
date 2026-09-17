@@ -40,17 +40,19 @@ interface DiscoveredRowProps {
   files: DiscoveredFileItem[];
   onSelectNode?: (node: SambaShareNode) => void;
   getFormatBadgeStyle: (cat: string | null) => string;
+  watchedMap: Record<string, boolean>;
 }
 
 const DiscoveredFileRow: React.FC<{
   index: number;
   style: React.CSSProperties;
-} & DiscoveredRowProps> = ({ index, style, files, onSelectNode, getFormatBadgeStyle }) => {
+} & DiscoveredRowProps> = ({ index, style, files, onSelectNode, getFormatBadgeStyle, watchedMap }) => {
   const item = files[index];
   if (!item) return null;
 
   const { node, category, fullPath, extension, fileCat } = item;
   const thumb = thumbnailStorage.get(fullPath) || thumbnailStorage.resolveForNode(node, fullPath);
+  const isWatched = watchedMap[node.name.toLowerCase()] || watchedMap[node.id];
 
   return (
     <div
@@ -94,10 +96,16 @@ const DiscoveredFileRow: React.FC<{
           {category}
         </span>
         <span className="hidden md:inline text-[11px]">{node.size || '1.4 GB'}</span>
-        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px]">
-          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-          <span>Indexed</span>
-        </span>
+        {isWatched ? (
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px]">
+            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+            <span>Watched</span>
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 text-[10px]">
+            <span>Unwatched</span>
+          </span>
+        )}
       </div>
     </div>
   );
@@ -113,6 +121,26 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [extensionFilter, setExtensionFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [watchedMap, setWatchedMap] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const fetchWatchHistory = async () => {
+      try {
+        const res = await fetch('/api/db/history?limit=500');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.history)) {
+          const map: Record<string, boolean> = {};
+          data.history.forEach((h: any) => {
+            const isComp = h.is_completed || (h.progress_percentage || 0) >= 90;
+            if (h.title) map[h.title.toLowerCase()] = isComp;
+            if (h.media_id) map[h.media_id] = isComp;
+          });
+          setWatchedMap(map);
+        }
+      } catch (err) {}
+    };
+    fetchWatchHistory();
+  }, [sambaTree]);
 
   // Flatten tree to get all discovered files with memoization
   const allDiscoveredFiles = useMemo(() => {
@@ -343,6 +371,7 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
                 files: filteredFiles,
                 onSelectNode,
                 getFormatBadgeStyle,
+                watchedMap,
               }}
               style={{ height: 288, width: '100%' }}
             />

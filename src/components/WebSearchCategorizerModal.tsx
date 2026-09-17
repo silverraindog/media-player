@@ -42,6 +42,8 @@ interface WebSearchCategorizerModalProps {
 }
 
 const POPULAR_SEARCH_PRESETS = [
+  { name: 'Breaking Bad', type: 'series', category: 'Crime / Drama' },
+  { name: '24', type: 'series', category: 'Action / Thriller' },
   { name: 'Severance', type: 'series', category: 'Sci-Fi' },
   { name: 'The Bear', type: 'series', category: 'Drama / Comedy' },
   { name: 'Ted Lasso', type: 'series', category: 'Comedy' },
@@ -82,6 +84,16 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [selectedPrimaryCategory, setSelectedPrimaryCategory] = useState<string>('Drama');
   const [isSaved, setIsSaved] = useState(false);
   const [showIncompleteList, setShowIncompleteList] = useState(false);
+
+  // Synchronize when initialQuery or initialType changes
+  React.useEffect(() => {
+    if (initialQuery) {
+      setQuery(initialQuery);
+    }
+    if (initialType) {
+      setMediaType(initialType);
+    }
+  }, [initialQuery, initialType]);
 
   const isMissingSynopsis = (m: MediaMetadata): boolean => {
     const text = (m.overview || (m as any).synopsis || '').trim();
@@ -145,8 +157,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             year: item.year,
           }),
         });
-        const data = await res.json();
-        if (res.ok && data.success && data.data) {
+        const text = await res.text();
+        let data: any = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch {
+          data = null;
+        }
+
+        if (res.ok && data?.success && data?.data) {
           onSaveCategorizedMedia(data.data);
           successCount++;
         }
@@ -184,9 +203,27 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || data.error || 'Failed to search web for categories');
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (parseErr) {
+        console.warn('Response parsing error:', parseErr);
+      }
+
+      if (!res.ok || !data?.success || !data?.data) {
+        // Safe instant fallback: Check if query exists in media library or matching item
+        const local = mediaLibrary.find(
+          (m) => m.title.toLowerCase() === q.toLowerCase() || m.title.toLowerCase().includes(q.toLowerCase())
+        );
+        if (local) {
+          setResultData(local);
+          setDetectedCategories(local.genres || ['Drama']);
+          setSelectedPrimaryCategory(local.genres?.[0] || 'Drama');
+          return;
+        }
+        const errorString = data?.message || data?.error || 'Unable to retrieve media details';
+        throw new Error(errorString);
       }
 
       const media: MediaMetadata = data.data;
@@ -195,7 +232,18 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       setSelectedPrimaryCategory(media.genres?.[0] || 'Drama');
     } catch (err: any) {
       console.error('Web categorization search error:', err);
-      setErrorMsg(err?.message || 'Failed to perform web categorization');
+      // Safe fallback if network/parsing failed: Check local library
+      const local = mediaLibrary.find(
+        (m) => m.title.toLowerCase() === q.toLowerCase() || m.title.toLowerCase().includes(q.toLowerCase())
+      );
+      if (local) {
+        setResultData(local);
+        setDetectedCategories(local.genres || ['Drama']);
+        setSelectedPrimaryCategory(local.genres?.[0] || 'Drama');
+      } else {
+        const msg = typeof err?.message === 'string' ? err.message : 'Failed to perform web categorization';
+        setErrorMsg(msg);
+      }
     } finally {
       setIsSearching(false);
     }

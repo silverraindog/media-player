@@ -431,21 +431,56 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Expandable Preview of sample files */}
+                    {/* Expandable Preview of sample files & Suggested Structure */}
                     {isExpanded && (
-                      <div className="mt-3 pt-3 border-t border-slate-800/80 pl-7 space-y-1">
-                        <div className="text-[11px] font-semibold text-slate-400">Sample Discovered Files:</div>
-                        <div className="bg-slate-950/80 rounded-lg p-2.5 space-y-1 border border-slate-800/60 font-mono text-[11px] text-slate-300">
-                          {item.sampleFiles.map((file, fIdx) => (
-                            <div key={fIdx} className="flex items-center gap-2 truncate">
-                              {file.endsWith('.mp3') || file.endsWith('.flac') ? (
-                                <FileAudio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                              ) : (
-                                <FileVideo className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                              )}
-                              <span className="truncate">{file}</span>
+                      <div className="mt-3 pt-3 border-t border-slate-800/80 pl-7 space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-[11px] font-semibold text-slate-400 mb-1">Sample Discovered Files:</div>
+                            <div className="bg-slate-950/80 rounded-lg p-2.5 space-y-1 border border-slate-800/60 font-mono text-[11px] text-slate-300">
+                              {item.sampleFiles.map((file, fIdx) => (
+                                <div key={fIdx} className="flex items-center gap-2 truncate">
+                                  {file.endsWith('.mp3') || file.endsWith('.flac') ? (
+                                    <FileAudio className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                                  ) : (
+                                    <FileVideo className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                                  )}
+                                  <span className="truncate">{file}</span>
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          </div>
+
+                          <div>
+                            <div className="text-[11px] font-semibold text-indigo-300 mb-1 flex items-center gap-1.5">
+                              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                              <span>AI & Heuristic Suggested Structure:</span>
+                            </div>
+                            <div className="bg-indigo-950/20 rounded-lg p-2.5 space-y-1 border border-indigo-900/40 font-mono text-[11px] text-indigo-200">
+                              <div className="text-slate-400 text-[10px] uppercase font-sans font-semibold">Target Convention:</div>
+                              {item.targetType === 'series' && (
+                                <div>
+                                  📁 TV Shows / <span className="text-white font-bold">{item.folderName.replace(/[\._]/g, ' ')}</span> / Season 01 /{' '}
+                                  <span className="text-emerald-300">{item.folderName.replace(/[\._]/g, ' ')} - S01E01 - Pilot.mkv</span>
+                                </div>
+                              )}
+                              {item.targetType === 'movie' && (
+                                <div>
+                                  📁 Movies / <span className="text-white font-bold">{item.folderName.replace(/[\._]/g, ' ')} (2024)</span> /{' '}
+                                  <span className="text-emerald-300">{item.folderName.replace(/[\._]/g, ' ')} (2024).mkv</span>
+                                </div>
+                              )}
+                              {item.targetType === 'album' && (
+                                <div>
+                                  📁 Music / <span className="text-white font-bold">{item.folderName.replace(/[\._]/g, ' ')}</span> /{' '}
+                                  <span className="text-emerald-300">01 - Track Title.flac</span>
+                                </div>
+                              )}
+                              {item.targetType === 'ignore' && (
+                                <div className="text-rose-400">🚫 Folder ignored / skipped from library import</div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}

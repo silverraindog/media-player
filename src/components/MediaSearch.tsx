@@ -133,6 +133,34 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const [isBatchCategorizing, setIsBatchCategorizing] = useState(false);
   const [batchCategorizeSuccess, setBatchCategorizeSuccess] = useState<string | null>(null);
 
+  // Watched / Unwatched persistent history check
+  const [watchedItemsMap, setWatchedItemsMap] = useState<Record<string, { isCompleted: boolean; progress: number }>>({});
+
+  useEffect(() => {
+    const fetchWatchStatus = async () => {
+      try {
+        const res = await fetch('/api/db/history?limit=500');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.history)) {
+          const map: Record<string, { isCompleted: boolean; progress: number }> = {};
+          data.history.forEach((h: any) => {
+            const isComp = h.is_completed || (h.progress_percentage || 0) >= 90;
+            if (h.media_id) {
+              map[h.media_id] = { isCompleted: isComp, progress: h.progress_percentage || 0 };
+            }
+            if (h.title) {
+              map[h.title.toLowerCase()] = { isCompleted: isComp, progress: h.progress_percentage || 0 };
+            }
+          });
+          setWatchedItemsMap(map);
+        }
+      } catch (err) {
+        console.warn('Failed to load watch status badges:', err);
+      }
+    };
+    fetchWatchStatus();
+  }, [mediaLibrary]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Determine Min and Max Year across library
@@ -1463,6 +1491,23 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                           {media.certification}
                         </span>
                       )}
+
+                      {/* Persistent Watched / Unwatched Badge */}
+                      {(() => {
+                        const watchInfo = watchedItemsMap[media.id] || watchedItemsMap[media.title.toLowerCase()];
+                        const isWatched = watchInfo?.isCompleted;
+                        return isWatched ? (
+                          <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1 shadow">
+                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                            Watched
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-slate-900/80 border border-slate-700/60 text-slate-400 text-[10px] font-medium flex items-center gap-1 shadow">
+                            <Clock className="w-2.5 h-2.5 text-slate-400" />
+                            Unwatched
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     {/* Rating badge & Watchlist toggle button */}

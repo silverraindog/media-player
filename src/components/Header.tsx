@@ -15,6 +15,7 @@ import {
   Database,
   Bookmark,
   BarChart3,
+  GitMerge,
   History,
 } from 'lucide-react';
 import { SambaConfig, AppTab } from '../types';
@@ -114,8 +115,8 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
 
             {/* Samba Status Badge */}
-            <button
-              id="header-samba-status-btn"
+              <button
+                id="header-samba-status-btn"
               onClick={onOpenQuickMount}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg border text-xs transition-all cursor-pointer ${
                 isConnected
@@ -147,8 +148,8 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Right Action Info */}
           <div className="flex items-center space-x-2">
-            <button
-              id="header-mount-hub-btn"
+              <button
+                id="header-mount-hub-btn"
               onClick={() => setActiveTab('samba-mount')}
               className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-colors"
             >
@@ -162,8 +163,8 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="border-t border-slate-800/80 py-2 space-y-1.5 overflow-x-auto scrollbar-none text-xs sm:text-sm">
           {/* Row 1: Core Media & Discovery */}
           <div className="flex items-center space-x-1.5 min-w-max">
-            <button
-              id="tab-search"
+              <button
+                id="tab-search"
               onClick={() => setActiveTab('search')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'search'
@@ -175,8 +176,8 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Search & Metadata</span>
             </button>
 
-            <button
-              id="tab-music"
+              <button
+                id="tab-music"
               onClick={() => setActiveTab('music')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'music'
@@ -188,8 +189,8 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Music & Audio Vault</span>
             </button>
 
-            <button
-              id="tab-watchlist"
+              <button
+                id="tab-watchlist"
               onClick={() => setActiveTab('watchlist')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'watchlist'
@@ -206,8 +207,8 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </button>
 
-            <button
-              id="tab-history"
+              <button
+                id="tab-history"
               onClick={() => setActiveTab('history')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'history'
@@ -219,8 +220,8 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Watch History</span>
             </button>
 
-            <button
-              id="tab-sqlite-vault"
+              <button
+                id="tab-sqlite-vault"
               onClick={() => setActiveTab('sqlite-vault')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'sqlite-vault'
@@ -235,8 +236,20 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Row 2: Advanced Utilities & OS Mount Tools */}
           <div className="flex items-center space-x-1.5 min-w-max">
-            <button
-              id="tab-stats"
+              <button
+                id="tab-dedup"
+              onClick={() => setActiveTab('dedup')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'dedup'
+                  ? 'bg-rose-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <GitMerge className="w-4 h-4 text-amber-400" />
+              <span>Dedup</span>
+            </button>
+              <button
+                id="tab-stats"
               onClick={() => setActiveTab('stats')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'stats'
@@ -249,7 +262,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
             <button
-              id="tab-cleaner"
+                id="tab-cleaner"
               onClick={() => setActiveTab('cleaner')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'cleaner'
@@ -261,8 +274,8 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Batch File Cleaner</span>
             </button>
 
-            <button
-              id="tab-explorer"
+              <button
+                id="tab-explorer"
               onClick={() => setActiveTab('explorer')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'explorer'
@@ -274,8 +287,8 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Samba Share Browser</span>
             </button>
 
-            <button
-              id="tab-samba-mount"
+              <button
+                id="tab-samba-mount"
               onClick={() => setActiveTab('samba-mount')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'samba-mount'
@@ -287,8 +300,8 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Cross-Platform Mount</span>
             </button>
 
-            <button
-              id="tab-nfo-studio"
+              <button
+                id="tab-nfo-studio"
               onClick={() => setActiveTab('nfo-studio')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
                 activeTab === 'nfo-studio'

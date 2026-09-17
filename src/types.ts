@@ -296,6 +296,7 @@ export type AppTab =
   | 'music'
   | 'watchlist'
   | 'history'
+  | 'dedup'
   | 'stats'
   | 'cleaner'
   | 'samba-mount'

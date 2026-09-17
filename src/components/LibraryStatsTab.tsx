@@ -179,7 +179,7 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
     }
     return items.slice(0, 7).map((item) => ({
       id: item.id,
-      title: item.title.length > 20 ? item.title.substring(0, 19) + '…' : item.title,
+      title: (item.mediaType === 'series' ? 'Series / ' : item.mediaType === 'movie' ? 'Movies / ' : 'Albums / ') + (item.title.length > 20 ? item.title.substring(0, 19) + '…' : item.title),
       fullTitle: item.title,
       totalGB: item.totalGB,
       mediaType: item.mediaType,
@@ -840,7 +840,7 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
         </div>
       </div>
 
-      {/* Heaviest Media Items Horizontal Bar Chart */}
+      {/* Storage Usage Horizontal Bar Chart */}
       <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-6 shadow-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 mb-4 border-b border-slate-800">
           <div>

@@ -12,6 +12,7 @@ import { MediaDetailModal } from './components/MediaDetailModal';
 import { MediaPlayerModal } from './components/MediaPlayerModal';
 import { SqliteVault } from './components/SqliteVault';
 import { LibraryStatsTab } from './components/LibraryStatsTab';
+import { DeduplicationManagerTab } from './components/DeduplicationManagerTab';
 import { FolderClassifierModal } from './components/FolderClassifierModal';
 import { ManualMatchModal } from './components/ManualMatchModal';
 import { WatchlistTab } from './components/WatchlistTab';
@@ -1571,6 +1572,14 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'dedup' && (
+          <DeduplicationManagerTab
+            mediaLibrary={mediaLibrary}
+            onRemoveItem={(id) => {
+              setMediaLibrary(prev => prev.filter(m => m.id !== id));
+            }}
+          />
+        )}
         {activeTab === 'cleaner' && (
           <BatchFilenameCleaner
             sambaConfig={sambaConfig}

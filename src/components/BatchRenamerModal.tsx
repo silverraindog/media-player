@@ -121,7 +121,7 @@ export const BatchRenamerModal: React.FC<BatchRenamerModalProps> = ({
   const handleExecuteBatch = () => {
     const renames: Record<string, string> = {};
     Object.entries(previewRenames).forEach(([id, val]) => {
-      renames[id] = val.renamed;
+      renames[id] = (val as any).renamed;
     });
     onApplyRename(renames);
     onClose();

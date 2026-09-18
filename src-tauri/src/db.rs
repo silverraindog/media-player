@@ -16,6 +16,7 @@ pub struct MediaItem {
     pub poster_url: Option<String>,
     pub fanart_url: Option<String>,
     pub genres: Option<String>,
+    pub cast: Option<String>,
     pub recommended_folder: Option<String>,
     pub raw_data: Option<String>,
     pub file_size_bytes: Option<i64>,
@@ -64,6 +65,7 @@ pub fn init_db(app_handle: &AppHandle) -> Result<()> {
             poster_url TEXT,
             fanart_url TEXT,
             genres TEXT,
+            cast TEXT,
             recommended_folder TEXT,
             raw_data TEXT,
             file_size_bytes INTEGER DEFAULT 0,
@@ -147,11 +149,12 @@ pub fn get_all_media(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
                 poster_url: row.get(7)?,
                 fanart_url: row.get(8)?,
                 genres: row.get(9)?,
-                recommended_folder: row.get(10)?,
-                raw_data: row.get(11)?,
-                file_size_bytes: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                cast: row.get(10)?,
+                recommended_folder: row.get(11)?,
+                raw_data: row.get(12)?,
+                file_size_bytes: row.get(13)?,
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -169,8 +172,8 @@ pub fn save_media(app_handle: AppHandle, media: MediaItem) -> Result<(), String>
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, file_size_bytes, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'))
+        "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET
            media_type = excluded.media_type,
            title = excluded.title,
@@ -181,6 +184,7 @@ pub fn save_media(app_handle: AppHandle, media: MediaItem) -> Result<(), String>
            poster_url = excluded.poster_url,
            fanart_url = excluded.fanart_url,
            genres = excluded.genres,
+           cast = excluded.cast,
            recommended_folder = excluded.recommended_folder,
            raw_data = excluded.raw_data,
            file_size_bytes = excluded.file_size_bytes,
@@ -196,6 +200,7 @@ pub fn save_media(app_handle: AppHandle, media: MediaItem) -> Result<(), String>
             media.poster_url,
             media.fanart_url,
             media.genres,
+            media.cast,
             media.recommended_folder,
             media.raw_data,
             media.file_size_bytes,

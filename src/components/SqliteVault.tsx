@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Database,
   Bookmark,
@@ -45,6 +45,10 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
   const [isLoading, setIsLoading] = useState(false);
   const [searchFilter, setSearchFilter] = useState('');
   const [batchStatus, setBatchStatus] = useState<SqliteQueueStatus>(sqliteBatchWriter.getStatus());
+
+  // Genre filtering state
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const [selectedMediaType, setSelectedMediaType] = useState<'all' | 'movie' | 'series' | 'album'>('all');
 
   useEffect(() => {
     const unsub = sqliteBatchWriter.subscribe((status) => {
@@ -225,11 +229,54 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
     }
   };
 
-  const filteredMedia = mediaItems.filter(
-    (item) =>
-      item.title.toLowerCase().includes(searchFilter.toLowerCase()) ||
-      item.synopsis.toLowerCase().includes(searchFilter.toLowerCase())
-  );
+  // Extract all available genres with item counts
+  const availableGenres = useMemo(() => {
+    const genreMap = new Map<string, number>();
+    mediaItems.forEach((m) => {
+      let genres: string[] = [];
+      try {
+        if (m.genres) genres = JSON.parse(m.genres);
+      } catch {
+        if (m.genres) genres = (m.genres || '').split(',').map((g: string) => g.trim()).filter(Boolean);
+      }
+      genres.forEach((g) => {
+        const trimmed = g.trim();
+        if (trimmed) {
+          genreMap.set(trimmed, (genreMap.get(trimmed) || 0) + 1);
+        }
+      });
+    });
+    return Array.from(genreMap.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }));
+  }, [mediaItems]);
+
+  const filteredMedia = useMemo(() => {
+    return mediaItems.filter((item) => {
+      // Type filter
+      if (selectedMediaType !== 'all' && item.media_type !== selectedMediaType) return false;
+
+      // Genre filter
+      if (selectedGenres.length > 0) {
+        let itemGenres: string[] = [];
+        try {
+          if (item.genres) itemGenres = JSON.parse(item.genres);
+        } catch {
+          if (item.genres) itemGenres = (item.genres || '').split(',').map((g: string) => g.trim()).filter(Boolean);
+        }
+        const hasMatch = itemGenres.some(g => selectedGenres.includes(g));
+        if (!hasMatch) return false;
+      }
+
+      // Search filter
+      const q = searchFilter.toLowerCase();
+      if (!q) return true;
+      return (
+        item.title.toLowerCase().includes(q) ||
+        item.synopsis.toLowerCase().includes(q)
+      );
+    });
+  }, [mediaItems, searchFilter, selectedGenres, selectedMediaType]);
 
   return (
     <div className="space-y-6">
@@ -509,8 +556,75 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
       {/* 2. SQLITE TITLES & SYNOPSES TABLE */}
       {/* ========================================================================= */}
       {activeSubTab === 'database' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+          {/* Genre Sidebar */}
+          <aside className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5 shadow-lg sticky top-24">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-bold text-white flex items-center gap-2 text-sm">
+                <Sliders className="w-4 h-4 text-indigo-400" />
+                <span>Vault Genres</span>
+              </h3>
+              {selectedGenres.length > 0 && (
+                <button
+                  onClick={() => setSelectedGenres([])}
+                  className="text-[10px] text-rose-400 hover:text-rose-300 font-bold"
+                >
+                  CLEAR
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-1 max-h-[60vh] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-800">
+              {availableGenres.length === 0 && (
+                <p className="text-[10px] text-slate-500 italic text-center py-4">No genres found in vault</p>
+              )}
+              {availableGenres.map((g) => {
+                const isSelected = selectedGenres.includes(g.name);
+                return (
+                  <button
+                    key={g.name}
+                    onClick={() => {
+                      setSelectedGenres(prev => 
+                        prev.includes(g.name) 
+                          ? prev.filter(pg => pg !== g.name) 
+                          : [...prev, g.name]
+                      );
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all ${
+                      isSelected 
+                        ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' 
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>{g.name}</span>
+                    <span className={`px-1.5 py-0.5 rounded-full font-mono text-[10px] ${isSelected ? 'bg-indigo-800 text-indigo-100' : 'bg-slate-800 text-slate-500'}`}>
+                      {g.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="pt-4 border-t border-slate-800 space-y-3">
+              <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Media Type</h4>
+              <div className="flex flex-col gap-1">
+                {(['all', 'movie', 'series', 'album'] as const).map(type => (
+                  <button
+                    key={type}
+                    onClick={() => setSelectedMediaType(type)}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-xs capitalize transition ${
+                      selectedMediaType === type ? 'bg-slate-800 text-white font-bold' : 'text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {type === 'all' ? 'All Formats' : type === 'movie' ? 'Movies Only' : type === 'series' ? 'TV Series' : 'Music Albums'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </aside>
+
+          <div className="lg:col-span-3 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <Database className="w-4 h-4 text-indigo-400" />
@@ -639,6 +753,7 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
             </table>
           </div>
         </div>
+      </div>
       )}
 
       {/* ========================================================================= */}

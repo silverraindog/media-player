@@ -17,6 +17,7 @@ export interface MediaItemDb {
   poster_url?: string;
   fanart_url?: string;
   genres?: string; // JSON array
+  cast?: string; // JSON array
   recommended_folder?: string;
   raw_data?: string; // JSON string
   file_size_bytes?: number;
@@ -98,6 +99,7 @@ export async function getDatabase(): Promise<Database> {
       poster_url TEXT,
       fanart_url TEXT,
       genres TEXT,
+      cast TEXT,
       recommended_folder TEXT,
       raw_data TEXT,
       created_at TEXT DEFAULT (datetime('now')),
@@ -156,6 +158,14 @@ export async function getDatabase(): Promise<Database> {
       hit_count INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS smart_playlists (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      rules_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS user_watchlist (
       id TEXT PRIMARY KEY,
       media_id TEXT NOT NULL UNIQUE,
@@ -180,6 +190,13 @@ export async function getDatabase(): Promise<Database> {
   // Migration: ensure file_size_bytes exists on media_items
   try {
     dbInstance.run(`ALTER TABLE media_items ADD COLUMN file_size_bytes INTEGER DEFAULT 0`);
+  } catch {
+    // Column already exists
+  }
+
+  // Migration: ensure cast exists on media_items
+  try {
+    dbInstance.run(`ALTER TABLE media_items ADD COLUMN cast TEXT`);
   } catch {
     // Column already exists
   }
@@ -771,8 +788,8 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
     : calculateMediaSizeBytes(media);
 
   db.run(
-    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, file_size_bytes, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        media_type = excluded.media_type,
        title = excluded.title,
@@ -783,6 +800,7 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
        poster_url = excluded.poster_url,
        fanart_url = excluded.fanart_url,
        genres = excluded.genres,
+       cast = excluded.cast,
        recommended_folder = excluded.recommended_folder,
        raw_data = excluded.raw_data,
        file_size_bytes = excluded.file_size_bytes,
@@ -798,6 +816,7 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
       media.poster_url || null,
       media.fanart_url || null,
       media.genres || null,
+      media.cast || null,
       media.recommended_folder || null,
       media.raw_data || null,
       calculatedSize
@@ -1343,6 +1362,11 @@ export async function getMediaDistributionStatsFromDb() {
   let totalRatingSum = 0;
   let ratedCount = 0;
 
+  // Metadata Health Metrics
+  let fullyEnrichedCount = 0; // synopsis + poster + fanart
+  let partiallyEnrichedCount = 0; // missing one or two but has something
+  let poorMetadataCount = 0; // missing critical fields (synopsis or poster)
+
   const genreMap = new Map<string, {
     genre: string;
     totalCount: number;
@@ -1382,6 +1406,19 @@ export async function getMediaDistributionStatsFromDb() {
     if (item.rating) {
       totalRatingSum += item.rating;
       ratedCount++;
+    }
+
+    // Calculate Health
+    const hasSynopsis = item.synopsis && item.synopsis.length > 50;
+    const hasPoster = item.poster_url && !item.poster_url.includes('unsplash.com');
+    const hasFanart = item.fanart_url && !item.fanart_url.includes('unsplash.com');
+
+    if (hasSynopsis && hasPoster && hasFanart) {
+      fullyEnrichedCount++;
+    } else if (hasSynopsis && hasPoster) {
+      partiallyEnrichedCount++;
+    } else {
+      poorMetadataCount++;
     }
 
     if (item.media_type === 'movie') {
@@ -1765,4 +1802,41 @@ export async function getThumbnailCacheDbStats(): Promise<{
     oldestTimestamp: Number(row[2] || 0),
     newestTimestamp: Number(row[3] || 0),
   };
+}
+
+// SMART PLAYLISTS
+export async function getAllSmartPlaylists() {
+  const db = await getDatabase();
+  const res = db.exec("SELECT * FROM smart_playlists ORDER BY created_at DESC");
+  if (res.length === 0) return [];
+
+  return res[0].values.map((row: any) => ({
+    id: row[0],
+    name: row[1],
+    description: row[2],
+    rules: JSON.parse(row[3]),
+    createdAt: row[4]
+  }));
+}
+
+export async function saveSmartPlaylist(playlist: any) {
+  const db = await getDatabase();
+  db.run(
+    `INSERT OR REPLACE INTO smart_playlists (id, name, description, rules_json, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [
+      playlist.id,
+      playlist.name,
+      playlist.description || '',
+      JSON.stringify(playlist.rules),
+      playlist.createdAt || new Date().toISOString()
+    ]
+  );
+  persistDbToDisk();
+}
+
+export async function deleteSmartPlaylist(id: string) {
+  const db = await getDatabase();
+  db.run("DELETE FROM smart_playlists WHERE id = ?", [id]);
+  persistDbToDisk();
 }

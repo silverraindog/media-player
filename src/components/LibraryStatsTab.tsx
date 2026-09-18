@@ -45,10 +45,14 @@ import {
   MediaType,
   MediaMetadata,
 } from '../types';
+import { BatchMetadataEnricher } from './BatchMetadataEnricher';
 
 interface LibraryStatsTabProps {
   onNavigateToVault: () => void;
   onOpenDetails?: (media: MediaMetadata) => void;
+  mediaLibrary: MediaMetadata[];
+  onUpdateMedia: (updatedItems: MediaMetadata[]) => void;
+  showToast: (msg: string) => void;
 }
 
 type GenreSortOption = 'storage-desc' | 'count-desc' | 'rating-desc' | 'name-asc';
@@ -56,6 +60,9 @@ type GenreSortOption = 'storage-desc' | 'count-desc' | 'rating-desc' | 'name-asc
 export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
   onNavigateToVault,
   onOpenDetails,
+  mediaLibrary,
+  onUpdateMedia,
+  showToast,
 }) => {
   const [statsData, setStatsData] = useState<LibraryDistributionStatsResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -169,6 +176,34 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
       color: item.color,
     }));
   }, [statsData, chartViewMode]);
+
+  // Metadata health breakdown for pie chart
+  const healthPieData = useMemo(() => {
+    if (!statsData?.health) return [];
+    return [
+      { 
+        name: 'Fully Enriched', 
+        value: statsData.health.fullyEnriched, 
+        color: '#10b981', 
+        percent: statsData.health.fullyEnrichedPercent,
+        description: 'Synopsis + Poster + Fanart'
+      },
+      { 
+        name: 'Partially Enriched', 
+        value: statsData.health.partiallyEnriched, 
+        color: '#f59e0b', 
+        percent: statsData.health.partiallyEnrichedPercent,
+        description: 'Synopsis + Poster'
+      },
+      { 
+        name: 'Needs Attention', 
+        value: statsData.health.poorMetadata, 
+        color: '#ef4444', 
+        percent: statsData.health.poorMetadataPercent,
+        description: 'Missing Artwork or Synopsis'
+      },
+    ];
+  }, [statsData]);
 
   // Top heaviest media items
   const heaviestItems = useMemo(() => {
@@ -550,6 +585,87 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
             <div className="text-[11px] text-slate-400 mt-1">
               High Quality Vault
             </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Batch Repair & Metadata Health Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+        <div className="lg:col-span-3">
+          <BatchMetadataEnricher 
+            mediaLibrary={mediaLibrary} 
+            onUpdateMedia={onUpdateMedia} 
+            showToast={showToast} 
+          />
+        </div>
+
+        {/* METADATA HEALTH AUDIT MINI CHART */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <h3 className="font-bold text-white text-sm">Metadata Health Audit</h3>
+          </div>
+
+          <div className="h-40 w-full relative flex items-center justify-center">
+            {isLoading ? (
+              <div className="text-slate-500 text-[10px]">Analyzing library health...</div>
+            ) : healthPieData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Tooltip 
+                    content={({ active, payload }) => {
+                      if (active && payload && payload.length) {
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-slate-950 border border-slate-800 p-2 rounded shadow text-[10px]">
+                            <div className="font-bold text-white">{data.name}</div>
+                            <div className="text-slate-400">{data.value} items ({data.percent}%)</div>
+                            <div className="text-slate-500 italic mt-0.5">{data.description}</div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
+                  />
+                  <Pie
+                    data={healthPieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={30}
+                    outerRadius={45}
+                    paddingAngle={2}
+                    dataKey="value"
+                  >
+                    {healthPieData.map((entry, index) => (
+                      <Cell key={`health-pie-cell-${index}`} fill={entry.color} stroke="#0f172a" strokeWidth={1} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-slate-500 text-[10px]">No health data</div>
+            )}
+            
+            {statsData?.health && (
+              <div className="absolute flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-[10px] text-slate-500 uppercase">Health</span>
+                <span className={`text-sm font-bold font-mono ${statsData.health.fullyEnrichedPercent > 70 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {statsData.health.fullyEnrichedPercent}%
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {healthPieData.map((item) => (
+              <div key={item.name} className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
+                  <span className="text-slate-300">{item.name}</span>
+                </div>
+                <span className="font-mono text-slate-400">{item.percent}%</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>

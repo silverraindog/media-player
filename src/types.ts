@@ -68,6 +68,7 @@ export interface MediaMetadata {
   localBlobUrl?: string;
   seasons?: SeasonMetadata[];
   tracks?: TrackMetadata[];
+  cast?: CastMember[];
   nfoContent?: string;
   recommendedFolderStructure: string;
   recommendedFilenames: string[];
@@ -403,6 +404,32 @@ export interface LibraryStatsSummary {
   totalWatchProgressTracked: number;
 }
 
+export interface MetadataHealthStats {
+  fullyEnriched: number;
+  partiallyEnriched: number;
+  poorMetadata: number;
+  total: number;
+  fullyEnrichedPercent: number;
+  partiallyEnrichedPercent: number;
+  poorMetadataPercent: number;
+}
+
+export interface SmartPlaylistRules {
+  genre?: string;
+  yearMin?: number;
+  yearMax?: number;
+  artist?: string;
+  minRating?: number;
+}
+
+export interface SmartPlaylist {
+  id: string;
+  name: string;
+  description?: string;
+  rules: SmartPlaylistRules;
+  createdAt: string;
+}
+
 export interface LibraryDistributionStatsResponse {
   success: boolean;
   summary: LibraryStatsSummary;
@@ -410,6 +437,7 @@ export interface LibraryDistributionStatsResponse {
   mediaTypeDistribution: MediaTypeDistributionItem[];
   decadeDistribution: DecadeDistributionItem[];
   largestItems: LargestMediaItem[];
+  health?: MetadataHealthStats;
   cachedThumbnailsCount?: number;
 }
 

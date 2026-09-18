@@ -93,6 +93,41 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [customScanPath, setCustomScanPath] = useState('');
   const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs'>('explorer');
   const [isBatchRenamerOpen, setIsBatchRenamerOpen] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{ percentage: number; currentItem: string; count: number } | null>(null);
+
+  // Listen for Tauri scan-progress events
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+      const { listen } = (window as any).__TAURI__.event;
+      let unlisten: any;
+      
+      const setupListener = async () => {
+        unlisten = await listen('scan-progress', (event: any) => {
+          const payload = event.payload;
+          setScanProgress({
+            percentage: payload.percentage,
+            currentItem: payload.current_item,
+            count: payload.items_count
+          });
+        });
+      };
+      
+      setupListener();
+      return () => {
+        if (unlisten) {
+          unlisten.then((fn: any) => fn());
+        }
+      };
+    }
+  }, []);
+
+  // Reset progress when syncing starts/stops
+  useEffect(() => {
+    if (!isSyncing) {
+      const timer = setTimeout(() => setScanProgress(null), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [isSyncing]);
 
   // Extension scan configuration & active filter state
   const [localExtConfig, setLocalExtConfig] = useState<MediaScanExtensionConfig>(DEFAULT_MEDIA_SCAN_CONFIG);
@@ -235,6 +270,21 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 <span>POSTER</span>
               </span>
             )}
+
+            {/* Metadata Status Indicator Badge */}
+            {node.matchedMedia && (
+              <div 
+                className={`flex items-center gap-1 px-1.5 py-0.2 rounded border text-[8px] font-bold uppercase tracking-tight ${
+                  (node.matchedMedia.posterUrl && !node.matchedMedia.posterUrl.includes('unsplash.com') && node.matchedMedia.overview && node.matchedMedia.overview.length > 50)
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                    : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                }`}
+                title={(node.matchedMedia.posterUrl && !node.matchedMedia.posterUrl.includes('unsplash.com') && node.matchedMedia.overview && node.matchedMedia.overview.length > 50) ? 'Full Metadata (Artwork + Synopsis)' : 'Partial Metadata (Missing Artwork or Synopsis)'}
+              >
+                <div className={`w-1 h-1 rounded-full ${(node.matchedMedia.posterUrl && !node.matchedMedia.posterUrl.includes('unsplash.com') && node.matchedMedia.overview && node.matchedMedia.overview.length > 50) ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                <span>{(node.matchedMedia.posterUrl && !node.matchedMedia.posterUrl.includes('unsplash.com') && node.matchedMedia.overview && node.matchedMedia.overview.length > 50) ? 'Full' : 'Partial'}</span>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
@@ -353,16 +403,36 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
       {/* Live Sync / Import Progress Indicator Banner */}
       {(isSyncing || isImporting) && (
-        <div className="bg-indigo-950/60 border border-indigo-500/30 rounded-2xl p-4 shadow-lg space-y-2">
+        <div className="bg-indigo-950/60 border border-indigo-500/30 rounded-2xl p-4 shadow-lg space-y-3">
           <div className="flex items-center justify-between text-xs font-semibold text-indigo-200">
-            <span className="flex items-center gap-2">
-              <RotateCw className="w-4 h-4 text-indigo-400 animate-spin" />
-              <span>{isSyncing ? 'Scanning Samba network share and indexing files...' : 'Importing media structure and warming thumbnail cache...'}</span>
-            </span>
-            <span className="font-mono text-[11px] text-emerald-400">Time-sliced async processing active</span>
+            <div className="flex flex-col gap-1">
+              <span className="flex items-center gap-2">
+                <RotateCw className="w-4 h-4 text-indigo-400 animate-spin" />
+                <span>{isSyncing ? 'Scanning Samba network share and indexing files...' : 'Importing media structure and warming thumbnail cache...'}</span>
+              </span>
+              {scanProgress && (
+                <span className="text-[10px] text-slate-400 truncate max-w-md">
+                  Currently at: <span className="text-emerald-400 font-mono">{scanProgress.currentItem}</span>
+                </span>
+              )}
+            </div>
+            <div className="text-right">
+              <span className="font-mono text-[11px] text-emerald-400 block">
+                {scanProgress ? `${scanProgress.percentage.toFixed(1)}% Complete` : 'Calculating...'}
+              </span>
+              <span className="text-[9px] text-slate-500 font-mono">
+                {scanProgress ? `${scanProgress.count} items indexed` : 'Initializing scanner...'}
+              </span>
+            </div>
           </div>
-          <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-indigo-500/20">
-            <div className="bg-gradient-to-r from-indigo-500 via-emerald-500 to-indigo-500 h-full w-full animate-pulse rounded-full"></div>
+          <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-indigo-500/20 relative">
+            <div 
+              className="bg-gradient-to-r from-indigo-500 via-emerald-500 to-indigo-500 h-full transition-all duration-300 rounded-full"
+              style={{ width: `${scanProgress ? scanProgress.percentage : (isSyncing ? 100 : 0)}%` }}
+            ></div>
+            {isSyncing && !scanProgress && (
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
+            )}
           </div>
         </div>
       )}

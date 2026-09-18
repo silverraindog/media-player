@@ -84,6 +84,31 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     }
   };
 
+  const persistMediaChange = async (updated: MediaMetadata) => {
+    try {
+      await apiCall('/api/db/media', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: updated.id,
+          media_type: updated.type,
+          title: updated.title,
+          original_title: updated.originalTitle || updated.title,
+          synopsis: updated.overview,
+          year: updated.year,
+          rating: updated.rating,
+          poster_url: updated.posterUrl,
+          fanart_url: updated.fanartUrl,
+          genres: JSON.stringify(updated.genres),
+          cast: updated.cast ? JSON.stringify(updated.cast) : null,
+          recommended_folder: updated.recommendedFolderStructure,
+          raw_data: updated.source || 'gemini-ai'
+        })
+      });
+    } catch (err) {
+      console.error('Failed to persist media change to database:', err);
+    }
+  };
+
   // Fetch SQLite watch progress on mount or when media changes
   useEffect(() => {
     if (media.type === 'series') {
@@ -272,9 +297,13 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             tagline: json.data.tagline || media.tagline,
             genres: json.data.genres || media.genres,
             rating: json.data.rating || media.rating,
+            posterUrl: json.data.posterUrl || media.posterUrl,
+            fanartUrl: json.data.fanartUrl || media.fanartUrl,
+            cast: json.data.cast || media.cast,
           };
           setMedia(updated);
           if (onUpdateMedia) onUpdateMedia(updated);
+          persistMediaChange(updated);
         }
       }
     } catch (err) {
@@ -326,6 +355,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           };
           setMedia(updated);
           if (onUpdateMedia) onUpdateMedia(updated);
+          persistMediaChange(updated);
         }
       }
     } catch (err) {
@@ -356,6 +386,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     };
     setMedia(updated);
     if (onUpdateMedia) onUpdateMedia(updated);
+    persistMediaChange(updated);
     setEditingEpNum(null);
   };
 
@@ -380,6 +411,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         };
         setMedia(updated);
         if (onUpdateMedia) onUpdateMedia(updated);
+        persistMediaChange(updated);
       }
     } catch (err) {
       console.error('Fanart generation failed:', err);
@@ -410,10 +442,14 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           rating: data.rating || media.rating,
           runtime: data.runtime || media.runtime,
           certification: data.certification || media.certification,
+          posterUrl: data.posterUrl || media.posterUrl,
+          fanartUrl: data.fanartUrl || media.fanartUrl,
+          cast: data.cast || media.cast,
           seasons: data.seasons || media.seasons,
         };
         setMedia(updated);
         if (onUpdateMedia) onUpdateMedia(updated);
+        persistMediaChange(updated);
         
         // Reset season/episode selection if needed
         if (updated.seasons && updated.seasons.length > 0) {
@@ -504,6 +540,22 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                 </span>
               ))}
             </div>
+
+            {media.cast && media.cast.length > 0 && (
+              <div className="space-y-3 pt-3 border-t border-slate-800/40">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-2">
+                  Featured Cast
+                </span>
+                <div className="flex flex-wrap gap-x-6 gap-y-3">
+                  {media.cast.slice(0, 8).map((member, idx) => (
+                    <div key={idx} className="flex flex-col min-w-[80px]">
+                      <span className="text-slate-200 font-medium text-[12px]">{member.name}</span>
+                      <span className="text-slate-500 text-[10px]">{member.role}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <VersionHub media={media} handleSelectVersionBranch={handleSelectVersionBranch} />

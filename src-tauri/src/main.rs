@@ -140,6 +140,13 @@ pub struct ScanVolumeResult {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ScanProgress {
+    pub percentage: f32,
+    pub current_item: String,
+    pub items_count: usize,
+}
+
 fn scan_dir_recursive(
     root: &Path,
     current: &Path,
@@ -147,6 +154,7 @@ fn scan_dir_recursive(
     max_depth: usize,
     items: &mut Vec<ScannedShareItem>,
     limit: usize,
+    window: Option<&tauri::Window>,
 ) {
     if depth > max_depth || items.len() >= limit {
         return;
@@ -186,15 +194,26 @@ fn scan_dir_recursive(
                 };
 
                 items.push(ScannedShareItem {
-                    name,
+                    name: name.clone(),
                     rel_path,
                     is_dir,
                     size_str,
                     extension: ext,
                 });
 
+                // Emit progress every 50 items to frontend
+                if let Some(w) = window {
+                    if items.len() % 50 == 0 {
+                        let _ = w.emit("scan-progress", ScanProgress {
+                            percentage: (items.len() as f32 / limit as f32) * 100.0,
+                            current_item: name,
+                            items_count: items.len(),
+                        });
+                    }
+                }
+
                 if is_dir {
-                    scan_dir_recursive(root, &path, depth + 1, max_depth, items, limit);
+                    scan_dir_recursive(root, &path, depth + 1, max_depth, items, limit, window);
                 }
             }
         }
@@ -202,7 +221,7 @@ fn scan_dir_recursive(
 }
 
 #[tauri::command]
-fn scan_samba_volume(share_name: String, custom_path: Option<String>) -> ScanVolumeResult {
+fn scan_samba_volume(share_name: String, custom_path: Option<String>, window: tauri::Window) -> ScanVolumeResult {
     let clean_share = share_name.trim_start_matches('/').trim_end_matches('/');
     let base_path = if let Some(cp) = custom_path {
         if !cp.is_empty() {
@@ -244,7 +263,7 @@ fn scan_samba_volume(share_name: String, custom_path: Option<String>) -> ScanVol
     }
 
     let mut items = Vec::new();
-    scan_dir_recursive(&base_path, &base_path, 0, 10, &mut items, 10000);
+    scan_dir_recursive(&base_path, &base_path, 0, 10, &mut items, 10000, Some(&window));
     let total = items.len();
 
     ScanVolumeResult {

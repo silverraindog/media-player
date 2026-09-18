@@ -12,6 +12,7 @@ import { MediaDetailModal } from './components/MediaDetailModal';
 import { MediaPlayerModal } from './components/MediaPlayerModal';
 import { SqliteVault } from './components/SqliteVault';
 import { LibraryStatsTab } from './components/LibraryStatsTab';
+import { BatchMetadataEnricher } from './components/BatchMetadataEnricher';
 import { DeduplicationManagerTab } from './components/DeduplicationManagerTab';
 import { FolderClassifierModal } from './components/FolderClassifierModal';
 import { ManualMatchModal } from './components/ManualMatchModal';
@@ -509,17 +510,44 @@ export default function App() {
     });
   };
 
-  const handleSaveMatchedMedia = (matched: MediaMetadata) => {
+  const handleSaveMatchedMedia = async (matched: MediaMetadata) => {
+    // Automatically trigger fanart generation if posterUrl is missing or is a placeholder
+    let updatedMedia = { ...matched };
+    const isPlaceholder = !matched.posterUrl || matched.posterUrl.includes('unsplash.com') || matched.posterUrl.includes('images.unsplash.com');
+    
+    if (isPlaceholder) {
+      showToast(`Generating custom AI fanart for "${matched.title}"...`);
+      try {
+        const fanartRes = await fetch('/api/media/generate-fanart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: matched.title,
+            synopsis: matched.overview,
+            mediaPath: matched.recommendedFolderStructure
+          })
+        });
+        const fanartData = await fanartRes.json();
+        if (fanartData.success && fanartData.fanartUrl) {
+          updatedMedia.fanartUrl = fanartData.fanartUrl;
+          updatedMedia.posterUrl = fanartData.fanartUrl; // Use generated fanart as poster fallback
+          showToast(`Successfully generated and saved AI fanart for "${matched.title}"!`);
+        }
+      } catch (err) {
+        console.warn('Auto-fanart generation failed on save:', err);
+      }
+    }
+
     setMediaLibrary((prev) => {
       const filtered = prev.filter(
-        (m) => m.id !== matched.id && m.title.toLowerCase() !== matched.title.toLowerCase()
+        (m) => m.id !== updatedMedia.id && m.title.toLowerCase() !== updatedMedia.title.toLowerCase()
       );
-      return [matched, ...filtered];
+      return [updatedMedia, ...filtered];
     });
-    batchPushToSambaTree([matched]);
+    batchPushToSambaTree([updatedMedia]);
     setManualMatchModalState(null);
-    setDetailModalMedia(matched);
-    showToast(`Saved and cataloged "${matched.title}" with AI synopsis!`);
+    setDetailModalMedia(updatedMedia);
+    showToast(`Saved and cataloged "${updatedMedia.title}" with AI synopsis!`);
   };
 
   // Export full JSON backup
@@ -1569,6 +1597,9 @@ export default function App() {
           <LibraryStatsTab
             onNavigateToVault={() => setActiveTab('sqlite-vault')}
             onOpenDetails={(media) => setDetailModalMedia(media)}
+            mediaLibrary={mediaLibrary}
+            onUpdateMedia={(updated) => setMediaLibrary(updated)}
+            showToast={showToast}
           />
         )}
 

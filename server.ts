@@ -34,6 +34,9 @@ import {
   getThumbnailCacheDbStats,
   ThumbnailDbRecord,
   getMediaDistributionStatsFromDb,
+  getAllSmartPlaylists,
+  saveSmartPlaylist,
+  deleteSmartPlaylist,
 } from './src/server/database';
 
 dotenv.config();
@@ -874,7 +877,7 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
 // Generate or refine synopsis for Movie, Series, or specific Episode
 app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) => {
   try {
-    const { title, type = 'movie', year, seasonNumber, episodeNumber, episodeTitle } = req.body;
+    const { title, type = 'movie', year, seasonNumber, episodeNumber, episodeTitle, posterUrl } = req.body;
     if (!title) {
       return res.status(400).json({ error: 'Title is required' });
     }
@@ -897,6 +900,7 @@ app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) 
             plot: omdbData.Plot || 'No plot available.',
             rating: parseFloat(omdbData.imdbRating) || 8.5,
             airDate: omdbData.Released !== 'N/A' ? omdbData.Released : undefined,
+            thumbUrl: omdbData.Poster !== 'N/A' ? omdbData.Poster : undefined,
             source: 'omdb-api',
           };
         }
@@ -911,6 +915,8 @@ app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) 
           certification: omdbData.Rated,
           runtime: omdbData.Runtime,
           directors: omdbData.Director ? omdbData.Director.split(', ') : undefined,
+          posterUrl: omdbData.Poster !== 'N/A' ? omdbData.Poster : posterUrl || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
+          cast: omdbData.Actors ? omdbData.Actors.split(', ').map((a: string) => ({ name: a, role: 'Cast' })) : undefined,
           source: 'omdb-api',
         };
       }
@@ -989,7 +995,8 @@ Return ONLY valid JSON matching this exact structure:
   "episodeTitle": "Official or realistic episode title",
   "plot": "Engaging, accurate 2-4 sentence plot synopsis of what happens in this specific episode without major spoilers.",
   "rating": 8.6,
-  "airDate": "YYYY-MM-DD"
+  "airDate": "YYYY-MM-DD",
+  "thumbUrl": "Actual high-quality episode thumbnail URL from a reliable source like IMDb/TMDB/TVDB"
 }`;
     } else if (type === 'series') {
       prompt = `You are a TV metadata database curator. Use Google Search to find actual, real-world information from IMDb, OMDb, and TVDB.
@@ -1011,6 +1018,8 @@ Return ONLY valid JSON matching this exact structure:
   "runtime": "45 min/ep",
   "directors": ["Director Name"],
   "cast": [{"name": "Actor Name", "role": "Character Name"}],
+  "posterUrl": "Actual high-quality official vertical poster image URL from a reliable source like IMDb/TMDB",
+  "fanartUrl": "Actual high-quality wide cinematic landscape backdrop URL (16:9) from a reliable source like IMDb/TMDB",
   "seasons": [
     {
       "seasonNumber": 1,
@@ -1048,7 +1057,9 @@ Return ONLY valid JSON matching this exact structure:
   "certification": "PG-13",
   "runtime": "120 min",
   "directors": ["Director Name"],
-  "cast": [{"name": "Actor Name", "role": "Character Name"}]
+  "cast": [{"name": "Actor Name", "role": "Character Name"}],
+  "posterUrl": "Actual high-quality official vertical poster image URL from a reliable source like IMDb/TMDB",
+  "fanartUrl": "Actual high-quality wide cinematic landscape backdrop URL (16:9) from a reliable source like IMDb/TMDB"
 }`;
     }
 
@@ -1058,8 +1069,8 @@ Return ONLY valid JSON matching this exact structure:
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
-      },
-      tools: [{ googleSearch: {} }]
+        tools: [{ googleSearch: {} }]
+      }
     });
 
     const aiText = aiResponse.text;
@@ -2018,6 +2029,88 @@ app.get('/api/media/sintel-trailer', (req: Request, res: Response) => {
     return res.sendFile(filePath);
   }
   res.redirect('https://media.w3.org/2010/05/sintel/trailer.mp4');
+});
+
+// Batch processing endpoint to enrich multiple media items with missing metadata/artwork
+app.post('/api/metadata/batch-enrich', async (req: Request, res: Response) => {
+  try {
+    const { items } = req.body; // Array of { id, title, type, year, hasPoster, hasSynopsis }
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'Items array is required' });
+    }
+
+    const results = [];
+    const ai = getGenAI();
+
+    // Process in sequential order to respect OMDb and AI rate limits
+    for (const item of items) {
+      let enrichedData: any = null;
+
+      // 1. Try OMDb first if missing anything or forcing poster repair
+      if (!item.hasPoster || !item.hasSynopsis || item.forcePosterRepair) {
+        const omdb = await fetchFromOMDb(item.title, item.type, item.year);
+        if (omdb && omdb.Response !== 'False') {
+          enrichedData = {
+            id: item.id,
+            title: omdb.Title || item.title,
+            year: parseInt(omdb.Year) || item.year,
+            overview: (item.hasSynopsis && !item.forcePosterRepair) ? undefined : omdb.Plot,
+            posterUrl: (omdb.Poster !== 'N/A' ? omdb.Poster : undefined),
+            rating: parseFloat(omdb.imdbRating) || undefined,
+            genres: omdb.Genre ? omdb.Genre.split(', ') : undefined,
+            cast: omdb.Actors ? omdb.Actors.split(', ').map((a: string) => ({ name: a, role: 'Cast' })) : undefined,
+            source: 'omdb-batch'
+          };
+        }
+      }
+
+      // 2. If OMDb failed or didn't provide artwork, and AI is available, flag for AI trigger
+      if (ai) {
+        if (!enrichedData) enrichedData = { id: item.id, title: item.title, source: 'ai-pending' };
+        enrichedData.triggerAiFanart = (item.forcePosterRepair || !item.hasPoster) && (!enrichedData || !enrichedData.posterUrl);
+        enrichedData.triggerAiSynopsis = !item.hasSynopsis && (!enrichedData || !enrichedData.overview);
+      }
+
+      if (enrichedData) {
+        results.push(enrichedData);
+      }
+    }
+
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('Batch enrich error:', err);
+    res.status(500).json({ error: 'Batch processing failed' });
+  }
+});
+
+// SMART PLAYLISTS API
+app.get('/api/playlists', async (req: Request, res: Response) => {
+  try {
+    const playlists = await getAllSmartPlaylists();
+    res.json({ success: true, playlists });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/playlists', async (req: Request, res: Response) => {
+  try {
+    const playlist = req.body;
+    await saveSmartPlaylist(playlist);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/playlists/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    await deleteSmartPlaylist(id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // Start Server and Vite Middleware

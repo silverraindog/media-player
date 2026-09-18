@@ -873,9 +873,21 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   {/* Card Info */}
                   <div className="p-3 flex-1 flex flex-col justify-between space-y-2">
                     <div>
-                      <h3 className="text-xs sm:text-sm font-bold text-white group-hover:text-indigo-400 transition-colors line-clamp-1">
-                        {item.title}
-                      </h3>
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="text-xs sm:text-sm font-bold text-white group-hover:text-indigo-400 transition-colors line-clamp-1">
+                          {item.title}
+                        </h3>
+                        {/* Metadata Status Indicator Badge */}
+                        {(() => {
+                          const hasFull = item.posterUrl && !item.posterUrl.includes('unsplash.com') && item.overview && item.overview.length > 50;
+                          return (
+                            <div 
+                              className={`shrink-0 w-2 h-2 rounded-full mt-1 ${hasFull ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]'}`}
+                              title={hasFull ? 'Full Metadata' : 'Partial Metadata (Missing Artwork or Synopsis)'}
+                            />
+                          );
+                        })()}
+                      </div>
                       <p className="text-[11px] text-slate-400 line-clamp-1 mt-0.5">
                         {item.genres?.slice(0, 2).join(' • ') || 'Drama'}
                       </p>

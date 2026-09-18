@@ -848,6 +848,29 @@ Return a JSON array of objects with:
   }
 });
 
+// Helper to fetch metadata from OMDb API
+async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number) {
+  const apiKey = process.env.OMDB_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    let url = `http://www.omdbapi.com/?apikey=${apiKey}&t=${encodeURIComponent(title)}&plot=full`;
+    if (type === 'series') url += '&type=series';
+    if (year) url += `&y=${year}`;
+    if (season) url += `&Season=${season}`;
+    if (episode) url += `&Episode=${episode}`;
+
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.Response === 'False') return null;
+    return data;
+  } catch (err) {
+    console.error('OMDb API Error:', err);
+    return null;
+  }
+}
+
 // Generate or refine synopsis for Movie, Series, or specific Episode
 app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) => {
   try {
@@ -856,10 +879,41 @@ app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Title is required' });
     }
 
+    // 1. Attempt OMDb if API Key is present
+    const omdbData = await fetchFromOMDb(title, type, year, seasonNumber, episodeNumber);
+
     const ai = getGenAI();
 
     // Fallback synopsis generator if AI client is not active
     const generateFallback = () => {
+      if (omdbData) {
+        if (episodeNumber !== undefined) {
+          return {
+            title: title,
+            type: 'series',
+            seasonNumber: seasonNumber || 1,
+            episodeNumber: episodeNumber,
+            episodeTitle: omdbData.Title || episodeTitle || `Episode ${episodeNumber}`,
+            plot: omdbData.Plot || 'No plot available.',
+            rating: parseFloat(omdbData.imdbRating) || 8.5,
+            airDate: omdbData.Released !== 'N/A' ? omdbData.Released : undefined,
+            source: 'omdb-api',
+          };
+        }
+        return {
+          title: omdbData.Title || title,
+          type: type,
+          year: parseInt(omdbData.Year) || year || 2024,
+          overview: omdbData.Plot || 'No synopsis available.',
+          tagline: 'Discover the story.',
+          genres: omdbData.Genre ? omdbData.Genre.split(', ') : ['Drama'],
+          rating: parseFloat(omdbData.imdbRating) || 8.5,
+          certification: omdbData.Rated,
+          runtime: omdbData.Runtime,
+          directors: omdbData.Director ? omdbData.Director.split(', ') : undefined,
+          source: 'omdb-api',
+        };
+      }
       if (type === 'series' && episodeNumber !== undefined) {
         return {
           title: title,
@@ -918,12 +972,14 @@ app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) 
 
     let prompt = '';
     if (type === 'series' && episodeNumber !== undefined) {
-      prompt = `You are a TV metadata database curator.
+      prompt = `You are a TV metadata database curator. Use Google Search to find actual, real-world information from IMDb, OMDb, and TVDB.
 Generate an accurate, engaging synopsis/plot for:
 Series: "${title}"
 Season: ${seasonNumber || 1}
 Episode: ${episodeNumber}
 ${episodeTitle ? `Episode Title: "${episodeTitle}"` : ''}
+
+${omdbData ? `Reference OMDb data: ${JSON.stringify(omdbData)}` : ''}
 
 Return ONLY valid JSON matching this exact structure:
 {
@@ -936,9 +992,11 @@ Return ONLY valid JSON matching this exact structure:
   "airDate": "YYYY-MM-DD"
 }`;
     } else if (type === 'series') {
-      prompt = `You are a TV metadata database curator.
+      prompt = `You are a TV metadata database curator. Use Google Search to find actual, real-world information from IMDb, OMDb, and TVDB.
 Generate an accurate, comprehensive series synopsis and season breakdown for:
 Series: "${title}" ${year ? `(${year})` : ''}
+
+${omdbData ? `Reference OMDb data: ${JSON.stringify(omdbData)}` : ''}
 
 Return ONLY valid JSON matching this exact structure:
 {
@@ -949,6 +1007,10 @@ Return ONLY valid JSON matching this exact structure:
   "tagline": "Official or thematic tagline",
   "genres": ["Genre1", "Genre2", "Genre3"],
   "rating": 8.8,
+  "certification": "TV-MA",
+  "runtime": "45 min/ep",
+  "directors": ["Director Name"],
+  "cast": [{"name": "Actor Name", "role": "Character Name"}],
   "seasons": [
     {
       "seasonNumber": 1,
@@ -962,23 +1024,17 @@ Return ONLY valid JSON matching this exact structure:
           "airDate": "YYYY-MM-DD",
           "plot": "Detailed plot summary of Episode 1",
           "rating": 8.5
-        },
-        {
-          "episodeNumber": 2,
-          "seasonNumber": 1,
-          "title": "Episode 2 Title",
-          "airDate": "YYYY-MM-DD",
-          "plot": "Detailed plot summary of Episode 2",
-          "rating": 8.6
         }
       ]
     }
   ]
 }`;
     } else {
-      prompt = `You are a film metadata database curator.
+      prompt = `You are a film metadata database curator. Use Google Search to find actual, real-world information from IMDb, OMDb, and Rotten Tomatoes.
 Generate an accurate, comprehensive movie synopsis for:
 Movie: "${title}" ${year ? `(${year})` : ''}
+
+${omdbData ? `Reference OMDb data: ${JSON.stringify(omdbData)}` : ''}
 
 Return ONLY valid JSON matching this exact structure:
 {
@@ -989,11 +1045,24 @@ Return ONLY valid JSON matching this exact structure:
   "tagline": "Memorable tagline",
   "genres": ["Genre1", "Genre2", "Genre3"],
   "rating": 8.5,
-  "runtime": "120 min"
+  "certification": "PG-13",
+  "runtime": "120 min",
+  "directors": ["Director Name"],
+  "cast": [{"name": "Actor Name", "role": "Character Name"}]
 }`;
     }
 
-    const aiText = await callGeminiWithTimeout(prompt, 4500);
+    // Call Gemini with Google Search Grounding
+    const aiResponse = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      },
+      tools: [{ googleSearch: {} }]
+    });
+
+    const aiText = aiResponse.text;
     if (aiText) {
       let parsedData: any = null;
       try {
@@ -1006,14 +1075,16 @@ Return ONLY valid JSON matching this exact structure:
       }
 
       if (parsedData && parsedData.overview) {
-        parsedData.source = 'gemini-ai';
-        return res.json({ success: true, data: { ...generateFallback(), ...parsedData } });
+        return res.json({ success: true, data: { ...generateFallback(), ...parsedData, source: 'gemini-google-grounded' } });
+      } else if (parsedData && parsedData.plot) {
+         // Episode level
+         return res.json({ success: true, data: { ...generateFallback(), ...parsedData, source: 'gemini-google-grounded' } });
       }
     }
 
     return res.json({ success: true, data: generateFallback() });
   } catch (error: any) {
-    console.error('Synopsis generation fallback:', error);
+    console.error('Synopsis generation error:', error);
     const { title = 'Media Item', type = 'movie', year } = req.body;
     const fallback = resolveMediaKnowledge(title, type, year);
     return res.json({

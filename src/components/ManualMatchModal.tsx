@@ -85,6 +85,12 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
   // Custom Episode list editor for series
   const [episodesList, setEpisodesList] = useState<EpisodeMetadata[]>([]);
   const [expandedEpisodeIndex, setExpandedEpisodeIndex] = useState<number | null>(0);
+  const [saveStatus, setSaveStatus] = useState<'Unsaved Changes' | 'Writing to Samba...' | 'Saved to Vault'>('Unsaved Changes');
+
+  // Mark changes as unsaved when metadata fields change
+  useEffect(() => {
+    setSaveStatus('Unsaved Changes');
+  }, [customTitle, customOverview, customTagline, customGenres, customRating, customPosterUrl, customSeasonNumber]);
 
   // Parse path when modal opens or path changes
   useEffect(() => {
@@ -421,8 +427,9 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
     setEpisodesList((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleApplyMatch = () => {
-    if (!customTitle.trim()) return;
+  const handleSaveChanges = async (): Promise<MediaMetadata | null> => {
+    if (!customTitle.trim()) return null;
+    setSaveStatus('Writing to Samba...');
 
     const parsedGenreArray = customGenres
       .split(',')
@@ -472,7 +479,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           mediaType === 'series'
             ? `TV Shows/${customTitle}/Season ${String(customSeasonNumber).padStart(2, '0')}/`
             : `Movies/${customTitle} (${customYear})/`,
-        recommendedFilenames: [fileName || `${customTitle}.mkv`, 'movie.nfo', 'poster.jpg'],
+        recommendedFilenames: [fileName || `${customTitle}.mkv`, mediaType === 'series' ? 'tvshow.nfo' : 'movie.nfo', 'poster.jpg'],
         source: 'gemini-ai',
       }),
       title: customTitle.trim(),
@@ -487,8 +494,69 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
       seasons: finalSeasons,
     };
 
-    onSaveMatchedMedia(finalized);
-    onClose();
+    try {
+      // 1. Persist to local SQLite Vault
+      await fetch('/api/db/media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: finalized.id,
+          media_type: finalized.type,
+          title: finalized.title,
+          original_title: finalized.title,
+          synopsis: finalized.overview,
+          year: finalized.year,
+          rating: finalized.rating,
+          poster_url: finalized.posterUrl,
+          fanart_url: finalized.fanartUrl,
+          genres: JSON.stringify(finalized.genres),
+          cast: finalized.cast ? JSON.stringify(finalized.cast) : null,
+          recommended_folder: finalized.recommendedFolderStructure,
+          raw_data: finalized.source || 'manual-match'
+        })
+      });
+
+      // 2. Trigger asynchronous write operation to Samba filesystem (.nfo and local images)
+      const rootTag = finalized.type === 'series' ? 'tvshow' : 'movie';
+      const nfoContent = `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<${rootTag}>
+  <title>${finalized.title}</title>
+  <originaltitle>${finalized.title}</originaltitle>
+  <year>${finalized.year}</year>
+  <rating>${finalized.rating}</rating>
+  <plot>${finalized.overview}</plot>
+  <tagline>${finalized.tagline || ''}</tagline>
+  ${finalized.genres.map(g => `<genre>${g}</genre>`).join('\n  ')}
+</${rootTag}>`;
+
+      await fetch('/api/samba/write-artwork', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderPath: finalized.recommendedFolderStructure,
+          posterUrl: finalized.posterUrl,
+          fanartUrl: finalized.fanartUrl,
+          mediaTitle: finalized.title,
+          type: finalized.type,
+          nfoContent,
+        }),
+      });
+
+      setSaveStatus('Saved to Vault');
+      return finalized;
+    } catch (err) {
+      console.error('Failed to save changes to vault/Samba:', err);
+      setSaveStatus('Unsaved Changes');
+      return null;
+    }
+  };
+
+  const handleApplyMatch = async () => {
+    const finalized = await handleSaveChanges();
+    if (finalized) {
+      onSaveMatchedMedia(finalized);
+      onClose();
+    }
   };
 
   return (
@@ -512,12 +580,23 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            <span className={`text-[11px] px-2.5 py-1 rounded-full font-semibold border ${
+              saveStatus === 'Saved to Vault'
+                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
+                : saveStatus === 'Writing to Samba...'
+                ? 'bg-indigo-950/80 text-indigo-300 border-indigo-800/60 animate-pulse'
+                : 'bg-amber-950/80 text-amber-300 border-amber-800/60'
+            }`}>
+              {saveStatus}
+            </span>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Body */}
@@ -940,15 +1019,26 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
             Cancel
           </button>
 
-          <button
-            type="button"
-            onClick={handleApplyMatch}
-            disabled={!customTitle.trim()}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition cursor-pointer"
-          >
-            <Check className="w-4 h-4" />
-            <span>Save & Apply Synopsis to Library</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSaveChanges}
+              disabled={!customTitle.trim()}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+            >
+              <Database className="w-4 h-4" />
+              <span>Save Changes</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleApplyMatch}
+              disabled={!customTitle.trim()}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition cursor-pointer"
+            >
+              <Check className="w-4 h-4" />
+              <span>Save & Apply Synopsis to Library</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

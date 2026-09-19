@@ -1151,6 +1151,44 @@ Return a JSON array of objects with:
   }
 });
 
+// Fetch detailed cast and director information from OMDb API
+app.post('/api/media/omdb-cast', async (req: Request, res: Response) => {
+  try {
+    const { title, type = 'movie', year } = req.body;
+    if (!title) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+    const omdbData = await fetchFromOMDb(title, type, year);
+    if (!omdbData || omdbData.Response === 'False') {
+      return res.json({ success: false, message: 'No OMDb data found' });
+    }
+
+    const directors = omdbData.Director && omdbData.Director !== 'N/A' ? omdbData.Director.split(', ').map((d: string) => ({ name: d, role: 'Director' })) : [];
+    const writers = omdbData.Writer && omdbData.Writer !== 'N/A' ? omdbData.Writer.split(', ').map((w: string) => ({ name: w, role: 'Writer' })) : [];
+    const actors = omdbData.Actors && omdbData.Actors !== 'N/A' ? omdbData.Actors.split(', ').map((a: string) => ({ name: a, role: 'Actor' })) : [];
+
+    return res.json({
+      success: true,
+      title: omdbData.Title,
+      year: omdbData.Year,
+      rated: omdbData.Rated,
+      released: omdbData.Released,
+      runtime: omdbData.Runtime,
+      genre: omdbData.Genre,
+      director: omdbData.Director,
+      writer: omdbData.Writer,
+      actors: omdbData.Actors,
+      awards: omdbData.Awards,
+      imdbRating: omdbData.imdbRating,
+      imdbVotes: omdbData.imdbVotes,
+      castMembers: [...directors, ...writers, ...actors],
+    });
+  } catch (err: any) {
+    console.error('OMDb cast fetch error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Generate or refine synopsis for Movie, Series, or specific Episode
 app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) => {
   try {

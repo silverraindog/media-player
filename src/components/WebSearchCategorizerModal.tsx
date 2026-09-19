@@ -249,7 +249,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!resultData) return;
 
     // Build finalized media metadata with assigned categories
@@ -257,6 +257,30 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       ...resultData,
       genres: Array.from(new Set([selectedPrimaryCategory, ...(resultData.genres || [])])),
     };
+
+    try {
+      await fetch('/api/db/media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: updatedMedia.id,
+          media_type: updatedMedia.type,
+          title: updatedMedia.title,
+          original_title: updatedMedia.originalTitle || updatedMedia.title,
+          synopsis: updatedMedia.overview,
+          year: updatedMedia.year,
+          rating: updatedMedia.rating,
+          poster_url: updatedMedia.posterUrl,
+          fanart_url: updatedMedia.fanartUrl,
+          genres: JSON.stringify(updatedMedia.genres),
+          cast: updatedMedia.cast ? JSON.stringify(updatedMedia.cast) : null,
+          recommended_folder: updatedMedia.recommendedFolderStructure,
+          raw_data: updatedMedia.source || 'web-categorizer'
+        })
+      });
+    } catch (e) {
+      console.error('Failed to save media asset to SQLite vault:', e);
+    }
 
     onSaveCategorizedMedia(updatedMedia);
     setIsSaved(true);
@@ -831,7 +855,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     ) : (
                       <>
                         <FolderPlus className="w-4 h-4" />
-                        <span>Add to Media Library</span>
+                        <span>Save & Download Assets to Vault</span>
                       </>
                     )}
                   </button>

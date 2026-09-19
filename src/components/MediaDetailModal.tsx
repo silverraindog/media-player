@@ -70,6 +70,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
   const [isGeneratingFanart, setIsGeneratingFanart] = useState(false);
   const [isFetchingArt, setIsFetchingArt] = useState(false);
+  const [isForceRefreshing, setIsForceRefreshing] = useState(false);
   const [generatingEpNum, setGeneratingEpNum] = useState<number | null>(null);
   const [editingEpNum, setEditingEpNum] = useState<number | null>(null);
   const [customEpPlot, setCustomEpPlot] = useState<string>('');
@@ -529,6 +530,47 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     }
   };
 
+  const handleForceRefresh = async () => {
+    if (isForceRefreshing) return;
+    setIsForceRefreshing(true);
+    try {
+      const cacheKey = media.recommendedFolderStructure || media.title;
+      await fetch(`/api/thumbnails/cache?path=${encodeURIComponent(cacheKey)}`, {
+        method: 'DELETE',
+      }).catch(() => {});
+
+      const res = await fetch('/api/metadata/categorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: media.title,
+          type: media.type,
+          year: media.year,
+          forceRefresh: true,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.success && data.data) {
+        const refreshed: MediaMetadata = {
+          ...media,
+          ...data.data,
+          id: media.id,
+        };
+        setMedia(refreshed);
+        if (onUpdateMedia) onUpdateMedia(refreshed);
+        persistMediaChange(refreshed);
+        setProgressSaveNotice('Cache bypassed & metadata forcefully refreshed from web!');
+        setTimeout(() => setProgressSaveNotice(null), 4000);
+      }
+    } catch (err) {
+      console.error('Force refresh failed:', err);
+      setProgressSaveNotice('Force refresh failed.');
+      setTimeout(() => setProgressSaveNotice(null), 4000);
+    } finally {
+      setIsForceRefreshing(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto">
       <div
@@ -556,6 +598,8 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           isGeneratingFanart={isGeneratingFanart}
           onFetchOfficialArt={handleFetchOfficialArt}
           isFetchingArt={isFetchingArt}
+          onForceRefresh={handleForceRefresh}
+          isForceRefreshing={isForceRefreshing}
         />
 
         {/* Navigation Tabs Bar */}

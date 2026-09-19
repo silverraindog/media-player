@@ -460,6 +460,7 @@ export default function App() {
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
+  const [syncCurrentPath, setSyncCurrentPath] = useState<string>('');
   const [connectionDetails, setConnectionDetails] = useState<any>(null);
 
   const [sambaTree, setSambaTree] = useState<SambaShareNode[]>(() => {
@@ -1100,6 +1101,7 @@ export default function App() {
   const handlePopulateMediaLibraryFromSamba = async () => {
     if (isImportingShare) return;
     setIsImportingShare(true);
+    setSyncCurrentPath('Samba Share / Cataloging Media Catalog');
     showToast('Importing media catalog from Samba share...');
     // Allow UI to render loading state before heavy processing
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -1123,6 +1125,7 @@ export default function App() {
       showToast('Error importing media from share');
     } finally {
       setIsImportingShare(false);
+      setSyncCurrentPath('');
     }
   };
 
@@ -1688,6 +1691,7 @@ export default function App() {
   // Non-recursive shallow scan of top-level Samba directories
   const handleQuickSyncSamba = async () => {
     setIsQuickSyncing(true);
+    setSyncCurrentPath('Samba Share / Top-Level Directory Scan');
     showToast('QuickSync: Performing shallow scan of top-level Samba directories...');
 
     const startTime = performance.now();
@@ -1727,6 +1731,7 @@ export default function App() {
       const discoveredNewFolders: string[] = [];
 
       for (const entry of topDirs) {
+        setSyncCurrentPath(`Samba Share / ${entry.path || entry.name}`);
         const topNameLower = entry.name.toLowerCase();
         const existingNode = newTree.find((n) => n.name.toLowerCase() === topNameLower);
 
@@ -1804,6 +1809,7 @@ export default function App() {
       showToast(`QuickSync error: ${err?.message || 'Failed to scan top-level directories'}`);
     } finally {
       setIsQuickSyncing(false);
+      setSyncCurrentPath('');
     }
   };
 
@@ -1883,6 +1889,31 @@ export default function App() {
         onQuickSync={handleQuickSyncSamba}
         isQuickSyncing={isQuickSyncing}
       />
+
+      {/* Persistent Sync Progress Banner */}
+      {(isQuickSyncing || isImportingShare || isSyncingShare) && (
+        <div className="bg-indigo-950/95 border-b border-indigo-800/80 px-4 py-2.5 shadow-lg flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-6 h-6 rounded-lg bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center shrink-0">
+              <span className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></span>
+            </div>
+            <div className="min-w-0 flex items-center gap-2">
+              <span className="text-xs font-bold text-white uppercase tracking-wider shrink-0">
+                {isQuickSyncing ? 'QuickSync Active:' : 'Samba Sync Active:'}
+              </span>
+              <span className="text-xs text-indigo-200 font-mono truncate">
+                {syncCurrentPath || 'Scanning Samba shared directories & inspecting folders...'}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="w-36 h-2 bg-indigo-900 rounded-full overflow-hidden border border-indigo-800/60 hidden sm:block">
+              <div className="h-full bg-indigo-400 animate-pulse w-3/4 rounded-full"></div>
+            </div>
+            <span className="text-[11px] font-mono text-indigo-300">Processing...</span>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">

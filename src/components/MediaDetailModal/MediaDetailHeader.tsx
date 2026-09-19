@@ -15,6 +15,8 @@ interface MediaDetailHeaderProps {
   isGeneratingFanart?: boolean;
   onFetchOfficialArt?: () => void;
   isFetchingArt?: boolean;
+  onForceRefresh?: () => void;
+  isForceRefreshing?: boolean;
 }
 
 export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
@@ -29,6 +31,8 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
   isGeneratingFanart = false,
   onFetchOfficialArt,
   isFetchingArt = false,
+  onForceRefresh,
+  isForceRefreshing = false,
 }) => {
   return (
     <div className="relative h-64 bg-slate-950 shrink-0 overflow-hidden">
@@ -109,6 +113,22 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             <span>{isRefreshing ? 'Refreshing Metadata...' : 'Bulk Refresh'}</span>
+          </button>
+        )}
+
+        {onForceRefresh && (
+          <button
+            disabled={isForceRefreshing}
+            onClick={onForceRefresh}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border backdrop-blur-sm transition cursor-pointer ${
+              isForceRefreshing
+                ? 'bg-slate-800 text-slate-500 border-slate-700'
+                : 'bg-amber-900/40 hover:bg-amber-900/60 text-amber-300 border-amber-500/40'
+            }`}
+            title="Bypass local SQLite & thumbnail cache and forcefully re-fetch fresh metadata"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isForceRefreshing ? 'animate-spin' : ''}`} />
+            <span>{isForceRefreshing ? 'Force Refreshing...' : 'Force Refresh'}</span>
           </button>
         )}
       </div>

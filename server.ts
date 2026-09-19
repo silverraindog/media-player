@@ -634,26 +634,31 @@ app.post('/api/metadata/search', async (req: Request, res: Response) => {
 
     const cleanQuery = query.trim();
     let fallbackKnowledge: any = resolveMediaKnowledge(cleanQuery, type, year ? parseInt(year, 10) : undefined);
+    let liveArt: any = {};
 
-    // Pre-fetch authentic poster & fanart from OMDb / TVMaze / iTunes
-    const liveArt = await fetchMediaArt(cleanQuery, type, year ? parseInt(year, 10) : undefined);
-    if (liveArt.posterUrl) {
-      fallbackKnowledge.posterUrl = liveArt.posterUrl;
-    }
-    if (liveArt.fanartUrl) {
-      fallbackKnowledge.fanartUrl = liveArt.fanartUrl;
-    }
-    if (liveArt.overview) {
-      fallbackKnowledge.overview = liveArt.overview;
-    }
-    if (liveArt.genres) {
-      fallbackKnowledge.genres = liveArt.genres;
-    }
-    if (liveArt.rating) {
-      fallbackKnowledge.rating = liveArt.rating;
-    }
-    if (liveArt.cast) {
-      fallbackKnowledge.cast = liveArt.cast;
+    // Pre-fetch authentic poster & fanart from OMDb / TVMaze / iTunes safely
+    try {
+      liveArt = await fetchMediaArt(cleanQuery, type, year ? parseInt(year, 10) : undefined);
+      if (liveArt.posterUrl) {
+        fallbackKnowledge.posterUrl = liveArt.posterUrl;
+      }
+      if (liveArt.fanartUrl) {
+        fallbackKnowledge.fanartUrl = liveArt.fanartUrl;
+      }
+      if (liveArt.overview) {
+        fallbackKnowledge.overview = liveArt.overview;
+      }
+      if (liveArt.genres) {
+        fallbackKnowledge.genres = liveArt.genres;
+      }
+      if (liveArt.rating) {
+        fallbackKnowledge.rating = liveArt.rating;
+      }
+      if (liveArt.cast) {
+        fallbackKnowledge.cast = liveArt.cast;
+      }
+    } catch (artErr) {
+      console.warn('Live art pre-fetch warning in search:', artErr);
     }
 
     const prompt = `You are a professional media metadata database scraper and tagger for Kodi, Jellyfin, Plex, Emby, and MusicBrainz.
@@ -747,15 +752,20 @@ app.post('/api/metadata/categorize', async (req: Request, res: Response) => {
 
     const cleanTitle = name.trim();
     let fallbackData: any = resolveMediaKnowledge(cleanTitle, type, year ? parseInt(year, 10) : undefined);
+    let liveArt: any = {};
 
-    // Pre-fetch authentic poster & fanart
-    const liveArt = await fetchMediaArt(cleanTitle, type !== 'all' ? type : undefined, year ? parseInt(year, 10) : undefined);
-    if (liveArt.posterUrl) fallbackData.posterUrl = liveArt.posterUrl;
-    if (liveArt.fanartUrl) fallbackData.fanartUrl = liveArt.fanartUrl;
-    if (liveArt.overview) fallbackData.overview = liveArt.overview;
-    if (liveArt.genres) fallbackData.genres = liveArt.genres;
-    if (liveArt.rating) fallbackData.rating = liveArt.rating;
-    if (liveArt.cast) fallbackData.cast = liveArt.cast;
+    // Pre-fetch authentic poster & fanart safely
+    try {
+      liveArt = await fetchMediaArt(cleanTitle, type !== 'all' ? type : undefined, year ? parseInt(year, 10) : undefined);
+      if (liveArt.posterUrl) fallbackData.posterUrl = liveArt.posterUrl;
+      if (liveArt.fanartUrl) fallbackData.fanartUrl = liveArt.fanartUrl;
+      if (liveArt.overview) fallbackData.overview = liveArt.overview;
+      if (liveArt.genres) fallbackData.genres = liveArt.genres;
+      if (liveArt.rating) fallbackData.rating = liveArt.rating;
+      if (liveArt.cast) fallbackData.cast = liveArt.cast;
+    } catch (artErr) {
+      console.warn('Live art pre-fetch warning in categorize:', artErr);
+    }
 
     const prompt = `You are a real-time web media scraper and encyclopedic category resolver for Kodi, Jellyfin, Plex, IMDb, and TMDB.
 Perform a web search and metadata categorization for the media item named: "${cleanTitle}" ${year ? `(year: ${year})` : ''} ${type !== 'all' ? `(preferred type: ${type})` : ''}.

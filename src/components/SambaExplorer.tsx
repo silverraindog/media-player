@@ -327,6 +327,36 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [isBatchRenamerOpen, setIsBatchRenamerOpen] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ percentage: number; currentItem: string; count: number } | null>(null);
 
+  // Compute sync health statistics
+  const { totalFoldersCount, verifiedFoldersCount, syncHealthPercentage } = useMemo(() => {
+    let total = 0;
+    let verified = 0;
+    const countNodes = (nodes: SambaShareNode[]) => {
+      for (const n of nodes) {
+        if (n.type === 'folder') {
+          total++;
+          if ((n.children && n.children.length > 0) || n.hasPoster || n.hasNfo || n.matchedMedia || n.artworkStatus === 'synced') {
+            verified++;
+          }
+          if (n.children) {
+            countNodes(n.children);
+          }
+        }
+      }
+    };
+    countNodes(sambaTree);
+    const percentage = total > 0 ? Math.round((verified / total) * 100) : 100;
+    return { totalFoldersCount: total, verifiedFoldersCount: verified, syncHealthPercentage: percentage };
+  }, [sambaTree]);
+
+  const handleRetryAllFailed = async () => {
+    if (onSyncSamba) {
+      await onSyncSamba(customScanPath || undefined);
+    } else {
+      onRefreshSamba();
+    }
+  };
+
   // Preview Mode: displays a floating card showing the first 5 filenames within a folder on hover
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(true);
   const [hoveredFolder, setHoveredFolder] = useState<{
@@ -1041,6 +1071,31 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Sync Health Circular Progress Gauge */}
+            <div className="flex items-center gap-2.5 bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 shadow-inner">
+              <div className="relative w-9 h-9 flex items-center justify-center">
+                <svg className="w-9 h-9 transform -rotate-90">
+                  <circle cx="18" cy="18" r="14" stroke="currentColor" strokeWidth="3" className="text-slate-800 fill-none" />
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="14"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeDasharray={87.96}
+                    strokeDashoffset={87.96 - (87.96 * syncHealthPercentage) / 100}
+                    strokeLinecap="round"
+                    className="text-emerald-400 fill-none transition-all duration-500"
+                  />
+                </svg>
+                <span className="absolute text-[10px] font-bold text-white font-mono">{syncHealthPercentage}%</span>
+              </div>
+              <div className="flex flex-col text-[11px]">
+                <span className="font-bold text-white leading-tight">Sync Health</span>
+                <span className="text-slate-400 text-[10px]">{verifiedFoldersCount}/{totalFoldersCount} verified</span>
+              </div>
+            </div>
+
             <span
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold ${
                 isMountedInFinder
@@ -1275,7 +1330,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       )}
 
       {activeSubTab === 'logs' && (
-        <ConsoleLogSection logs={syncLogs} />
+        <ConsoleLogSection logs={syncLogs} onRetryAllFailed={handleRetryAllFailed} />
       )}
 
       {activeSubTab === 'explorer' && (
@@ -1568,7 +1623,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               </div>
 
               {/* Console Log Preview Card */}
-              <ConsoleLogSection logs={syncLogs} />
+              <ConsoleLogSection logs={syncLogs} onRetryAllFailed={handleRetryAllFailed} />
             </div>
           </div>
         </>

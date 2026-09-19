@@ -5,12 +5,28 @@ import { SyncLog } from '../types';
 interface ConsoleLogSectionProps {
   logs: SyncLog[];
   onClearLogs?: () => void;
+  onRetryAllFailed?: () => void;
 }
 
-export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({ logs, onClearLogs }) => {
+export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({ logs, onClearLogs, onRetryAllFailed }) => {
   const [filterType, setFilterType] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [copied, setCopied] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  const failedLogsCount = logs.filter(
+    (l) => l.status === 'error' || l.details.toLowerCase().includes('fail') || l.details.toLowerCase().includes('error')
+  ).length;
+
+  const handleRetryFailed = async () => {
+    if (isRetrying || !onRetryAllFailed) return;
+    setIsRetrying(true);
+    try {
+      await onRetryAllFailed();
+    } finally {
+      setIsRetrying(false);
+    }
+  };
 
   const filteredLogs = logs.filter((log) => {
     const matchesType = filterType === 'all' || log.status === filterType || log.type === filterType;
@@ -43,7 +59,23 @@ export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({ logs, onCl
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {onRetryAllFailed && (
+            <button
+              onClick={handleRetryFailed}
+              disabled={isRetrying}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition cursor-pointer ${
+                isRetrying
+                  ? 'bg-amber-950/40 border-amber-800/40 text-amber-400/60'
+                  : 'bg-amber-900/40 hover:bg-amber-900/60 border-amber-500/40 text-amber-300'
+              }`}
+              title="Re-trigger metadata fetcher and write-artwork for failed items in last 24h"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin' : ''}`} />
+              <span>{isRetrying ? 'Retrying...' : `Retry All Failed (${failedLogsCount})`}</span>
+            </button>
+          )}
+
           <button
             onClick={handleCopyLogs}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition cursor-pointer"

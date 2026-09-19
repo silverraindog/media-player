@@ -85,6 +85,83 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [isSaved, setIsSaved] = useState(false);
   const [showIncompleteList, setShowIncompleteList] = useState(false);
 
+  interface ApiLogEntry {
+    id: string;
+    timestamp: string;
+    method: string;
+    url: string;
+    requestBody?: any;
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    responseBody?: any;
+    error?: string;
+  }
+  const [apiLogs, setApiLogs] = useState<ApiLogEntry[]>([]);
+  const [showLogsPanel, setShowLogsPanel] = useState(false);
+
+  const performLoggedFetch = async (url: string, options: RequestInit) => {
+    const startTime = new Date().toISOString();
+    const reqBody = options.body ? JSON.parse(options.body as string) : undefined;
+    try {
+      const res = await fetch(url, options);
+      const status = res.status;
+      const statusText = res.statusText;
+      const headersObj: Record<string, string> = {};
+      res.headers.forEach((val, key) => {
+        headersObj[key] = val;
+      });
+      const text = await res.text();
+      let parsedBody: any;
+      try {
+        parsedBody = text ? JSON.parse(text) : null;
+      } catch {
+        parsedBody = text;
+      }
+
+      setApiLogs((prev) => [
+        {
+          id: Math.random().toString(36).substring(2, 9),
+          timestamp: startTime,
+          method: options.method || 'GET',
+          url,
+          requestBody: reqBody,
+          status,
+          statusText,
+          headers: headersObj,
+          responseBody: parsedBody,
+        },
+        ...prev.slice(0, 49),
+      ]);
+
+      return {
+        ok: res.ok,
+        status,
+        statusText,
+        headers: res.headers,
+        text: () => Promise.resolve(text),
+        json: () => Promise.resolve(parsedBody),
+        data: parsedBody,
+      };
+    } catch (err: any) {
+      setApiLogs((prev) => [
+        {
+          id: Math.random().toString(36).substring(2, 9),
+          timestamp: startTime,
+          method: options.method || 'GET',
+          url,
+          requestBody: reqBody,
+          status: 500,
+          statusText: 'Network Error',
+          headers: {},
+          error: err?.message || String(err),
+        },
+        ...prev.slice(0, 49),
+      ]);
+      throw err;
+    }
+  };
+
   // Synchronize when initialQuery or initialType changes
   React.useEffect(() => {
     if (initialQuery) {
@@ -148,7 +225,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       const item = incompleteItems[i];
       setBatchProgress({ current: i + 1, total: incompleteItems.length });
       try {
-        const res = await fetch('/api/metadata/categorize', {
+        const res = await performLoggedFetch('/api/metadata/categorize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -157,13 +234,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             year: item.year,
           }),
         });
-        const text = await res.text();
-        let data: any = null;
-        try {
-          data = text ? JSON.parse(text) : null;
-        } catch {
-          data = null;
-        }
+        const data = res.data;
 
         if (res.ok && data?.success && data?.data) {
           onSaveCategorizedMedia(data.data);
@@ -193,7 +264,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setIsSaved(false);
 
     try {
-      const res = await fetch('/api/metadata/categorize', {
+      const res = await performLoggedFetch('/api/metadata/categorize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -203,13 +274,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         }),
       });
 
-      const text = await res.text();
-      let data: any = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch (parseErr) {
-        console.warn('Response parsing error:', parseErr);
-      }
+      const data = res.data;
 
       if (!res.ok || !data?.success || !data?.data) {
         // Safe instant fallback: Check if query exists in media library or matching item
@@ -323,12 +388,27 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowLogsPanel(!showLogsPanel)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition flex items-center gap-1.5 cursor-pointer ${
+                showLogsPanel
+                  ? 'bg-amber-600 text-white border-amber-500'
+                  : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border-slate-700'
+              }`}
+              title="Toggle API Diagnostic Logs & Response Headers"
+            >
+              <FileCode className="w-3.5 h-3.5 text-amber-400" />
+              <span>Logs ({apiLogs.length})</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Top View Switcher Tabs */}
@@ -889,6 +969,77 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             </>
           )}
         </div>
+        {/* Diagnostic Logs Panel Drawer */}
+        {showLogsPanel && (
+          <div className="bg-slate-950 border-t border-slate-800 p-4 max-h-60 overflow-y-auto shrink-0 font-mono text-xs">
+            <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-amber-400 font-bold">
+                <FileCode className="w-4 h-4" />
+                <span>API Diagnostic Inspector & Response Headers ({apiLogs.length} entries)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setApiLogs([])}
+                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px]"
+                >
+                  Clear Logs
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowLogsPanel(false)}
+                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px]"
+                >
+                  Close Logs
+                </button>
+              </div>
+            </div>
+            {apiLogs.length === 0 ? (
+              <p className="text-slate-500 italic py-2 text-center">No API requests recorded yet. Perform a search or categorize media to view network traces.</p>
+            ) : (
+              <div className="space-y-3">
+                {apiLogs.map((log) => (
+                  <div key={log.id} className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${log.method === 'POST' ? 'bg-indigo-950 text-indigo-300' : 'bg-emerald-950 text-emerald-300'}`}>
+                          {log.method}
+                        </span>
+                        <span className="text-slate-200 font-bold">{log.url}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${log.status >= 200 && log.status < 300 ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'}`}>
+                          {log.status} {log.statusText}
+                        </span>
+                        <span className="text-slate-500 text-[10px]">{log.timestamp.split('T')[1]?.slice(0, 8)}</span>
+                      </div>
+                    </div>
+                    {log.requestBody && (
+                      <div className="text-[11px] text-slate-400">
+                        <strong className="text-indigo-400">Payload:</strong> {JSON.stringify(log.requestBody)}
+                      </div>
+                    )}
+                    {log.headers && Object.keys(log.headers).length > 0 && (
+                      <div className="text-[10px] text-slate-400 bg-slate-950/60 p-1.5 rounded">
+                        <span className="text-cyan-400 font-bold">Response Headers:</span> {JSON.stringify(log.headers)}
+                      </div>
+                    )}
+                    {log.responseBody && (
+                      <div className="text-[11px] text-slate-300 bg-slate-950 p-2 rounded max-h-32 overflow-y-auto">
+                        <strong className="text-emerald-400">Response Body:</strong> <pre className="whitespace-pre-wrap">{typeof log.responseBody === 'string' ? log.responseBody : JSON.stringify(log.responseBody, null, 2)}</pre>
+                      </div>
+                    )}
+                    {log.error && (
+                      <div className="text-[11px] text-rose-400">
+                        <strong>Error:</strong> {log.error}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

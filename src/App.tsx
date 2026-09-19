@@ -974,46 +974,44 @@ export default function App() {
     showToast('Cleared thumbnail storage and in-memory caches.');
   };
 
-  // Unified Media Library populated from Curated Master Database + Discovered Samba Share Items + Batch Imports + Persistent Cache
-  const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
-    let initialList: MediaMetadata[] = [];
-    try {
-      const cached = sqliteBatchWriter.getCachedMedia();
-      if (cached && cached.length > 0) {
-        initialList = cached;
-      } else {
-        const saved = localStorage.getItem('samba_vault_library');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) initialList = parsed;
-        }
-      }
-    } catch {}
-
-    if (initialList.length === 0) {
-      const sambaMedia = extractAllMediaFromSambaTree(INITIAL_SAMBA_TREE, DEFAULT_MEDIA_SCAN_CONFIG);
-      const map = new Map<string, MediaMetadata>();
-      CURATED_MEDIA_DATABASE.forEach((m) => map.set(m.title.toLowerCase(), m));
-      sambaMedia.forEach((m) => {
-        if (!map.has(m.title.toLowerCase())) {
-          map.set(m.title.toLowerCase(), m);
-        }
-      });
-      initialList = Array.from(map.values());
-    }
-
-    // Run duplicate & multi-version detector on initial load
-    const { enrichedItems } = detectDuplicatesAndVersionBranches(initialList);
-    sqliteBatchWriter.updateCache(enrichedItems);
-    return enrichedItems;
-  });
+  // Persistent state loading from backend
+  const [isVaultLoaded, setIsVaultLoaded] = useState(false);
+  const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>([]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('samba_vault_library', JSON.stringify(mediaLibrary));
-      sqliteBatchWriter.updateCache(mediaLibrary);
-    } catch {}
-  }, [mediaLibrary]);
+    fetch('/api/vault/state')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.state) {
+          if (data.state.sambaTree) setSambaTree(data.state.sambaTree);
+          if (data.state.syncLogs) setSyncLogs(data.state.syncLogs);
+          if (data.state.sambaConfig) setSambaConfig(data.state.sambaConfig);
+          if (data.state.classifierSettings) setClassifierSettings(data.state.classifierSettings);
+          // Load mediaLibrary if available in state
+          if (data.state.mediaLibrary) setMediaLibrary(data.state.mediaLibrary);
+        }
+        setIsVaultLoaded(true);
+      })
+      .catch(() => setIsVaultLoaded(true));
+  }, []);
+
+  // Sync state to backend on change
+  useEffect(() => {
+    if (!isVaultLoaded) return;
+    
+    fetch('/api/vault/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sambaTree,
+        syncLogs,
+        sambaConfig,
+        classifierSettings,
+        mediaLibrary
+      })
+    }).catch(console.error);
+  }, [sambaTree, syncLogs, sambaConfig, classifierSettings, mediaLibrary, isVaultLoaded]);
+
 
   // Background SQLite persistent caching reconciliation
   useEffect(() => {

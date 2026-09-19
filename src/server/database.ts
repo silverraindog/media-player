@@ -1,10 +1,69 @@
 import initSqlJs, { Database } from 'sql.js';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 let dbInstance: Database | null = null;
-const DATA_DIR = path.join(process.cwd(), 'data');
+
+// Determine persistent data directory across app re-installs / zip extractions
+function resolveDataDirectory(): string {
+  // 1. Explicit override via env variable
+  if (process.env.SAMBA_VAULT_DATA_DIR) {
+    try {
+      if (!fs.existsSync(process.env.SAMBA_VAULT_DATA_DIR)) {
+        fs.mkdirSync(process.env.SAMBA_VAULT_DATA_DIR, { recursive: true });
+      }
+      return process.env.SAMBA_VAULT_DATA_DIR;
+    } catch {}
+  }
+
+  // 2. Primary: User's permanent home directory (~/.sambavault)
+  // This directory survives app package deletion, unzipping in Downloads, and system updates
+  try {
+    const homeDir = os.homedir();
+    if (homeDir) {
+      const userVaultDir = path.join(homeDir, '.sambavault');
+      if (!fs.existsSync(userVaultDir)) {
+        fs.mkdirSync(userVaultDir, { recursive: true });
+      }
+      return userVaultDir;
+    }
+  } catch (e) {
+    console.warn('[SambaVault Storage] Could not access user home directory, falling back to local folder:', e);
+  }
+
+  // 3. Fallback: local project data directory
+  const localData = path.join(process.cwd(), 'data');
+  if (!fs.existsSync(localData)) {
+    try {
+      fs.mkdirSync(localData, { recursive: true });
+    } catch {}
+  }
+  return localData;
+}
+
+const DATA_DIR = resolveDataDirectory();
 const DB_PATH = path.join(DATA_DIR, 'media_vault.sqlite');
+const VAULT_STATE_FILE = path.join(DATA_DIR, 'vault_state.json');
+
+// Automatic Migration: If ~/.sambavault is active but empty and ./data/ has previous database or state, copy it over
+try {
+  const localDataDir = path.join(process.cwd(), 'data');
+  if (DATA_DIR !== localDataDir) {
+    const localDb = path.join(localDataDir, 'media_vault.sqlite');
+    if (fs.existsSync(localDb) && !fs.existsSync(DB_PATH)) {
+      fs.copyFileSync(localDb, DB_PATH);
+      console.info(`[SambaVault Storage] Successfully migrated SQLite database to permanent location: ${DB_PATH}`);
+    }
+    const localState = path.join(localDataDir, 'vault_state.json');
+    if (fs.existsSync(localState) && !fs.existsSync(VAULT_STATE_FILE)) {
+      fs.copyFileSync(localState, VAULT_STATE_FILE);
+      console.info(`[SambaVault Storage] Successfully migrated vault state to permanent location: ${VAULT_STATE_FILE}`);
+    }
+  }
+} catch (e) {
+  console.warn('[SambaVault Storage] Migration check error:', e);
+}
 
 export interface MediaItemDb {
   id: string;
@@ -1934,3 +1993,100 @@ export async function deleteSmartPlaylist(id: string) {
   db.run("DELETE FROM smart_playlists WHERE id = ?", [id]);
   persistDbToDisk();
 }
+
+// PERSISTENT VAULT STATE STORAGE (Persists across app re-installs, update extraction, and deletions)
+export interface PersistentVaultState {
+  version: number;
+  lastSavedAt: string;
+  sambaTree?: any[];
+  syncLogs?: any[];
+  sambaConfig?: any;
+  classifierSettings?: any;
+  mediaExtensionConfig?: any;
+  mediaLibrarySummary?: {
+    totalItems: number;
+    syncedSeriesCount: number;
+  };
+  customData?: Record<string, any>;
+}
+
+export function getPersistentStorageInfo() {
+  const homeDir = os.homedir();
+  const existsDb = fs.existsSync(DB_PATH);
+  const existsState = fs.existsSync(VAULT_STATE_FILE);
+  let dbSizeBytes = 0;
+  let stateSizeBytes = 0;
+  let stateModifiedAt: string | null = null;
+
+  try {
+    if (existsDb) {
+      dbSizeBytes = fs.statSync(DB_PATH).size;
+    }
+    if (existsState) {
+      const st = fs.statSync(VAULT_STATE_FILE);
+      stateSizeBytes = st.size;
+      stateModifiedAt = st.mtime.toISOString();
+    }
+  } catch {}
+
+  return {
+    dataDir: DATA_DIR,
+    dbPath: DB_PATH,
+    stateFilePath: VAULT_STATE_FILE,
+    isPermanentHomeLocation: DATA_DIR.startsWith(homeDir),
+    dbExists: existsDb,
+    stateFileExists: existsState,
+    dbSizeBytes,
+    stateSizeBytes,
+    lastSavedAt: stateModifiedAt,
+  };
+}
+
+export function getVaultStateFromDisk(): PersistentVaultState | null {
+  try {
+    if (fs.existsSync(VAULT_STATE_FILE)) {
+      const raw = fs.readFileSync(VAULT_STATE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return parsed;
+    }
+  } catch (e) {
+    console.error('[SambaVault Storage] Error reading vault_state.json:', e);
+  }
+  return null;
+}
+
+let vaultStatePersistTimer: NodeJS.Timeout | null = null;
+let pendingVaultState: PersistentVaultState | null = null;
+
+export function saveVaultStateToDisk(state: Partial<PersistentVaultState>): PersistentVaultState {
+  const existing = getVaultStateFromDisk() || {
+    version: 1,
+    lastSavedAt: new Date().toISOString(),
+  };
+
+  const updated: PersistentVaultState = {
+    ...existing,
+    ...state,
+    version: 1,
+    lastSavedAt: new Date().toISOString(),
+  };
+
+  pendingVaultState = updated;
+
+  if (vaultStatePersistTimer) clearTimeout(vaultStatePersistTimer);
+  vaultStatePersistTimer = setTimeout(() => {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const tempPath = `${VAULT_STATE_FILE}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
+      fs.renameSync(tempPath, VAULT_STATE_FILE);
+    } catch (e) {
+      console.error('[SambaVault Storage] Failed saving vault_state.json to disk:', e);
+    }
+  }, 150);
+
+  return updated;
+}
+

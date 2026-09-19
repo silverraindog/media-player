@@ -38,6 +38,9 @@ import {
   saveSmartPlaylist,
   deleteSmartPlaylist,
   renameVaultMediaFile,
+  getPersistentStorageInfo,
+  getVaultStateFromDisk,
+  saveVaultStateToDisk,
 } from './src/server/database';
 
 dotenv.config();
@@ -2519,6 +2522,93 @@ app.get('/api/samba/supported-extensions', (req: Request, res: Response) => {
 });
 
 
+
+// ==========================================
+// PERSISTENT VAULT STATE & RECOVERY ROUTES
+// (Persists across app re-installs, update extraction, and folder moves)
+// ==========================================
+
+// Get persistent storage system diagnostics and directory path
+app.get('/api/vault/storage-info', (req: Request, res: Response) => {
+  try {
+    const info = getPersistentStorageInfo();
+    res.json({ success: true, ...info });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to read storage info', message: err?.message });
+  }
+});
+
+// Load persistent vault state (synced series, folder trees, sync logs, settings)
+app.get('/api/vault/state', (req: Request, res: Response) => {
+  try {
+    const state = getVaultStateFromDisk();
+    const storageInfo = getPersistentStorageInfo();
+    res.json({
+      success: true,
+      hasSavedState: Boolean(state),
+      state: state || null,
+      storageInfo,
+    });
+  } catch (err: any) {
+    console.error('Error reading vault state:', err);
+    res.status(500).json({ error: 'Failed to load vault state', message: err?.message });
+  }
+});
+
+// Save persistent vault state to disk
+app.post('/api/vault/state', (req: Request, res: Response) => {
+  try {
+    const payload = req.body;
+    if (!payload || typeof payload !== 'object') {
+      return res.status(400).json({ error: 'Invalid vault state payload' });
+    }
+    const saved = saveVaultStateToDisk(payload);
+    res.json({ success: true, savedAt: saved.lastSavedAt, version: saved.version });
+  } catch (err: any) {
+    console.error('Error saving vault state:', err);
+    res.status(500).json({ error: 'Failed to save vault state', message: err?.message });
+  }
+});
+
+// Download a full backup JSON snapshot of the persistent vault
+app.get('/api/vault/backup/export', (req: Request, res: Response) => {
+  try {
+    const state = getVaultStateFromDisk();
+    const storageInfo = getPersistentStorageInfo();
+    const backupSnapshot = {
+      exportVersion: 1,
+      exportedAt: new Date().toISOString(),
+      storageInfo,
+      state: state || {},
+    };
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="sambavault-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+    res.send(JSON.stringify(backupSnapshot, null, 2));
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to export backup snapshot', message: err?.message });
+  }
+});
+
+// Restore vault state from an uploaded JSON snapshot
+app.post('/api/vault/backup/restore', (req: Request, res: Response) => {
+  try {
+    const { snapshot } = req.body;
+    if (!snapshot) {
+      return res.status(400).json({ error: 'Missing snapshot payload' });
+    }
+    const stateToRestore = snapshot.state || snapshot;
+    const restored = saveVaultStateToDisk(stateToRestore);
+    res.json({
+      success: true,
+      message: 'Vault state restored successfully from backup',
+      restoredAt: restored.lastSavedAt,
+      state: restored,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to restore vault backup', message: err?.message });
+  }
+});
 
 // ==========================================
 // SQLITE DATABASE & SERIES PROGRESS ROUTES

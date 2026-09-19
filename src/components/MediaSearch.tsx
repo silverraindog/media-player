@@ -2186,13 +2186,25 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   onClick={(e) => toggleExpandCard(media.id, e)}
                 >
                   {/* Media Poster & Header Image */}
-                  <div className="relative h-48 sm:h-52 bg-slate-950 overflow-hidden">
+                  <div className="relative h-48 sm:h-52 bg-slate-950 overflow-hidden group/poster">
                     <img
                       src={media.fanartUrl || media.posterUrl}
                       alt={media.title}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-70 group-hover:opacity-85"
                     />
+                    
+                    {/* Hover Tooltip */}
+                    <div className="absolute inset-0 z-10 p-4 bg-slate-950/90 backdrop-blur-sm opacity-0 group-hover/poster:opacity-100 transition-opacity flex flex-col justify-end pointer-events-none">
+                      <div className="text-white text-xs font-semibold mb-1 flex items-center justify-between">
+                        <span>{media.rating.toFixed(1)} / 10</span>
+                        <span className="text-slate-400 font-normal">{media.genres.slice(0, 2).join(', ')}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-tight line-clamp-4">
+                        {media.overview}
+                      </p>
+                    </div>
+
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent"></div>
 
                     {/* Type Badge & Origin Badge & Affinity Badge */}

@@ -2070,26 +2070,50 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
         detectedType = 'movie';
       }
 
-      // Check for season/episode markers (e.g. S01E02 or Season 1)
+      // Check for season/episode/extras markers (e.g. S01E02, Season 1, Extras, Specials)
       const sMatch = fileName.match(/s(\d{1,2})e(\d{1,2})/i);
-      const sFolderMatch = parts.find((p) => /season\s*(\d{1,2})/i.test(p));
+      const sFolderMatch = parts.find((p) => /season\s*(\d{1,2})|^s(\d{1,2})$/i.test(p));
+      const isExtrasFolder = parts.some((p) => /specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes/i.test(p));
       
       if (sMatch) {
         detectedType = 'series';
         detectedSeason = parseInt(sMatch[1], 10);
         detectedEpisode = parseInt(sMatch[2], 10);
+      } else if (isExtrasFolder) {
+        detectedType = 'series';
+        detectedSeason = 0;
       } else if (sFolderMatch) {
         detectedType = 'series';
-        const match = sFolderMatch.match(/season\s*(\d{1,2})/i);
-        if (match) detectedSeason = parseInt(match[1], 10);
+        const match = sFolderMatch.match(/season\s*(\d{1,2})|^s(\d{1,2})$/i);
+        if (match) detectedSeason = parseInt(match[1] || match[2], 10);
       }
 
       // Extract Title from folder structure:
-      // E.g. Series/Breaking Bad/Season 01/S01E01.mkv -> "Breaking Bad"
-      // E.g. Franchises/Star Wars/Star Wars Episode IV (1977)/file.mkv -> "Star Wars: Episode IV"
-      // E.g. Music/Daft Punk/Random Access Memories (2013)/01.flac -> "Random Access Memories"
-      // E.g. Audio books/The Hobbit (J.R.R. Tolkien)/Chapter 01.m4b -> "The Hobbit"
-      if (parts.length >= 3 && (topCategory.includes('series') || topCategory.includes('anime') || topCategory.includes('docu'))) {
+      // Robust hierarchy search: skip root containers and season/extras/disc/numeric sub-folders
+      const rootContainers = [
+        'series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort',
+        'downloads', 'complete', 'share', 'storage', 'video', 'movies', 'nas', 'public', 'disk1', 'disk2',
+        'franchises', 'franchise', 'collections', 'collection', 'box sets', 'box sets & collections', 'sagas'
+      ];
+      const isSeasonOrSubdir = (seg: string) =>
+        /^(?:season|staffel|saison|temporada|stagione|series)[\s._-]?\d+/i.test(seg) ||
+        /^s\d{1,2}(?:[\s._-].*)?$/i.test(seg) ||
+        /^(?:specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(seg) ||
+        /^(?:disc|disk|cd|dvd|part|volume|vol|side)[\s._-]?\d+/i.test(seg) ||
+        /^\d{1,3}$/.test(seg);
+
+      let foundSeriesFolder = '';
+      for (let i = parts.length - 2; i >= 0; i--) {
+        const seg = parts[i].trim();
+        if (!isSeasonOrSubdir(seg) && !rootContainers.includes(seg.toLowerCase())) {
+          foundSeriesFolder = seg;
+          break;
+        }
+      }
+
+      if (foundSeriesFolder) {
+        detectedTitle = foundSeriesFolder;
+      } else if (parts.length >= 3 && (topCategory.includes('series') || topCategory.includes('anime') || topCategory.includes('docu'))) {
         detectedTitle = parts[1];
       } else if (parts.length >= 4 && topCategory.includes('franchise')) {
         detectedTitle = parts[2] || parts[1];

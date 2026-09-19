@@ -50,15 +50,17 @@ import {
   Languages,
   Bug,
 } from 'lucide-react';
-import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore } from '../types';
+import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore, SambaShareNode } from '../types';
 import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
 import { BulkSubtitlesModal } from './BulkSubtitlesModal';
+import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
   mediaLibrary: MediaMetadata[];
+  sambaTree?: SambaShareNode[];
   onPushToSamba: (media: MediaMetadata) => void;
   onOpenDetails: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
@@ -169,6 +171,7 @@ export const getMediaFileExtensions = (media: MediaMetadata): string[] => {
 
 export const MediaSearch: React.FC<MediaSearchProps> = ({
   mediaLibrary,
+  sambaTree,
   onPushToSamba,
   onOpenDetails,
   onOpenInNfoStudio,
@@ -228,6 +231,47 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const [rawHistory, setRawHistory] = useState<any[]>([]);
   const [sortBy, setSortBy] = useState<MediaSortOption>('affinity');
   const [showAffinityBreakdownModal, setShowAffinityBreakdownModal] = useState(false);
+
+  // Global Search & Discovery Indexer State
+  const [smartSuggestions, setSmartSuggestions] = useState<SmartSearchSuggestion[]>([]);
+  const [isSmartSearching, setIsSmartSearching] = useState(false);
+  const [indexerTelemetry, setIndexerTelemetry] = useState<IndexerTelemetry>(globalSearchIndexer.getTelemetry());
+
+  // Background indexing synchronization
+  useEffect(() => {
+    globalSearchIndexer.scheduleBackgroundIndexing(mediaLibrary, sambaTree);
+  }, [mediaLibrary, sambaTree]);
+
+  // Subscribe to telemetry updates
+  useEffect(() => {
+    return globalSearchIndexer.subscribe(() => {
+      setIndexerTelemetry(globalSearchIndexer.getTelemetry());
+    });
+  }, []);
+
+  // Trigger Smart Search when search query changes
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSmartSuggestions([]);
+      setIsSmartSearching(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSmartSearching(true);
+      try {
+        const res = await globalSearchIndexer.performSmartSearch(q, selectedType);
+        setSmartSuggestions(res.suggestions);
+      } catch (err) {
+        console.warn('Smart search non-fatal error:', err);
+      } finally {
+        setIsSmartSearching(false);
+      }
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, mediaLibrary, selectedType]);
 
   useEffect(() => {
     const fetchWatchStatus = async () => {
@@ -778,6 +822,27 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       setCategorizerInitialQuery(query);
       setCategorizerInitialType(selectedType);
       setIsCategorizerModalOpen(true);
+    }
+  };
+
+  const handleApplySuggestion = (s: SmartSearchSuggestion) => {
+    setSearchQuery(s.title);
+    if (s.type) {
+      setSelectedType(s.type);
+    }
+    if (s.preloadedMetadata && onSaveCategorizedMedia) {
+      const exists = mediaLibrary.some((m) => m.id === s.preloadedMetadata!.id || m.title.toLowerCase() === s.title.toLowerCase());
+      if (!exists) {
+        onSaveCategorizedMedia(s.preloadedMetadata);
+      }
+    }
+  };
+
+  const handleInspectSuggestion = (s: SmartSearchSuggestion) => {
+    if (s.preloadedMetadata) {
+      onOpenDetails(s.preloadedMetadata);
+    } else {
+      handleOpenCategorizerForTitle(s.title, s.type);
     }
   };
 
@@ -1734,6 +1799,132 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             </div>
           )}
 
+          {/* Global Search & Discovery Indexer Status Bar */}
+          <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="font-semibold text-slate-300">Global Search & Discovery Indexer</span>
+              <span className="text-slate-500">•</span>
+              <span className="font-mono text-slate-400">
+                {indexerTelemetry.totalIndexedItems} indexed titles across TVMaze / TMDB / Local Vault
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {isSmartSearching && (
+                <span className="flex items-center gap-1 text-indigo-400 font-mono text-[10px]">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Scanning alternate DBs...</span>
+                </span>
+              )}
+              <span className="text-[10px] font-mono text-slate-500 hidden sm:inline">
+                Aliases: {indexerTelemetry.totalAliases} | Latency: ~{indexerTelemetry.lastQueryTimeMs.toFixed(1)}ms
+              </span>
+            </div>
+          </div>
+
+          {/* Smart Search & Discovery "Did you mean?" Suggestion Banner */}
+          {smartSuggestions.length > 0 && searchQuery.trim().length > 0 && (
+            <div className="bg-gradient-to-r from-indigo-950/80 via-slate-900 to-purple-950/80 border border-indigo-500/50 rounded-2xl p-4 space-y-3 shadow-xl shadow-indigo-950/20">
+              <div className="flex items-center justify-between pb-2 border-b border-indigo-800/40">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
+                  <h4 className="text-xs font-bold text-white">Smart Search & Discovery Suggestions</h4>
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-900/70 text-indigo-200 text-[10px] font-mono border border-indigo-600/40">
+                    TVMaze / TMDB Fallback
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-400 font-mono">
+                  {smartSuggestions.length} match{smartSuggestions.length > 1 ? 'es' : ''} found
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-indigo-200 flex items-center gap-1">
+                  <span>💡 Did you mean:</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {smartSuggestions.map((s, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 bg-slate-950/80 border border-indigo-800/50 hover:border-indigo-400 rounded-xl space-y-2 transition shadow-sm group cursor-pointer"
+                      onClick={() => handleApplySuggestion(s)}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        {s.posterUrl ? (
+                          <img
+                            src={s.posterUrl}
+                            alt={s.title}
+                            referrerPolicy="no-referrer"
+                            className="w-10 h-14 object-cover rounded bg-slate-800 border border-slate-700 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-10 h-14 rounded bg-indigo-950 border border-indigo-800/60 flex items-center justify-center text-indigo-400 shrink-0">
+                            {s.type === 'series' ? <Tv className="w-5 h-5" /> : <Film className="w-5 h-5" />}
+                          </div>
+                        )}
+
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-white text-xs group-hover:text-indigo-300 transition truncate">
+                              {s.title}
+                            </span>
+                            {s.year && (
+                              <span className="text-[11px] text-slate-400 font-mono">
+                                ({s.year})
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap text-[9px] font-mono">
+                            <span className="px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-700/50 font-bold">
+                              {Math.round(s.confidence)}% Match
+                            </span>
+                            <span className="px-1.5 py-0.2 rounded bg-slate-900 text-slate-300 border border-slate-700 uppercase">
+                              {s.source}
+                            </span>
+                            {s.matchedAlias && (
+                              <span className="px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-700/50">
+                                Alias: {s.matchedAlias}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {s.overview && (
+                        <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">
+                          {s.overview}
+                        </p>
+                      )}
+
+                      <div className="flex items-center gap-1.5 pt-1 border-t border-slate-800/60 text-[10px]">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleApplySuggestion(s);
+                          }}
+                          className="flex-1 py-1 px-2 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition text-center cursor-pointer"
+                        >
+                          Select "{s.title}"
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleInspectSuggestion(s);
+                          }}
+                          className="py-1 px-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition cursor-pointer"
+                        >
+                          Inspect
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Results Header Status & Sort Controls */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-400 px-1 bg-slate-900/40 p-2.5 rounded-xl border border-slate-800/80">
             <div className="flex items-center gap-2 flex-wrap">
@@ -1875,14 +2066,78 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
           {/* Empty State */}
           {sortedAndFilteredMedia.length === 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4 shadow-xl">
-              <div className="w-16 h-16 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center mx-auto text-slate-400">
-                <Globe className="w-8 h-8 text-indigo-400" />
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 sm:p-12 text-center space-y-6 shadow-xl">
+              <div className="w-16 h-16 rounded-2xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-center mx-auto text-slate-400 shadow-inner">
+                {smartSuggestions.length > 0 ? (
+                  <Sparkles className="w-8 h-8 text-amber-400 animate-pulse" />
+                ) : (
+                  <Globe className="w-8 h-8 text-indigo-400" />
+                )}
               </div>
-              <h3 className="text-lg font-bold text-white">No media found for this category/filter</h3>
-              <p className="text-sm text-slate-400 max-w-md mx-auto">
-                You can search the web by title to discover and download categories, plot synopses, and folder paths directly.
-              </p>
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white">
+                  {smartSuggestions.length > 0
+                    ? `No local matches found for "${searchQuery}", but Smart Search found recommendations:`
+                    : 'No media found for this category/filter'}
+                </h3>
+                <p className="text-sm text-slate-400 max-w-lg mx-auto">
+                  {smartSuggestions.length > 0
+                    ? 'Our Global Search Indexer queried TVMaze, TMDB and the Encyclopedic Vault to find the closest matches:'
+                    : 'You can search the web by title to discover and download categories, plot synopses, and folder paths directly.'}
+                </p>
+              </div>
+
+              {/* Suggestions in Empty State */}
+              {smartSuggestions.length > 0 && (
+                <div className="max-w-2xl mx-auto space-y-2 text-left pt-2">
+                  <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Did you mean one of these titles?</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {smartSuggestions.map((s, i) => (
+                      <div
+                        key={i}
+                        onClick={() => handleApplySuggestion(s)}
+                        className="p-3 bg-slate-950/90 border border-amber-500/30 hover:border-amber-400 rounded-xl flex items-center gap-3 transition cursor-pointer group shadow-sm"
+                      >
+                        {s.posterUrl ? (
+                          <img
+                            src={s.posterUrl}
+                            alt={s.title}
+                            referrerPolicy="no-referrer"
+                            className="w-10 h-14 object-cover rounded bg-slate-800 border border-slate-700 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-10 h-14 rounded bg-amber-950/60 border border-amber-800/60 flex items-center justify-center text-amber-400 shrink-0">
+                            {s.type === 'series' ? <Tv className="w-5 h-5" /> : <Film className="w-5 h-5" />}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-white text-xs group-hover:text-amber-300 transition truncate">
+                            {s.title} {s.year ? `(${s.year})` : ''}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[9px] font-mono mt-0.5">
+                            <span className="text-emerald-400 font-bold">{Math.round(s.confidence)}% Match</span>
+                            <span className="text-slate-500">•</span>
+                            <span className="text-slate-400 uppercase">{s.source}</span>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleApplySuggestion(s);
+                            }}
+                            className="mt-1.5 text-[10px] text-amber-400 group-hover:text-amber-300 font-semibold underline"
+                          >
+                            Load "{s.title}" →
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                 <button
                   onClick={handleResetAllFilters}

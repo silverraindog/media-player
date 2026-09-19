@@ -11,6 +11,7 @@ import {
 } from '../types';
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { resolveMediaWithFallback } from './clientMediaResolver';
+import { normalizeFranchiseHierarchy } from './franchiseHierarchy';
 
 // Comprehensive Media Extension Definitions
 export const SUPPORTED_VIDEO_EXTENSIONS = [
@@ -128,13 +129,15 @@ export const SAMPLE_VIDEO_STREAMS = {
 
 export const SAMPLE_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
 
-// Robust Season Directory Checker (e.g., 'Season 1', 'S01', 'Season_02', 'S02', 'Staffel 3', 'Series 1', 'Specials', etc.)
+// Robust Season and Extras Directory Checker (e.g., 'Season 1', 'S01', 'Season_02', 'Extras', 'Specials', 'Bonus', 'Featurettes', 'Disc 1', '4', '5', etc.)
 export function isSeasonDirectory(folderName: string): boolean {
   const clean = folderName.trim().toLowerCase();
   return (
     /^(?:season|staffel|saison|temporada|stagione|series)[\s._-]?\d+/i.test(clean) ||
     /^s\d{1,2}(?:[\s._-].*)?$/i.test(clean) ||
-    /^(?:specials|special|extras|bonus|sp)$/i.test(clean) ||
+    /^(?:specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(clean) ||
+    /^(?:disc|disk|cd|dvd|part|volume|vol|side)[\s._-]?\d+/i.test(clean) ||
+    /^\d{1,3}$/.test(clean) ||
     /^s\d{1,2}$/i.test(clean) ||
     /^season\s*\d+/i.test(clean)
   );
@@ -248,16 +251,21 @@ export function parseTitleAndYear(rawName: string): { title: string; year: numbe
   return { title, year, season, episode };
 }
 
-// Extract Season number from directory or path string (e.g. "Season 1", "S01", "S02", "Staffel 3", "Series 2", "Specials")
+// Extract Season number from directory or path string (e.g. "Season 1", "S01", "S02", "Staffel 3", "Series 2", "Specials", "Extras/4")
 export function extractSeasonNumberFromPath(folderOrPath: string): number | undefined {
   const normalized = folderOrPath.replace(/\\/g, '/');
   const segments = normalized.split('/').map((s) => s.trim());
 
+  // Check if any segment is specials or extras
+  const hasExtras = segments.some((seg) =>
+    /^(?:specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(seg)
+  );
+  if (hasExtras) {
+    return 0; // Season 0 = Specials & Extras
+  }
+
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
-    if (/^(?:specials|special|extras|bonus|sp)$/i.test(seg)) {
-      return 0;
-    }
     // Check for 'Season 01', 'Season1', 'S01', 'S1', 'Staffel 2', 'Series 1', 'Temporada 3'
     const match =
       seg.match(/(?:season|staffel|saison|temporada|stagione|series)[\s._-]?(\d{1,2})/i) ||
@@ -346,10 +354,11 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     const segments = fullPath.replace(/\\/g, '/').split('/').filter(Boolean);
     const rootContainers = [
       'series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort',
-      'downloads', 'complete', 'share', 'storage', 'video', 'movies', 'nas', 'public', 'disk1', 'disk2'
+      'downloads', 'complete', 'share', 'storage', 'video', 'movies', 'nas', 'public', 'disk1', 'disk2',
+      'franchises', 'franchise', 'collections', 'collection', 'box sets', 'box sets & collections', 'box sets and collections', 'sagas'
     ];
     
-    // Find the nearest folder that isn't a root container and isn't a season folder
+    // Find the nearest folder that isn't a root container and isn't a season or extras subfolder
     let seriesFolderName = '';
     for (let i = segments.length - (node.type === 'file' ? 2 : 1); i >= 0; i--) {
       const seg = segments[i].trim();
@@ -403,15 +412,17 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     mediaType === 'series'
       ? [
           {
-            seasonNumber: season || 1,
-            name: season === 0 ? 'Specials' : `Season ${season || 1}`,
+            seasonNumber: season ?? 1,
+            name: (season === 0 || fullPath.toLowerCase().includes('extras') || fullPath.toLowerCase().includes('specials')) ? 'Specials & Extras' : `Season ${season ?? 1}`,
             episodeCount: 1,
             episodes: [
               {
                 episodeNumber: episode || 1,
-                seasonNumber: season || 1,
-                title: episodeTitle || `${title} S${String(season || 1).padStart(2, '0')}E${String(episode || 1).padStart(2, '0')}`,
-                plot: `Synopsis for ${title} Season ${season || 1} Episode ${episode || 1}. Tagged from Samba network share (${node.name}).`,
+                seasonNumber: season ?? 1,
+                title: episodeTitle || (season === 0 ? `Extra: ${node.name.replace(/\.[^/.]+$/, '')}` : `${title} S${String(season ?? 1).padStart(2, '0')}E${String(episode || 1).padStart(2, '0')}`),
+                plot: season === 0
+                  ? `Special feature and bonus material for ${title} (${node.name}).`
+                  : `Synopsis for ${title} Season ${season ?? 1} Episode ${episode || 1}. Tagged from Samba network share (${node.name}).`,
                 rating: 8.5,
                 playbackUrl: SAMPLE_VIDEO_STREAMS.series,
               },
@@ -477,22 +488,32 @@ export function extractAllMediaFromSambaTree(
     const existing = mediaMap.get(key)!;
     if (item.type === 'series' && item.seasons && item.seasons.length > 0) {
       const existingSeasons = existing.seasons || [];
-      const newSeason = item.seasons[0];
-      const matchedSeason = existingSeasons.find((s) => s.seasonNumber === newSeason.seasonNumber);
-
-      if (matchedSeason) {
-        if (newSeason.episodes && newSeason.episodes.length > 0) {
-          const newEp = newSeason.episodes[0];
-          if (!matchedSeason.episodes.some((e) => e.episodeNumber === newEp.episodeNumber)) {
-            matchedSeason.episodes.push(newEp);
+      for (const newSeason of item.seasons) {
+        const matchedSeason = existingSeasons.find((s) => s.seasonNumber === newSeason.seasonNumber);
+        if (matchedSeason) {
+          if (newSeason.episodes && newSeason.episodes.length > 0) {
+            for (const newEp of newSeason.episodes) {
+              const alreadyExists = matchedSeason.episodes.some(
+                (e) => (e.episodeNumber === newEp.episodeNumber && e.title === newEp.title) ||
+                       (e.title && newEp.title && e.title.toLowerCase() === newEp.title.toLowerCase())
+              );
+              if (!alreadyExists) {
+                let finalEp = { ...newEp };
+                if (matchedSeason.episodes.some((e) => e.episodeNumber === finalEp.episodeNumber)) {
+                  const maxEp = Math.max(...matchedSeason.episodes.map((e) => e.episodeNumber), 0);
+                  finalEp.episodeNumber = maxEp + 1;
+                }
+                matchedSeason.episodes.push(finalEp);
+              }
+            }
             matchedSeason.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
             matchedSeason.episodeCount = matchedSeason.episodes.length;
           }
+        } else {
+          existingSeasons.push({ ...newSeason });
         }
-      } else {
-        existingSeasons.push(newSeason);
-        existingSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
       }
+      existingSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
       existing.seasons = existingSeasons;
     }
   }
@@ -538,7 +559,8 @@ export function extractAllMediaFromSambaTree(
     }
   }
 
-  traverse(nodes);
+  const normalizedNodes = normalizeFranchiseHierarchy(nodes);
+  traverse(normalizedNodes);
   return Array.from(mediaMap.values());
 }
 
@@ -560,29 +582,42 @@ export async function extractAllMediaFromSambaTreeAsync(
     const existing = mediaMap.get(key)!;
     if (item.type === 'series' && item.seasons && item.seasons.length > 0) {
       const existingSeasons = existing.seasons || [];
-      const newSeason = item.seasons[0];
-      const matchedSeason = existingSeasons.find((s) => s.seasonNumber === newSeason.seasonNumber);
-
-      if (matchedSeason) {
-        if (newSeason.episodes && newSeason.episodes.length > 0) {
-          const newEp = newSeason.episodes[0];
-          if (!matchedSeason.episodes.some((e) => e.episodeNumber === newEp.episodeNumber)) {
-            matchedSeason.episodes.push(newEp);
+      for (const newSeason of item.seasons) {
+        const matchedSeason = existingSeasons.find((s) => s.seasonNumber === newSeason.seasonNumber);
+        if (matchedSeason) {
+          if (newSeason.episodes && newSeason.episodes.length > 0) {
+            for (const newEp of newSeason.episodes) {
+              const alreadyExists = matchedSeason.episodes.some(
+                (e) => (e.episodeNumber === newEp.episodeNumber && e.title === newEp.title) ||
+                       (e.title && newEp.title && e.title.toLowerCase() === newEp.title.toLowerCase())
+              );
+              if (!alreadyExists) {
+                let finalEp = { ...newEp };
+                if (matchedSeason.episodes.some((e) => e.episodeNumber === finalEp.episodeNumber)) {
+                  const maxEp = Math.max(...matchedSeason.episodes.map((e) => e.episodeNumber), 0);
+                  finalEp.episodeNumber = maxEp + 1;
+                }
+                matchedSeason.episodes.push(finalEp);
+              }
+            }
             matchedSeason.episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
             matchedSeason.episodeCount = matchedSeason.episodes.length;
           }
+        } else {
+          existingSeasons.push({ ...newSeason });
         }
-      } else {
-        existingSeasons.push(newSeason);
-        existingSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
       }
+      existingSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber);
       existing.seasons = existingSeasons;
     }
   }
 
+  // Normalize any flat franchise folders before queued async traversal
+  const normalizedNodes = normalizeFranchiseHierarchy(nodes);
+
   // Iterative work queue avoids stack overflow and allows non-blocking slicing
   const queue: Array<{ node: SambaShareNode; parentPath: string }> = [];
-  nodes.forEach((n) => queue.push({ node: n, parentPath: '' }));
+  normalizedNodes.forEach((n) => queue.push({ node: n, parentPath: '' }));
 
   let processedCount = 0;
 

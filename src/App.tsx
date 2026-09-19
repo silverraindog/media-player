@@ -279,6 +279,190 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
     ],
   },
   {
+    id: 'root-franchises',
+    name: 'Franchises',
+    path: 'Franchises',
+    type: 'folder',
+    isFranchiseRoot: true,
+    children: [
+      {
+        id: 'franchise-battlestar-galactica',
+        name: 'Battlestar Galactica',
+        path: 'Franchises/Battlestar Galactica',
+        type: 'folder',
+        isFranchiseContainer: true,
+        children: [
+          {
+            id: 'series-bsg-2004',
+            name: 'Battlestar Galactica (2004)',
+            path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)',
+            type: 'folder',
+            hasNfo: true,
+            hasPoster: true,
+            mediaType: 'series',
+            children: [
+              {
+                id: 'folder-bsg-s01',
+                name: 'Season 01',
+                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 01',
+                type: 'folder',
+                children: [
+                  {
+                    id: 'file-bsg-s01e01',
+                    name: 'Battlestar Galactica - S01E01 - 33.mkv',
+                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 01/Battlestar Galactica - S01E01 - 33.mkv',
+                    type: 'file',
+                    size: '1.4 GB',
+                  },
+                  {
+                    id: 'file-bsg-s01e02',
+                    name: 'Battlestar Galactica - S01E02 - Water.mkv',
+                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 01/Battlestar Galactica - S01E02 - Water.mkv',
+                    type: 'file',
+                    size: '1.3 GB',
+                  },
+                ],
+              },
+              {
+                id: 'folder-bsg-s02',
+                name: 'Season 02',
+                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 02',
+                type: 'folder',
+                children: [
+                  {
+                    id: 'file-bsg-s02e01',
+                    name: 'Battlestar Galactica - S02E01 - Scattered.mkv',
+                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 02/Battlestar Galactica - S02E01 - Scattered.mkv',
+                    type: 'file',
+                    size: '1.4 GB',
+                  },
+                ],
+              },
+              {
+                id: 'folder-bsg-extras',
+                name: 'Specials & Extras',
+                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras',
+                type: 'folder',
+                children: [
+                  {
+                    id: 'file-bsg-miniseries',
+                    name: 'Battlestar Galactica - S00E01 - The Miniseries (Part 1).mkv',
+                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Battlestar Galactica - S00E01 - The Miniseries (Part 1).mkv',
+                    type: 'file',
+                    size: '2.8 GB',
+                  },
+                  {
+                    id: 'file-bsg-razor',
+                    name: 'Battlestar Galactica - S00E03 - Razor.mkv',
+                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Battlestar Galactica - S00E03 - Razor.mkv',
+                    type: 'file',
+                    size: '3.1 GB',
+                  },
+                  {
+                    id: 'file-bsg-disc4-iso',
+                    name: 'Disc 4 - Extended Cuts & Commentary.iso',
+                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Disc 4 - Extended Cuts & Commentary.iso',
+                    type: 'file',
+                    size: '7.8 GB',
+                  },
+                  {
+                    id: 'file-bsg-disc5-iso',
+                    name: 'Disc 5 - Behind the Scenes & Featurettes.iso',
+                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Disc 5 - Behind the Scenes & Featurettes.iso',
+                    type: 'file',
+                    size: '8.2 GB',
+                  },
+                ],
+              },
+              {
+                id: 'file-bsg-tvshow-nfo',
+                name: 'tvshow.nfo',
+                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/tvshow.nfo',
+                type: 'file',
+                size: '3.8 KB',
+              },
+              {
+                id: 'file-bsg-poster',
+                name: 'poster.jpg',
+                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/poster.jpg',
+                type: 'file',
+                size: '512 KB',
+              },
+              {
+                id: 'file-bsg-fanart',
+                name: 'fanart.jpg',
+                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/fanart.jpg',
+                type: 'file',
+                size: '1.4 MB',
+              },
+            ],
+          },
+          {
+            id: 'series-caprica-2010',
+            name: 'Caprica (2010)',
+            path: 'Franchises/Battlestar Galactica/Caprica (2010)',
+            type: 'folder',
+            hasNfo: true,
+            hasPoster: true,
+            mediaType: 'series',
+            children: [
+              {
+                id: 'folder-caprica-s01',
+                name: 'Season 01',
+                path: 'Franchises/Battlestar Galactica/Caprica (2010)/Season 01',
+                type: 'folder',
+                children: [
+                  {
+                    id: 'file-caprica-s01e01',
+                    name: 'Caprica - S01E01 - Pilot.mkv',
+                    path: 'Franchises/Battlestar Galactica/Caprica (2010)/Season 01/Caprica - S01E01 - Pilot.mkv',
+                    type: 'file',
+                    size: '1.5 GB',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'franchise-star-wars',
+        name: 'Star Wars Saga',
+        path: 'Franchises/Star Wars Saga',
+        type: 'folder',
+        isFranchiseContainer: true,
+        children: [
+          {
+            id: 'series-mandalorian',
+            name: 'The Mandalorian (2019)',
+            path: 'Franchises/Star Wars Saga/The Mandalorian (2019)',
+            type: 'folder',
+            hasNfo: true,
+            hasPoster: true,
+            mediaType: 'series',
+            children: [
+              {
+                id: 'folder-mando-s01',
+                name: 'Season 01',
+                path: 'Franchises/Star Wars Saga/The Mandalorian (2019)/Season 01',
+                type: 'folder',
+                children: [
+                  {
+                    id: 'file-mando-s01e01',
+                    name: 'The Mandalorian - S01E01 - Chapter 1.mkv',
+                    path: 'Franchises/Star Wars Saga/The Mandalorian (2019)/Season 01/The Mandalorian - S01E01 - Chapter 1.mkv',
+                    type: 'file',
+                    size: '2.1 GB',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     id: 'root-documentaries',
     name: 'Documentaries',
     path: 'Documentaries',
@@ -1987,6 +2171,7 @@ export default function App() {
         {activeTab === 'search' && (
           <MediaSearch
             mediaLibrary={mediaLibrary}
+            sambaTree={sambaTree}
             onPushToSamba={handlePushToSamba}
             onOpenDetails={(media) => setDetailModalMedia(media)}
             onOpenInNfoStudio={handleOpenInNfoStudio}

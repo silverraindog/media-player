@@ -251,6 +251,82 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     source: 'curated-database'
   },
   {
+    id: 'series-battlestar-galactica',
+    type: 'series',
+    title: 'Battlestar Galactica',
+    originalTitle: 'Battlestar Galactica',
+    year: 2004,
+    premiered: '2004-10-18',
+    overview: 'When an old enemy, the Cylons, resurface and obliterate the 12 colonies, the crew of the aged battlestar Galactica protect a small civilian fleet - the last of humanity - as they journey toward the fabled 13th colony, Earth.',
+    tagline: 'The Cylons were created by man. They evolved. They rebelled. There are many copies. And they have a plan.',
+    genres: ['Action', 'Adventure', 'Drama', 'Sci-Fi'],
+    rating: 8.7,
+    votes: 175000,
+    runtime: '44 min/ep',
+    directors: ['Michael Rymer', 'Michael Nankin', 'Rod Hardy'],
+    studio: 'Sci-Fi Channel / NBCUniversal Television',
+    certification: 'TV-14',
+    country: 'United States',
+    language: 'English',
+    imdbId: 'tt0407362',
+    tmdbId: '1972',
+    posterUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
+    fanartUrl: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1600&auto=format&fit=crop&q=80',
+    recommendedFolderStructure: 'Franchises/Battlestar Galactica/Season 01/',
+    recommendedFilenames: [
+      'Battlestar Galactica - S01E01 - 33.mkv',
+      'Battlestar Galactica - S01E02 - Water.mkv',
+      'tvshow.nfo',
+      'poster.jpg',
+      'fanart.jpg'
+    ],
+    actors: [
+      { name: 'Edward James Olmos', role: 'Commander William Adama', thumb: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300' },
+      { name: 'Mary McDonnell', role: 'President Laura Roslin', thumb: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300' },
+      { name: 'Katee Sackhoff', role: 'Kara \'Starbuck\' Thrace', thumb: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300' },
+      { name: 'Jamie Bamber', role: 'Lee \'Apollo\' Adama', thumb: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300' },
+      { name: 'James Callis', role: 'Dr. Gaius Baltar', thumb: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=300' },
+      { name: 'Tricia Helfer', role: 'Number Six', thumb: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=300' }
+    ],
+    seasons: [
+      {
+        seasonNumber: 0,
+        name: 'Specials & Extras',
+        episodeCount: 5,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 0, title: 'The Miniseries: Part 1', airDate: '2003-12-08', plot: 'The Cylons launch a devastating nuclear sneak attack that annihilates the Twelve Colonies of Kobol.', rating: 8.6 },
+          { episodeNumber: 2, seasonNumber: 0, title: 'The Miniseries: Part 2', airDate: '2003-12-09', plot: 'Commander Adama and Secretary of Education Laura Roslin gather the surviving civilian ships.', rating: 8.7 },
+          { episodeNumber: 3, seasonNumber: 0, title: 'Razor', airDate: '2007-11-24', plot: 'Chronicles the tragic story of the Battlestar Pegasus under the command of Admiral Helena Cain.', rating: 8.4 },
+          { episodeNumber: 4, seasonNumber: 0, title: 'Extras Disc 4: Behind the Scenes & Featurettes', airDate: '2004-10-18', plot: 'Production diaries, visual effects breakdowns, miniature modeling, and director commentaries.', rating: 8.2 },
+          { episodeNumber: 5, seasonNumber: 0, title: 'Extras Disc 5: Deleted Scenes & Cast Retrospectives', airDate: '2005-01-24', plot: 'Exclusive deleted scenes, extended cuts, and in-depth cast interviews.', rating: 8.3 }
+        ]
+      },
+      {
+        seasonNumber: 1,
+        name: 'Season 1',
+        episodeCount: 13,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 1, title: '33', airDate: '2004-10-18', plot: 'Relentlessly pursued by the Cylons every thirty-three minutes, the exhausted fleet struggles to survive.', rating: 9.2 },
+          { episodeNumber: 2, seasonNumber: 1, title: 'Water', airDate: '2004-10-25', plot: 'When sabotage destroys the Galactica\'s water tanks, the search for a new source begins.', rating: 8.5 },
+          { episodeNumber: 3, seasonNumber: 1, title: 'Bastille Day', airDate: '2004-11-01', plot: 'Prisoners aboard the Astral Queen are offered freedom in exchange for hazardous work collecting ice.', rating: 8.4 },
+          { episodeNumber: 4, seasonNumber: 1, title: 'Act of Contrition', airDate: '2004-11-08', plot: 'A freak flight deck explosion kills several pilots, forcing Starbuck to train fresh recruits.', rating: 8.6 },
+          { episodeNumber: 12, seasonNumber: 1, title: 'Kobol\'s Last Gleaming: Part 1', airDate: '2005-01-17', plot: 'The discovery of the legendary planet Kobol sparks a constitutional and spiritual crisis.', rating: 9.1 },
+          { episodeNumber: 13, seasonNumber: 1, title: 'Kobol\'s Last Gleaming: Part 2', airDate: '2005-01-24', plot: 'Adama launches an assault on a Cylon basestar while Roslin sends Starbuck on a forbidden mission.', rating: 9.4 }
+        ]
+      },
+      {
+        seasonNumber: 2,
+        name: 'Season 2',
+        episodeCount: 20,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 2, title: 'Scattered', airDate: '2005-07-15', plot: 'With Adama fighting for his life, Colonel Tigh must take command when the fleet jumps to wrong coordinates.', rating: 8.9 },
+          { episodeNumber: 10, seasonNumber: 2, title: 'Pegasus', airDate: '2005-09-23', plot: 'Galactica rejoices at the arrival of Battlestar Pegasus, but Admiral Cain\'s tyrannical rule quickly breeds tension.', rating: 9.5 }
+        ]
+      }
+    ],
+    source: 'curated-database'
+  },
+  {
     id: 'series-stranger-things',
     type: 'series',
     title: 'Stranger Things',

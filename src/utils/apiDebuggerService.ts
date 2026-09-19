@@ -70,139 +70,177 @@ class ApiDebuggerStore {
   }
 
   public installInterceptor() {
-    if (this.isInterceptorInstalled || typeof window === 'undefined') return;
+    if (this.isInterceptorInstalled || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
     this.isInterceptorInstalled = true;
 
-    const originalFetch = window.fetch;
-    const self = this;
+    try {
+      const originalFetch = window.fetch.bind(window);
+      const self = this;
 
-    window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-      if (!self.isCapturing) {
-        return originalFetch.apply(this, [input, init]);
-      }
-
-      const startTime = performance.now();
-      const id = Math.random().toString(36).substring(2, 9);
-      const timestamp = new Date().toISOString();
-
-      let url = '';
-      if (typeof input === 'string') {
-        url = input;
-      } else if (input instanceof URL) {
-        url = input.toString();
-      } else if (input && typeof (input as Request).url === 'string') {
-        url = (input as Request).url;
-      }
-
-      const method = (init?.method || (typeof input === 'object' && 'method' in input ? (input as Request).method : 'GET')).toUpperCase();
-
-      // Extract Request Headers
-      const requestHeaders: Record<string, string> = {};
-      if (init?.headers) {
-        if (init.headers instanceof Headers) {
-          init.headers.forEach((v, k) => { requestHeaders[k.toLowerCase()] = v; });
-        } else if (Array.isArray(init.headers)) {
-          init.headers.forEach(([k, v]) => { requestHeaders[k.toLowerCase()] = v; });
-        } else {
-          Object.entries(init.headers).forEach(([k, v]) => { requestHeaders[k.toLowerCase()] = String(v); });
+      const interceptedFetch: typeof window.fetch = async function (
+        input: RequestInfo | URL,
+        init?: RequestInit
+      ): Promise<Response> {
+        if (!self.isCapturing) {
+          return originalFetch(input, init);
         }
-      }
 
-      // Extract Request Body
-      let rawRequestBody = '';
-      let parsedRequestBody: any = undefined;
-      if (init?.body) {
-        try {
-          if (typeof init.body === 'string') {
-            rawRequestBody = init.body;
-            parsedRequestBody = JSON.parse(init.body);
+        const startTime = performance.now();
+        const id = Math.random().toString(36).substring(2, 9);
+        const timestamp = new Date().toISOString();
+
+        let url = '';
+        if (typeof input === 'string') {
+          url = input;
+        } else if (input instanceof URL) {
+          url = input.toString();
+        } else if (input && typeof (input as Request).url === 'string') {
+          url = (input as Request).url;
+        }
+
+        const method = (
+          init?.method ||
+          (typeof input === 'object' && input && 'method' in input
+            ? (input as Request).method
+            : 'GET')
+        ).toUpperCase();
+
+        // Extract Request Headers
+        const requestHeaders: Record<string, string> = {};
+        if (init?.headers) {
+          if (init.headers instanceof Headers) {
+            init.headers.forEach((v, k) => {
+              requestHeaders[k.toLowerCase()] = v;
+            });
+          } else if (Array.isArray(init.headers)) {
+            init.headers.forEach(([k, v]) => {
+              requestHeaders[k.toLowerCase()] = v;
+            });
           } else {
-            rawRequestBody = '[Binary or FormData Body]';
+            Object.entries(init.headers).forEach(([k, v]) => {
+              requestHeaders[k.toLowerCase()] = String(v);
+            });
           }
-        } catch {
-          rawRequestBody = String(init.body);
         }
-      }
 
-      // Determine category and query target
-      const { category, isMetadataRequest, queryTarget } = self.categorizeRequest(url, method, parsedRequestBody || rawRequestBody);
+        // Extract Request Body
+        let rawRequestBody = '';
+        let parsedRequestBody: any = undefined;
+        if (init?.body) {
+          try {
+            if (typeof init.body === 'string') {
+              rawRequestBody = init.body;
+              parsedRequestBody = JSON.parse(init.body);
+            } else {
+              rawRequestBody = '[Binary or FormData Body]';
+            }
+          } catch {
+            rawRequestBody = String(init.body);
+          }
+        }
 
-      let response: Response;
-      let durationMs = 0;
+        // Determine category and query target
+        const { category, isMetadataRequest, queryTarget } = self.categorizeRequest(
+          url,
+          method,
+          parsedRequestBody || rawRequestBody
+        );
 
-      try {
-        response = await originalFetch.apply(this, [input, init]);
-        durationMs = Math.round(performance.now() - startTime);
-      } catch (err: any) {
-        durationMs = Math.round(performance.now() - startTime);
-        
-        // Network failure log
-        const logEntry: ApiLogEntry = {
+        let response: Response;
+        let durationMs = 0;
+
+        try {
+          response = await originalFetch(input, init);
+          durationMs = Math.round(performance.now() - startTime);
+        } catch (err: any) {
+          durationMs = Math.round(performance.now() - startTime);
+
+          // Network failure log
+          const logEntry: ApiLogEntry = {
+            id,
+            timestamp,
+            startTime,
+            durationMs,
+            method,
+            url,
+            targetDomain: self.extractDomain(url),
+            category,
+            requestHeaders,
+            requestBody: parsedRequestBody,
+            rawRequestBody,
+            status: 0,
+            statusText: 'Network Failure / Connection Refused',
+            redirected: false,
+            responseHeaders: {},
+            responseBody: null,
+            rawResponseBody: err?.message || 'Network connection failed',
+            responseType: 'error',
+            isFailed: true,
+            isMetadataRequest,
+            errorType: 'network_failure',
+            errorMessage: err?.message || 'Network fetch failed',
+            queryTarget,
+            diagnosticNote: `The request to "${url}" could not be completed. The network connection was refused, dropped, or timed out.`,
+          };
+
+          self.addLog(logEntry);
+          throw err;
+        }
+
+        // Parse Response asynchronously using clone so application continues without delay
+        const responseClone = response.clone();
+        const status = response.status;
+        const statusText = response.statusText;
+        const redirected = response.redirected;
+
+        // Extract Response Headers
+        const responseHeaders: Record<string, string> = {};
+        response.headers.forEach((val, key) => {
+          responseHeaders[key.toLowerCase()] = val;
+        });
+
+        // Process Clone
+        self.processResponseClone({
           id,
           timestamp,
           startTime,
           durationMs,
           method,
           url,
-          targetDomain: self.extractDomain(url),
           category,
+          isMetadataRequest,
+          queryTarget,
           requestHeaders,
           requestBody: parsedRequestBody,
           rawRequestBody,
-          status: 0,
-          statusText: 'Network Failure / Connection Refused',
-          redirected: false,
-          responseHeaders: {},
-          responseBody: null,
-          rawResponseBody: err?.message || 'Network connection failed',
-          responseType: 'error',
-          isFailed: true,
-          isMetadataRequest,
-          errorType: 'network_failure',
-          errorMessage: err?.message || 'Network fetch failed',
-          queryTarget,
-          diagnosticNote: `The request to "${url}" could not be completed. The network connection was refused, dropped, or timed out.`,
-        };
+          status,
+          statusText,
+          redirected,
+          responseHeaders,
+          responseClone,
+        });
 
-        self.addLog(logEntry);
-        throw err;
+        return response;
+      };
+
+      // Try setting via Object.defineProperty to handle environments where window.fetch is getter-only
+      try {
+        Object.defineProperty(window, 'fetch', {
+          value: interceptedFetch,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      } catch {
+        try {
+          (window as any).fetch = interceptedFetch;
+        } catch (e2) {
+          console.warn('[ApiDebugger] fetch property is protected; interceptor skipped.', e2);
+        }
       }
-
-      // Parse Response asynchronously using clone so application continues without delay
-      const responseClone = response.clone();
-      const status = response.status;
-      const statusText = response.statusText;
-      const redirected = response.redirected;
-
-      // Extract Response Headers
-      const responseHeaders: Record<string, string> = {};
-      response.headers.forEach((val, key) => {
-        responseHeaders[key.toLowerCase()] = val;
-      });
-
-      // Process Clone
-      self.processResponseClone({
-        id,
-        timestamp,
-        startTime,
-        durationMs,
-        method,
-        url,
-        category,
-        isMetadataRequest,
-        queryTarget,
-        requestHeaders,
-        requestBody: parsedRequestBody,
-        rawRequestBody,
-        status,
-        statusText,
-        redirected,
-        responseHeaders,
-        responseClone,
-      });
-
-      return response;
-    };
+    } catch (outerErr) {
+      console.warn('[ApiDebugger] Failed to initialize fetch interceptor:', outerErr);
+    }
   }
 
   private async processResponseClone(context: {

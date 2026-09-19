@@ -54,6 +54,7 @@ import { ThumbnailCacheBar } from './ThumbnailCacheBar';
 import { CachedThumbnail } from './CachedThumbnail';
 import { BatchRenamerModal } from './BatchRenamerModal';
 import { thumbnailStorage } from '../utils/thumbnailStorage';
+import { normalizeFranchiseHierarchy, isFranchisePath } from '../utils/franchiseHierarchy';
 import {
   DEFAULT_MEDIA_SCAN_CONFIG,
   getFileCategory,
@@ -333,6 +334,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({
     'root-movies': true,
     'root-shows': true,
+    'root-franchises': true,
+    'franchise-battlestar-galactica': true,
     'root-music': true,
     'root-documentaries': true,
     'root-anime': true,
@@ -344,6 +347,11 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs'>('explorer');
   const [isBatchRenamerOpen, setIsBatchRenamerOpen] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ percentage: number; currentItem: string; count: number } | null>(null);
+
+  // Normalize SambaTree so Franchises are nested containers (Franchise -> Series -> Seasons/Extras)
+  const normalizedSambaTree = useMemo(() => {
+    return normalizeFranchiseHierarchy(sambaTree);
+  }, [sambaTree]);
 
   // Compute sync health statistics
   const { totalFoldersCount, verifiedFoldersCount, syncHealthPercentage } = useMemo(() => {
@@ -362,10 +370,10 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         }
       }
     };
-    countNodes(sambaTree);
+    countNodes(normalizedSambaTree);
     const percentage = total > 0 ? Math.round((verified / total) * 100) : 100;
     return { totalFoldersCount: total, verifiedFoldersCount: verified, syncHealthPercentage: percentage };
-  }, [sambaTree]);
+  }, [normalizedSambaTree]);
 
   // Preview Mode: displays a floating card showing the first 5 filenames within a folder on hover
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(true);
@@ -1408,7 +1416,27 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         >
           <div className="flex items-center gap-2 truncate">
             {isFolder ? (
-              isExpanded ? (
+              node.isFranchiseRoot || node.name.toLowerCase() === 'franchises' ? (
+                <Layers className="w-4 h-4 text-amber-400 shrink-0" />
+              ) : node.isFranchiseContainer ? (
+                isExpanded ? (
+                  <FolderOpen className="w-4 h-4 text-purple-400 shrink-0" />
+                ) : (
+                  <FolderTree className="w-4 h-4 text-purple-400 shrink-0" />
+                )
+              ) : node.mediaType === 'series' && node.path.includes('Franchises') ? (
+                isExpanded ? (
+                  <FolderOpen className="w-4 h-4 text-indigo-400 shrink-0" />
+                ) : (
+                  <Tv className="w-4 h-4 text-indigo-400 shrink-0" />
+                )
+              ) : node.name.toLowerCase().includes('extras') || node.name.toLowerCase().includes('specials') ? (
+                isExpanded ? (
+                  <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" />
+                ) : (
+                  <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                )
+              ) : isExpanded ? (
                 <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" />
               ) : (
                 <Folder className="w-4 h-4 text-amber-400 shrink-0" />
@@ -1431,6 +1459,30 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             )}
 
             <span className="font-mono truncate">{node.name}</span>
+
+            {node.isFranchiseRoot && (
+              <span className="px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 text-[9px] font-bold border border-amber-800/50">
+                FRANCHISES
+              </span>
+            )}
+
+            {node.isFranchiseContainer && (
+              <span className="px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 text-[9px] font-bold border border-purple-800/50">
+                FRANCHISE
+              </span>
+            )}
+
+            {node.mediaType === 'series' && node.path.includes('Franchises') && !node.isFranchiseContainer && (
+              <span className="px-1.5 py-0.2 rounded bg-indigo-950 text-indigo-300 text-[9px] font-bold border border-indigo-800/50">
+                SERIES
+              </span>
+            )}
+
+            {isFolder && (node.name.toLowerCase().includes('extras') || node.name.toLowerCase().includes('specials')) && (
+              <span className="px-1.5 py-0.2 rounded bg-amber-950/70 text-amber-300 text-[9px] font-bold border border-amber-700/50">
+                EXTRAS
+              </span>
+            )}
 
             {ext && !isFolder && (
               <span className="px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 text-[10px] font-mono border border-slate-800 uppercase">
@@ -1824,7 +1876,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
       {activeSubTab === 'files' && (
         <DiscoveredFilesInspector
-          sambaTree={sambaTree}
+          sambaTree={normalizedSambaTree}
           onSelectNode={(node) => {
             setSelectedNode(node);
             if (node.matchedMedia) {
@@ -1922,7 +1974,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                   }}
                   className="bg-slate-950 p-3 rounded-xl border border-slate-800 max-h-[460px] overflow-y-auto space-y-1"
                 >
-                  {sambaTree.map((rootNode) => renderNode(rootNode, 0))}
+                  {normalizedSambaTree.map((rootNode) => renderNode(rootNode, 0))}
                 </div>
               </div>
 

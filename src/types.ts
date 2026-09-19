@@ -141,6 +141,8 @@ export interface SambaShareNode {
   matchedMedia?: MediaMetadata;
   artworkStatus?: 'pending' | 'synced' | 'missing' | 'error';
   metadataStatus?: 'synced' | 'pending' | 'metadata-missing' | 'error';
+  isFranchiseRoot?: boolean;
+  isFranchiseContainer?: boolean;
 }
 
 export interface SyncLog {

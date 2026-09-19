@@ -60,6 +60,29 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(settings.confidenceThreshold || 0.85);
   const [autoImportConfident, setAutoImportConfident] = useState<boolean>(settings.autoImportConfident ?? true);
   const [alwaysPromptReview, setAlwaysPromptReview] = useState<boolean>(settings.alwaysPromptReview ?? false);
+  
+  // Progress Simulation State
+  const [analyzingProgress, setAnalyzingProgress] = useState(0);
+  const [matchingProgress, setMatchingProgress] = useState(0);
+  const [applyingProgress, setApplyingProgress] = useState(0);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      // Simulate classification progress for visual feedback
+      let timer1 = setTimeout(() => setAnalyzingProgress(100), 400);
+      let timer2 = setTimeout(() => setMatchingProgress(100), 900);
+      let timer3 = setTimeout(() => setApplyingProgress(100), 1400);
+      
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+        clearTimeout(timer3);
+        setAnalyzingProgress(0);
+        setMatchingProgress(0);
+        setApplyingProgress(0);
+      };
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -295,21 +318,36 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
               <div className="p-3.5 bg-slate-900/50 border border-slate-800 rounded-xl space-y-2">
                   <div className="flex justify-between text-[10px] text-slate-400">
                       <span>Analyzing file structure</span>
-                      <span>100%</span>
+                      <span>{analyzingProgress}%</span>
                   </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full"><div className="bg-indigo-500 h-1.5 rounded-full w-full"></div></div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full">
+                    <div 
+                      className="bg-indigo-500 h-1.5 rounded-full transition-all duration-500 ease-out" 
+                      style={{ width: `${analyzingProgress}%` }}
+                    ></div>
+                  </div>
                   
                   <div className="flex justify-between text-[10px] text-slate-400">
                       <span>Matching metadata</span>
-                      <span>100%</span>
+                      <span>{matchingProgress}%</span>
                   </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full"><div className="bg-emerald-500 h-1.5 rounded-full w-full"></div></div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full">
+                    <div 
+                      className="bg-emerald-500 h-1.5 rounded-full transition-all duration-500 ease-out" 
+                      style={{ width: `${matchingProgress}%` }}
+                    ></div>
+                  </div>
                   
                   <div className="flex justify-between text-[10px] text-slate-400">
                       <span>Applying changes</span>
-                      <span>100%</span>
+                      <span>{applyingProgress}%</span>
                   </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full"><div className="bg-purple-500 h-1.5 rounded-full w-full"></div></div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full">
+                    <div 
+                      className="bg-purple-500 h-1.5 rounded-full transition-all duration-500 ease-out" 
+                      style={{ width: `${applyingProgress}%` }}
+                    ></div>
+                  </div>
               </div>
 
                 {selectedCount > 0 ? (
@@ -363,7 +401,6 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                     Check folders to mass-apply Movie, Series, or Ignore
                   </span>
                 )}
-              </div>
 
               {uncertainFoldersCount > 0 ? (
                 <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-3">

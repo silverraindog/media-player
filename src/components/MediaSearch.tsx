@@ -48,6 +48,7 @@ import {
   Info,
   HelpCircle,
   Languages,
+  Bug,
 } from 'lucide-react';
 import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore } from '../types';
 import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
@@ -70,6 +71,7 @@ interface MediaSearchProps {
   isSyncing?: boolean;
   selectedMediaType?: 'all' | MediaType;
   onSelectMediaType?: (type: 'all' | MediaType) => void;
+  onOpenApiDebugger?: () => void;
 }
 
 // Curated Category Taxonomy with Icons & Brand Colors
@@ -179,6 +181,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   isSyncing = false,
   selectedMediaType,
   onSelectMediaType,
+  onOpenApiDebugger,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('all');
@@ -909,6 +912,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         initialQuery={categorizerInitialQuery}
         initialType={categorizerInitialType}
         mediaLibrary={mediaLibrary}
+        onOpenApiDebugger={onOpenApiDebugger}
         onSaveCategorizedMedia={(media) => {
           if (onSaveCategorizedMedia) {
             onSaveCategorizedMedia(media);
@@ -974,6 +978,18 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               <span>Bulk Subtitles</span>
             </button>
 
+            {onOpenApiDebugger && (
+              <button
+                id="btn-open-api-debugger-search"
+                onClick={onOpenApiDebugger}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-950/40 hover:bg-amber-900/50 text-amber-300 hover:text-white text-xs font-semibold border border-amber-500/40 transition cursor-pointer shadow-sm"
+                title="Open API Debugger to inspect outbound and inbound metadata requests (OMDb, TVMaze, TMDB)"
+              >
+                <Bug className="w-4 h-4 text-amber-400" />
+                <span>API Debugger</span>
+              </button>
+            )}
+
             {onSyncFromSamba && (
               <button
                 id="btn-sync-samba-all-media"
@@ -992,6 +1008,13 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-slate-400 font-medium">Quick Suggestions:</span>
+            <button
+              id="preset-24-series"
+              onClick={() => handlePresetClick('24', 'series')}
+              className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 transition cursor-pointer font-medium"
+            >
+              ⏱️ 24 (Action/Thriller)
+            </button>
             <button
               id="preset-severance"
               onClick={() => handlePresetClick('Severance', 'series')}

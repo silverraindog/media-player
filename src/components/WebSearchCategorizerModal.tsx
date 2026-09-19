@@ -28,6 +28,8 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { MediaMetadata, MediaType } from '../types';
+import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
+import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 
 interface WebSearchCategorizerModalProps {
   isOpen: boolean;
@@ -36,6 +38,7 @@ interface WebSearchCategorizerModalProps {
   onPlayMedia?: (media: MediaMetadata) => void;
   onOpenInNfoStudio?: (media: MediaMetadata) => void;
   onOpenManualMatch?: (media: MediaMetadata) => void;
+  onOpenApiDebugger?: () => void;
   initialQuery?: string;
   initialType?: MediaType | 'all';
   mediaLibrary?: MediaMetadata[];
@@ -63,6 +66,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   onPlayMedia,
   onOpenInNfoStudio,
   onOpenManualMatch,
+  onOpenApiDebugger,
   initialQuery = '',
   initialType = 'all',
   mediaLibrary = [],
@@ -104,7 +108,21 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     const startTime = new Date().toISOString();
     const reqBody = options.body ? JSON.parse(options.body as string) : undefined;
     try {
-      const res = await fetch(url, options);
+      let targetUrl = url;
+      // In Tauri desktop environment, check if local Node server is running on port 3000
+      if (url.startsWith('/api/') && (window.location.origin.includes('tauri://') || (window as any).__TAURI__)) {
+        try {
+          const testRes = await fetch(`http://127.0.0.1:3000${url}`, { ...options, signal: AbortSignal.timeout(1500) });
+          const contentType = testRes.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            targetUrl = `http://127.0.0.1:3000${url}`;
+          }
+        } catch {
+          // Local server port 3000 not listening or timed out, fallback to current origin
+        }
+      }
+
+      const res = await fetch(targetUrl, options);
       const status = res.status;
       const statusText = res.statusText;
       const headersObj: Record<string, string> = {};
@@ -124,7 +142,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           id: Math.random().toString(36).substring(2, 9),
           timestamp: startTime,
           method: options.method || 'GET',
-          url,
+          url: targetUrl,
           requestBody: reqBody,
           status,
           statusText,
@@ -236,8 +254,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         });
         const data = res.data;
 
-        if (res.ok && data?.success && data?.data) {
-          onSaveCategorizedMedia(data.data);
+        let itemData: MediaMetadata | null = null;
+        if (res.ok && data?.success && data?.data && typeof data !== 'string') {
+          itemData = data.data;
+        } else {
+          itemData = await resolveMediaWithFallback(item.title, item.type, item.year);
+        }
+
+        if (itemData) {
+          onSaveCategorizedMedia(itemData);
           successCount++;
         }
       } catch (e) {
@@ -275,8 +300,71 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       });
 
       const data = res.data;
+      const isHtmlResponse =
+        typeof data === 'string' ||
+        res.headers.get('content-type')?.includes('text/html') ||
+        (typeof data === 'string' && (data.includes('<!doctype') || data.includes('<html'))) ||
+        (data && !data.success);
 
-      if (!res.ok || !data?.success || !data?.data) {
+      let media: MediaMetadata | null = null;
+
+      if (res.ok && !isHtmlResponse && data?.success && data?.data && data.data.title) {
+        media = data.data;
+      } else {
+        // Safe and resilient fallback: Primary API failed, returned 404/500, or HTML SPA redirect
+        // Activate secondary metadata fetcher (TVMaze / TMDB fallback) to resolve titles like '24'
+        console.info(`[Media Resolver] Primary endpoint returned non-JSON / HTML / incomplete for "${q}". Activating secondary metadata fetcher (TVMaze)...`);
+
+        try {
+          const secondary = await fetchSecondaryMetadata(
+            q,
+            targetType || mediaType,
+            yearHint ? parseInt(yearHint, 10) : undefined
+          );
+
+          if (secondary) {
+            media = secondary;
+            setApiLogs((prev) => [
+              {
+                id: Math.random().toString(36).substring(2, 9),
+                timestamp: new Date().toISOString(),
+                method: 'SECONDARY_FALLBACK',
+                url: `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(q)}`,
+                requestBody: { name: q, type: targetType || mediaType, year: yearHint },
+                status: 200,
+                statusText: '200 OK (TVMaze Secondary Fallback)',
+                headers: {
+                  'content-type': 'application/json',
+                  'x-fallback-provider': 'TVMaze API',
+                },
+                responseBody: { success: true, source: secondary.source, data: secondary },
+              },
+              ...prev.slice(0, 49),
+            ]);
+          } else {
+            const resolved = await resolveMediaWithFallback(
+              q,
+              targetType || mediaType,
+              yearHint ? parseInt(yearHint, 10) : undefined
+            );
+            if (resolved) {
+              media = resolved;
+            }
+          }
+        } catch (resolverErr) {
+          console.warn('Secondary / universal resolver warning:', resolverErr);
+          const resolved = await resolveMediaWithFallback(
+            q,
+            targetType || mediaType,
+            yearHint ? parseInt(yearHint, 10) : undefined
+          );
+          if (resolved) {
+            media = resolved;
+          }
+        }
+      }
+
+      if (!media) {
         // Safe instant fallback: Check if query exists in media library or matching item
         const local = mediaLibrary.find(
           (m) => m.title.toLowerCase() === q.toLowerCase() || m.title.toLowerCase().includes(q.toLowerCase())
@@ -287,16 +375,30 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           setSelectedPrimaryCategory(local.genres?.[0] || 'Drama');
           return;
         }
-        const errorString = data?.message || data?.error || 'Unable to retrieve media details';
+        const errorString = (typeof data === 'object' && (data?.message || data?.error)) || 'Unable to retrieve media details';
         throw new Error(errorString);
       }
 
-      const media: MediaMetadata = data.data;
-      setResultData(media);
-      setDetectedCategories(media.genres || ['Drama']);
-      setSelectedPrimaryCategory(media.genres?.[0] || 'Drama');
+      const finalizedMedia: MediaMetadata = media;
+      setResultData(finalizedMedia);
+      setDetectedCategories(finalizedMedia.genres || ['Drama']);
+      setSelectedPrimaryCategory(finalizedMedia.genres?.[0] || 'Drama');
     } catch (err: any) {
       console.error('Web categorization search error:', err);
+      try {
+        const resolved = await resolveMediaWithFallback(
+          q,
+          targetType || mediaType,
+          yearHint ? parseInt(yearHint, 10) : undefined
+        );
+        if (resolved) {
+          setResultData(resolved);
+          setDetectedCategories(resolved.genres || ['Drama']);
+          setSelectedPrimaryCategory(resolved.genres?.[0] || 'Drama');
+          return;
+        }
+      } catch {}
+
       // Safe fallback if network/parsing failed: Check local library
       const local = mediaLibrary.find(
         (m) => m.title.toLowerCase() === q.toLowerCase() || m.title.toLowerCase().includes(q.toLowerCase())
@@ -978,6 +1080,17 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 <span>API Diagnostic Inspector & Response Headers ({apiLogs.length} entries)</span>
               </div>
               <div className="flex items-center gap-2">
+                {onOpenApiDebugger && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenApiDebugger();
+                    }}
+                    className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold flex items-center gap-1 shadow-sm"
+                  >
+                    <span>Open Full API Debugger</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setApiLogs([])}

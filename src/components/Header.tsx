@@ -19,6 +19,7 @@ import {
   History,
   Zap,
   RotateCw,
+  Bug,
 } from 'lucide-react';
 import { SambaConfig, AppTab } from '../types';
 
@@ -32,6 +33,7 @@ interface HeaderProps {
   onQuickSync?: () => void;
   isQuickSyncing?: boolean;
   watchlistCount?: number;
+  onOpenApiDebugger?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -44,6 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
   onQuickSync,
   isQuickSyncing = false,
   watchlistCount = 0,
+  onOpenApiDebugger,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 shadow-md">
@@ -184,6 +187,18 @@ export const Header: React.FC<HeaderProps> = ({
               <Terminal className="w-3.5 h-3.5 text-indigo-400" />
               <span>OS Mount Hub</span>
             </button>
+
+            {onOpenApiDebugger && (
+              <button
+                id="header-api-debugger-btn"
+                onClick={onOpenApiDebugger}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-semibold transition-colors cursor-pointer"
+                title="Open API Debugger & Network Inspector: inspect request headers, body, redirects, and 404/500 diagnostics"
+              >
+                <Bug className="w-3.5 h-3.5 text-amber-400" />
+                <span>API Debugger</span>
+              </button>
+            )}
           </div>
         </div>
 

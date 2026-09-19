@@ -12,6 +12,7 @@ import { VersionHub } from './MediaDetailModal/VersionHub';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 import { downloadMediaBundleZip } from '../utils/zipDownloader';
+import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 
 interface MediaDetailModalProps {
   media: MediaMetadata | null;
@@ -487,15 +488,27 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   const handleBulkRefresh = async () => {
     setIsBulkRefreshing(true);
     try {
-      const data = await apiCall<any>('/api/metadata/generate-synopsis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: media.title,
-          type: media.type,
-          year: media.year,
-        }),
-      });
+      let data: any = null;
+      try {
+        data = await apiCall<any>('/api/metadata/generate-synopsis', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: media.title,
+            type: media.type,
+            year: media.year,
+          }),
+        });
+      } catch (err) {
+        console.warn('apiCall generate-synopsis failed, falling back to client resolver:', err);
+      }
+
+      if (!data || !data.overview) {
+        const resolved = await resolveMediaWithFallback(media.title, media.type, media.year);
+        if (resolved) {
+          data = resolved;
+        }
+      }
 
       if (data) {
         const updated: MediaMetadata = {
@@ -539,21 +552,44 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         method: 'DELETE',
       }).catch(() => {});
 
-      const res = await fetch('/api/metadata/categorize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: media.title,
-          type: media.type,
-          year: media.year,
-          forceRefresh: true,
-        }),
-      });
-      const data = await res.json();
-      if (data && data.success && data.data) {
+      let refreshedData: any = null;
+
+      try {
+        let fetchUrl = '/api/metadata/categorize';
+        if (window.location.origin.includes('tauri://') || (window as any).__TAURI__) {
+          fetchUrl = 'http://127.0.0.1:3000/api/metadata/categorize';
+        }
+
+        const res = await fetch(fetchUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: media.title,
+            type: media.type,
+            year: media.year,
+            forceRefresh: true,
+          }),
+        });
+
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const json = await res.json();
+          if (json && json.success && json.data) {
+            refreshedData = json.data;
+          }
+        }
+      } catch (directErr) {
+        console.warn('Direct server force refresh failed, falling back to client media resolver:', directErr);
+      }
+
+      if (!refreshedData) {
+        refreshedData = await resolveMediaWithFallback(media.title, media.type, media.year);
+      }
+
+      if (refreshedData) {
         const refreshed: MediaMetadata = {
           ...media,
-          ...data.data,
+          ...refreshedData,
           id: media.id,
         };
         setMedia(refreshed);

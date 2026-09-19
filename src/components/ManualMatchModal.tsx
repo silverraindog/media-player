@@ -30,6 +30,7 @@ import {
   EpisodeMetadata,
   SeasonMetadata,
 } from '../types';
+import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import {
   extractSeasonNumberFromPath,
   extractEpisodeInfoFromFilename,
@@ -291,6 +292,28 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           if (newMedia.seasons && newMedia.seasons[0]) {
             setEpisodesList(newMedia.seasons[0].episodes || []);
           }
+          return;
+        }
+      }
+
+      // Offline / Desktop fallback
+      const resolved = await resolveMediaWithFallback(titleQuery, type, customYear);
+      if (resolved) {
+        setCustomOverview(resolved.overview);
+        setCustomTagline(resolved.tagline || '');
+        setCustomGenres(resolved.genres.join(', '));
+        setCustomRating(resolved.rating || 8.5);
+        setCustomPosterUrl(resolved.posterUrl);
+
+        const newMedia: MediaMetadata = {
+          ...resolved,
+          id: `matched-${type}-${Date.now()}`,
+          matchedFilename: fileName,
+        };
+
+        setPreviewMedia(newMedia);
+        if (newMedia.seasons && newMedia.seasons[0]) {
+          setEpisodesList(newMedia.seasons[0].episodes || []);
         }
       }
     } catch (err: any) {

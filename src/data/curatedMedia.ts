@@ -190,6 +190,67 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     source: 'curated-database'
   },
   {
+    id: 'series-24',
+    type: 'series',
+    title: '24',
+    originalTitle: '24',
+    year: 2001,
+    premiered: '2001-11-06',
+    overview: 'Counter Terrorist Unit (CTU) agent Jack Bauer races against time to prevent terrorist attacks, rescue hostages, and protect the United States, with each 24-episode season unfolding in real time over the course of 24 consecutive hours.',
+    tagline: 'Events occur in real time.',
+    genres: ['Action', 'Crime', 'Drama', 'Thriller'],
+    rating: 8.4,
+    votes: 205000,
+    runtime: '44 min/ep',
+    directors: ['Jon Cassar', 'Brad Turner', 'Stephen Hopkins'],
+    studio: '20th Century Fox Television / Imagine Television',
+    certification: 'TV-14',
+    country: 'United States',
+    language: 'English',
+    imdbId: 'tt0285331',
+    tmdbId: '1973',
+    posterUrl: 'https://static.tvmaze.com/uploads/images/original_untouched/4/10492.jpg',
+    fanartUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1600&auto=format&fit=crop&q=80',
+    recommendedFolderStructure: 'TV Shows/24 (2001)/Season 01/',
+    recommendedFilenames: [
+      '24 - S01E01 - 12-00 AM - 1-00 AM.mkv',
+      '24 - S01E02 - 1-00 AM - 2-00 AM.mkv',
+      '24 - S01E03 - 2-00 AM - 3-00 AM.mkv',
+      'tvshow.nfo',
+      'poster.jpg',
+      'fanart.jpg'
+    ],
+    actors: [
+      { name: 'Kiefer Sutherland', role: 'Jack Bauer', thumb: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300' },
+      { name: 'Dennis Haysbert', role: 'Senator David Palmer', thumb: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300' },
+      { name: 'Elisha Cuthbert', role: 'Kim Bauer', thumb: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300' },
+      { name: 'Carlos Bernard', role: 'Tony Almeida', thumb: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=300' },
+      { name: 'Mary Lynn Rajskub', role: 'Chloe O\'Brian', thumb: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=300' }
+    ],
+    seasons: [
+      {
+        seasonNumber: 1,
+        name: 'Season 1',
+        episodeCount: 24,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 1, title: '12:00 AM - 1:00 AM', airDate: '2001-11-06', plot: 'CTU Director Jack Bauer is called into work in the middle of the night to stop an assassination attempt against presidential candidate David Palmer.', rating: 8.6 },
+          { episodeNumber: 2, seasonNumber: 1, title: '1:00 AM - 2:00 AM', airDate: '2001-11-13', plot: 'Jack discovers a keycard left by Walsh pointing to a conspiracy within CTU, while Kimberly and Janet find themselves trapped.', rating: 8.5 },
+          { episodeNumber: 3, seasonNumber: 1, title: '2:00 AM - 3:00 AM', airDate: '2001-11-20', plot: 'Jack follows clues to a warehouse while Palmer tries to manage a potential family scandal.', rating: 8.4 },
+          { episodeNumber: 24, seasonNumber: 1, title: '11:00 PM - 12:00 AM', airDate: '2002-05-21', plot: 'Jack engages the Drazens in a final dock shootout and rushes back to CTU to discover the tragic truth about Nina Myers.', rating: 9.3 }
+        ]
+      },
+      {
+        seasonNumber: 2,
+        name: 'Season 2',
+        episodeCount: 24,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 2, title: '8:00 AM - 9:00 AM', airDate: '2002-10-29', plot: 'President Palmer calls an isolated Jack Bauer back into service when intelligence detects a nuclear bomb threat in Los Angeles.', rating: 8.7 }
+        ]
+      }
+    ],
+    source: 'curated-database'
+  },
+  {
     id: 'series-stranger-things',
     type: 'series',
     title: 'Stranger Things',

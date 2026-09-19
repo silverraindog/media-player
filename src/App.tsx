@@ -19,6 +19,8 @@ import { ManualMatchModal } from './components/ManualMatchModal';
 import { WatchlistTab } from './components/WatchlistTab';
 import { WatchHistoryTab } from './components/WatchHistoryTab';
 import { MusicTab } from './components/MusicTab';
+import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
+import { Bug } from 'lucide-react';
 import {
   MediaMetadata,
   MediaType,
@@ -247,6 +249,33 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
           },
         ],
       },
+      {
+        id: 'folder-24-series',
+        name: '24 (2001)',
+        path: 'Series/24 (2001)',
+        type: 'folder',
+        hasNfo: false,
+        hasPoster: false,
+        mediaType: 'series',
+        metadataStatus: 'metadata-missing',
+        artworkStatus: 'missing',
+        children: [
+          {
+            id: 'file-24-s01e01',
+            name: '24 - S01E01 - 12-00 AM - 1-00 AM.mkv',
+            path: 'Series/24 (2001)/24 - S01E01 - 12-00 AM - 1-00 AM.mkv',
+            type: 'file',
+            size: '1.2 GB',
+          },
+          {
+            id: 'file-24-s01e02',
+            name: '24 - S01E02 - 1-00 AM - 2-00 AM.mkv',
+            path: 'Series/24 (2001)/24 - S01E02 - 1-00 AM - 2-00 AM.mkv',
+            type: 'file',
+            size: '1.2 GB',
+          },
+        ],
+      },
     ],
   },
   {
@@ -421,6 +450,14 @@ const INITIAL_SYNC_LOGS: SyncLog[] = [
     details: 'Wrote movie.nfo & poster.jpg to Movies/Interstellar (2014)/',
     status: 'success',
   },
+  {
+    id: 'log-3',
+    timestamp: new Date().toLocaleTimeString(),
+    type: 'metadata_created',
+    title: 'Series Flagged: 24 (2001)',
+    details: 'Series detected in Series/24 (2001) without NFO or artwork. Flagged as metadata-missing.',
+    status: 'metadata-missing',
+  },
 ];
 
 export default function App() {
@@ -508,6 +545,7 @@ export default function App() {
   }, [classifierSettings]);
 
   const [isClassifierModalOpen, setIsClassifierModalOpen] = useState(false);
+  const [isApiDebuggerOpen, setIsApiDebuggerOpen] = useState(false);
   const [manualMatchModalState, setManualMatchModalState] = useState<{
     isOpen: boolean;
     rawPathOrName?: string;
@@ -1875,6 +1913,7 @@ export default function App() {
         onRefreshStatus={handleTestConnection}
         onToggleExpandAll={() => setIsAllTreeExpanded((prev) => !prev)}
         isAllExpanded={isAllTreeExpanded}
+        onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
       />
 
       {/* Main Header */}
@@ -1888,6 +1927,7 @@ export default function App() {
         onOpenQuickMount={() => setActiveTab('samba-mount')}
         onQuickSync={handleQuickSyncSamba}
         isQuickSyncing={isQuickSyncing}
+        onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
       />
 
       {/* Persistent Sync Progress Banner */}
@@ -1978,6 +2018,7 @@ export default function App() {
             isSyncing={isSyncingShare}
             selectedMediaType={selectedMediaType}
             onSelectMediaType={setSelectedMediaType}
+            onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
           />
         )}
 
@@ -2020,6 +2061,7 @@ export default function App() {
             sambaTree={sambaTree}
             setSambaTree={setSambaTree}
             syncLogs={syncLogs}
+            setSyncLogs={setSyncLogs}
             onOpenDetails={(media) => setDetailModalMedia(media)}
             onOpenInNfoStudio={handleOpenInNfoStudio}
             onRefreshSamba={handleTestConnection}
@@ -2111,6 +2153,26 @@ export default function App() {
           onSaveMatchedMedia={handleSaveMatchedMedia}
         />
       )}
+
+      {/* API Debugger & Network Request Inspector Overlay */}
+      <ApiDebuggerOverlay
+        isOpen={isApiDebuggerOpen}
+        onClose={() => setIsApiDebuggerOpen(false)}
+      />
+
+      {/* Quick API Debugger Floating Action Button */}
+      <button
+        id="floating-api-debugger-trigger"
+        onClick={() => setIsApiDebuggerOpen(true)}
+        className="fixed bottom-4 right-4 z-40 flex items-center gap-2 px-3.5 py-2 rounded-full bg-slate-900/95 hover:bg-slate-800 text-amber-300 border border-amber-500/40 shadow-xl shadow-black/60 text-xs font-semibold backdrop-blur-sm transition-all hover:scale-105 active:scale-95 cursor-pointer group"
+        title="Open API Debugger & Network Request Inspector (⌘D)"
+      >
+        <div className="relative">
+          <Bug className="w-4 h-4 text-amber-400 group-hover:rotate-12 transition-transform" />
+          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+        </div>
+        <span className="font-mono text-[11px] text-slate-200">API Debugger</span>
+      </button>
 
       {/* Clean Minimalist Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">

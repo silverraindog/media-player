@@ -28,6 +28,7 @@ import {
   Settings,
   FolderSearch,
   Zap,
+  Bug,
 } from 'lucide-react';
 import { SambaConfig, MediaType, AppTab } from '../types';
 import { Bookmark, BarChart3, History } from 'lucide-react';
@@ -51,6 +52,7 @@ interface MenuBarProps {
   onRefreshStatus: () => void;
   onToggleExpandAll?: () => void;
   isAllExpanded?: boolean;
+  onOpenApiDebugger?: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -72,6 +74,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onRefreshStatus,
   onToggleExpandAll,
   isAllExpanded = true,
+  onOpenApiDebugger,
 }) => {
   const [openMenu, setOpenMenu] = useState<'file' | 'edit' | 'view' | 'help' | null>(null);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
@@ -125,6 +128,11 @@ export const MenuBar: React.FC<MenuBarProps> = ({
       } else if ((e.metaKey || e.ctrlKey) && e.key === '7') {
         e.preventDefault();
         setActiveTab('stats');
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
+        if (onOpenApiDebugger) {
+          e.preventDefault();
+          onOpenApiDebugger();
+        }
       }
     };
 
@@ -694,6 +702,24 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                       <span>Kodi / Plex Folder Structure Guide</span>
                     </span>
                   </button>
+
+                  {onOpenApiDebugger && (
+                    <button
+                      id="help-menu-api-debugger-btn"
+                      onClick={() =>
+                        executeAction(() => {
+                          onOpenApiDebugger();
+                        })
+                      }
+                      className="w-full px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex items-center justify-between text-xs transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Bug className="w-3.5 h-3.5 text-amber-400" />
+                        <span>API Debugger & Request Logs</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">⌘D</span>
+                    </button>
+                  )}
 
                   <button
                     onClick={() =>

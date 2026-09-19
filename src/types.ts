@@ -69,6 +69,8 @@ export interface MediaMetadata {
   seasons?: SeasonMetadata[];
   tracks?: TrackMetadata[];
   cast?: CastMember[];
+  actors?: CastMember[];
+  primaryCategory?: string;
   nfoContent?: string;
   recommendedFolderStructure: string;
   recommendedFilenames: string[];
@@ -138,15 +140,43 @@ export interface SambaShareNode {
   mediaType?: MediaType;
   matchedMedia?: MediaMetadata;
   artworkStatus?: 'pending' | 'synced' | 'missing' | 'error';
+  metadataStatus?: 'synced' | 'pending' | 'metadata-missing' | 'error';
 }
 
 export interface SyncLog {
   id: string;
   timestamp: string;
-  type: 'metadata_created' | 'samba_pushed' | 'file_renamed' | 'nfo_downloaded' | 'mount_script_copied' | 'connected' | 'db_saved' | 'progress_updated';
+  type: 'metadata_created' | 'samba_pushed' | 'file_renamed' | 'nfo_downloaded' | 'mount_script_copied' | 'connected' | 'db_saved' | 'progress_updated' | 'deep_refresh';
   title: string;
   details: string;
-  status: 'success' | 'pending' | 'warning' | 'error';
+  status: 'success' | 'pending' | 'warning' | 'error' | 'metadata-missing';
+}
+
+export interface DeepRefreshProviderAudit {
+  providerId: string;
+  providerName: string;
+  status: 'pending' | 'querying' | 'success' | 'failed' | 'skipped';
+  details?: string;
+  responseTimeMs?: number;
+}
+
+export interface DeepRefreshJobState {
+  isActive: boolean;
+  totalSeries: number;
+  completedSeries: number;
+  currentSeriesTitle: string;
+  currentSeriesPath?: string;
+  currentProviderIndex: number;
+  activeProviderName: string;
+  providers: DeepRefreshProviderAudit[];
+  overallProgress: number; // 0 - 100
+  results: Array<{
+    title: string;
+    resolvedBy: string;
+    episodesCount?: number;
+    posterAvailable: boolean;
+    status: 'resolved' | 'failed';
+  }>;
 }
 
 export interface SqliteMediaItem {

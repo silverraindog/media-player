@@ -37,6 +37,7 @@ import {
   detectMediaType,
 } from '../utils/mediaExtractor';
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
+import { downloadMediaArtwork } from '../utils/zipDownloader';
 
 export interface ManualMatchModalProps {
   isOpen: boolean;
@@ -201,10 +202,35 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           const taglineText = d.tagline || 'Original Media Vault Edition';
           const genreList = d.genres || (type === 'series' ? ['Drama', 'Series'] : ['Feature Film', 'Cinema']);
           const ratingNum = d.rating || 8.5;
-          const poster =
-            type === 'series'
+          let poster = d.posterUrl && !d.posterUrl.includes('unsplash.com') ? d.posterUrl : '';
+          let fanart = d.fanartUrl && !d.fanartUrl.includes('unsplash.com') ? d.fanartUrl : '';
+
+          // If poster is missing, try live fetch
+          if (!poster) {
+            try {
+              const artRes = await fetch('/api/media/fetch-art', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: d.title || titleQuery, type, year: d.year || customYear }),
+              });
+              if (artRes.ok) {
+                const artData = await artRes.json();
+                if (artData.posterUrl) poster = artData.posterUrl;
+                if (artData.fanartUrl) fanart = artData.fanartUrl;
+              }
+            } catch (e) {
+              console.warn('Modal live art fetch error:', e);
+            }
+          }
+
+          if (!poster) {
+            poster = type === 'series'
               ? 'https://images.unsplash.com/photo-1522869635100-9f4c5e86aa37?w=800&auto=format&fit=crop&q=80'
               : 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80';
+          }
+          if (!fanart) {
+            fanart = poster;
+          }
 
           setCustomOverview(overviewText);
           setCustomTagline(taglineText);
@@ -222,7 +248,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
             genres: genreList,
             rating: ratingNum,
             posterUrl: poster,
-            fanartUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
+            fanartUrl: fanart,
             recommendedFolderStructure:
               type === 'series'
                 ? `TV Shows/${titleQuery}/Season ${String(seasonNum).padStart(2, '0')}/`
@@ -870,7 +896,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
                     {customOverview || previewMedia.overview}
                   </p>
 
-                  <div className="flex flex-wrap gap-1.5 pt-1">
+                  <div className="flex flex-wrap items-center gap-2 pt-2">
                     {(customGenres ? customGenres.split(',') : previewMedia.genres)?.map((g, i) => (
                       <span
                         key={i}
@@ -879,6 +905,24 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
                         {typeof g === 'string' ? g.trim() : g}
                       </span>
                     ))}
+
+                    <div className="flex items-center gap-1.5 ml-auto">
+                      {(customPosterUrl || previewMedia.posterUrl) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url = customPosterUrl || previewMedia.posterUrl;
+                            const name = `${(customTitle || previewMedia.title || 'media').replace(/[/\\?%*:|"<>]/g, '_')}-poster.jpg`;
+                            downloadMediaArtwork(url, name);
+                          }}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-800/60 text-[11px] font-semibold transition cursor-pointer"
+                          title="Download high-resolution poster file directly"
+                        >
+                          <Image className="w-3 h-3" />
+                          <span>Download Art (.jpg)</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

@@ -891,6 +891,100 @@ export async function deleteMediaFromDb(id: string): Promise<void> {
   persistDbToDisk();
 }
 
+export async function renameVaultMediaFile(
+  oldPath: string,
+  newPath: string,
+  newFileName: string,
+  mediaId?: string
+): Promise<{ success: boolean; updatedCount: number; newTitle: string }> {
+  const db = await getDatabase();
+  let updatedCount = 0;
+
+  // Clean title without file extension
+  const cleanTitle = newFileName
+    .replace(/\.[^/.]+$/, '')
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .replace(/[._]/g, ' ')
+    .trim() || newFileName;
+
+  const oldBaseName = path.basename(oldPath);
+  const oldBaseNoExt = oldBaseName.replace(/\.[^/.]+$/, '').trim();
+
+  // 1. Update matching media_items by mediaId if specified
+  if (mediaId) {
+    try {
+      db.run(
+        `UPDATE media_items 
+         SET title = COALESCE(NULLIF(?, ''), title),
+             recommended_folder = REPLACE(COALESCE(recommended_folder, ''), ?, ?),
+             updated_at = datetime('now')
+         WHERE id = ?`,
+        [cleanTitle, oldPath, newPath, mediaId]
+      );
+      updatedCount++;
+    } catch (e) {
+      console.warn('Error updating media item by ID during rename:', e);
+    }
+  }
+
+  // 2. Update media_items where recommended_folder contains oldPath or oldBaseName
+  try {
+    db.run(
+      `UPDATE media_items 
+       SET recommended_folder = REPLACE(recommended_folder, ?, ?),
+           updated_at = datetime('now')
+       WHERE recommended_folder LIKE ? OR recommended_folder LIKE ?`,
+      [oldPath, newPath, `%${oldPath}%`, `%${oldBaseName}%`]
+    );
+  } catch (e) {
+    console.warn('Error updating recommended_folder in media_items:', e);
+  }
+
+  // 3. Update thumbnail_metadata_cache for oldPath
+  try {
+    db.run(
+      `UPDATE thumbnail_metadata_cache 
+       SET media_path = ?, title = COALESCE(NULLIF(?, ''), title), last_accessed_at = ?
+       WHERE media_path = ? OR media_path = ?`,
+      [newPath, cleanTitle, Date.now(), oldPath, oldBaseName]
+    );
+  } catch (e) {
+    console.warn('Error updating thumbnail cache during rename:', e);
+  }
+
+  // 4. Update user_watchlist if title matches
+  if (mediaId) {
+    try {
+      db.run(
+        `UPDATE user_watchlist SET title = COALESCE(NULLIF(?, ''), title) WHERE media_id = ?`,
+        [cleanTitle, mediaId]
+      );
+    } catch (e) {
+      console.warn('Error updating user_watchlist during rename:', e);
+    }
+  }
+
+  // 5. Update watch_history_log if matching old title or mediaId
+  try {
+    if (mediaId) {
+      db.run(
+        `UPDATE watch_history_log SET title = COALESCE(NULLIF(?, ''), title) WHERE media_id = ? OR series_id = ?`,
+        [cleanTitle, mediaId, mediaId]
+      );
+    } else if (oldBaseNoExt) {
+      db.run(
+        `UPDATE watch_history_log SET title = COALESCE(NULLIF(?, ''), title) WHERE title LIKE ?`,
+        [cleanTitle, `%${oldBaseNoExt}%`]
+      );
+    }
+  } catch (e) {
+    console.warn('Error updating watch_history_log during rename:', e);
+  }
+
+  persistDbToDisk();
+  return { success: true, updatedCount, newTitle: cleanTitle };
+}
+
 export async function getAllWatchProgress(): Promise<WatchProgressDb[]> {
   const db = await getDatabase();
   const res = db.exec(`

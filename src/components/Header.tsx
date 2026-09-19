@@ -17,6 +17,8 @@ import {
   BarChart3,
   GitMerge,
   History,
+  Zap,
+  RotateCw,
 } from 'lucide-react';
 import { SambaConfig, AppTab } from '../types';
 
@@ -27,6 +29,8 @@ interface HeaderProps {
   setSambaConfig: React.Dispatch<React.SetStateAction<SambaConfig>>;
   isConnected: boolean;
   onOpenQuickMount: () => void;
+  onQuickSync?: () => void;
+  isQuickSyncing?: boolean;
   watchlistCount?: number;
 }
 
@@ -37,6 +41,8 @@ export const Header: React.FC<HeaderProps> = ({
   setSambaConfig,
   isConnected,
   onOpenQuickMount,
+  onQuickSync,
+  isQuickSyncing = false,
   watchlistCount = 0,
 }) => {
   return (
@@ -148,8 +154,30 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Right Action Info */}
           <div className="flex items-center space-x-2">
+            {/* QuickSync Shallow Scan Button */}
+            {onQuickSync && (
               <button
-                id="header-mount-hub-btn"
+                id="header-quicksync-btn"
+                onClick={onQuickSync}
+                disabled={isQuickSyncing}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-md transition-all cursor-pointer select-none ${
+                  isQuickSyncing
+                    ? 'bg-amber-950/80 border-amber-500/50 text-amber-300 shadow-amber-950/40 cursor-wait'
+                    : 'bg-gradient-to-r from-emerald-600/90 to-teal-600/90 hover:from-emerald-500 hover:to-teal-500 text-white border-emerald-500/40 shadow-emerald-950/40 active:scale-95'
+                }`}
+                title="QuickSync: Shallow scan of top-level Samba directories to detect new folders instantly without re-indexing existing files"
+              >
+                {isQuickSyncing ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-300 shrink-0" />
+                ) : (
+                  <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300 shrink-0" />
+                )}
+                <span>{isQuickSyncing ? 'QuickSyncing...' : 'QuickSync'}</span>
+              </button>
+            )}
+
+            <button
+              id="header-mount-hub-btn"
               onClick={() => setActiveTab('samba-mount')}
               className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-colors"
             >

@@ -113,13 +113,13 @@ export function isMediaFile(
   return !!config.enabledCategories[cat];
 }
 
-// Sample streaming URLs for in-app video & audio player
+// Sample streaming URLs for in-app video & audio player (HD Live Cinema feeds)
 export const SAMPLE_VIDEO_STREAMS = {
   movie: '/api/media/sample-video',
-  scifi: '/api/media/sintel-trailer',
+  scifi: 'https://vjs.zencdn.net/v/oceans.mp4',
   series: 'https://vjs.zencdn.net/v/oceans.mp4',
-  action: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
-  nature: 'https://media.w3.org/2010/05/bunny/trailer.mp4',
+  action: 'https://vjs.zencdn.net/v/oceans.mp4',
+  nature: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
 };
 
 export const SAMPLE_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';

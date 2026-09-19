@@ -1,6 +1,7 @@
 import React from 'react';
-import { Copy, Database, FileCode2, Check, FolderPlus, Download } from 'lucide-react';
+import { Copy, Database, FileCode2, Check, FolderPlus, Download, Image as ImageIcon } from 'lucide-react';
 import { MediaMetadata } from '../../types';
+import { downloadMediaArtwork } from '../../utils/zipDownloader';
 
 interface MediaDetailFooterProps {
   media: MediaMetadata;
@@ -85,6 +86,22 @@ export const MediaDetailFooter: React.FC<MediaDetailFooterProps> = ({
       </div>
 
       <div className="flex items-center gap-2">
+        {media.posterUrl && (
+          <button
+            id="modal-btn-download-art"
+            type="button"
+            onClick={() => {
+              const filename = `${media.title.replace(/[/\\?%*:|"<>]/g, '_')}-${media.type === 'album' ? 'folder' : 'poster'}.jpg`;
+              downloadMediaArtwork(media.posterUrl, filename);
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs font-semibold border border-indigo-900/50 transition cursor-pointer"
+            title="Download high-resolution poster artwork file directly"
+          >
+            <ImageIcon className="w-3.5 h-3.5" />
+            <span>Download Art (.jpg)</span>
+          </button>
+        )}
+
         <button
           id="modal-btn-push-samba"
           onClick={handlePush}

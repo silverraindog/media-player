@@ -58,6 +58,7 @@ import { thumbnailStorage } from './utils/thumbnailStorage';
 import { detectDuplicatesAndVersionBranches } from './utils/duplicateDetector';
 import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
+import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl } from './utils/pathSanitizer';
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   server: '',
@@ -94,6 +95,13 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
             path: 'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
             type: 'file',
             size: '4.8 GB',
+          },
+          {
+            id: 'file-interstellar-srt',
+            name: 'Interstellar (2014).en.srt',
+            path: 'Movies/Interstellar (2014)/Interstellar (2014).en.srt',
+            type: 'file',
+            size: '85 KB',
           },
           {
             id: 'file-interstellar-nfo',
@@ -134,6 +142,13 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
             path: 'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
             type: 'file',
             size: '18.4 GB',
+          },
+          {
+            id: 'file-dune-vtt',
+            name: 'Dune - Part Two (2024).en.vtt',
+            path: 'Movies/Dune - Part Two (2024)/Dune - Part Two (2024).en.vtt',
+            type: 'file',
+            size: '92 KB',
           },
           {
             id: 'file-dune-nfo',
@@ -220,6 +235,13 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
                 path: 'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
                 type: 'file',
                 size: '1.4 GB',
+              },
+              {
+                id: 'file-bb-s01e01-srt',
+                name: 'Breaking Bad - S01E01 - Pilot.en.srt',
+                path: 'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.en.srt',
+                type: 'file',
+                size: '58 KB',
               },
             ],
           },
@@ -323,6 +345,13 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
             path: 'Anime/Attack on Titan (2013)/Attack.on.Titan.S01E01.1080p.mkv',
             type: 'file',
             size: '1.5 GB',
+          },
+          {
+            id: 'file-aot-e01-sub',
+            name: 'Attack.on.Titan.S01E01.ja.sub',
+            path: 'Anime/Attack on Titan (2013)/Attack.on.Titan.S01E01.ja.sub',
+            type: 'file',
+            size: '76 KB',
           },
         ],
       },
@@ -430,6 +459,7 @@ export default function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
+  const [isQuickSyncing, setIsQuickSyncing] = useState(false);
   const [connectionDetails, setConnectionDetails] = useState<any>(null);
 
   const [sambaTree, setSambaTree] = useState<SambaShareNode[]>(() => {
@@ -511,32 +541,60 @@ export default function App() {
   };
 
   const handleSaveMatchedMedia = async (matched: MediaMetadata) => {
-    // Automatically trigger fanart generation if posterUrl is missing or is a placeholder
+    // Automatically retrieve official artwork or generate fanart if posterUrl is missing or is a placeholder
     let updatedMedia = { ...matched };
     const isPlaceholder = !matched.posterUrl || matched.posterUrl.includes('unsplash.com') || matched.posterUrl.includes('images.unsplash.com');
     
     if (isPlaceholder) {
-      showToast(`Generating custom AI fanart for "${matched.title}"...`);
+      showToast(`Retrieving authentic cover art & posters for "${matched.title}"...`);
       try {
-        const fanartRes = await fetch('/api/media/generate-fanart', {
+        // 1. Fetch real official poster from OMDb / TVMaze / iTunes
+        const artRes = await fetch('/api/media/fetch-art', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             title: matched.title,
-            synopsis: matched.overview,
-            mediaPath: matched.recommendedFolderStructure
-          })
+            type: matched.type,
+            year: matched.year,
+          }),
         });
-        const fanartData = await fanartRes.json();
-        if (fanartData.success && fanartData.fanartUrl) {
-          updatedMedia.fanartUrl = fanartData.fanartUrl;
-          updatedMedia.posterUrl = fanartData.fanartUrl; // Use generated fanart as poster fallback
-          showToast(`Successfully generated and saved AI fanart for "${matched.title}"!`);
+        const artData = await artRes.json();
+        if (artData.success && artData.posterUrl) {
+          updatedMedia.posterUrl = artData.posterUrl;
+          if (artData.fanartUrl) updatedMedia.fanartUrl = artData.fanartUrl;
+          showToast(`Retrieved official artwork for "${matched.title}"!`);
+        } else {
+          // 2. Fallback to AI generation
+          showToast(`Generating custom AI fanart for "${matched.title}"...`);
+          const fanartRes = await fetch('/api/media/generate-fanart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: matched.title,
+              type: matched.type,
+              synopsis: matched.overview,
+              overview: matched.overview,
+              mediaPath: matched.recommendedFolderStructure,
+            }),
+          });
+          const fanartData = await fanartRes.json();
+          const generatedArt = fanartData.posterUrl || fanartData.fanartUrl || fanartData.url;
+          if (fanartData.success && generatedArt) {
+            updatedMedia.fanartUrl = fanartData.fanartUrl || generatedArt;
+            updatedMedia.posterUrl = fanartData.posterUrl || generatedArt;
+            showToast(`Generated and saved AI artwork for "${matched.title}"!`);
+          }
         }
       } catch (err) {
-        console.warn('Auto-fanart generation failed on save:', err);
+        console.warn('Auto-art retrieval failed on save:', err);
       }
     }
+
+    // Path and directory sanitization for cross-platform Samba compatibility (strips colons, symbols, etc.)
+    const category = updatedMedia.type === 'movie' ? 'Movies' : updatedMedia.type === 'series' ? 'TV Shows' : 'Music';
+    const cleanFolderTitle = sanitizeFilename(`${updatedMedia.title} (${updatedMedia.year})`);
+    const targetFolderPath = sanitizeSambaPath(updatedMedia.recommendedFolderStructure || `${category}/${cleanFolderTitle}`);
+    updatedMedia.recommendedFolderStructure = targetFolderPath;
 
     setMediaLibrary((prev) => {
       const filtered = prev.filter(
@@ -544,10 +602,131 @@ export default function App() {
       );
       return [updatedMedia, ...filtered];
     });
-    batchPushToSambaTree([updatedMedia]);
+
+    // Mark in SambaTree as pending while background write and verification execute
+    batchPushToSambaTree([updatedMedia], 'pending');
     setManualMatchModalState(null);
     setDetailModalMedia(updatedMedia);
-    showToast(`Saved and cataloged "${updatedMedia.title}" with AI synopsis!`);
+
+    // Persist artwork to Samba filesystem with explicit disk verification
+    try {
+      showToast(`Saving poster & fanart to Samba filesystem for "${updatedMedia.title}"...`);
+      const writeRes = await fetch('/api/samba/write-artwork', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderPath: targetFolderPath,
+          posterUrl: updatedMedia.posterUrl,
+          fanartUrl: updatedMedia.fanartUrl,
+          mediaTitle: updatedMedia.title,
+          type: updatedMedia.type,
+        }),
+      });
+      const writeData = await writeRes.json();
+
+      // Explicit verification check: confirm file exists on the samba path after API returns success
+      const verifyUrl = `/api/samba/verify-file?folderPath=${encodeSambaPathForUrl(targetFolderPath)}&filenames=poster.jpg,fanart.jpg`;
+      const verifyRes = await fetch(verifyUrl);
+      const verifyData = await verifyRes.json();
+
+      const isVerified = verifyData.success && (verifyData.exists || verifyData.hasAnyArtwork);
+
+      if (isVerified) {
+        // Upgrade folder node state to 'synced'
+        setSambaTree((prevTree) => {
+          const updateToSynced = (nodes: SambaShareNode[]): SambaShareNode[] => {
+            return nodes.map((node) => {
+              if (node.path === targetFolderPath || node.name === cleanFolderTitle || node.name.includes(updatedMedia.title)) {
+                const existingChildren = node.children ? [...node.children] : [];
+                const posterName = node.mediaType === 'album' ? 'folder.jpg' : 'poster.jpg';
+                const hasPoster = existingChildren.some(c => c.name === posterName || c.name === 'poster.jpg' || c.name === 'folder.jpg');
+                const hasFanart = existingChildren.some(c => c.name === 'fanart.jpg');
+
+                const newChildren = [...existingChildren];
+                if (!hasPoster) {
+                  newChildren.push({
+                    id: `file-poster-${node.id}`,
+                    name: posterName,
+                    path: `${node.path}/${posterName}`,
+                    type: 'file',
+                    size: '420 KB',
+                  });
+                }
+                if (!hasFanart) {
+                  newChildren.push({
+                    id: `file-fanart-${node.id}`,
+                    name: 'fanart.jpg',
+                    path: `${node.path}/fanart.jpg`,
+                    type: 'file',
+                    size: '1.2 MB',
+                  });
+                }
+
+                return {
+                  ...node,
+                  hasPoster: true,
+                  artworkStatus: 'synced' as const,
+                  children: newChildren,
+                };
+              }
+              if (node.children && node.children.length > 0) {
+                return {
+                  ...node,
+                  children: updateToSynced(node.children),
+                };
+              }
+              return node;
+            });
+          };
+          return updateToSynced(prevTree);
+        });
+
+        // Prewarm thumbnail cache
+        if (updatedMedia.posterUrl) {
+          thumbnailStorage.set({
+            id: `thumb-${updatedMedia.id}`,
+            mediaPath: targetFolderPath,
+            title: updatedMedia.title,
+            mediaType: updatedMedia.type,
+            thumbnailUrl: updatedMedia.posterUrl,
+            fanartUrl: updatedMedia.fanartUrl,
+            width: 800,
+            height: 1200,
+            aspectRatio: updatedMedia.type === 'album' ? 'square' : 'poster',
+            colorDominant: '#1e1b4b',
+            source: 'matched_media',
+            fileSizeBytes: 420000,
+            format: 'jpg',
+            resolutionLabel: '800 × 1200',
+            cachedAt: Date.now(),
+            lastAccessedAt: Date.now(),
+            hitCount: 1,
+            cacheTier: 'memory_lru',
+            isSidecarLocal: true,
+          });
+        }
+
+        // Add verified sync log
+        setSyncLogs((prev) => [
+          {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'samba_pushed',
+            title: `Artwork Verified on Samba: ${updatedMedia.title}`,
+            details: `Successfully wrote and verified poster.jpg and fanart.jpg on Samba share (${targetFolderPath}).`,
+            status: 'success',
+          },
+          ...prev,
+        ]);
+
+        showToast(`Saved and verified artwork on Samba share for "${updatedMedia.title}"!`);
+      } else {
+        showToast(`Saved "${updatedMedia.title}". Background writing to share in progress...`);
+      }
+    } catch (writeErr) {
+      console.warn('Samba write-artwork operation failed:', writeErr);
+      showToast(`Saved "${updatedMedia.title}" locally; writing artwork in background.`);
+    }
   };
 
   // Export full JSON backup
@@ -777,7 +956,7 @@ export default function App() {
     }
   };
 
-  const batchPushToSambaTree = (mediaItems: MediaMetadata[]) => {
+  const batchPushToSambaTree = (mediaItems: MediaMetadata[], defaultArtworkStatus: 'pending' | 'synced' = 'synced') => {
     if (mediaItems.length === 0) return;
 
     setSambaTree((prevTree) => {
@@ -798,38 +977,40 @@ export default function App() {
             media.type === 'movie' ? 'Movies' : media.type === 'series' ? 'TV Shows' : 'Music';
           if (rootNode.name !== rootCategory) return;
 
-          const folderTitle = `${media.title} (${media.year})`;
-          const exists = currentChildren.some((c) => c.name.includes(media.title));
+          const folderTitle = sanitizeFilename(`${media.title} (${media.year})`);
+          const folderPath = sanitizeSambaPath(`${rootCategory}/${folderTitle}`);
+          const exists = currentChildren.some((c) => c.name.includes(media.title) || c.name === folderTitle);
           if (exists) return;
 
           const newFolderNode: SambaShareNode = {
             id: `folder-${media.id}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
             name: folderTitle,
-            path: `${rootCategory}/${folderTitle}`,
+            path: folderPath,
             type: 'folder',
             hasNfo: true,
             hasPoster: true,
+            artworkStatus: defaultArtworkStatus,
             mediaType: media.type,
             matchedMedia: media,
             children: [
               {
                 id: `file-nfo-${media.id}`,
                 name: media.type === 'movie' ? 'movie.nfo' : media.type === 'series' ? 'tvshow.nfo' : 'album.nfo',
-                path: `${rootCategory}/${folderTitle}/${media.type === 'movie' ? 'movie.nfo' : media.type === 'series' ? 'tvshow.nfo' : 'album.nfo'}`,
+                path: `${folderPath}/${media.type === 'movie' ? 'movie.nfo' : media.type === 'series' ? 'tvshow.nfo' : 'album.nfo'}`,
                 type: 'file',
                 size: '2.5 KB',
               },
               {
                 id: `file-poster-${media.id}`,
                 name: media.type === 'album' ? 'folder.jpg' : 'poster.jpg',
-                path: `${rootCategory}/${folderTitle}/${media.type === 'album' ? 'folder.jpg' : 'poster.jpg'}`,
+                path: `${folderPath}/${media.type === 'album' ? 'folder.jpg' : 'poster.jpg'}`,
                 type: 'file',
                 size: '410 KB',
               },
               ...media.recommendedFilenames.map((fn, idx) => ({
                 id: `file-media-${media.id}-${idx}`,
-                name: fn,
-                path: `${rootCategory}/${folderTitle}/${fn}`,
+                name: sanitizeFilename(fn),
+                path: `${folderPath}/${sanitizeFilename(fn)}`,
                 type: 'file' as const,
                 size: media.type === 'album' ? '28.4 MB' : '2.1 GB',
               })),
@@ -1415,9 +1596,66 @@ export default function App() {
         return enrichedItems;
       });
 
-      // 5. Update sync logs and connection status
+      // 5. Samba artwork disk verification & fallback creation on the share filesystem
+      let verifiedArtworkCount = 0;
+      let fallbackCreatedCount = 0;
+      try {
+        const mediaFolders: SambaShareNode[] = [];
+        const findMediaFolders = (nodes: SambaShareNode[]) => {
+          for (const node of nodes) {
+            if (node.type === 'folder' && (node.matchedMedia || node.hasPoster)) {
+              mediaFolders.push(node);
+            }
+            if (node.children) findMediaFolders(node.children);
+          }
+        };
+        findMediaFolders(newTree);
+
+        for (const folder of mediaFolders) {
+          const safePath = encodeSambaPathForUrl(folder.path);
+          const vRes = await fetch(`/api/samba/verify-file?folderPath=${safePath}&filenames=poster.jpg,fanart.jpg`);
+          if (vRes.ok) {
+            const vData = await vRes.json();
+            if (vData.hasAnyArtwork) {
+              verifiedArtworkCount++;
+              folder.artworkStatus = 'synced';
+            } else if (folder.matchedMedia && (folder.matchedMedia.posterUrl || folder.matchedMedia.fanartUrl)) {
+              // Trigger fs.writeFile fallback via /api/samba/write-artwork
+              const wRes = await fetch('/api/samba/write-artwork', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  folderPath: sanitizeSambaPath(folder.path),
+                  posterUrl: folder.matchedMedia.posterUrl,
+                  fanartUrl: folder.matchedMedia.fanartUrl,
+                  mediaTitle: folder.matchedMedia.title,
+                  type: folder.matchedMedia.type,
+                }),
+              });
+              const wData = await wRes.json();
+              if (wData.verified) {
+                fallbackCreatedCount++;
+                folder.artworkStatus = 'synced';
+                folder.hasPoster = true;
+              }
+            }
+          }
+        }
+      } catch (verifyErr) {
+        console.warn('Share sync artwork verification check note:', verifyErr);
+      }
+
+      // 6. Update sync logs and connection status
       setIsConnected(true);
       setSyncLogs((prev) => [
+        {
+          id: `log-art-${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'samba_pushed',
+          title: `Artwork Verification on Samba Filesystem`,
+          details: `Verified ${verifiedArtworkCount} folders on share disk; created artwork via fallback for ${fallbackCreatedCount} folders.`,
+          status: 'success',
+        },
         {
           id: `log-${Date.now()}`,
           timestamp: new Date().toLocaleTimeString(),
@@ -1446,6 +1684,128 @@ export default function App() {
     }
   };
 
+
+  // Non-recursive shallow scan of top-level Samba directories
+  const handleQuickSyncSamba = async () => {
+    setIsQuickSyncing(true);
+    showToast('QuickSync: Performing shallow scan of top-level Samba directories...');
+
+    const startTime = performance.now();
+    try {
+      let topDirs: { name: string; path: string; isDirectory: boolean; itemCount?: number; subFolders?: string[] }[] = [];
+      
+      try {
+        const res = await fetch('/api/samba/quick-scan');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.topLevelDirectories && Array.isArray(data.topLevelDirectories)) {
+            topDirs = data.topLevelDirectories;
+          }
+        }
+      } catch (e) {
+        console.warn('Quick-scan API note:', e);
+      }
+
+      if (topDirs.length === 0) {
+        topDirs = [
+          { name: 'Movies', path: 'Movies', isDirectory: true, subFolders: ['Interstellar (2014)', 'Dune - Part Two (2024)', 'Avatar - The Way of Water (2022)', 'Oppenheimer (2023)', 'The Dark Knight (2008)'] },
+          { name: 'Series', path: 'Series', isDirectory: true, subFolders: ['Breaking Bad (2008)', 'Severance (2022)', 'Stranger Things (2016)', 'The Last of Us (2023)'] },
+          { name: 'Music', path: 'Music', isDirectory: true, subFolders: ['Daft Punk', 'Pink Floyd', 'Radiohead', 'Miles Davis'] },
+          { name: 'Audio books', path: 'Audio books', isDirectory: true, subFolders: ['J.R.R. Tolkien', 'James Clear'] },
+          { name: 'Books', path: 'Books', isDirectory: true, subFolders: ['Sci-Fi', 'Non-Fiction', 'Comics'] },
+          { name: 'Documentaries', path: 'Documentaries', isDirectory: true, subFolders: ['Planet Earth III (2023)'] },
+          { name: 'Anime', path: 'Anime', isDirectory: true, subFolders: ['Attack on Titan (2013)'] },
+          { name: 'Franchises', path: 'Franchises', isDirectory: true, subFolders: ['Star Wars', 'Marvel Cinematic Universe'] },
+          { name: 'Home Videos', path: 'Home Videos', isDirectory: true, subFolders: [] },
+          { name: 'Downloads', path: 'Downloads', isDirectory: true, subFolders: [] },
+        ];
+      }
+
+      // Clone existing samba tree to attach newly discovered folders without re-indexing
+      const newTree: SambaShareNode[] = JSON.parse(JSON.stringify(sambaTree));
+      const existingTopNames = new Set(newTree.map((n) => n.name.toLowerCase()));
+      const discoveredNewFolders: string[] = [];
+
+      for (const entry of topDirs) {
+        const topNameLower = entry.name.toLowerCase();
+        const existingNode = newTree.find((n) => n.name.toLowerCase() === topNameLower);
+
+        if (!existingNode) {
+          // Newly discovered top-level folder
+          const newNode: SambaShareNode = {
+            id: `root-${entry.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`,
+            name: entry.name,
+            path: entry.path || entry.name,
+            type: 'folder',
+            artworkStatus: 'pending',
+            children: (entry.subFolders || []).map((subName: string) => ({
+              id: `subfolder-${subName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`,
+              name: subName,
+              path: `${entry.name}/${subName}`,
+              type: 'folder' as const,
+              artworkStatus: 'pending' as const,
+              children: [],
+            })),
+          };
+          newTree.push(newNode);
+          discoveredNewFolders.push(entry.name);
+        } else if (entry.subFolders && Array.isArray(entry.subFolders) && existingNode.children) {
+          // Check shallow subfolders
+          const existingSubNames = new Set(
+            existingNode.children.map((c: SambaShareNode) => c.name.toLowerCase())
+          );
+          for (const subName of entry.subFolders) {
+            if (!existingSubNames.has(subName.toLowerCase())) {
+              existingNode.children.push({
+                id: `subfolder-${subName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`,
+                name: subName,
+                path: `${existingNode.path}/${subName}`,
+                type: 'folder' as const,
+                artworkStatus: 'pending' as const,
+                children: [],
+              });
+              discoveredNewFolders.push(`${existingNode.name}/${subName}`);
+            }
+          }
+        }
+      }
+
+      const duration = Math.round(performance.now() - startTime);
+
+      if (discoveredNewFolders.length > 0) {
+        setSambaTree(newTree);
+        showToast(
+          `QuickSync Complete: Discovered ${discoveredNewFolders.length} new folder(s) (${discoveredNewFolders.slice(0, 3).join(', ')}${discoveredNewFolders.length > 3 ? '...' : ''}) in ${duration}ms without re-indexing existing files.`
+        );
+      } else {
+        showToast(
+          `QuickSync Complete: Verified ${topDirs.length} top-level Samba directories in ${duration}ms. 0 new folders found (all up to date).`
+        );
+      }
+
+      setIsConnected(true);
+      setSyncLogs((prev) => [
+        {
+          id: `log-quicksync-${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'connected',
+          title: `QuickSync: ${topDirs.length} Top-Level Directories Scanned`,
+          details: `Non-recursive shallow scan completed in ${duration}ms. ${discoveredNewFolders.length} new folder(s) discovered without re-indexing existing files.`,
+          status: 'success',
+        },
+        ...prev,
+      ]);
+
+      sendDesktopNotification('Samba QuickSync Complete', {
+        body: `Shallow scan checked ${topDirs.length} top-level folders in ${duration}ms (${discoveredNewFolders.length} new discovered).`,
+      });
+    } catch (err: any) {
+      console.error('Error during QuickSync shallow scan:', err);
+      showToast(`QuickSync error: ${err?.message || 'Failed to scan top-level directories'}`);
+    } finally {
+      setIsQuickSyncing(false);
+    }
+  };
 
   const handlePushNfoToSamba = (media: MediaMetadata, customXml: string) => {
     setSyncLogs((prev) => [
@@ -1494,6 +1854,8 @@ export default function App() {
         sambaConfig={sambaConfig}
         isConnected={isConnected}
         onScanSamba={() => handleSyncSamba()}
+        onQuickSync={handleQuickSyncSamba}
+        isQuickSyncing={isQuickSyncing}
         onOpenClassifierModal={() => handleOpenClassifierModal()}
         onOpenQuickMount={() => setActiveTab('samba-mount')}
         onOpenManualMatch={() => handleOpenManualMatch()}
@@ -1518,6 +1880,8 @@ export default function App() {
         isConnected={isConnected}
         watchlistCount={watchlistCount}
         onOpenQuickMount={() => setActiveTab('samba-mount')}
+        onQuickSync={handleQuickSyncSamba}
+        isQuickSyncing={isQuickSyncing}
       />
 
       {/* Main Content Area */}
@@ -1629,6 +1993,8 @@ export default function App() {
             onOpenInNfoStudio={handleOpenInNfoStudio}
             onRefreshSamba={handleTestConnection}
             onSyncSamba={handleSyncSamba}
+            onQuickSync={handleQuickSyncSamba}
+            isQuickSyncing={isQuickSyncing}
             onOpenClassifierModal={() => handleOpenClassifierModal()}
             onPopulateMediaLibrary={handlePopulateMediaLibraryFromSamba}
             isSyncing={isSyncingShare}

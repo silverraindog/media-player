@@ -68,6 +68,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false);
   const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
   const [isGeneratingFanart, setIsGeneratingFanart] = useState(false);
+  const [isFetchingArt, setIsFetchingArt] = useState(false);
   const [generatingEpNum, setGeneratingEpNum] = useState<number | null>(null);
   const [editingEpNum, setEditingEpNum] = useState<number | null>(null);
   const [customEpPlot, setCustomEpPlot] = useState<string>('');
@@ -420,6 +421,36 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
     }
   };
 
+  const handleFetchOfficialArt = async () => {
+    setIsFetchingArt(true);
+    try {
+      const data = await apiCall<{ success: boolean; posterUrl?: string; fanartUrl?: string }>('/api/media/fetch-art', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: media.title,
+          type: media.type,
+          year: media.year,
+        }),
+      });
+
+      if (data && data.success && data.posterUrl) {
+        const updated: MediaMetadata = {
+          ...media,
+          posterUrl: data.posterUrl,
+          fanartUrl: data.fanartUrl || media.fanartUrl || data.posterUrl,
+        };
+        setMedia(updated);
+        if (onUpdateMedia) onUpdateMedia(updated);
+        persistMediaChange(updated);
+      }
+    } catch (err) {
+      console.error('Fetch official artwork failed:', err);
+    } finally {
+      setIsFetchingArt(false);
+    }
+  };
+
   const handleBulkRefresh = async () => {
     setIsBulkRefreshing(true);
     try {
@@ -491,6 +522,8 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
           isRefreshing={isBulkRefreshing}
           onGenerateFanart={handleGenerateFanart}
           isGeneratingFanart={isGeneratingFanart}
+          onFetchOfficialArt={handleFetchOfficialArt}
+          isFetchingArt={isFetchingArt}
         />
 
         {/* Modal Body - Scrollable */}

@@ -27,6 +27,7 @@ import {
   MonitorPlay,
   Settings,
   FolderSearch,
+  Zap,
 } from 'lucide-react';
 import { SambaConfig, MediaType, AppTab } from '../types';
 import { Bookmark, BarChart3, History } from 'lucide-react';
@@ -39,6 +40,8 @@ interface MenuBarProps {
   sambaConfig: SambaConfig;
   isConnected: boolean;
   onScanSamba: () => void;
+  onQuickSync?: () => void;
+  isQuickSyncing?: boolean;
   onOpenClassifierModal: () => void;
   onOpenQuickMount: () => void;
   onOpenManualMatch?: () => void;
@@ -58,6 +61,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   sambaConfig,
   isConnected,
   onScanSamba,
+  onQuickSync,
+  isQuickSyncing = false,
   onOpenClassifierModal,
   onOpenQuickMount,
   onOpenManualMatch,
@@ -169,6 +174,27 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
               {openMenu === 'file' && (
                 <div className="absolute left-0 top-full mt-0.5 w-64 bg-slate-900 border border-slate-700/80 rounded-lg shadow-2xl py-1 text-slate-200 z-50 animate-in fade-in slide-in-from-top-1 duration-100">
+                  {onQuickSync && (
+                    <button
+                      id="menu-file-quicksync-btn"
+                      onClick={() =>
+                        executeAction(() => {
+                          onQuickSync();
+                        })
+                      }
+                      disabled={isQuickSyncing}
+                      className="w-full px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex items-center justify-between text-xs transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                        <span className="font-medium text-amber-200">
+                          {isQuickSyncing ? 'QuickSyncing...' : 'QuickSync (Shallow Scan)'}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">⇧⌘R</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() =>
                       executeAction(() => {

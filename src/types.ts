@@ -133,8 +133,11 @@ export interface SambaShareNode {
   children?: SambaShareNode[];
   hasNfo?: boolean;
   hasPoster?: boolean;
+  hasSubtitles?: boolean;
+  subtitleFiles?: string[];
   mediaType?: MediaType;
   matchedMedia?: MediaMetadata;
+  artworkStatus?: 'pending' | 'synced' | 'missing' | 'error';
 }
 
 export interface SyncLog {
@@ -440,5 +443,24 @@ export interface LibraryDistributionStatsResponse {
   health?: MetadataHealthStats;
   cachedThumbnailsCount?: number;
 }
+
+export type MediaSortOption =
+  | 'affinity'
+  | 'rating-desc'
+  | 'year-desc'
+  | 'year-asc'
+  | 'title-asc'
+  | 'title-desc'
+  | 'recently-added';
+
+export interface GenreAffinityScore {
+  genre: string;
+  score: number;
+  watchCount: number;
+  totalDurationMinutes: number;
+  completedCount: number;
+  percentage?: number;
+}
+
 
 

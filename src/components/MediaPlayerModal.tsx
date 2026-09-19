@@ -29,6 +29,9 @@ import {
   Info,
   FileText,
   SkipForward,
+  Globe,
+  Link,
+  UploadCloud,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
 
@@ -53,36 +56,22 @@ interface StreamOption {
 
 const SAMPLE_VIDEO_STREAMS: StreamOption[] = [
   {
+    id: 'oceans-vjs',
+    name: 'Oceans High-Definition Cinema',
+    url: 'https://vjs.zencdn.net/v/oceans.mp4',
+    badge: '1080p Cinema',
+    type: 'video',
+  },
+  {
     id: 'local-vault-stream',
-    name: 'Vault Master Stream (Direct Local)',
+    name: 'Vault Direct Stream (HD Server Feed)',
     url: '/api/media/sample-video',
     badge: '1080p Direct',
     type: 'video',
   },
   {
-    id: 'oceans-vjs',
-    name: 'Oceans High-Definition Cinema',
-    url: 'https://vjs.zencdn.net/v/oceans.mp4',
-    badge: 'VideoJS CDN',
-    type: 'video',
-  },
-  {
-    id: 'sintel-trailer',
-    name: 'Sintel Cinema Trailer (W3C Master)',
-    url: '/api/media/sintel-trailer',
-    badge: '1080p Trailer',
-    type: 'video',
-  },
-  {
-    id: 'bunny-w3c',
-    name: 'Big Buck Bunny (Animation Cinema)',
-    url: 'https://media.w3.org/2010/05/bunny/trailer.mp4',
-    badge: 'W3C Cloudflare',
-    type: 'video',
-  },
-  {
     id: 'mdn-cc0',
-    name: 'Mozilla Showcase (HD CC0)',
+    name: 'Cinematic Showcase (HD CC0)',
     url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
     badge: 'Mozilla CDN',
     type: 'video',
@@ -145,6 +134,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
   const [customLocalBlobUrl, setCustomLocalBlobUrl] = useState<string | null>(null);
+  const [customStreamInputUrl, setCustomStreamInputUrl] = useState<string>('');
+  const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [isManualStreamOverride, setIsManualStreamOverride] = useState(false);
   const [autoFallbackAttempted, setAutoFallbackAttempted] = useState(false);
 
@@ -156,6 +148,40 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   ]);
   const [activeSubtitleIndex, setActiveSubtitleIndex] = useState<number>(-1); // -1 = off
   const [activeSubtitleMenu, setActiveSubtitleMenu] = useState(false);
+
+  // Smart Resume & Subtitle Offset state
+  const [smartResumeEnabled, setSmartResumeEnabled] = useState(true);
+  const [resumingToast, setResumingToast] = useState<string | null>(null);
+  const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // in seconds (-5.0 to +5.0)
+
+  useEffect(() => {
+    if (!isOpen || !smartResumeEnabled) return;
+    const checkSmartResume = async () => {
+      try {
+        const titleQuery = media?.title || '';
+        if (!titleQuery) return;
+        const res = await fetch(`/api/db/history?search=${encodeURIComponent(titleQuery)}&limit=10`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.history) && data.history.length > 0) {
+          const match = data.history.find((h: any) => h.title?.toLowerCase() === titleQuery.toLowerCase() || h.media_id === media?.id);
+          if (match && match.playback_position_seconds > 5) {
+            const pos = match.playback_position_seconds;
+            if (videoRef.current) {
+              videoRef.current.currentTime = pos;
+            }
+            const mins = Math.floor(pos / 60);
+            const secs = Math.floor(pos % 60);
+            const timeStr = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+            setResumingToast(`Resuming playback at ${timeStr}`);
+            setTimeout(() => setResumingToast(null), 4000);
+          }
+        }
+      } catch (err) {
+        console.warn('Smart resume error:', err);
+      }
+    };
+    checkSmartResume();
+  }, [isOpen, media?.id]);
 
   // Audio Track Languages (MKV / Media Stream audio tracks)
   const [audioTracks, setAudioTracks] = useState<Array<{ id: string; name: string; language: string; codec: string; channels: string }>>([
@@ -263,9 +289,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const nextEpInfo = media?.type === 'series' ? getNextEpisode() : null;
   const isNearEnd = duration > 0 && currentTime >= duration - 30;
 
-  // Selected stream source preset - default to sintel-trailer for series
+  // Selected stream source preset - default to clean 1080p stream
   const [selectedStreamId, setSelectedStreamId] = useState<string>(
-    isAudio ? SAMPLE_AUDIO_STREAMS[0].id : media?.type === 'series' ? 'sintel-trailer' : SAMPLE_VIDEO_STREAMS[0].id
+    isAudio ? SAMPLE_AUDIO_STREAMS[0].id : SAMPLE_VIDEO_STREAMS[0].id
   );
 
   // Calculate default fallback stream URL
@@ -274,6 +300,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId) || SAMPLE_VIDEO_STREAMS[0]);
 
   const defaultStreamUrl = selectedStreamObj.url;
+
+  // Derive direct Samba stream endpoint path
+  const sambaStreamUrl = selectedEpisode?.playbackUrl && selectedEpisode.playbackUrl.startsWith('/api/')
+    ? selectedEpisode.playbackUrl
+    : media?.recommendedFolderStructure
+    ? `/api/samba/stream?path=${encodeURIComponent(media.recommendedFolderStructure)}`
+    : null;
 
   // Determine active streaming/playback source safely
   const currentStreamUrl =
@@ -538,7 +571,30 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDragOver(false);
+        const file = e.dataTransfer.files?.[0];
+        if (file) {
+          if (customLocalBlobUrl) URL.revokeObjectURL(customLocalBlobUrl);
+          const url = URL.createObjectURL(file);
+          setLocalVideoFile(file);
+          setCustomLocalBlobUrl(url);
+          setIsManualStreamOverride(false);
+          setAutoFallbackAttempted(true);
+          setCurrentTime(0);
+          setPlaybackError(null);
+          setTimeout(startPlayback, 100);
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200"
+    >
       {/* Hidden local file input */}
       <input
         ref={localFileInputRef}
@@ -548,7 +604,75 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         onChange={handleLocalFileSelect}
       />
 
-      <div className="relative w-full max-w-5xl bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+      <div
+        className={`relative w-full max-w-5xl bg-slate-950 border transition-all rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] ${
+          isDragOver ? 'border-indigo-500 ring-4 ring-indigo-500/30' : 'border-slate-800'
+        }`}
+      >
+        {/* Drag over indicator banner */}
+        {isDragOver && (
+          <div className="absolute inset-0 bg-indigo-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-indigo-400 m-3 rounded-xl pointer-events-none animate-in fade-in duration-150">
+            <UploadCloud className="w-12 h-12 text-indigo-300 animate-bounce" />
+            <span className="text-base font-bold text-white">Drop your MKV / MP4 video file here to play</span>
+            <span className="text-xs text-indigo-300">Plays immediately directly from your hardware</span>
+          </div>
+        )}
+
+        {/* Custom Stream URL Dialog Modal */}
+        {showCustomUrlInput && (
+          <div className="absolute inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-md w-full shadow-2xl space-y-4 animate-in zoom-in-95">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-white flex items-center gap-2">
+                  <Link className="w-4 h-4 text-indigo-400" />
+                  <span>Enter Custom Stream / File URL</span>
+                </span>
+                <button
+                  onClick={() => setShowCustomUrlInput(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-xs text-slate-300">
+                Paste any HTTP/HTTPS direct video stream link, local network URL, or Samba proxy path for this episode/movie:
+              </p>
+              <input
+                type="text"
+                value={customStreamInputUrl}
+                onChange={(e) => setCustomStreamInputUrl(e.target.value)}
+                placeholder="https://example.com/stream.mp4 or /api/samba/stream?path=..."
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+              />
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setShowCustomUrlInput(false)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (customStreamInputUrl.trim()) {
+                      if (customLocalBlobUrl) URL.revokeObjectURL(customLocalBlobUrl);
+                      setCustomLocalBlobUrl(customStreamInputUrl.trim());
+                      setIsManualStreamOverride(false);
+                      setShowCustomUrlInput(false);
+                      setCurrentTime(0);
+                      setPlaybackError(null);
+                      setTimeout(startPlayback, 100);
+                    }
+                  }}
+                  disabled={!customStreamInputUrl.trim()}
+                  className="px-4 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white cursor-pointer"
+                >
+                  Load & Play Stream
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Top Header Bar */}
         <div className="flex items-center justify-between px-5 py-3.5 bg-slate-900 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-3 truncate">
@@ -628,6 +752,21 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               )}
             </button>
 
+            {/* Smart Resume Toggle Button */}
+            <button
+              id="player-btn-smart-resume"
+              onClick={() => setSmartResumeEnabled((prev) => !prev)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer border ${
+                smartResumeEnabled
+                  ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/50'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+              title={smartResumeEnabled ? 'Smart Resume Enabled: Automatically resumes playback position from SQLite vault' : 'Smart Resume Disabled'}
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${smartResumeEnabled ? 'text-emerald-400' : ''}`} />
+              <span className="hidden sm:inline">Smart Resume</span>
+            </button>
+
             {/* Subtitles Dropdown Button */}
             <div className="relative">
               <input
@@ -681,6 +820,31 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       {activeSubtitleIndex === idx && <Check className="w-3.5 h-3.5 shrink-0" />}
                     </button>
                   ))}
+                  <div className="border-t border-slate-800 my-1" />
+                  <div className="pt-1 px-3 pb-1">
+                    <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300 mb-1">
+                      <span>Subtitle Offset</span>
+                      <span className="font-mono text-cyan-300">{subtitleOffset > 0 ? `+${subtitleOffset.toFixed(1)}s` : `${subtitleOffset.toFixed(1)}s`}</span>
+                    </div>
+                    <div className="flex items-center gap-2 pb-1">
+                      <input
+                        type="range"
+                        min="-5"
+                        max="5"
+                        step="0.5"
+                        value={subtitleOffset}
+                        onChange={(e) => setSubtitleOffset(parseFloat(e.target.value))}
+                        className="w-full accent-cyan-500 h-1 bg-slate-800 rounded-lg cursor-pointer"
+                      />
+                      <button
+                        onClick={() => setSubtitleOffset(0)}
+                        className="text-[10px] text-slate-400 hover:text-white px-1.5 py-0.5 rounded bg-slate-800"
+                        title="Reset Offset"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
                   <div className="border-t border-slate-800 my-1" />
                   <button
                     onClick={() => {
@@ -794,6 +958,75 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           ) : (
             /* Video Stage */
             <div className="relative w-full h-full flex items-center justify-center bg-black min-h-[300px]">
+              {/* Series Episode Info / Quick Source Switcher Bar */}
+              {media.type === 'series' && (
+                <div className="absolute top-3 left-3 right-3 z-20 flex flex-wrap items-center justify-between gap-2 p-2 px-3 rounded-xl bg-slate-950/80 backdrop-blur-md border border-slate-800 text-xs shadow-lg">
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="px-2 py-0.5 rounded bg-purple-900/60 border border-purple-700/50 text-purple-300 font-bold text-[11px]">
+                      S{selectedSeasonNum}E{selectedEpisode?.episodeNumber || 1}
+                    </span>
+                    <span className="text-white font-medium truncate">
+                      {selectedEpisode?.title || media.title}
+                    </span>
+                    {localVideoFile ? (
+                      <span className="hidden sm:inline-flex items-center gap-1 text-emerald-400 text-[10px] font-mono bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
+                        📁 File: {localVideoFile.name}
+                      </span>
+                    ) : customLocalBlobUrl?.startsWith('/api/samba/stream') ? (
+                      <span className="hidden sm:inline-flex items-center gap-1 text-cyan-400 text-[10px] font-mono bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800/40">
+                        🌐 Samba Stream
+                      </span>
+                    ) : (
+                      <span className="hidden sm:inline-flex items-center gap-1 text-indigo-300 text-[10px] font-mono bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-800/40">
+                        🎬 {selectedStreamObj.name}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => localFileInputRef.current?.click()}
+                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition border border-slate-700"
+                      title="Load local video file for this episode"
+                    >
+                      <FolderOpen className="w-3 h-3 text-emerald-400" />
+                      <span className="hidden md:inline">Play Episode File</span>
+                    </button>
+                    {sambaStreamUrl && (
+                      <button
+                        onClick={() => {
+                          setCustomLocalBlobUrl(sambaStreamUrl);
+                          setIsManualStreamOverride(false);
+                          setCurrentTime(0);
+                          setPlaybackError(null);
+                          setTimeout(startPlayback, 100);
+                        }}
+                        className="px-2 py-1 rounded bg-cyan-900/60 hover:bg-cyan-800 text-cyan-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition border border-cyan-700/50"
+                        title="Stream direct from Samba server endpoint"
+                      >
+                        <Globe className="w-3 h-3 text-cyan-400" />
+                        <span className="hidden md:inline">Samba Stream</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowCustomUrlInput(true)}
+                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition border border-slate-700"
+                      title="Paste direct video URL"
+                    >
+                      <Link className="w-3 h-3 text-indigo-400" />
+                      <span className="hidden md:inline">Custom URL</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Smart Resuming Playback Toast Notification */}
+              {resumingToast && (
+                <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-xl bg-emerald-950/95 border border-emerald-500/80 text-emerald-200 text-xs font-bold shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95 backdrop-blur-md">
+                  <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+                  <span>{resumingToast}</span>
+                </div>
+              )}
+
               <video
                 ref={videoRef}
                 src={currentStreamUrl}
@@ -1129,10 +1362,39 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 </button>
 
                 {activeSourceMenu && (
-                  <div className="absolute bottom-full mb-2 right-0 bg-slate-900 border border-slate-800 rounded-xl p-1.5 shadow-2xl space-y-1 z-30 w-64 animate-in fade-in zoom-in-95">
+                  <div className="absolute bottom-full mb-2 right-0 bg-slate-900 border border-slate-800 rounded-xl p-1.5 shadow-2xl space-y-1 z-30 w-72 animate-in fade-in zoom-in-95">
                     <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
                       Select Playback Source
                     </div>
+
+                    {sambaStreamUrl && (
+                      <button
+                        onClick={() => {
+                          if (customLocalBlobUrl) {
+                            URL.revokeObjectURL(customLocalBlobUrl);
+                            setCustomLocalBlobUrl(null);
+                            setLocalVideoFile(null);
+                          }
+                          setCustomLocalBlobUrl(sambaStreamUrl);
+                          setIsManualStreamOverride(false);
+                          setActiveSourceMenu(false);
+                          setCurrentTime(0);
+                          setPlaybackError(null);
+                          setTimeout(startPlayback, 100);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between transition cursor-pointer ${
+                          customLocalBlobUrl === sambaStreamUrl
+                            ? 'bg-cyan-600 text-white font-bold'
+                            : 'text-cyan-300 hover:bg-cyan-950/50'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5 truncate">
+                          <Globe className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">Samba HTTP Stream (SMB)</span>
+                        </span>
+                        <span className="text-[10px] px-1 bg-cyan-900/60 rounded font-mono shrink-0">Server</span>
+                      </button>
+                    )}
 
                     <button
                       onClick={() => {
@@ -1145,8 +1407,26 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                         <FolderOpen className="w-3.5 h-3.5" />
                         <span>Open Local File...</span>
                       </span>
-                      <span className="text-[10px] px-1 bg-emerald-900/60 rounded">Disk</span>
+                      <span className="text-[10px] px-1 bg-emerald-900/60 rounded font-mono">Disk</span>
                     </button>
+
+                    <button
+                      onClick={() => {
+                        setActiveSourceMenu(false);
+                        setShowCustomUrlInput(true);
+                      }}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 hover:bg-indigo-950/50 flex items-center justify-between transition cursor-pointer"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <Link className="w-3.5 h-3.5" />
+                        <span>Enter Custom Stream URL...</span>
+                      </span>
+                      <span className="text-[10px] px-1 bg-indigo-900/60 rounded font-mono">Custom</span>
+                    </button>
+
+                    <div className="px-2 pt-1 pb-0.5 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-t border-slate-800">
+                      Standard Quality Presets
+                    </div>
 
                     {(isAudio ? SAMPLE_AUDIO_STREAMS : SAMPLE_VIDEO_STREAMS).map((stream) => (
                       <button

@@ -1,6 +1,7 @@
 import React from 'react';
-import { Play, Edit3, Star, Calendar, Clock, GitBranch, RefreshCw, Wand2 } from 'lucide-react';
+import { Play, Edit3, Star, Calendar, Clock, GitBranch, RefreshCw, Wand2, Download, Image as ImageIcon } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata } from '../../types';
+import { downloadMediaArtwork } from '../../utils/zipDownloader';
 
 interface MediaDetailHeaderProps {
   media: MediaMetadata;
@@ -12,6 +13,8 @@ interface MediaDetailHeaderProps {
   isRefreshing?: boolean;
   onGenerateFanart?: () => void;
   isGeneratingFanart?: boolean;
+  onFetchOfficialArt?: () => void;
+  isFetchingArt?: boolean;
 }
 
 export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
@@ -24,6 +27,8 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
   isRefreshing = false,
   onGenerateFanart,
   isGeneratingFanart = false,
+  onFetchOfficialArt,
+  isFetchingArt = false,
 }) => {
   return (
     <div className="relative h-64 bg-slate-950 shrink-0 overflow-hidden">
@@ -75,6 +80,22 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
           </button>
         )}
 
+        {onFetchOfficialArt && (
+          <button
+            disabled={isFetchingArt}
+            onClick={onFetchOfficialArt}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border backdrop-blur-sm transition cursor-pointer ${
+              isFetchingArt
+                ? 'bg-slate-800 text-slate-500 border-slate-700'
+                : 'bg-emerald-900/40 hover:bg-emerald-900/60 text-emerald-300 border-emerald-500/40'
+            }`}
+            title="Fetch authentic official poster & backdrop from OMDb/TVMaze"
+          >
+            <ImageIcon className={`w-3.5 h-3.5 ${isFetchingArt ? 'animate-spin' : ''}`} />
+            <span>{isFetchingArt ? 'Fetching Artwork...' : 'Fetch Official Art'}</span>
+          </button>
+        )}
+
         {onBulkRefresh && (
           <button
             disabled={isRefreshing}
@@ -94,13 +115,26 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
 
       {/* Content inside header */}
       <div className="absolute bottom-4 left-6 right-6 flex items-end gap-5">
-        {/* Poster Thumbnail */}
-        <div className="w-24 sm:w-28 h-36 rounded-xl overflow-hidden border-2 border-slate-700 shadow-xl shrink-0 hidden xs:block bg-slate-950">
+        {/* Poster Thumbnail with direct download hover */}
+        <div className="group/poster relative w-24 sm:w-28 h-36 rounded-xl overflow-hidden border-2 border-slate-700 shadow-xl shrink-0 hidden xs:block bg-slate-950">
           <img
             src={media.posterUrl}
             alt={media.title}
             className="w-full h-full object-cover"
           />
+          {media.posterUrl && (
+            <button
+              onClick={() => {
+                const filename = `${media.title.replace(/[/\\?%*:|"<>]/g, '_')}-${media.type === 'album' ? 'folder' : 'poster'}.jpg`;
+                downloadMediaArtwork(media.posterUrl, filename);
+              }}
+              className="absolute inset-0 bg-slate-950/80 opacity-0 group-hover/poster:opacity-100 flex flex-col items-center justify-center gap-1 text-white text-[10px] font-bold transition cursor-pointer"
+              title="Click to download poster file directly"
+            >
+              <Download className="w-4 h-4 text-indigo-400" />
+              <span>Download Art</span>
+            </button>
+          )}
         </div>
 
         {/* Title & Metadata */}

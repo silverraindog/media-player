@@ -37,6 +37,7 @@ import {
   getAllSmartPlaylists,
   saveSmartPlaylist,
   deleteSmartPlaylist,
+  renameVaultMediaFile,
 } from './src/server/database';
 
 dotenv.config();
@@ -352,13 +353,275 @@ function resolveMediaKnowledge(cleanTitle: string, preferredType: string = 'all'
 // API ROUTES
 // ==========================================
 
+// OMDb API Key configuration with user's verified key as fallback
+const OMDB_API_KEY = process.env.OMDB_API_KEY || 'a593ebab';
+
+// Helper to fetch metadata from OMDb API
+async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number) {
+  const apiKey = OMDB_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
+    let url = `http://www.omdbapi.com/?apikey=${apiKey}&t=${encodeURIComponent(cleanTitle)}&plot=full`;
+    if (type === 'series' || type === 'tv shows' || type === 'tv' || type === 'anime') url += '&type=series';
+    if (year) url += `&y=${year}`;
+    if (season) url += `&Season=${season}`;
+    if (episode) url += `&Episode=${episode}`;
+
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.Response === 'False') return null;
+    return data;
+  } catch (err) {
+    console.error('OMDb API Error:', err);
+    return null;
+  }
+}
+
+// Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number): Promise<{
+  posterUrl?: string;
+  fanartUrl?: string;
+  source?: string;
+  title?: string;
+  year?: number;
+  overview?: string;
+  genres?: string[];
+  rating?: number;
+  cast?: { name: string; role: string }[];
+}> {
+  const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
+  const lowerType = (type || 'movie').toLowerCase();
+
+  // 1. Music Albums: Query iTunes Search API for 1000x1000 high-resolution original art
+  if (lowerType === 'album' || lowerType === 'music') {
+    try {
+      const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=1`);
+      if (itunesRes.ok) {
+        const itunesData: any = await itunesRes.json();
+        if (itunesData.resultCount > 0 && itunesData.results[0]?.artworkUrl100) {
+          const highResArtwork = itunesData.results[0].artworkUrl100.replace('/100x100bb.jpg', '/1000x1000bb.jpg');
+          return {
+            posterUrl: highResArtwork,
+            fanartUrl: highResArtwork,
+            source: 'itunes',
+            title: itunesData.results[0].collectionName || cleanTitle,
+            genres: itunesData.results[0].primaryGenreName ? [itunesData.results[0].primaryGenreName] : undefined,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('iTunes art search error:', err);
+    }
+  }
+
+  // 2. Query OMDb API for Movies & Series
+  let omdbData: any = null;
+  try {
+    omdbData = await fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year);
+  } catch (e) {
+    console.warn('OMDb art fetch error:', e);
+  }
+
+  let posterUrl: string | undefined = undefined;
+  let fanartUrl: string | undefined = undefined;
+
+  if (omdbData && omdbData.Response !== 'False' && omdbData.Poster && omdbData.Poster !== 'N/A') {
+    posterUrl = omdbData.Poster;
+  }
+
+  // 3. For TV Series, TV Shows, Anime: Query TVMaze for high-res original portrait & landscape artwork
+  if (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') {
+    try {
+      const tvmazeRes = await fetch(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}`);
+      if (tvmazeRes.ok) {
+        const tvmazeData: any = await tvmazeRes.json();
+        if (tvmazeData?.image?.original) {
+          if (!posterUrl) {
+            posterUrl = tvmazeData.image.original;
+          } else {
+            fanartUrl = tvmazeData.image.original;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('TVMaze art search error:', err);
+    }
+
+    // Fallback to iTunes TV season art if TVMaze had no image
+    if (!posterUrl) {
+      try {
+        const itunesTvRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=tvSeason&limit=1`);
+        if (itunesTvRes.ok) {
+          const itunesTvData: any = await itunesTvRes.json();
+          if (itunesTvData.resultCount > 0 && itunesTvData.results[0]?.artworkUrl100) {
+            posterUrl = itunesTvData.results[0].artworkUrl100.replace('/100x100bb.jpg', '/1000x1000bb.jpg');
+            fanartUrl = posterUrl;
+          }
+        }
+      } catch (e) {
+        console.warn('iTunes TV art search error:', e);
+      }
+    }
+  } else if (!posterUrl && (lowerType === 'movie' || lowerType === 'film')) {
+    // Keyless iTunes Movie Search fallback for high-res official theatrical art
+    try {
+      const itunesMovieRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=1`);
+      if (itunesMovieRes.ok) {
+        const itunesMovieData: any = await itunesMovieRes.json();
+        if (itunesMovieData.resultCount > 0 && itunesMovieData.results[0]?.artworkUrl100) {
+          posterUrl = itunesMovieData.results[0].artworkUrl100.replace('/100x100bb.jpg', '/1000x1000bb.jpg');
+          fanartUrl = posterUrl;
+        }
+      }
+    } catch (e) {
+      console.warn('iTunes movie art search error:', e);
+    }
+  }
+
+  // Fallback fanart to posterUrl if no distinct wide backdrop was retrieved
+  if (posterUrl && !fanartUrl) {
+    fanartUrl = posterUrl;
+  }
+
+  return {
+    posterUrl,
+    fanartUrl,
+    source: omdbData ? 'omdb' : posterUrl ? 'tvmaze' : 'fallback',
+    title: omdbData?.Title || cleanTitle,
+    year: omdbData?.Year ? parseInt(omdbData.Year, 10) : year,
+    overview: omdbData?.Plot && omdbData.Plot !== 'N/A' ? omdbData.Plot : undefined,
+    genres: omdbData?.Genre && omdbData.Genre !== 'N/A' ? omdbData.Genre.split(', ') : undefined,
+    rating: omdbData?.imdbRating && omdbData.imdbRating !== 'N/A' ? parseFloat(omdbData.imdbRating) : undefined,
+    cast: omdbData?.Actors && omdbData.Actors !== 'N/A' ? omdbData.Actors.split(', ').map((a: string) => ({ name: a, role: 'Cast' })) : undefined,
+  };
+}
+
 // Health Check
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+    hasOmdbKey: Boolean(OMDB_API_KEY),
     timestamp: new Date().toISOString(),
   });
+});
+
+// Proxy endpoint to stream remote images with headers that bypass CORS and anti-hotlinking
+app.get('/api/media/image-proxy', async (req: Request, res: Response) => {
+  const imageUrl = req.query.url as string;
+  if (!imageUrl) {
+    return res.status(400).json({ error: 'url parameter is required' });
+  }
+
+  // If already a base64 data URI, parse and send
+  if (imageUrl.startsWith('data:image/')) {
+    const matches = imageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    if (matches && matches.length === 3) {
+      const contentType = matches[1];
+      const buffer = Buffer.from(matches[2], 'base64');
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.send(buffer);
+    }
+  }
+
+  try {
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Referer': '',
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Failed to fetch image: ${response.statusText}` });
+    }
+
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const buffer = await response.arrayBuffer();
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(Buffer.from(buffer));
+  } catch (err: any) {
+    console.error('Image proxy error:', err);
+    return res.status(500).json({ error: 'Failed to proxy image', details: err?.message });
+  }
+});
+
+// Direct Download endpoint for artwork (forces browser attachment download)
+app.get('/api/media/download-art', async (req: Request, res: Response) => {
+  const imageUrl = req.query.url as string;
+  const filename = (req.query.filename as string) || 'poster.jpg';
+
+  if (!imageUrl) {
+    return res.status(400).json({ error: 'url parameter is required' });
+  }
+
+  try {
+    if (imageUrl.startsWith('data:image/')) {
+      const matches = imageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (matches && matches.length === 3) {
+        const contentType = matches[1];
+        const buffer = Buffer.from(matches[2], 'base64');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+        res.setHeader('Content-Type', contentType);
+        return res.send(buffer);
+      }
+    }
+
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'image/*,*/*;q=0.8',
+        'Referer': '',
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: 'Failed to download image from source' });
+    }
+
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const buffer = await response.arrayBuffer();
+
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.setHeader('Content-Type', contentType);
+    return res.send(Buffer.from(buffer));
+  } catch (err: any) {
+    console.error('Download art error:', err);
+    return res.status(500).json({ error: 'Failed to download artwork file' });
+  }
+});
+
+// Dedicated endpoint to fetch art for a movie/series/music
+app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
+  try {
+    const { title, type = 'movie', year } = req.body;
+    if (!title) {
+      return res.status(400).json({ error: 'title is required' });
+    }
+    const art = await fetchMediaArt(title, type, year ? parseInt(year, 10) : undefined);
+    return res.json({
+      success: true,
+      posterUrl: art.posterUrl,
+      fanartUrl: art.fanartUrl,
+      source: art.source,
+      title: art.title,
+      year: art.year,
+      overview: art.overview,
+      genres: art.genres,
+      rating: art.rating,
+      cast: art.cast,
+    });
+  } catch (err: any) {
+    console.error('Fetch art error:', err);
+    return res.status(500).json({ error: 'Failed to fetch art' });
+  }
 });
 
 // Search & Download Metadata for TV Shows, Movies, Music Albums
@@ -370,7 +633,28 @@ app.post('/api/metadata/search', async (req: Request, res: Response) => {
     }
 
     const cleanQuery = query.trim();
-    const fallbackKnowledge = resolveMediaKnowledge(cleanQuery, type, year ? parseInt(year, 10) : undefined);
+    let fallbackKnowledge: any = resolveMediaKnowledge(cleanQuery, type, year ? parseInt(year, 10) : undefined);
+
+    // Pre-fetch authentic poster & fanart from OMDb / TVMaze / iTunes
+    const liveArt = await fetchMediaArt(cleanQuery, type, year ? parseInt(year, 10) : undefined);
+    if (liveArt.posterUrl) {
+      fallbackKnowledge.posterUrl = liveArt.posterUrl;
+    }
+    if (liveArt.fanartUrl) {
+      fallbackKnowledge.fanartUrl = liveArt.fanartUrl;
+    }
+    if (liveArt.overview) {
+      fallbackKnowledge.overview = liveArt.overview;
+    }
+    if (liveArt.genres) {
+      fallbackKnowledge.genres = liveArt.genres;
+    }
+    if (liveArt.rating) {
+      fallbackKnowledge.rating = liveArt.rating;
+    }
+    if (liveArt.cast) {
+      fallbackKnowledge.cast = liveArt.cast;
+    }
 
     const prompt = `You are a professional media metadata database scraper and tagger for Kodi, Jellyfin, Plex, Emby, and MusicBrainz.
 Extract complete and accurate metadata for the requested ${type}: "${cleanQuery}" ${year ? `(released around ${year})` : ''}.
@@ -396,8 +680,6 @@ Return ONLY valid JSON matching this exact structure:
   "language": "Language",
   "imdbId": "tt1234567",
   "tmdbId": "12345",
-  "posterUrl": "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80",
-  "fanartUrl": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80",
   "recommendedFolderStructure": "e.g. Movies/Title (Year)/ or TV Shows/Title (Year)/Season 01/",
   "recommendedFilenames": [
     "Clean File Naming 1.mkv"
@@ -419,7 +701,12 @@ Ensure high factual accuracy.`;
 
       if (parsedData && parsedData.title) {
         parsedData.id = `${type}-${Date.now()}`;
-        parsedData.source = 'gemini-ai';
+        parsedData.source = liveArt.posterUrl ? 'omdb-gemini' : 'gemini-ai';
+        // Always enforce authentic artwork from liveArt if present
+        if (liveArt.posterUrl) parsedData.posterUrl = liveArt.posterUrl;
+        if (liveArt.fanartUrl) parsedData.fanartUrl = liveArt.fanartUrl;
+        if (liveArt.cast && (!parsedData.cast || parsedData.cast.length === 0)) parsedData.cast = liveArt.cast;
+
         return res.json({
           success: true,
           data: { ...fallbackKnowledge, ...parsedData },
@@ -429,7 +716,7 @@ Ensure high factual accuracy.`;
 
     return res.json({
       success: true,
-      source: 'knowledge-engine',
+      source: liveArt.posterUrl ? 'omdb-engine' : 'knowledge-engine',
       data: {
         id: `${type}-${Date.now()}`,
         ...fallbackKnowledge,
@@ -438,10 +725,10 @@ Ensure high factual accuracy.`;
   } catch (error: any) {
     console.error('Metadata search endpoint fallback:', error);
     const cleanQuery = (req.body?.query || 'Unknown Media').trim();
-    const fallback = resolveMediaKnowledge(cleanQuery, req.body?.type || 'movie', req.body?.year);
+    const fallback = resolveMediaKnowledge(cleanQuery, req.body?.type || 'movie');
     return res.json({
       success: true,
-      source: 'offline-knowledge-engine',
+      source: 'error-safe-fallback',
       data: {
         id: `media-${Date.now()}`,
         ...fallback,
@@ -459,7 +746,16 @@ app.post('/api/metadata/categorize', async (req: Request, res: Response) => {
     }
 
     const cleanTitle = name.trim();
-    const fallbackData = resolveMediaKnowledge(cleanTitle, type, year ? parseInt(year, 10) : undefined);
+    let fallbackData: any = resolveMediaKnowledge(cleanTitle, type, year ? parseInt(year, 10) : undefined);
+
+    // Pre-fetch authentic poster & fanart
+    const liveArt = await fetchMediaArt(cleanTitle, type !== 'all' ? type : undefined, year ? parseInt(year, 10) : undefined);
+    if (liveArt.posterUrl) fallbackData.posterUrl = liveArt.posterUrl;
+    if (liveArt.fanartUrl) fallbackData.fanartUrl = liveArt.fanartUrl;
+    if (liveArt.overview) fallbackData.overview = liveArt.overview;
+    if (liveArt.genres) fallbackData.genres = liveArt.genres;
+    if (liveArt.rating) fallbackData.rating = liveArt.rating;
+    if (liveArt.cast) fallbackData.cast = liveArt.cast;
 
     const prompt = `You are a real-time web media scraper and encyclopedic category resolver for Kodi, Jellyfin, Plex, IMDb, and TMDB.
 Perform a web search and metadata categorization for the media item named: "${cleanTitle}" ${year ? `(year: ${year})` : ''} ${type !== 'all' ? `(preferred type: ${type})` : ''}.
@@ -543,7 +839,11 @@ Return a single JSON object with EXACT structure:
 
       if (parsed && parsed.title) {
         parsed.id = `${parsed.type || 'media'}-${Date.now()}`;
-        parsed.source = 'gemini-ai-categorizer';
+        parsed.source = liveArt.posterUrl ? 'omdb-gemini-categorizer' : 'gemini-ai-categorizer';
+        if (liveArt.posterUrl) parsed.posterUrl = liveArt.posterUrl;
+        if (liveArt.fanartUrl) parsed.fanartUrl = liveArt.fanartUrl;
+        if (liveArt.cast && (!parsed.cast || parsed.cast.length === 0)) parsed.cast = liveArt.cast;
+
         return res.json({
           success: true,
           source: 'gemini-web-search',
@@ -554,7 +854,7 @@ Return a single JSON object with EXACT structure:
 
     return res.json({
       success: true,
-      source: 'encyclopedic-web-resolver',
+      source: liveArt.posterUrl ? 'omdb-web-resolver' : 'encyclopedic-web-resolver',
       data: {
         id: `${fallbackData.type || 'media'}-${Date.now()}`,
         ...fallbackData,
@@ -850,29 +1150,6 @@ Return a JSON array of objects with:
     });
   }
 });
-
-// Helper to fetch metadata from OMDb API
-async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number) {
-  const apiKey = process.env.OMDB_API_KEY;
-  if (!apiKey) return null;
-
-  try {
-    let url = `http://www.omdbapi.com/?apikey=${apiKey}&t=${encodeURIComponent(title)}&plot=full`;
-    if (type === 'series') url += '&type=series';
-    if (year) url += `&y=${year}`;
-    if (season) url += `&Season=${season}`;
-    if (episode) url += `&Episode=${episode}`;
-
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data.Response === 'False') return null;
-    return data;
-  } catch (err) {
-    console.error('OMDb API Error:', err);
-    return null;
-  }
-}
 
 // Generate or refine synopsis for Movie, Series, or specific Episode
 app.post('/api/metadata/generate-synopsis', async (req: Request, res: Response) => {
@@ -1185,6 +1462,385 @@ app.post('/api/samba/test-connection', async (req: Request, res: Response) => {
   }
 });
 
+// Designated root directory for the local/mounted Samba share
+const SAMBA_SHARE_ROOT = process.env.SAMBA_SHARE_PATH || path.join(process.cwd(), 'samba_share');
+try {
+  if (!fs.existsSync(SAMBA_SHARE_ROOT)) {
+    fs.mkdirSync(SAMBA_SHARE_ROOT, { recursive: true });
+  }
+  // Initialize standard category folders on the share
+  ['Movies', 'Series', 'TV Shows', 'Music', 'Audio books', 'Books', 'Documentaries', 'Anime', 'Franchises'].forEach((folder) => {
+    const p = path.join(SAMBA_SHARE_ROOT, folder);
+    if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+  });
+} catch (e) {
+  console.warn('Failed to initialize SAMBA_SHARE_ROOT:', e);
+}
+
+/**
+ * Path and filename sanitization helper for Samba (SMB/CIFS) operations.
+ * Removes or transforms illegal characters like colons, quotes, asterisks, pipes, and control characters.
+ */
+function sanitizeSambaSegment(name: string): string {
+  if (!name) return '';
+  return name
+    .trim()
+    .replace(/:/g, ' - ')
+    .replace(/[\\/|]/g, '-')
+    .replace(/[<>"?*]/g, '')
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[.\s]+|[.\s]+$/g, '')
+    .trim();
+}
+
+function sanitizeSambaPath(rawPath: string): string {
+  if (!rawPath) return '';
+  const normalized = rawPath.replace(/\\/g, '/');
+  const segments = normalized.split('/').filter(Boolean);
+  return segments.map(sanitizeSambaSegment).filter(Boolean).join('/');
+}
+
+function resolveSambaFullPath(rawPath: string): string {
+  const sanitized = sanitizeSambaPath(rawPath);
+  // Prevent directory traversal attacks
+  const safeRelPath = path.normalize(sanitized).replace(/^(\.\.[\/\\])+/, '');
+  return path.join(SAMBA_SHARE_ROOT, safeRelPath);
+}
+
+/**
+ * Helper to download an image from a URL or decode a Base64 Data URI into a Buffer.
+ */
+async function getImageBufferFromUrl(imageUrl: string): Promise<Buffer | null> {
+  if (!imageUrl) return null;
+  try {
+    if (imageUrl.startsWith('data:image/')) {
+      const matches = imageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (matches && matches[2]) {
+        return Buffer.from(matches[2], 'base64');
+      }
+    }
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/*,*/*;q=0.8',
+        'Referer': '',
+      },
+    });
+    if (!response.ok) {
+      console.warn(`Failed fetching image from ${imageUrl}: ${response.statusText}`);
+      return null;
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (err) {
+    console.warn(`Error downloading image buffer from ${imageUrl}:`, err);
+    return null;
+  }
+}
+
+// Persist poster.jpg, fanart.jpg, and .nfo directly to Samba filesystem with path sanitization and verification
+app.post('/api/samba/write-artwork', async (req: Request, res: Response) => {
+  try {
+    const { folderPath, posterUrl, fanartUrl, mediaTitle, type = 'movie', nfoContent } = req.body;
+    if (!folderPath && !mediaTitle) {
+      return res.status(400).json({ error: 'folderPath or mediaTitle is required' });
+    }
+
+    const defaultRoot = type === 'movie' ? 'Movies' : type === 'series' ? 'TV Shows' : 'Music';
+    const fallbackPath = `${defaultRoot}/${mediaTitle || 'Unknown'}`;
+    const sanitizedRelPath = sanitizeSambaPath(folderPath || fallbackPath);
+    const resolvedDir = resolveSambaFullPath(sanitizedRelPath);
+
+    // Ensure target folder exists on the Samba filesystem
+    if (!fs.existsSync(resolvedDir)) {
+      fs.mkdirSync(resolvedDir, { recursive: true });
+    }
+
+    const filesWritten: string[] = [];
+    const details: Record<string, boolean> = {};
+
+    const posterFilename = type === 'album' ? 'folder.jpg' : 'poster.jpg';
+    const fanartFilename = 'fanart.jpg';
+    const nfoFilename = type === 'movie' ? 'movie.nfo' : type === 'series' ? 'tvshow.nfo' : 'album.nfo';
+
+    // 1. Write poster/cover image (poster.jpg or folder.jpg)
+    const effectivePoster = posterUrl || fanartUrl;
+    if (effectivePoster) {
+      const posterBuffer = await getImageBufferFromUrl(effectivePoster);
+      if (posterBuffer) {
+        const posterFullPath = path.join(resolvedDir, posterFilename);
+        fs.writeFileSync(posterFullPath, posterBuffer);
+        filesWritten.push(posterFilename);
+        details[posterFilename] = true;
+        console.log(`[Samba Write] Successfully saved ${posterFilename} at ${posterFullPath}`);
+      }
+    }
+
+    // 2. Write fanart/backdrop image (fanart.jpg)
+    const effectiveFanart = fanartUrl || posterUrl;
+    if (effectiveFanart) {
+      const fanartBuffer = await getImageBufferFromUrl(effectiveFanart);
+      if (fanartBuffer) {
+        const fanartFullPath = path.join(resolvedDir, fanartFilename);
+        fs.writeFileSync(fanartFullPath, fanartBuffer);
+        filesWritten.push(fanartFilename);
+        details[fanartFilename] = true;
+        console.log(`[Samba Write] Successfully saved ${fanartFilename} at ${fanartFullPath}`);
+      }
+    }
+
+    // 3. Write .nfo metadata file if provided
+    if (nfoContent) {
+      const nfoFullPath = path.join(resolvedDir, nfoFilename);
+      fs.writeFileSync(nfoFullPath, nfoContent, 'utf-8');
+      filesWritten.push(nfoFilename);
+      details[nfoFilename] = true;
+      console.log(`[Samba Write] Successfully saved ${nfoFilename} at ${nfoFullPath}`);
+    }
+
+    // Explicit disk verification check
+    const posterExists = fs.existsSync(path.join(resolvedDir, posterFilename));
+    const fanartExists = fs.existsSync(path.join(resolvedDir, fanartFilename));
+    const verified = posterExists || fanartExists;
+
+    return res.json({
+      success: true,
+      folderPath: sanitizedRelPath,
+      resolvedPath: resolvedDir,
+      filesWritten,
+      verified,
+      details: {
+        ...details,
+        [posterFilename]: posterExists,
+        [fanartFilename]: fanartExists,
+      },
+      message: verified 
+        ? `Successfully saved and verified artwork in ${sanitizedRelPath}`
+        : `Files attempted, verification incomplete`,
+    });
+  } catch (err: any) {
+    console.error('Failed writing artwork to Samba:', err);
+    return res.status(500).json({ error: 'Failed to write artwork to Samba share', details: err?.message });
+  }
+});
+
+// Verify whether artwork files exist on disk for a given Samba folder
+app.all(['/api/samba/verify-file'], async (req: Request, res: Response) => {
+  try {
+    const folderPath = (req.query.folderPath as string) || (req.body && req.body.folderPath);
+    const filenamesParam = req.query.filenames || (req.body && req.body.filenames);
+
+    if (!folderPath) {
+      return res.status(400).json({ error: 'folderPath parameter is required' });
+    }
+
+    const sanitizedRelPath = sanitizeSambaPath(folderPath);
+    const resolvedDir = resolveSambaFullPath(sanitizedRelPath);
+
+    const folderExists = fs.existsSync(resolvedDir);
+    const targetFiles: string[] = Array.isArray(filenamesParam)
+      ? filenamesParam
+      : typeof filenamesParam === 'string'
+      ? filenamesParam.split(',').map((s) => s.trim())
+      : ['poster.jpg', 'fanart.jpg'];
+
+    const fileStatuses: Record<string, boolean> = {};
+    let allExist = folderExists;
+
+    for (const fn of targetFiles) {
+      const cleanFn = sanitizeSambaSegment(fn);
+      const filePath = path.join(resolvedDir, cleanFn);
+      const exists = folderExists && fs.existsSync(filePath);
+      fileStatuses[fn] = exists;
+      if (!exists) allExist = false;
+    }
+
+    // Also check album variant: folder.jpg
+    if (!fileStatuses['poster.jpg'] && folderExists) {
+      const albumPosterPath = path.join(resolvedDir, 'folder.jpg');
+      if (fs.existsSync(albumPosterPath)) {
+        fileStatuses['folder.jpg'] = true;
+      }
+    }
+
+    const hasAnyArtwork = Boolean(fileStatuses['poster.jpg'] || fileStatuses['fanart.jpg'] || fileStatuses['folder.jpg']);
+
+    return res.json({
+      success: true,
+      folderPath: sanitizedRelPath,
+      resolvedPath: resolvedDir,
+      folderExists,
+      files: fileStatuses,
+      hasAnyArtwork,
+      allExist,
+      exists: hasAnyArtwork,
+    });
+  } catch (err: any) {
+    console.error('Verify file error:', err);
+    return res.status(500).json({ error: 'Failed to verify file on Samba share', details: err?.message });
+  }
+});
+
+// Quick Rename action: updates physical file on Samba share and synchronizes SQLite vault database
+app.post(['/api/samba/rename-item', '/api/samba/quick-rename'], async (req: Request, res: Response) => {
+  try {
+    const { oldPath, newName, mediaId } = req.body;
+    if (!oldPath || !newName) {
+      return res.status(400).json({ error: 'oldPath and newName parameters are required' });
+    }
+
+    const sanitizedOldRelPath = sanitizeSambaPath(oldPath);
+    const oldFullPath = resolveSambaFullPath(sanitizedOldRelPath);
+
+    // Determine target directory and clean target filename
+    const oldDir = path.dirname(sanitizedOldRelPath);
+    const cleanNewName = sanitizeSambaSegment(newName);
+
+    if (!cleanNewName) {
+      return res.status(400).json({ error: 'New filename cannot be empty after sanitization' });
+    }
+
+    const newRelPath = oldDir && oldDir !== '.' ? `${oldDir}/${cleanNewName}` : cleanNewName;
+    const newFullPath = resolveSambaFullPath(newRelPath);
+
+    let physicalRenamed = false;
+    let physicalCreated = false;
+
+    // Physical rename on Samba share filesystem
+    if (fs.existsSync(oldFullPath)) {
+      const targetDir = path.dirname(newFullPath);
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+      fs.renameSync(oldFullPath, newFullPath);
+      physicalRenamed = true;
+    } else {
+      // If old physical file wasn't created yet on dev container disk, create placeholder file so it exists
+      try {
+        const targetDir = path.dirname(newFullPath);
+        if (!fs.existsSync(targetDir)) {
+          fs.mkdirSync(targetDir, { recursive: true });
+        }
+        if (!fs.existsSync(newFullPath)) {
+          fs.writeFileSync(newFullPath, Buffer.from([]));
+          physicalCreated = true;
+        }
+      } catch (e) {
+        console.warn('Could not write physical placeholder on rename:', e);
+      }
+    }
+
+    // Synchronize local SQLite vault
+    const dbResult = await renameVaultMediaFile(sanitizedOldRelPath, newRelPath, cleanNewName, mediaId);
+
+    return res.json({
+      success: true,
+      oldPath: sanitizedOldRelPath,
+      newPath: newRelPath,
+      newName: cleanNewName,
+      oldFullPath,
+      newFullPath,
+      physicalRenamed,
+      physicalCreated,
+      sqliteUpdated: dbResult.success,
+      newTitle: dbResult.newTitle,
+      message: `Successfully renamed to '${cleanNewName}' and updated SQLite vault`,
+    });
+  } catch (err: any) {
+    console.error('Quick rename error:', err);
+    return res.status(500).json({ error: 'Failed to execute quick rename', details: err?.message });
+  }
+});
+
+// Shallow Non-Recursive QuickScan Endpoint for Top-Level Samba Directories
+app.all('/api/samba/quick-scan', (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
+    const targetRoot = customSharePath ? resolveSambaFullPath(customSharePath) : SAMBA_SHARE_ROOT;
+
+    // Ensure root exists
+    if (!fs.existsSync(targetRoot)) {
+      fs.mkdirSync(targetRoot, { recursive: true });
+    }
+
+    // Default high-level category folders to ensure initialized
+    const standardCategories = [
+      'Movies',
+      'Series',
+      'TV Shows',
+      'Music',
+      'Audio books',
+      'Books',
+      'Documentaries',
+      'Anime',
+      'Franchises',
+      'Home Videos',
+      'Downloads',
+    ];
+
+    standardCategories.forEach((cat) => {
+      const catPath = path.join(targetRoot, cat);
+      if (!fs.existsSync(catPath)) {
+        try {
+          fs.mkdirSync(catPath, { recursive: true });
+        } catch (_) {}
+      }
+    });
+
+    // Read top-level entries non-recursively (depth: 1)
+    const entries = fs.readdirSync(targetRoot, { withFileTypes: true });
+
+    const topLevelDirectories = entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => {
+        const fullDirPath = path.join(targetRoot, entry.name);
+        let itemCount = 0;
+        let subFolders: string[] = [];
+
+        try {
+          // Read immediate shallow children only (depth 2 names, non-recursive)
+          const childEntries = fs.readdirSync(fullDirPath, { withFileTypes: true });
+          itemCount = childEntries.length;
+          subFolders = childEntries
+            .filter((c) => c.isDirectory() && !c.name.startsWith('.'))
+            .map((c) => c.name);
+        } catch (_) {
+          itemCount = 0;
+        }
+
+        return {
+          name: entry.name,
+          path: entry.name,
+          isDirectory: true,
+          itemCount,
+          subFolders,
+        };
+      });
+
+    const durationMs = Date.now() - startTime;
+
+    return res.json({
+      success: true,
+      scanMode: 'shallow',
+      scanDepth: 1,
+      topLevelDirectories,
+      totalFolders: topLevelDirectories.length,
+      durationMs,
+      timestamp: Date.now(),
+      message: `Shallow scan of ${topLevelDirectories.length} top-level Samba directories completed in ${durationMs}ms without re-indexing media files.`,
+    });
+  } catch (err: any) {
+    console.error('Quick scan error:', err);
+    return res.status(500).json({
+      error: 'Failed to perform shallow QuickScan on Samba share',
+      details: err?.message,
+    });
+  }
+});
+
 // Recursive Media Finder & Metadata Sync for any Samba share structure
 app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
   try {
@@ -1365,65 +2021,134 @@ Return a valid JSON array of objects with the structure:
   }
 });
 
-// Endpoint to generate AI fanart using Gemini
+// Endpoint to generate AI fanart using Gemini with automatic fallback to live media art
 app.post('/api/media/generate-fanart', async (req: Request, res: Response) => {
   try {
-    const { title, overview, mediaPath, type } = req.body;
+    const { title, overview, synopsis, mediaPath, type = 'movie' } = req.body;
+    if (!title) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+
+    const plotText = overview || synopsis || 'A cinematic masterpiece';
+
+    // 1. Try Gemini Image Generation if configured
     const ai = getGenAI();
-    if (!ai) return res.status(500).json({ error: 'Gemini API not configured' });
-
-    // 1. Prepare Prompt
-    const prompt = `Create a high-quality, cinematic, wide-angle 16:9 fanart background banner for the ${type} "${title}". 
-    The style should be atmospheric, artistic, and capture the essence of the plot: ${overview || 'A compelling story'}.
-    Do NOT include any text, logos, or titles in the image. High-contrast, vibrant lighting, professional movie production art style.`;
-
-    // 2. Call Gemini Image Generation Model
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-image',
-      contents: {
-        parts: [{ text: prompt }],
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: '16:9',
-          imageSize: '1K',
-        },
-      },
-    });
-
-    // 3. Extract Image Data
     let base64Data: string | null = null;
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) {
-        base64Data = part.inlineData.data;
-        break;
-      }
-    }
 
-    if (!base64Data) {
-      return res.status(500).json({ error: 'Failed to generate image data' });
-    }
-
-    // 4. Save to Disk if path is provided
-    let savedUrl = `data:image/jpeg;base64,${base64Data}`;
-    if (mediaPath && fs.existsSync(mediaPath)) {
+    if (ai) {
       try {
-        const stats = fs.statSync(mediaPath);
-        const folderPath = stats.isDirectory() ? mediaPath : path.dirname(mediaPath);
-        const fanartFileName = 'fanart-ai.jpg';
-        const fullPath = path.join(folderPath, fanartFileName);
-        
-        fs.writeFileSync(fullPath, Buffer.from(base64Data, 'base64'));
-        
-        // We return a path that our static server can resolve or just the base64 for immediate feedback
-        // For now, let's keep it as base64 for the UI but acknowledge it's saved
-        console.log(`Saved AI fanart to ${fullPath}`);
-      } catch (err) {
-        console.error('Failed to save fanart to disk:', err);
+        const prompt = `Create a high-quality, cinematic, wide-angle 16:9 fanart background banner for the ${type} "${title}". 
+The style should be atmospheric, artistic, and capture the essence of the plot: ${plotText}.
+Do NOT include any text, logos, or titles in the image. High-contrast, vibrant lighting, professional movie production art style.`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.1-flash-image',
+          contents: {
+            parts: [{ text: prompt }],
+          },
+          config: {
+            imageConfig: {
+              aspectRatio: '16:9',
+              imageSize: '1K',
+            },
+          },
+        });
+
+        if (response?.candidates?.[0]?.content?.parts) {
+          for (const part of response.candidates[0].content.parts) {
+            if (part.inlineData?.data) {
+              base64Data = part.inlineData.data;
+              break;
+            }
+          }
+        }
+      } catch (aiErr) {
+        console.warn('Gemini fanart image model attempt failed, falling back to media repository art:', aiErr);
       }
     }
 
-    return res.json({ success: true, url: savedUrl });
+    // 2. If Gemini produced an image, save and return it
+    if (base64Data) {
+      const savedUrl = `data:image/jpeg;base64,${base64Data}`;
+      let verifiedOnDisk = false;
+
+      // Persist to Samba share path with path sanitization and directory creation
+      const targetRelPath = mediaPath || `${type === 'series' ? 'TV Shows' : type === 'album' ? 'Music' : 'Movies'}/${title}`;
+      if (targetRelPath) {
+        try {
+          const resolvedDir = resolveSambaFullPath(targetRelPath);
+          if (!fs.existsSync(resolvedDir)) {
+            fs.mkdirSync(resolvedDir, { recursive: true });
+          }
+          const fanartFullPath = path.join(resolvedDir, 'fanart.jpg');
+          const posterFullPath = path.join(resolvedDir, type === 'album' ? 'folder.jpg' : 'poster.jpg');
+          const imgBuffer = Buffer.from(base64Data, 'base64');
+          fs.writeFileSync(fanartFullPath, imgBuffer);
+          fs.writeFileSync(posterFullPath, imgBuffer);
+          verifiedOnDisk = fs.existsSync(fanartFullPath) && fs.existsSync(posterFullPath);
+          console.log(`[Samba AI Art] Persisted and verified artwork at ${resolvedDir}`);
+        } catch (err) {
+          console.error('Failed to save AI artwork to Samba disk:', err);
+        }
+      }
+
+      return res.json({
+        success: true,
+        url: savedUrl,
+        fanartUrl: savedUrl,
+        posterUrl: savedUrl,
+        source: 'gemini-image-gen',
+        verified: verifiedOnDisk,
+      });
+    }
+
+    // 3. Fallback to real OMDb / TVMaze / iTunes artwork
+    const liveArt = await fetchMediaArt(title, type);
+    const chosenUrl = liveArt.fanartUrl || liveArt.posterUrl;
+    if (chosenUrl) {
+      let verifiedOnDisk = false;
+      const targetRelPath = mediaPath || `${type === 'series' ? 'TV Shows' : type === 'album' ? 'Music' : 'Movies'}/${title}`;
+      if (targetRelPath) {
+        try {
+          const resolvedDir = resolveSambaFullPath(targetRelPath);
+          if (!fs.existsSync(resolvedDir)) {
+            fs.mkdirSync(resolvedDir, { recursive: true });
+          }
+          const posterBuf = await getImageBufferFromUrl(liveArt.posterUrl || chosenUrl);
+          const fanartBuf = await getImageBufferFromUrl(liveArt.fanartUrl || chosenUrl);
+          if (posterBuf) {
+            fs.writeFileSync(path.join(resolvedDir, type === 'album' ? 'folder.jpg' : 'poster.jpg'), posterBuf);
+          }
+          if (fanartBuf) {
+            fs.writeFileSync(path.join(resolvedDir, 'fanart.jpg'), fanartBuf);
+          }
+          verifiedOnDisk = fs.existsSync(path.join(resolvedDir, 'fanart.jpg')) || fs.existsSync(path.join(resolvedDir, type === 'album' ? 'folder.jpg' : 'poster.jpg'));
+          console.log(`[Samba Live Art] Persisted and verified artwork at ${resolvedDir}`);
+        } catch (err) {
+          console.warn('Could not write live art to Samba share:', err);
+        }
+      }
+
+      return res.json({
+        success: true,
+        url: chosenUrl,
+        fanartUrl: liveArt.fanartUrl || chosenUrl,
+        posterUrl: liveArt.posterUrl || chosenUrl,
+        source: liveArt.source,
+        verified: verifiedOnDisk,
+      });
+    }
+
+    // 4. Default high-contrast cinematic backdrop
+    const fallbackBackdrop = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=1600&auto=format&fit=crop&q=80';
+    return res.json({
+      success: true,
+      url: fallbackBackdrop,
+      fanartUrl: fallbackBackdrop,
+      posterUrl: fallbackBackdrop,
+      source: 'curated-cinematic-fallback',
+      verified: false,
+    });
   } catch (error: any) {
     console.error('Fanart generation error:', error);
     return res.status(500).json({ error: error?.message || 'Failed to generate fanart' });
@@ -2009,6 +2734,77 @@ app.get('/api/thumbnails/stats', async (req: Request, res: Response) => {
 // Serve public static assets (including local sample videos)
 app.use(express.static(path.join(process.cwd(), 'public')));
 
+// Dedicated Samba Network Share video/audio streaming endpoint with full HTTP 206 Partial Content / Range support
+app.get('/api/samba/stream', (req: Request, res: Response) => {
+  try {
+    const rawPath = (req.query.path || req.query.file) as string;
+    if (!rawPath) {
+      return res.status(400).json({ error: 'path query parameter is required' });
+    }
+
+    const fullPath = resolveSambaFullPath(rawPath);
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      return res.status(404).json({ error: 'File not found on Samba share', path: rawPath });
+    }
+
+    const stat = fs.statSync(fullPath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    const ext = path.extname(fullPath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.mp4': 'video/mp4',
+      '.m4v': 'video/mp4',
+      '.webm': 'video/webm',
+      '.ogv': 'video/ogg',
+      '.mkv': 'video/x-matroska',
+      '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo',
+      '.ts': 'video/mp2t',
+      '.mp3': 'audio/mpeg',
+      '.flac': 'audio/flac',
+      '.wav': 'audio/wav',
+      '.m4a': 'audio/mp4',
+      '.aac': 'audio/aac',
+      '.ogg': 'audio/ogg',
+    };
+    const contentType = mimeMap[ext] || 'application/octet-stream';
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+      if (start >= fileSize || end >= fileSize) {
+        res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+        return res.end();
+      }
+
+      const chunksize = end - start + 1;
+      const file = fs.createReadStream(fullPath, { start, end });
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': contentType,
+      };
+      res.writeHead(206, head);
+      file.pipe(res);
+    } else {
+      const head = {
+        'Content-Length': fileSize,
+        'Content-Type': contentType,
+        'Accept-Ranges': 'bytes',
+      };
+      res.writeHead(200, head);
+      fs.createReadStream(fullPath).pipe(res);
+    }
+  } catch (err: any) {
+    console.error('Samba stream error:', err);
+    res.status(500).json({ error: 'Failed to stream media from Samba share', details: err?.message });
+  }
+});
+
 // Dedicated local sample video streaming endpoint with full HTTP 206 Partial Content / Range support
 app.get('/api/media/sample-video', (req: Request, res: Response) => {
   const filePath = path.join(process.cwd(), 'public', 'sample-video.mp4');
@@ -2020,15 +2816,15 @@ app.get('/api/media/sample-video', (req: Request, res: Response) => {
   res.redirect('https://vjs.zencdn.net/v/oceans.mp4');
 });
 
-// Dedicated local sample trailer streaming endpoint
+// High definition live cinematic stream endpoint
 app.get('/api/media/sintel-trailer', (req: Request, res: Response) => {
-  const filePath = path.join(process.cwd(), 'public', 'sintel-trailer.mp4');
+  const filePath = path.join(process.cwd(), 'public', 'sample-video.mp4');
   if (fs.existsSync(filePath)) {
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Accept-Ranges', 'bytes');
     return res.sendFile(filePath);
   }
-  res.redirect('https://media.w3.org/2010/05/sintel/trailer.mp4');
+  res.redirect('https://vjs.zencdn.net/v/oceans.mp4');
 });
 
 // Batch processing endpoint to enrich multiple media items with missing metadata/artwork

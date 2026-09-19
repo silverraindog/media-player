@@ -55,7 +55,7 @@ export const BatchMetadataEnricher: React.FC<BatchMetadataEnricherProps> = ({
     const itemsToProcess = activeItemsToProcess.map(item => ({
       id: item.id,
       title: item.title,
-      type: item.mediaType,
+      type: item.type,
       year: item.year,
       hasPoster: !( !item.posterUrl || item.posterUrl.includes('unsplash.com') || item.posterUrl.includes('images.unsplash.com') ),
       hasSynopsis: !!(item.overview && item.overview.length > 50),
@@ -102,7 +102,7 @@ export const BatchMetadataEnricher: React.FC<BatchMetadataEnricherProps> = ({
             const aiRes = await fetch('/api/metadata/generate-synopsis', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ title: currentMedia.title, type: currentMedia.mediaType })
+              body: JSON.stringify({ title: currentMedia.title, type: currentMedia.type, year: currentMedia.year })
             });
             const aiData = await aiRes.json();
             if (aiData.success && aiData.data?.overview) {
@@ -111,22 +111,42 @@ export const BatchMetadataEnricher: React.FC<BatchMetadataEnricherProps> = ({
           } catch (err) { console.warn("AI Synopsis batch fail:", err); }
         }
 
-        // Trigger AI Fanart if flagged
-        if (result.triggerAiFanart) {
+        // Trigger Artwork recovery if flagged or still missing
+        const isStillPlaceholder = !currentMedia.posterUrl || currentMedia.posterUrl.includes('unsplash.com') || currentMedia.posterUrl.includes('images.unsplash.com');
+        if (result.triggerAiFanart || isStillPlaceholder) {
           try {
-            const fanartRes = await fetch('/api/media/generate-fanart', {
+            // First attempt live fetch from official sources
+            const artRes = await fetch('/api/media/fetch-art', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ 
                 title: currentMedia.title, 
-                synopsis: currentMedia.overview,
-                mediaPath: currentMedia.recommendedFolderStructure 
+                type: currentMedia.type, 
+                year: currentMedia.year 
               })
             });
-            const fanartData = await fanartRes.json();
-            if (fanartData.success && fanartData.fanartUrl) {
-              currentMedia.fanartUrl = fanartData.fanartUrl;
-              currentMedia.posterUrl = fanartData.fanartUrl;
+            const artData = await artRes.json();
+            if (artData.success && artData.posterUrl) {
+              currentMedia.posterUrl = artData.posterUrl;
+              currentMedia.fanartUrl = artData.fanartUrl || artData.posterUrl;
+            } else {
+              // Fallback to AI generation
+              const fanartRes = await fetch('/api/media/generate-fanart', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  title: currentMedia.title, 
+                  type: currentMedia.type,
+                  synopsis: currentMedia.overview,
+                  mediaPath: currentMedia.recommendedFolderStructure 
+                })
+              });
+              const fanartData = await fanartRes.json();
+              const art = fanartData.posterUrl || fanartData.fanartUrl || fanartData.url;
+              if (fanartData.success && art) {
+                currentMedia.fanartUrl = fanartData.fanartUrl || art;
+                currentMedia.posterUrl = fanartData.posterUrl || art;
+              }
             }
           } catch (err) { console.warn("AI Fanart batch fail:", err); }
         }

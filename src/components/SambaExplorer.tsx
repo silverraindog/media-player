@@ -27,6 +27,15 @@ import {
   FileText,
   Zap,
   Layers,
+  Eye,
+  EyeOff,
+  Captions,
+  Pencil,
+  Copy,
+  Check,
+  ExternalLink,
+  X,
+  AlertCircle,
 } from 'lucide-react';
 import { SambaConfig, SambaShareNode, SyncLog, MediaMetadata, MediaScanExtensionConfig } from '../types';
 import { DiscoveredFilesInspector } from './DiscoveredFilesInspector';
@@ -41,6 +50,225 @@ import {
   getFileCategory,
   getFileExtension,
 } from '../utils/mediaExtractor';
+import { sanitizeSambaPath, encodeSambaPathForUrl } from '../utils/pathSanitizer';
+
+// Subtitle scanning configuration & helpers
+export const SUBTITLE_EXTENSIONS = ['srt', 'sub', 'vtt', 'ass', 'ssa'];
+
+export interface SubtitleLanguage {
+  code: string;
+  label: string;
+  flag: string;
+}
+
+export interface SubtitleScanResult {
+  hasSubtitles: boolean;
+  count: number;
+  subtitleFiles: string[];
+  languages: SubtitleLanguage[];
+}
+
+const LANGUAGE_CODE_MAP: Record<string, { label: string; flag: string }> = {
+  en: { label: 'EN', flag: '🇺🇸' },
+  eng: { label: 'EN', flag: '🇺🇸' },
+  english: { label: 'EN', flag: '🇺🇸' },
+  ja: { label: 'JA', flag: '🇯🇵' },
+  jpn: { label: 'JA', flag: '🇯🇵' },
+  japanese: { label: 'JA', flag: '🇯🇵' },
+  fr: { label: 'FR', flag: '🇫🇷' },
+  fre: { label: 'FR', flag: '🇫🇷' },
+  fra: { label: 'FR', flag: '🇫🇷' },
+  french: { label: 'FR', flag: '🇫🇷' },
+  de: { label: 'DE', flag: '🇩🇪' },
+  ger: { label: 'DE', flag: '🇩🇪' },
+  deu: { label: 'DE', flag: '🇩🇪' },
+  german: { label: 'DE', flag: '🇩🇪' },
+  es: { label: 'ES', flag: '🇪🇸' },
+  spa: { label: 'ES', flag: '🇪🇸' },
+  spanish: { label: 'ES', flag: '🇪🇸' },
+  zh: { label: 'ZH', flag: '🇨🇳' },
+  chi: { label: 'ZH', flag: '🇨🇳' },
+  zho: { label: 'ZH', flag: '🇨🇳' },
+  chinese: { label: 'ZH', flag: '🇨🇳' },
+  it: { label: 'IT', flag: '🇮🇹' },
+  ita: { label: 'IT', flag: '🇮🇹' },
+  italian: { label: 'IT', flag: '🇮🇹' },
+  pt: { label: 'PT', flag: '🇵🇹' },
+  por: { label: 'PT', flag: '🇵🇹' },
+  portuguese: { label: 'PT', flag: '🇵🇹' },
+  ru: { label: 'RU', flag: '🇷🇺' },
+  rus: { label: 'RU', flag: '🇷🇺' },
+  russian: { label: 'RU', flag: '🇷🇺' },
+  ko: { label: 'KO', flag: '🇰🇷' },
+  kor: { label: 'KO', flag: '🇰🇷' },
+  korean: { label: 'KO', flag: '🇰🇷' },
+  ar: { label: 'AR', flag: '🇸🇦' },
+  ara: { label: 'AR', flag: '🇸🇦' },
+  arabic: { label: 'AR', flag: '🇸🇦' },
+  nl: { label: 'NL', flag: '🇳🇱' },
+  dut: { label: 'NL', flag: '🇳🇱' },
+  nld: { label: 'NL', flag: '🇳🇱' },
+  dutch: { label: 'NL', flag: '🇳🇱' },
+  pl: { label: 'PL', flag: '🇵🇱' },
+  pol: { label: 'PL', flag: '🇵🇱' },
+  polish: { label: 'PL', flag: '🇵🇱' },
+  sv: { label: 'SV', flag: '🇸🇪' },
+  swe: { label: 'SV', flag: '🇸🇪' },
+  swedish: { label: 'SV', flag: '🇸🇪' },
+  hi: { label: 'HI', flag: '🇮🇳' },
+  hin: { label: 'HI', flag: '🇮🇳' },
+  hindi: { label: 'HI', flag: '🇮🇳' },
+  tr: { label: 'TR', flag: '🇹🇷' },
+  tur: { label: 'TR', flag: '🇹🇷' },
+  turkish: { label: 'TR', flag: '🇹🇷' },
+};
+
+/**
+ * Parses a subtitle filename to extract language codes (e.g., .en, .ja, .fr, .eng, .japanese).
+ */
+export const parseSubtitleLanguage = (filename: string): SubtitleLanguage | null => {
+  if (!filename) return null;
+  const clean = filename.toLowerCase();
+  const parts = clean.split(/[\._\-\s\[\]\(\)]+/);
+  for (const part of parts) {
+    if (LANGUAGE_CODE_MAP[part]) {
+      return {
+        code: part,
+        label: LANGUAGE_CODE_MAP[part].label,
+        flag: LANGUAGE_CODE_MAP[part].flag,
+      };
+    }
+  }
+  return null;
+};
+
+export const parseAllSubtitleLanguages = (subtitleFiles: string[]): SubtitleLanguage[] => {
+  const seen = new Set<string>();
+  const list: SubtitleLanguage[] = [];
+  for (const file of subtitleFiles) {
+    const lang = parseSubtitleLanguage(file);
+    if (lang && !seen.has(lang.label)) {
+      seen.add(lang.label);
+      list.push(lang);
+    }
+  }
+  return list;
+};
+
+/**
+ * Automatically scans a folder for .srt, .sub, or .vtt subtitle files,
+ * including within dedicated 'Subs' or 'Subtitles' subdirectories.
+ */
+export const scanFolderForSubtitles = (folderNode: SambaShareNode): string[] => {
+  const subtitleFiles: string[] = [];
+  if (!folderNode.children) return subtitleFiles;
+
+  for (const child of folderNode.children) {
+    if (child.type === 'file') {
+      const ext = getFileExtension(child.name).toLowerCase();
+      if (SUBTITLE_EXTENSIONS.includes(ext)) {
+        subtitleFiles.push(child.name);
+      }
+    } else if (child.type === 'folder' && /^(subs|subtitles|sub)$/i.test(child.name) && child.children) {
+      for (const subChild of child.children) {
+        if (subChild.type === 'file') {
+          const ext = getFileExtension(subChild.name).toLowerCase();
+          if (SUBTITLE_EXTENSIONS.includes(ext)) {
+            subtitleFiles.push(`${child.name}/${subChild.name}`);
+          }
+        }
+      }
+    }
+  }
+  return subtitleFiles;
+};
+
+/**
+ * Builds a lookup map associating each file node in the Samba tree
+ * with any available .srt, .sub, or .vtt subtitle files in its folder or siblings.
+ */
+export const buildSubtitleAvailabilityMap = (
+  nodes: SambaShareNode[]
+): Map<string, SubtitleScanResult> => {
+  const map = new Map<string, SubtitleScanResult>();
+
+  const traverse = (currentNodes: SambaShareNode[]) => {
+    // Collect all subtitle files in current directory
+    const folderSubtitles: string[] = [];
+
+    for (const node of currentNodes) {
+      if (node.type === 'file') {
+        const ext = getFileExtension(node.name).toLowerCase();
+        if (SUBTITLE_EXTENSIONS.includes(ext)) {
+          folderSubtitles.push(node.name);
+        }
+      } else if (node.type === 'folder' && /^(subs|subtitles|sub)$/i.test(node.name) && node.children) {
+        for (const subChild of node.children) {
+          if (subChild.type === 'file') {
+            const ext = getFileExtension(subChild.name).toLowerCase();
+            if (SUBTITLE_EXTENSIONS.includes(ext)) {
+              folderSubtitles.push(`${node.name}/${subChild.name}`);
+            }
+          }
+        }
+      }
+    }
+
+    // Now map subtitle associations to media file nodes
+    for (const node of currentNodes) {
+      if (node.type === 'file') {
+        const ext = getFileExtension(node.name).toLowerCase();
+        const category = getFileCategory(node.name);
+
+        if (SUBTITLE_EXTENSIONS.includes(ext)) {
+          const languages = parseAllSubtitleLanguages([node.name]);
+          const res: SubtitleScanResult = {
+            hasSubtitles: true,
+            count: 1,
+            subtitleFiles: [node.name],
+            languages,
+          };
+          map.set(node.id, res);
+          map.set(node.path, res);
+          continue;
+        }
+
+        // For video files or disc images in this folder
+        if (
+          category === 'video' ||
+          category === 'disc_images' ||
+          ['mkv', 'mp4', 'avi', 'mov', 'wmv', 'iso', 'm4v', 'ts'].includes(ext)
+        ) {
+          const baseName = node.name.replace(/\.[^/.]+$/, '').toLowerCase();
+          // Filter matching subtitles or include all folder subtitles
+          const matchedSubs = folderSubtitles.filter((subName) => {
+            const subBase = subName.replace(/\.[^/.]+$/, '').toLowerCase();
+            return subBase.includes(baseName) || baseName.includes(subBase) || folderSubtitles.length === 1;
+          });
+
+          const activeSubs = matchedSubs.length > 0 ? matchedSubs : folderSubtitles;
+
+          if (activeSubs.length > 0) {
+            const languages = parseAllSubtitleLanguages(activeSubs);
+            const res: SubtitleScanResult = {
+              hasSubtitles: true,
+              count: activeSubs.length,
+              subtitleFiles: activeSubs,
+              languages,
+            };
+            map.set(node.id, res);
+            map.set(node.path, res);
+          }
+        }
+      } else if (node.type === 'folder' && node.children) {
+        traverse(node.children);
+      }
+    }
+  };
+
+  traverse(nodes);
+  return map;
+};
 
 interface SambaExplorerProps {
   sambaConfig: SambaConfig;
@@ -51,6 +279,8 @@ interface SambaExplorerProps {
   onOpenInNfoStudio: (media: MediaMetadata) => void;
   onRefreshSamba: () => void;
   onSyncSamba?: (customScanPath?: string) => Promise<void>;
+  onQuickSync?: () => Promise<void> | void;
+  isQuickSyncing?: boolean;
   onOpenClassifierModal?: () => void;
   onPopulateMediaLibrary?: () => void;
   isSyncing?: boolean;
@@ -70,6 +300,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onOpenInNfoStudio,
   onRefreshSamba,
   onSyncSamba,
+  onQuickSync,
+  isQuickSyncing = false,
   onOpenClassifierModal,
   onPopulateMediaLibrary,
   isSyncing = false,
@@ -94,6 +326,254 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs'>('explorer');
   const [isBatchRenamerOpen, setIsBatchRenamerOpen] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ percentage: number; currentItem: string; count: number } | null>(null);
+
+  // Preview Mode: displays a floating card showing the first 5 filenames within a folder on hover
+  const [isPreviewMode, setIsPreviewMode] = useState<boolean>(true);
+  const [hoveredFolder, setHoveredFolder] = useState<{
+    node: SambaShareNode;
+    x: number;
+    y: number;
+  } | null>(null);
+  const hoverTimerRef = React.useRef<any>(null);
+
+  // Right-click context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    node: SambaShareNode | null;
+  }>({
+    visible: false,
+    x: 0,
+    y: 0,
+    node: null,
+  });
+
+  // Quick Rename state & modal
+  const [renamingNode, setRenamingNode] = useState<SambaShareNode | null>(null);
+  const [renameInputVal, setRenameInputVal] = useState('');
+  const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const [isRenameSubmitting, setIsRenameSubmitting] = useState(false);
+  const [renameFeedback, setRenameFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
+
+  // Close context menu on outside click or escape
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (contextMenu.visible) {
+        setContextMenu({ visible: false, x: 0, y: 0, node: null });
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu({ visible: false, x: 0, y: 0, node: null });
+        if (isRenameModalOpen && !isRenameSubmitting) {
+          setIsRenameModalOpen(false);
+        }
+      }
+    };
+    window.addEventListener('click', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('click', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu.visible, isRenameModalOpen, isRenameSubmitting]);
+
+  // Subtitle availability map computed from current sambaTree
+  const subtitleAvailabilityMap = useMemo(() => {
+    return buildSubtitleAvailabilityMap(sambaTree);
+  }, [sambaTree]);
+
+  // Total count of files/nodes with subtitles found
+  const totalSubtitlesFoundCount = useMemo(() => {
+    let count = 0;
+    subtitleAvailabilityMap.forEach((val) => {
+      if (val.hasSubtitles) count++;
+    });
+    return count;
+  }, [subtitleAvailabilityMap]);
+
+  // Open Quick Rename modal for a given node
+  const handleOpenQuickRename = (node: SambaShareNode) => {
+    setRenamingNode(node);
+    setRenameInputVal(node.name);
+    setRenameFeedback(null);
+    setIsRenameModalOpen(true);
+    setContextMenu({ visible: false, x: 0, y: 0, node: null });
+  };
+
+  // Open context menu on right click
+  const handleContextMenu = (e: React.MouseEvent, node: SambaShareNode) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedNode(node);
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      node,
+    });
+  };
+
+  // Copy path to clipboard
+  const handleCopyPath = (node: SambaShareNode) => {
+    const fullSmbPath = `//${sambaConfig.server}/${sambaConfig.share}/${node.path}`;
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(fullSmbPath);
+      setCopyToast(`Copied Samba path: ${node.name}`);
+      setTimeout(() => setCopyToast(null), 2500);
+    }
+    setContextMenu({ visible: false, x: 0, y: 0, node: null });
+  };
+
+  // Execute Quick Rename: updates both Samba physical file and SQLite vault
+  const handleExecuteQuickRename = async () => {
+    if (!renamingNode) return;
+    const cleanName = renameInputVal.trim();
+    if (!cleanName) {
+      setRenameFeedback({ type: 'error', message: 'Filename cannot be blank.' });
+      return;
+    }
+    if (cleanName === renamingNode.name) {
+      setIsRenameModalOpen(false);
+      return;
+    }
+
+    setIsRenameSubmitting(true);
+    setRenameFeedback(null);
+
+    try {
+      const res = await fetch('/api/samba/rename-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          oldPath: renamingNode.path,
+          newName: cleanName,
+          mediaId: renamingNode.matchedMedia?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || data.details || 'Failed to rename file on Samba share');
+      }
+
+      const updatedNewPath = data.newPath || cleanName;
+
+      // Recursive tree updater
+      const updateNodeInTree = (items: SambaShareNode[]): SambaShareNode[] => {
+        return items.map((item) => {
+          if (item.id === renamingNode.id) {
+            const updatedMatched = item.matchedMedia
+              ? {
+                  ...item.matchedMedia,
+                  title: data.newTitle || item.matchedMedia.title,
+                  matchedFilename: cleanName,
+                }
+              : undefined;
+            return {
+              ...item,
+              name: cleanName,
+              path: updatedNewPath,
+              matchedMedia: updatedMatched,
+            };
+          }
+          if (item.children) {
+            return {
+              ...item,
+              children: updateNodeInTree(item.children),
+            };
+          }
+          return item;
+        });
+      };
+
+      setSambaTree((prev) => updateNodeInTree(prev));
+
+      // Update selectedNode if currently selected
+      if (selectedNode?.id === renamingNode.id) {
+        setSelectedNode((prev) =>
+          prev
+            ? {
+                ...prev,
+                name: cleanName,
+                path: updatedNewPath,
+                matchedMedia: prev.matchedMedia
+                  ? {
+                      ...prev.matchedMedia,
+                      title: data.newTitle || prev.matchedMedia.title,
+                      matchedFilename: cleanName,
+                    }
+                  : undefined,
+              }
+            : null
+        );
+      }
+
+      setRenameFeedback({
+        type: 'success',
+        message: `Successfully renamed to "${cleanName}" and synchronized SQLite vault!`,
+      });
+
+      setTimeout(() => {
+        setIsRenameModalOpen(false);
+        setIsRenameSubmitting(false);
+        setRenamingNode(null);
+      }, 900);
+    } catch (err: any) {
+      console.error('Quick rename error:', err);
+      setRenameFeedback({
+        type: 'error',
+        message: err.message || 'Error occurred while renaming file on Samba share',
+      });
+      setIsRenameSubmitting(false);
+    }
+  };
+
+  // Helper to extract the first 5 filenames inside a folder
+  const getFolderPreviewFiles = (node: SambaShareNode): { name: string; size?: string; ext: string; category: string }[] => {
+    const files: { name: string; size?: string; ext: string; category: string }[] = [];
+    const collect = (current: SambaShareNode) => {
+      if (files.length >= 5) return;
+      if (current.type === 'file') {
+        const ext = getFileExtension(current.name);
+        const category = getFileCategory(current.name);
+        files.push({
+          name: current.name,
+          size: current.size,
+          ext,
+          category,
+        });
+      } else if (current.children) {
+        for (const child of current.children) {
+          collect(child);
+          if (files.length >= 5) break;
+        }
+      }
+    };
+    if (node.children) {
+      for (const child of node.children) {
+        collect(child);
+        if (files.length >= 5) break;
+      }
+    }
+    return files;
+  };
+
+  // Helper to count total files inside a folder
+  const countTotalFilesInFolder = (node: SambaShareNode): number => {
+    let count = 0;
+    const walk = (n: SambaShareNode) => {
+      if (n.type === 'file') count++;
+      if (n.children) n.children.forEach(walk);
+    };
+    if (node.children) node.children.forEach(walk);
+    return count;
+  };
 
   // Listen for Tauri scan-progress events
   useEffect(() => {
@@ -144,6 +624,170 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       return () => clearTimeout(timer);
     }
   }, [sambaTree]);
+
+  // Periodic polling effect: checks Samba share filesystem for folders with artworkStatus === 'pending'
+  // Ensures UI state updates automatically as soon as background artwork writes finish on disk
+  useEffect(() => {
+    const pendingFolders: SambaShareNode[] = [];
+    const findPendingNodes = (nodes: SambaShareNode[]) => {
+      for (const node of nodes) {
+        if (
+          node.type === 'folder' &&
+          (node.artworkStatus === 'pending' || (node as any).artworkStatus === 'Pending')
+        ) {
+          pendingFolders.push(node);
+        }
+        if (node.children && node.children.length > 0) {
+          findPendingNodes(node.children);
+        }
+      }
+    };
+    findPendingNodes(sambaTree);
+
+    if (pendingFolders.length === 0) return;
+
+    let isSubscribed = true;
+    const pollInterval = setInterval(async () => {
+      for (const folder of pendingFolders) {
+        try {
+          const encodedPath = encodeSambaPathForUrl(folder.path);
+          const res = await fetch(`/api/samba/verify-file?folderPath=${encodedPath}&filenames=poster.jpg,fanart.jpg`);
+          if (!res.ok) continue;
+          const data = await res.json();
+
+          if (data.success && (data.exists || data.hasAnyArtwork)) {
+            if (!isSubscribed) return;
+
+            setSambaTree((prevTree) => {
+              const updateFolderNode = (items: SambaShareNode[]): SambaShareNode[] => {
+                return items.map((item) => {
+                  if (item.id === folder.id || item.path === folder.path) {
+                    const currentChildren = item.children ? [...item.children] : [];
+                    const hasPoster = currentChildren.some(
+                      (c) => c.name === 'poster.jpg' || c.name === 'folder.jpg'
+                    );
+                    const hasFanart = currentChildren.some((c) => c.name === 'fanart.jpg');
+
+                    const newFiles = [...currentChildren];
+                    const posterName = item.mediaType === 'album' ? 'folder.jpg' : 'poster.jpg';
+                    if (!hasPoster && (data.files[posterName] || data.files['poster.jpg'] || data.files['folder.jpg'])) {
+                      newFiles.push({
+                        id: `file-poster-${item.id}-${Date.now()}`,
+                        name: posterName,
+                        path: `${item.path}/${posterName}`,
+                        type: 'file',
+                        size: '420 KB',
+                      });
+                    }
+                    if (!hasFanart && data.files['fanart.jpg']) {
+                      newFiles.push({
+                        id: `file-fanart-${item.id}-${Date.now()}`,
+                        name: 'fanart.jpg',
+                        path: `${item.path}/fanart.jpg`,
+                        type: 'file',
+                        size: '1.1 MB',
+                      });
+                    }
+
+                    return {
+                      ...item,
+                      hasPoster: true,
+                      artworkStatus: 'synced' as const,
+                      children: newFiles,
+                    };
+                  }
+                  if (item.children && item.children.length > 0) {
+                    return {
+                      ...item,
+                      children: updateFolderNode(item.children),
+                    };
+                  }
+                  return item;
+                });
+              };
+              return updateFolderNode(prevTree);
+            });
+
+            // Pre-warm thumbnail in local cache
+            if (folder.matchedMedia?.posterUrl) {
+              thumbnailStorage.resolveForNode(folder);
+            }
+          }
+        } catch (err) {
+          console.warn('Samba pending artwork verify failed:', folder.path, err);
+        }
+      }
+    }, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(pollInterval);
+    };
+  }, [sambaTree, setSambaTree]);
+
+  const [isVerifyingArtwork, setIsVerifyingArtwork] = useState(false);
+  const [verifyStatusMessage, setVerifyStatusMessage] = useState<string | null>(null);
+
+  const handleVerifyArtworkOnShare = async () => {
+    setIsVerifyingArtwork(true);
+    setVerifyStatusMessage('Verifying artwork files on Samba filesystem...');
+
+    try {
+      const mediaFolders: SambaShareNode[] = [];
+      const collectMediaFolders = (nodes: SambaShareNode[]) => {
+        for (const n of nodes) {
+          if (n.type === 'folder' && (n.matchedMedia || n.hasPoster || n.mediaType)) {
+            mediaFolders.push(n);
+          }
+          if (n.children) collectMediaFolders(n.children);
+        }
+      };
+      collectMediaFolders(sambaTree);
+
+      let verifiedCount = 0;
+      let fixedCount = 0;
+
+      for (const folder of mediaFolders) {
+        try {
+          const safePath = encodeSambaPathForUrl(folder.path);
+          const verifyRes = await fetch(`/api/samba/verify-file?folderPath=${safePath}&filenames=poster.jpg,fanart.jpg`);
+          if (!verifyRes.ok) continue;
+          const data = await verifyRes.json();
+
+          // Fallback write if missing on share
+          if (!data.hasAnyArtwork && folder.matchedMedia && (folder.matchedMedia.posterUrl || folder.matchedMedia.fanartUrl)) {
+            const writeRes = await fetch('/api/samba/write-artwork', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                folderPath: sanitizeSambaPath(folder.path),
+                posterUrl: folder.matchedMedia.posterUrl,
+                fanartUrl: folder.matchedMedia.fanartUrl,
+                mediaTitle: folder.matchedMedia.title,
+                type: folder.matchedMedia.type,
+              }),
+            });
+            const writeData = await writeRes.json();
+            if (writeData.verified) {
+              fixedCount++;
+            }
+          } else if (data.hasAnyArtwork) {
+            verifiedCount++;
+          }
+        } catch (e) {
+          console.warn('Error verifying folder on share:', folder.path, e);
+        }
+      }
+
+      setVerifyStatusMessage(`Verified ${verifiedCount} folders on share${fixedCount > 0 ? `, created artwork for ${fixedCount} folders` : ''}.`);
+      setTimeout(() => setVerifyStatusMessage(null), 4500);
+    } catch (err: any) {
+      setVerifyStatusMessage('Verification check encountered an error');
+      setTimeout(() => setVerifyStatusMessage(null), 3000);
+    } finally {
+      setIsVerifyingArtwork(false);
+    }
+  };
 
   // Compute live discovered extension counts
   const discoveredExtensionCounts = useMemo(() => {
@@ -207,6 +851,9 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       ? thumbnailStorage.get(node.path || node.name)
       : null;
 
+    // Subtitle detection info for this node
+    const subtitleInfo = subtitleAvailabilityMap.get(node.id) || subtitleAvailabilityMap.get(node.path);
+
     return (
       <div key={node.id} className="select-none text-xs">
         <div
@@ -214,6 +861,30 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           onClick={() => {
             setSelectedNode(node);
             if (isFolder) toggleFolder(node.id);
+          }}
+          onContextMenu={(e) => handleContextMenu(e, node)}
+          onMouseEnter={(e) => {
+            if (isPreviewMode && isFolder) {
+              const clientX = e.clientX;
+              const clientY = e.clientY;
+              if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+              hoverTimerRef.current = setTimeout(() => {
+                setHoveredFolder({
+                  node,
+                  x: clientX,
+                  y: clientY,
+                });
+              }, 120);
+            }
+          }}
+          onMouseMove={(e) => {
+            if (isPreviewMode && isFolder && hoveredFolder?.node.id === node.id) {
+              setHoveredFolder((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : null));
+            }
+          }}
+          onMouseLeave={() => {
+            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+            setHoveredFolder(null);
           }}
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           className={`flex items-center justify-between py-1.5 pr-3 rounded-lg cursor-pointer transition ${
@@ -258,6 +929,34 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               </span>
             )}
 
+            {/* Subtitles Found Badge with Language Flags and Labels */}
+            {subtitleInfo?.hasSubtitles && (
+              <span
+                id={`subtitles-badge-${node.id}`}
+                className="px-1.5 py-0.5 rounded bg-teal-950/90 text-teal-300 text-[9px] font-bold border border-teal-500/40 flex items-center gap-1 shadow-xs shrink-0"
+                title={`Subtitles found (${subtitleInfo.count}): ${subtitleInfo.subtitleFiles.join(', ')}`}
+              >
+                <Captions className="w-2.5 h-2.5 text-teal-400 shrink-0" />
+                {subtitleInfo.languages && subtitleInfo.languages.length > 0 ? (
+                  <span className="flex items-center gap-1">
+                    <span>Subs</span>
+                    {subtitleInfo.languages.map((l) => (
+                      <span
+                        key={l.label}
+                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-teal-900/80 text-teal-200 border border-teal-600/40 text-[9px]"
+                        title={`${l.label} Subtitle track`}
+                      >
+                        <span>{l.flag}</span>
+                        <span>{l.label}</span>
+                      </span>
+                    ))}
+                  </span>
+                ) : (
+                  <span>Subtitles found</span>
+                )}
+              </span>
+            )}
+
             {node.hasNfo && (
               <span className="px-1.5 py-0.2 rounded bg-purple-950 text-purple-300 text-[10px] font-bold border border-purple-800/40">
                 NFO
@@ -268,6 +967,27 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <span className="px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 text-[9px] font-bold border border-emerald-800/40 flex items-center gap-0.5">
                 <Zap className="w-2.5 h-2.5 text-emerald-400" />
                 <span>POSTER</span>
+              </span>
+            )}
+
+            {/* Artwork Persistence & Pending State Badges */}
+            {node.artworkStatus === 'pending' && (
+              <span
+                className="px-1.5 py-0.2 rounded bg-amber-950/80 text-amber-300 text-[9px] font-bold border border-amber-500/50 flex items-center gap-1 animate-pulse"
+                title="Samba background file writing in progress: writing poster.jpg and fanart.jpg to share"
+              >
+                <RotateCw className="w-2.5 h-2.5 text-amber-400 animate-spin" />
+                <span>WRITING ART (PENDING)</span>
+              </span>
+            )}
+
+            {node.artworkStatus === 'synced' && (
+              <span
+                className="px-1.5 py-0.2 rounded bg-emerald-950/90 text-emerald-300 text-[9px] font-bold border border-emerald-500/40 flex items-center gap-1"
+                title="Verified: poster.jpg and fanart.jpg exist on Samba share filesystem"
+              >
+                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                <span>SYNCED</span>
               </span>
             )}
 
@@ -356,16 +1076,61 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <span>Batch Renamer</span>
             </button>
 
+            {/* Preview Mode Toggle Button */}
+            <button
+              id="samba-preview-mode-btn"
+              onClick={() => setIsPreviewMode(!isPreviewMode)}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border transition shadow cursor-pointer ${
+                isPreviewMode
+                  ? 'bg-cyan-950/70 hover:bg-cyan-900/90 text-cyan-200 border-cyan-500/50 shadow-cyan-950/40'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border-slate-700'
+              }`}
+              title="Toggle Preview Mode: shows a floating preview card with the first 5 filenames when hovering over any folder"
+            >
+              {isPreviewMode ? <Eye className="w-3.5 h-3.5 text-cyan-400" /> : <EyeOff className="w-3.5 h-3.5 text-slate-400" />}
+              <span>Preview Mode: {isPreviewMode ? 'ON' : 'OFF'}</span>
+            </button>
+
+            {/* QuickSync Shallow Scan Button */}
+            {onQuickSync && (
+              <button
+                id="samba-quicksync-btn"
+                onClick={() => onQuickSync()}
+                disabled={isQuickSyncing || isSyncing}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-semibold shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50 select-none"
+                title="QuickSync: Shallow non-recursive scan of top-level Samba directories to detect new folders instantly without re-indexing existing files"
+              >
+                {isQuickSyncing ? (
+                  <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                ) : (
+                  <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+                )}
+                <span>{isQuickSyncing ? 'QuickSyncing...' : 'QuickSync (Shallow)'}</span>
+              </button>
+            )}
+
             {/* Sync Share Media Button */}
             <button
               id="samba-sync-share-btn"
               onClick={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
-              disabled={isSyncing}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white text-xs font-semibold shadow-lg shadow-indigo-500/25 transition cursor-pointer disabled:opacity-50"
+              disabled={isSyncing || isQuickSyncing}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
               title="Recursively scan the Samba share, detect movies/series across any folder layout, and pull metadata"
             >
-              <RotateCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Scanning & Fetching Details...' : 'Sync Share & Media Details'}</span>
+              <RotateCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-400' : 'text-slate-400'}`} />
+              <span>{isSyncing ? 'Deep Scanning...' : 'Full Deep Sync'}</span>
+            </button>
+
+            {/* Verify Share Artwork & Persistence Button */}
+            <button
+              id="samba-verify-artwork-btn"
+              onClick={handleVerifyArtworkOnShare}
+              disabled={isVerifyingArtwork}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition shadow cursor-pointer disabled:opacity-50"
+              title="Verify poster.jpg and fanart.jpg files on the Samba share filesystem and create missing artwork"
+            >
+              <RotateCw className={`w-3.5 h-3.5 text-amber-400 ${isVerifyingArtwork ? 'animate-spin' : ''}`} />
+              <span>{isVerifyingArtwork ? 'Verifying Files...' : 'Verify Share Artwork'}</span>
             </button>
 
             <button
@@ -379,6 +1144,14 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Verification Status Banner */}
+        {verifyStatusMessage && (
+          <div className="mt-3 py-2 px-3 rounded-xl bg-slate-950/80 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>{verifyStatusMessage}</span>
+          </div>
+        )}
 
         {/* Custom Folder & Advanced Scan Path Bar */}
         <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
@@ -532,18 +1305,48 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             {/* Left: Directory Tree */}
             <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
+                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800 gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
-                    <FolderTree className="w-4 h-4 text-emerald-400" />
-                    <h3 className="text-sm font-bold text-white">Samba Directory Tree (Movies, Series, Music, Documentaries, Anime, etc.)</h3>
+                    <FolderTree className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <h3 className="text-sm font-bold text-white">Samba Directory Tree</h3>
+                    {totalSubtitlesFoundCount > 0 && (
+                      <span
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-teal-950/70 border border-teal-500/30 text-[10px] text-teal-300 font-mono shadow-xs"
+                        title={`${totalSubtitlesFoundCount} files with detected .srt/.sub/.vtt subtitle tracks`}
+                      >
+                        <Captions className="w-3 h-3 text-teal-400 shrink-0" />
+                        <span>{totalSubtitlesFoundCount} Subtitles</span>
+                      </span>
+                    )}
                   </div>
-                  <span className="text-xs text-slate-500 font-mono">
-                    Protocol: SMB 3.1.1
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      id="samba-tree-preview-mode-toggle"
+                      onClick={() => setIsPreviewMode(!isPreviewMode)}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                        isPreviewMode
+                          ? 'bg-cyan-950/70 text-cyan-300 border-cyan-500/50 hover:bg-cyan-900/60 shadow-xs'
+                          : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                      }`}
+                      title="Toggle folder hover filename preview"
+                    >
+                      {isPreviewMode ? <Eye className="w-3 h-3 text-cyan-400" /> : <EyeOff className="w-3 h-3 text-slate-500" />}
+                      <span>Preview Mode: {isPreviewMode ? 'ON' : 'OFF'}</span>
+                    </button>
+                    <span className="text-xs text-slate-500 font-mono hidden sm:inline">
+                      SMB 3.1.1
+                    </span>
+                  </div>
                 </div>
 
                 {/* Tree Viewer */}
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 max-h-[460px] overflow-y-auto space-y-1">
+                <div
+                  onScroll={() => {
+                    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+                    setHoveredFolder(null);
+                  }}
+                  className="bg-slate-950 p-3 rounded-xl border border-slate-800 max-h-[460px] overflow-y-auto space-y-1"
+                >
                   {sambaTree.map((rootNode) => renderNode(rootNode, 0))}
                 </div>
               </div>
@@ -671,8 +1474,49 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                             </div>
                           </div>
 
+                          {/* Detected Subtitle Details Card */}
+                          {(() => {
+                            const selectedSubInfo = subtitleAvailabilityMap.get(selectedNode.id) || subtitleAvailabilityMap.get(selectedNode.path);
+                            if (!selectedSubInfo || !selectedSubInfo.hasSubtitles) return null;
+
+                            return (
+                              <div className="p-3 bg-teal-950/40 border border-teal-800/50 rounded-xl space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5 text-teal-300 font-semibold text-xs">
+                                    <Captions className="w-3.5 h-3.5 text-teal-400" />
+                                    <span>Subtitles Available ({selectedSubInfo.count})</span>
+                                  </div>
+                                  <span className="px-2 py-0.5 rounded bg-teal-900/70 text-teal-200 text-[9px] font-mono font-bold border border-teal-600/40">
+                                    Attached Track
+                                  </span>
+                                </div>
+                                <div className="space-y-1">
+                                  {selectedSubInfo.subtitleFiles.map((sub, i) => {
+                                    const lang = parseSubtitleLanguage(sub);
+                                    return (
+                                      <div key={i} className="flex items-center justify-between text-[11px] font-mono text-slate-300 bg-slate-900/90 px-2 py-1.5 rounded border border-slate-800">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          {lang && (
+                                            <span className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-teal-900/80 text-teal-200 border border-teal-600/40 text-[9px] font-bold shrink-0">
+                                              <span>{lang.flag}</span>
+                                              <span>{lang.label}</span>
+                                            </span>
+                                          )}
+                                          <span className="truncate max-w-[180px]">{sub}</span>
+                                        </div>
+                                        <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-teal-950 text-teal-300 border border-teal-800/50 font-bold shrink-0">
+                                          .{getFileExtension(sub)}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
                           {/* Quick Actions */}
-                          <div className="flex gap-2 pt-2 border-t border-slate-800/80">
+                          <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800/80">
                             {selectedNode.matchedMedia ? (
                               <>
                                 <button
@@ -694,12 +1538,23 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                                   thumbnailStorage.resolveForNode(selectedNode);
                                   setSelectedNode({ ...selectedNode });
                                 }}
-                                className="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
+                                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
                               >
                                 <RefreshCw className="w-3 h-3 text-slate-400" />
-                                <span>Re-cache Thumbnail Metadata</span>
+                                <span>Re-cache Thumbnail</span>
                               </button>
                             )}
+
+                            {/* Quick Rename Button */}
+                            <button
+                              id="samba-details-quick-rename-btn"
+                              onClick={() => handleOpenQuickRename(selectedNode)}
+                              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-700/50 text-xs font-medium transition cursor-pointer"
+                              title="Rename this file on the Samba share and update SQLite vault database"
+                            >
+                              <Pencil className="w-3 h-3 text-emerald-400" />
+                              <span>Quick Rename</span>
+                            </button>
                           </div>
                         </div>
                       );
@@ -738,6 +1593,317 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           setSambaTree(updateTreeNames(sambaTree));
         }}
       />
+
+      {/* Preview Mode Floating Card Tooltip */}
+      {isPreviewMode && hoveredFolder && (
+        <div
+          id="samba-folder-preview-card"
+          className="fixed z-50 pointer-events-none transition-all duration-150 animate-in fade-in zoom-in-95"
+          style={{
+            left: `${Math.min(
+              hoveredFolder.x + 16,
+              (typeof window !== 'undefined' ? window.innerWidth : 1200) - 360
+            )}px`,
+            top: `${Math.min(
+              hoveredFolder.y + 10,
+              (typeof window !== 'undefined' ? window.innerHeight : 800) - 260
+            )}px`,
+          }}
+        >
+          <div className="bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-xl shadow-2xl shadow-black/80 p-3.5 max-w-sm min-w-[280px] space-y-2.5">
+            {/* Header */}
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2 min-w-0">
+                <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="text-xs font-bold text-white truncate font-mono">
+                  {hoveredFolder.node.name}
+                </span>
+              </div>
+              <span className="px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 text-[10px] font-mono border border-cyan-800/40 shrink-0">
+                Preview (First 5)
+              </span>
+            </div>
+
+            {/* Content preview */}
+            {(() => {
+              const previewFiles = getFolderPreviewFiles(hoveredFolder.node);
+              const totalFiles = countTotalFilesInFolder(hoveredFolder.node);
+
+              if (previewFiles.length === 0) {
+                return (
+                  <div className="py-2.5 text-center text-slate-500 text-[11px] italic">
+                    Folder is empty or contains no direct files
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-1.5">
+                  <div className="space-y-1">
+                    {previewFiles.map((file, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-slate-950/70 border border-slate-800/60 text-[11px]"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {renderFileIcon(file.name)}
+                          <span className="font-mono text-slate-200 truncate max-w-[190px]">
+                            {file.name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0 font-mono text-[10px]">
+                          {file.ext && (
+                            <span className="text-slate-400 uppercase">
+                              .{file.ext}
+                            </span>
+                          )}
+                          {file.size && (
+                            <span className="text-slate-500">
+                              {file.size}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Summary footer if more files */}
+                  <div className="pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                    <span>
+                      {totalFiles > 5 ? `+${totalFiles - 5} more file${totalFiles - 5 > 1 ? 's' : ''}` : 'All files shown'}
+                    </span>
+                    <span className="text-cyan-400">
+                      {totalFiles} file{totalFiles !== 1 ? 's' : ''} total
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Right-Click Context Menu for Samba Tree Nodes */}
+      {contextMenu.visible && contextMenu.node && (
+        <div
+          id="samba-context-menu"
+          className="fixed z-50 bg-slate-900/98 backdrop-blur-md border border-slate-700/80 rounded-xl shadow-2xl shadow-black/90 py-1.5 w-60 text-xs text-slate-200 animate-in fade-in zoom-in-95"
+          style={{
+            left: `${Math.min(
+              contextMenu.x,
+              (typeof window !== 'undefined' ? window.innerWidth : 1200) - 250
+            )}px`,
+            top: `${Math.min(
+              contextMenu.y,
+              (typeof window !== 'undefined' ? window.innerHeight : 800) - 220
+            )}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1.5 border-b border-slate-800/80 text-[11px] font-mono text-slate-400 truncate">
+            {contextMenu.node.name}
+          </div>
+
+          <div className="py-1">
+            <button
+              id="context-menu-quick-rename-btn"
+              onClick={() => handleOpenQuickRename(contextMenu.node!)}
+              className="w-full px-3 py-2 text-left flex items-center gap-2.5 hover:bg-emerald-950/60 hover:text-emerald-300 transition cursor-pointer text-slate-200"
+            >
+              <Pencil className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <div className="flex-1">
+                <span className="font-semibold block">Quick Rename</span>
+                <span className="text-[10px] text-slate-400 block font-sans">Updates Samba & SQLite vault</span>
+              </div>
+            </button>
+
+            <button
+              id="context-menu-copy-path-btn"
+              onClick={() => handleCopyPath(contextMenu.node!)}
+              className="w-full px-3 py-2 text-left flex items-center gap-2.5 hover:bg-slate-800 hover:text-white transition cursor-pointer text-slate-200"
+            >
+              <Copy className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span>Copy Samba Share Path</span>
+            </button>
+
+            <button
+              id="context-menu-inspect-btn"
+              onClick={() => {
+                setSelectedNode(contextMenu.node);
+                if (contextMenu.node?.matchedMedia) {
+                  onOpenDetails(contextMenu.node.matchedMedia);
+                }
+                setContextMenu({ visible: false, x: 0, y: 0, node: null });
+              }}
+              className="w-full px-3 py-2 text-left flex items-center gap-2.5 hover:bg-slate-800 hover:text-white transition cursor-pointer text-slate-200"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span>Inspect Metadata & XML</span>
+            </button>
+
+            {/* Subtitle status if present */}
+            {(() => {
+              const sub = subtitleAvailabilityMap.get(contextMenu.node.id) || subtitleAvailabilityMap.get(contextMenu.node.path);
+              if (sub && sub.hasSubtitles) {
+                return (
+                  <div className="px-3 py-1.5 border-t border-slate-800/80 mt-1 flex items-center justify-between text-[10px] text-teal-300 font-mono bg-teal-950/30">
+                    <span className="flex items-center gap-1">
+                      <Captions className="w-3 h-3 text-teal-400" />
+                      <span>{sub.count} Subtitle Track{sub.count > 1 ? 's' : ''}</span>
+                    </span>
+                    <span className="text-[9px] text-teal-400 uppercase font-bold">Attached</span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Quick Rename Modal Dialog */}
+      {isRenameModalOpen && renamingNode && (
+        <div
+          id="samba-quick-rename-modal"
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => {
+            if (!isRenameSubmitting) setIsRenameModalOpen(false);
+          }}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl shadow-black/90 w-full max-w-lg p-6 space-y-5 animate-in fade-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-emerald-950/80 border border-emerald-500/30 flex items-center justify-center">
+                  <Pencil className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">
+                    Quick Rename File
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Updates physical filename on Samba share & synchronized SQLite vault
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsRenameModalOpen(false)}
+                disabled={isRenameSubmitting}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Path & Source Info */}
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5 text-xs font-mono">
+              <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">
+                Current Location
+              </div>
+              <div className="text-indigo-300 break-all text-[11px]">
+                //{sambaConfig.server}/{sambaConfig.share}/{renamingNode.path}
+              </div>
+            </div>
+
+            {/* Rename Input Field */}
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-300 block">
+                New Filename
+              </label>
+              <div className="relative">
+                <input
+                  id="samba-quick-rename-input"
+                  type="text"
+                  value={renameInputVal}
+                  onChange={(e) => setRenameInputVal(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !isRenameSubmitting) {
+                      handleExecuteQuickRename();
+                    }
+                  }}
+                  autoFocus
+                  disabled={isRenameSubmitting}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50"
+                  placeholder="Enter new filename..."
+                />
+              </div>
+            </div>
+
+            {/* Synchronization Notice Banner */}
+            <div className="p-3 bg-indigo-950/30 border border-indigo-500/20 rounded-xl text-xs space-y-1">
+              <div className="flex items-center gap-1.5 text-indigo-300 font-semibold text-[11px]">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Synchronized Vault Operations</span>
+              </div>
+              <ul className="text-[10px] text-slate-400 space-y-0.5 list-disc list-inside">
+                <li>Physical file rename on Samba filesystem mount</li>
+                <li>Updates <code className="text-slate-300">media_items</code> table & matched filenames</li>
+                <li>Re-keys <code className="text-slate-300">thumbnail_metadata_cache</code> & user watchlist entries</li>
+              </ul>
+            </div>
+
+            {/* Feedback Alert */}
+            {renameFeedback && (
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                  renameFeedback.type === 'success'
+                    ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300'
+                    : 'bg-rose-950/80 border-rose-500/40 text-rose-300'
+                }`}
+              >
+                {renameFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                )}
+                <span>{renameFeedback.message}</span>
+              </div>
+            )}
+
+            {/* Modal Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsRenameModalOpen(false)}
+                disabled={isRenameSubmitting}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                id="samba-quick-rename-confirm-btn"
+                type="button"
+                onClick={handleExecuteQuickRename}
+                disabled={isRenameSubmitting || !renameInputVal.trim()}
+                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-semibold shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50"
+              >
+                {isRenameSubmitting ? (
+                  <>
+                    <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Renaming & Updating Vault...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Rename & Sync Vault</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Toast Notification */}
+      {copyToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900/95 border border-indigo-500/50 text-indigo-200 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-mono flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2">
+          <Check className="w-4 h-4 text-emerald-400" />
+          <span>{copyToast}</span>
+        </div>
+      )}
     </div>
   );
 };

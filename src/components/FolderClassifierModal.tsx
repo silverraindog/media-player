@@ -278,6 +278,39 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                     {selectedCount} of {classifications.length} selected
                   </span>
                 </label>
+                
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                        setClassifications(prev => prev.map(c => c.confidence >= 0.9 ? {...c, selectedForImport: true} : c));
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 text-xs font-semibold border border-emerald-800/40 transition cursor-pointer"
+                  >
+                    Fix All (&gt;90%)
+                  </button>
+                </div>
+              </div>
+
+              {/* Granular Progress Bars */}
+              <div className="p-3.5 bg-slate-900/50 border border-slate-800 rounded-xl space-y-2">
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                      <span>Analyzing file structure</span>
+                      <span>100%</span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full"><div className="bg-indigo-500 h-1.5 rounded-full w-full"></div></div>
+                  
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                      <span>Matching metadata</span>
+                      <span>100%</span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full"><div className="bg-emerald-500 h-1.5 rounded-full w-full"></div></div>
+                  
+                  <div className="flex justify-between text-[10px] text-slate-400">
+                      <span>Applying changes</span>
+                      <span>100%</span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-1.5 rounded-full"><div className="bg-purple-500 h-1.5 rounded-full w-full"></div></div>
+              </div>
 
                 {selectedCount > 0 ? (
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -294,7 +327,6 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                       <Film className="w-3.5 h-3.5 text-indigo-400" />
                       <span>Movie</span>
                     </button>
-
                     <button
                       id="btn-mass-apply-series"
                       type="button"
@@ -305,7 +337,6 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                       <Tv className="w-3.5 h-3.5 text-purple-400" />
                       <span>Series</span>
                     </button>
-
                     <button
                       id="btn-mass-apply-ignore"
                       type="button"
@@ -316,7 +347,6 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                       <X className="w-3.5 h-3.5 text-rose-400" />
                       <span>Ignore</span>
                     </button>
-
                     <button
                       id="btn-mass-apply-music"
                       type="button"
@@ -335,7 +365,7 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                 )}
               </div>
 
-              {uncertainFoldersCount > 0 && (
+              {uncertainFoldersCount > 0 ? (
                 <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-3">
                   <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                   <div>
@@ -343,7 +373,7 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                     Some folders have ambiguous names or low regex confidence (e.g. <em>sort/</em>, <em>temp/</em>). You can assign them directly to TV Series, Movies, or Music Albums below.
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {classifications.map((item) => {
                 const isExpanded = expandedFolderIds[item.id];

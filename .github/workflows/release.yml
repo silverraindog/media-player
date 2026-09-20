@@ -44,7 +44,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tauriScript: "npx tauri"
+          tauriScript: "npx @tauri-apps/cli@1"
 
       - name: Upload macOS Artifacts
         if: matrix.platform == 'macos-latest'

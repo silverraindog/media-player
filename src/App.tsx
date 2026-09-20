@@ -62,6 +62,44 @@ import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
 import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl } from './utils/pathSanitizer';
 
+const isTauri = typeof window !== 'undefined' && (
+  '__TAURI_IPC__' in window ||
+  (((window as any).location?.origin || '').includes('tauri://')) ||
+  (((window as any).location?.origin || '').includes('localhost:1420'))
+);
+
+const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  let modifiedInput = input;
+  if (isTauri) {
+    let urlStr = '';
+    if (typeof input === 'string') {
+      urlStr = input;
+    } else if (input instanceof URL) {
+      urlStr = input.pathname + input.search;
+    } else if (input && typeof (input as any).url === 'string') {
+      urlStr = (input as any).url;
+    }
+    
+    if (urlStr.startsWith('/api/')) {
+      const rewrittenUrl = `http://127.0.0.1:3000${urlStr}`;
+      if (typeof input === 'string') {
+        modifiedInput = rewrittenUrl;
+      } else if (input instanceof URL) {
+        modifiedInput = new URL(rewrittenUrl);
+      } else if (input) {
+        try {
+          modifiedInput = new Request(rewrittenUrl, input as Request);
+        } catch {
+          modifiedInput = rewrittenUrl;
+        }
+      }
+    }
+  }
+  return window.fetch(modifiedInput, init);
+};
+
+const fetch = customFetch;
+
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   server: '',
   share: 'media',

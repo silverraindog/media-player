@@ -344,3 +344,98 @@ export const saveMediaToTauriDb = async (media: any): Promise<boolean> => {
   }
 };
 
+export interface PathValidationResult {
+  resolvedPath: string;
+  protocol: 'file' | 'smb' | 'http' | 'custom';
+  platform: 'macos' | 'windows' | 'linux' | 'browser';
+  isAbsolute: boolean;
+  valid: boolean;
+  message: string;
+}
+
+export const validateSambaPlaybackPath = (
+  rawPathOrUrl: string,
+  sambaConfig: { server?: string; share?: string; mountPath?: string } = {}
+): PathValidationResult => {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
+  const isWin = ua.includes('win');
+  const isMac = ua.includes('mac');
+  const platform = isWin ? 'windows' : isMac ? 'macos' : 'linux';
+
+  if (!rawPathOrUrl) {
+    return {
+      resolvedPath: '',
+      protocol: 'custom',
+      platform,
+      isAbsolute: false,
+      valid: false,
+      message: 'Empty path provided',
+    };
+  }
+
+  // If already an HTTP stream URL
+  if (rawPathOrUrl.startsWith('http://') || rawPathOrUrl.startsWith('https://')) {
+    return {
+      resolvedPath: rawPathOrUrl,
+      protocol: 'http',
+      platform,
+      isAbsolute: true,
+      valid: true,
+      message: 'Streaming via HTTP/S proxy endpoint',
+    };
+  }
+
+  // If SMB protocol URL
+  if (rawPathOrUrl.startsWith('smb://') || rawPathOrUrl.startsWith('smb:\\')) {
+    return {
+      resolvedPath: rawPathOrUrl,
+      protocol: 'smb',
+      platform,
+      isAbsolute: true,
+      valid: true,
+      message: 'Direct SMB network protocol URI',
+    };
+  }
+
+  // If file protocol URL
+  if (rawPathOrUrl.startsWith('file://')) {
+    return {
+      resolvedPath: rawPathOrUrl,
+      protocol: 'file',
+      platform,
+      isAbsolute: true,
+      valid: true,
+      message: 'Local file URI protocol',
+    };
+  }
+
+  const server = sambaConfig.server || 'nas.local';
+  const share = sambaConfig.share || 'media';
+  const cleanPath = rawPathOrUrl.replace(/^[/\\]+/, '');
+
+  let resolvedPath = rawPathOrUrl;
+  let isAbsolute = false;
+
+  if (isMac) {
+    resolvedPath = sambaConfig.mountPath || `/Volumes/${share}/${cleanPath}`;
+    isAbsolute = resolvedPath.startsWith('/');
+  } else if (isWin) {
+    const uncShare = `\\\\${server}\\${share}`;
+    resolvedPath = `${uncShare}\\${cleanPath.replace(/\//g, '\\')}`;
+    isAbsolute = resolvedPath.startsWith('\\\\');
+  } else {
+    resolvedPath = `/mnt/samba/${share}/${cleanPath}`;
+    isAbsolute = resolvedPath.startsWith('/');
+  }
+
+  return {
+    resolvedPath,
+    protocol: 'file',
+    platform,
+    isAbsolute,
+    valid: true,
+    message: `Resolved for ${platform}: ${resolvedPath}`,
+  };
+};
+
+

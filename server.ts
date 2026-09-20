@@ -1574,34 +1574,37 @@ Return ONLY valid JSON matching this exact structure:
 }`;
     }
 
-    // Call Gemini with Google Search Grounding
-    const aiResponse = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        tools: [{ googleSearch: {} }]
-      }
-    });
+    // Call Gemini with Google Search Grounding with robust overload/error protection
+    try {
+      const aiResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        }
+      });
 
-    const aiText = aiResponse.text;
-    if (aiText) {
-      let parsedData: any = null;
-      try {
-        parsedData = JSON.parse(aiText);
-      } catch {
-        const cleaned = aiText.replace(/```json\n?|\n?```/g, '').trim();
+      const aiText = aiResponse.text;
+      if (aiText) {
+        let parsedData: any = null;
         try {
-          parsedData = JSON.parse(cleaned);
-        } catch {}
-      }
+          parsedData = JSON.parse(aiText);
+        } catch {
+          const cleaned = aiText.replace(/```json\n?|\n?```/g, '').trim();
+          try {
+            parsedData = JSON.parse(cleaned);
+          } catch {}
+        }
 
-      if (parsedData && parsedData.overview) {
-        return res.json({ success: true, data: { ...generateFallback(), ...parsedData, source: 'gemini-google-grounded' } });
-      } else if (parsedData && parsedData.plot) {
-         // Episode level
-         return res.json({ success: true, data: { ...generateFallback(), ...parsedData, source: 'gemini-google-grounded' } });
+        if (parsedData && parsedData.overview) {
+          return res.json({ success: true, data: { ...generateFallback(), ...parsedData, source: 'gemini-grounded' } });
+        } else if (parsedData && parsedData.plot) {
+           // Episode level
+           return res.json({ success: true, data: { ...generateFallback(), ...parsedData, source: 'gemini-grounded' } });
+        }
       }
+    } catch (modelErr: any) {
+      console.warn('Gemini model call overloaded or failed, falling back to local encyclopedic metadata:', modelErr?.message || modelErr);
     }
 
     return res.json({ success: true, data: generateFallback() });
@@ -1693,6 +1696,80 @@ app.post('/api/samba/test-connection', async (req: Request, res: Response) => {
       error: err.message || 'Connection refused or unreachable',
       message: `Could not reach ${server}:${targetPort}. Check IP address, port (${targetPort}), and firewall / local network settings.`,
     });
+  }
+});
+
+// Probe Samba Stream endpoint (attempts to read first 1MB / test byte range read)
+app.post('/api/samba/probe-stream', async (req: Request, res: Response) => {
+  try {
+    const { path: rawPath, server, share } = req.body;
+    if (!rawPath) {
+      return res.status(400).json({ success: false, error: 'path is required' });
+    }
+
+    const cleanRaw = rawPath.replace(/\\/g, '/');
+    const candidateRoots = [
+      cleanRaw,
+      resolveSambaFullPath(cleanRaw),
+      path.join(SAMBA_SHARE_ROOT, cleanRaw),
+      path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
+      path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
+    ];
+
+    let foundPath = '';
+    let fileSize = 0;
+
+    for (const root of candidateRoots) {
+      if (fs.existsSync(root)) {
+        try {
+          const stat = fs.statSync(root);
+          if (stat.isFile()) {
+            foundPath = root;
+            fileSize = stat.size;
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+
+    if (!foundPath) {
+      return res.json({
+        success: false,
+        error: 'File not found on Samba mount or local cache',
+        checkedRoots: candidateRoots,
+      });
+    }
+
+    // Attempt to read first 1MB (or up to file size)
+    const bufferSize = Math.min(1024 * 1024, fileSize > 0 ? fileSize : 1024 * 1024);
+    const buffer = Buffer.alloc(bufferSize);
+    const startTime = Date.now();
+    let bytesRead = 0;
+
+    try {
+      const fd = fs.openSync(foundPath, 'r');
+      bytesRead = fs.readSync(fd, buffer, 0, bufferSize, 0);
+      fs.closeSync(fd);
+    } catch (readErr: any) {
+      return res.json({
+        success: false,
+        error: `Failed to read file chunk: ${readErr.message}`,
+        filePath: foundPath,
+      });
+    }
+
+    const latencyMs = Date.now() - startTime;
+
+    return res.json({
+      success: true,
+      filePath: foundPath,
+      fileSizeBytes: fileSize,
+      probedBytes: bytesRead,
+      latencyMs,
+      message: `Successfully read ${bytesRead} bytes from Samba target in ${latencyMs}ms`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 

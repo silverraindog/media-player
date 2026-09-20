@@ -2350,6 +2350,8 @@ export default function App() {
           sambaConfig={sambaConfig}
           mediaLibrary={mediaLibrary}
           onSelectMedia={(m) => setPlayerMediaState({ media: m })}
+          onTestConnection={handleTestConnection}
+          onNavigateToMountHub={() => setActiveTab('samba-mount')}
         />
       )}
 

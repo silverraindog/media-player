@@ -34,7 +34,8 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
-import { openInVlc, openInIina, openInSystemPlayer } from '../utils/tauriBridge';
+import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath } from '../utils/tauriBridge';
+import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
 
 interface MediaPlayerModalProps {
   media: MediaMetadata | null;
@@ -45,6 +46,8 @@ interface MediaPlayerModalProps {
   initialTrack?: TrackMetadata;
   mediaLibrary?: MediaMetadata[];
   onSelectMedia?: (media: MediaMetadata) => void;
+  onTestConnection?: () => void;
+  onNavigateToMountHub?: () => void;
 }
 
 interface StreamOption {
@@ -115,7 +118,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   sambaConfig,
   initialEpisode,
   initialTrack,
+  onTestConnection,
+  onNavigateToMountHub,
 }) => {
+  const { suggestTestConnection, mountFailureReason, evaluateError, resetMonitor } = useSambaErrorMonitor();
+
+  useEffect(() => {
+    if (playbackError) {
+      evaluateError(playbackError);
+    } else {
+      resetMonitor();
+    }
+  }, [playbackError, evaluateError, resetMonitor]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const localFileInputRef = useRef<HTMLInputElement>(null);
@@ -341,7 +355,46 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         sanitizeStreamUrl(media?.playbackUrl) ||
         defaultStreamUrl);
 
+  const validatedPlaybackPath = useMemo(() => {
+    const res = validateSambaPlaybackPath(currentStreamUrl, sambaConfig);
+    console.info(`[MediaPlayerEngine] Validated Samba Playback Path:`, res);
+    return res;
+  }, [currentStreamUrl, sambaConfig]);
+
   const [externalPlayerStatus, setExternalPlayerStatus] = useState<string | null>(null);
+  const [isProbeRunning, setIsProbeRunning] = useState(false);
+  const [probeResult, setProbeResult] = useState<{ success: boolean; message: string; latencyMs?: number; probedBytes?: number } | null>(null);
+
+  const handleProbeSambaStream = async () => {
+    setIsProbeRunning(true);
+    setProbeResult(null);
+    try {
+      const targetPath = media?.recommendedFolderStructure || selectedEpisode?.playbackUrl || currentStreamUrl || '';
+      const response = await fetch('/api/samba/probe-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: targetPath,
+          server: sambaConfig.server,
+          share: sambaConfig.share,
+        }),
+      });
+      const data = await response.json();
+      setProbeResult({
+        success: Boolean(data.success),
+        message: data.message || data.error || 'Probe completed',
+        latencyMs: data.latencyMs,
+        probedBytes: data.probedBytes,
+      });
+    } catch (err: any) {
+      setProbeResult({
+        success: false,
+        message: `Probe failed: ${err.message}`,
+      });
+    } finally {
+      setIsProbeRunning(false);
+    }
+  };
 
   const handleLaunchExternalVlc = async () => {
     const shareName = sambaConfig.share || 'media';
@@ -1175,6 +1228,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     <span className="text-slate-500 mr-1">Source:</span>
                     <span className="font-mono text-slate-300">{localVideoFile ? localVideoFile.name : currentStreamUrl}</span>
                   </div>
+                  <div className="pt-0.5 text-[10px] text-slate-400 truncate">
+                    <span className="text-slate-500 mr-1">Resolved Path:</span>
+                    <span className="font-mono text-emerald-300">{validatedPlaybackPath.resolvedPath} ({validatedPlaybackPath.platform})</span>
+                  </div>
                 </div>
               )}
 
@@ -1255,6 +1312,49 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       <Layers className="w-3.5 h-3.5" />
                       <span>Switch to Backup Stream</span>
                     </button>
+                    <button
+                      onClick={handleProbeSambaStream}
+                      disabled={isProbeRunning}
+                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition shadow-md shadow-indigo-600/20 border border-indigo-400/40"
+                      title="Probe Samba Stream: read first 1MB chunk to verify read access"
+                    >
+                      <Sparkles className={`w-3.5 h-3.5 ${isProbeRunning ? 'animate-spin' : ''}`} />
+                      <span>{isProbeRunning ? 'Probing (1MB)...' : 'Probe Samba Stream'}</span>
+                    </button>
+                    {probeResult && (
+                      <div className={`w-full text-xs px-3 py-2 rounded-lg border flex items-center justify-between gap-3 my-1 ${probeResult.success ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300' : 'bg-red-950/60 border-red-500/40 text-red-300'}`}>
+                        <div className="flex items-center gap-2 truncate">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span className="font-mono truncate">{probeResult.message}</span>
+                        </div>
+                        <button onClick={() => setProbeResult(null)} className="text-[10px] uppercase font-bold underline cursor-pointer shrink-0">Dismiss</button>
+                      </div>
+                    )}
+                    {suggestTestConnection && (
+                      <button
+                        onClick={() => {
+                          if (onTestConnection) {
+                            onTestConnection();
+                          } else {
+                            fetch('/api/samba/test', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(sambaConfig),
+                            })
+                              .then(res => res.json())
+                              .then(data => {
+                                alert(`Samba Connection Test: ${data.message || (data.connected ? 'Connected successfully!' : 'Connection failed')}`);
+                              })
+                              .catch(err => alert(`Test connection error: ${err.message}`));
+                          }
+                        }}
+                        className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-600/30 transition border border-cyan-400 animate-bounce"
+                        title="Run Test Connection utility to diagnose network mount issues"
+                      >
+                        <HardDrive className="w-4 h-4" />
+                        <span>Run Test Connection Utility</span>
+                      </button>
+                    )}
                   </div>
                   {externalPlayerStatus && (
                     <div className="text-xs font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-3 py-1 rounded-lg">
@@ -1707,8 +1807,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-400">
             <div className="flex items-center gap-2">
               <HardDrive className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="font-mono truncate max-w-md">
-                //{sambaConfig.server}/{sambaConfig.share}/{media.recommendedFolderStructure}
+              <span className="font-mono truncate max-w-md text-emerald-300" title={validatedPlaybackPath.resolvedPath}>
+                {validatedPlaybackPath.resolvedPath}
               </span>
               <button
                 onClick={handleCopyPath}

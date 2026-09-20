@@ -9,6 +9,7 @@
     "productName": "SambaVault",
     "version": "1.0.0"
   },
+  "identifier": "com.sambavault.desktop",
   "tauri": {
     "allowlist": {
       "all": true

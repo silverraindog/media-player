@@ -238,6 +238,18 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
           )}
 
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+            {media.genres && media.genres.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {media.genres.map((genre) => (
+                  <button
+                    key={genre}
+                    className="px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 hover:bg-slate-700 hover:border-slate-600 text-slate-300 text-[10px] font-semibold transition cursor-pointer"
+                  >
+                    {genre}
+                  </button>
+                ))}
+              </div>
+            )}
             <span className="flex items-center gap-1">
               <Calendar className="w-3.5 h-3.5 text-indigo-400" />
               {media.year}

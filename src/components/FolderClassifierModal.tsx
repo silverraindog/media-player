@@ -53,13 +53,26 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
   customScanPath,
 }) => {
   const [classifications, setClassifications] = useState<FolderScanClassification[]>(initialClassifications);
-  const [activeTab, setActiveTab] = useState<'review' | 'rules'>('review');
+  const [activeTab, setActiveTab] = useState<'review' | 'rules' | 'categories'>('review');
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({});
   const [testFolderName, setTestFolderName] = useState('My TV Shows');
   const [customRules, setCustomRules] = useState<RegexCategoryRule[]>(settings.rules || DEFAULT_REGEX_RULES);
+  const [categories, setCategories] = useState<string[]>(settings.categories || ['Movie', 'Series', 'Album', 'Animation', 'Comedy']);
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(settings.confidenceThreshold || 0.85);
   const [autoImportConfident, setAutoImportConfident] = useState<boolean>(settings.autoImportConfident ?? true);
   const [alwaysPromptReview, setAlwaysPromptReview] = useState<boolean>(settings.alwaysPromptReview ?? false);
+  
+  // Persist settings effect
+  React.useEffect(() => {
+    const newSettings: ClassifierSettings = {
+      confidenceThreshold,
+      autoImportConfident,
+      alwaysPromptReview,
+      rules: customRules,
+      categories: categories,
+    };
+    localStorage.setItem('samba_vault_classifier', JSON.stringify(newSettings));
+  }, [customRules, categories, confidenceThreshold, autoImportConfident, alwaysPromptReview]);
   
   // Progress Simulation State
   const [analyzingProgress, setAnalyzingProgress] = useState(0);
@@ -86,8 +99,14 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
 
   if (!isOpen) return null;
 
-  const toggleFolderExpand = (id: string) => {
-    setExpandedFolderIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  const handleAddCategory = (newCat: string) => {
+    if (newCat && !categories.includes(newCat)) {
+      setCategories([...categories, newCat]);
+    }
+  };
+
+  const handleRemoveCategory = (catToRemove: string) => {
+    setCategories(categories.filter(c => c !== catToRemove));
   };
 
   const toggleFolderSelection = (id: string) => {
@@ -249,6 +268,17 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
             >
               <Sliders className="w-4 h-4 text-indigo-400" />
               <span>Regex Rules & Confidence Settings</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('categories')}
+              className={`px-4 py-2 rounded-t-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer border-t border-x ${
+                activeTab === 'categories'
+                  ? 'bg-slate-950 text-indigo-300 border-slate-800 border-b-slate-950'
+                  : 'text-slate-400 hover:text-slate-200 border-transparent'
+              }`}
+            >
+              <FolderTree className="w-4 h-4 text-indigo-400" />
+              <span>Manage Categories</span>
             </button>
           </div>
 
@@ -688,11 +718,30 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                   ))}
                 </div>
               </div>
+              {activeTab === 'categories' && (
+                <div className="p-4 space-y-4">
+                  <h3 className="text-sm font-bold text-white">Manage Media Categories</h3>
+                  <div className="flex gap-2">
+                    <input type="text" id="new-cat-input" placeholder="New Category..." className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
+                    <button onClick={() => {
+                        const input = document.getElementById('new-cat-input') as HTMLInputElement;
+                        handleAddCategory(input.value);
+                        input.value = '';
+                    }} className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold">Add</button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map(cat => (
+                      <div key={cat} className="flex items-center gap-1 bg-slate-800 px-2 py-1 rounded text-xs text-slate-200">
+                        {cat}
+                        <button onClick={() => handleRemoveCategory(cat)} className="text-slate-400 hover:text-white">×</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
-
-        {/* Modal Footer Actions */}
         <div className="px-6 py-4 bg-slate-900 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="text-xs text-slate-400">
             Selected for import:{' '}

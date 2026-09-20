@@ -852,13 +852,34 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] text-slate-400 block mb-1">Genres (comma-separated):</label>
+                  <label className="text-[10px] text-slate-400 block mb-1">Genres / Categories:</label>
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {customGenres.split(',').map((g) => g.trim()).filter(Boolean).map((genre) => (
+                      <span key={genre} className="px-2 py-0.5 rounded-full bg-indigo-900 text-indigo-200 text-[10px] flex items-center gap-1">
+                        {genre}
+                        <button onClick={() => setCustomGenres(customGenres.split(',').map(g => g.trim()).filter(g => g !== genre).join(', '))} className="hover:text-white">×</button>
+                      </span>
+                    ))}
+                  </div>
                   <input
                     type="text"
+                    placeholder="Type new genre & press enter..."
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const val = e.currentTarget.value.trim();
+                        if (val && !customGenres.includes(val)) {
+                          setCustomGenres(customGenres ? `${customGenres}, ${val}` : val);
+                          e.currentTarget.value = '';
+                        }
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white text-xs"
+                  />
+                  <input
+                    type="hidden"
                     value={customGenres}
                     onChange={(e) => setCustomGenres(e.target.value)}
-                    placeholder="Drama, Sci-Fi, Thriller"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white text-xs"
                   />
                 </div>
                 <div>

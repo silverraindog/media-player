@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   X,
   Play,
@@ -34,6 +34,7 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
+import { openInVlc, openInIina, openInSystemPlayer } from '../utils/tauriBridge';
 
 interface MediaPlayerModalProps {
   media: MediaMetadata | null;
@@ -302,22 +303,79 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const defaultStreamUrl = selectedStreamObj.url;
 
   // Derive direct Samba stream endpoint path
-  const sambaStreamUrl = selectedEpisode?.playbackUrl && selectedEpisode.playbackUrl.startsWith('/api/')
-    ? selectedEpisode.playbackUrl
-    : media?.recommendedFolderStructure
-    ? `/api/samba/stream?path=${encodeURIComponent(media.recommendedFolderStructure)}`
-    : null;
+  const sambaStreamUrl = useMemo(() => {
+    if (selectedEpisode?.playbackUrl && selectedEpisode.playbackUrl.startsWith('/api/')) {
+      return selectedEpisode.playbackUrl;
+    }
+    const targetPath =
+      selectedEpisode?.filePath ||
+      selectedEpisode?.filename ||
+      media?.recommendedFolderStructure ||
+      media?.title ||
+      '';
+    if (!targetPath) return null;
 
-  // Determine active streaming/playback source safely
+    const params = new URLSearchParams();
+    params.set('path', targetPath);
+    if (selectedSeasonNum !== undefined) {
+      params.set('season', String(selectedSeasonNum));
+    }
+    if (selectedEpisode?.episodeNumber !== undefined) {
+      params.set('episode', String(selectedEpisode.episodeNumber));
+    }
+    if (selectedEpisode?.filename) {
+      params.set('file', selectedEpisode.filename);
+    }
+    return `/api/samba/stream?${params.toString()}`;
+  }, [selectedEpisode, media, selectedSeasonNum]);
+
+  // Determine active streaming/playback source safely (prioritizing direct Samba/HDD stream)
   const currentStreamUrl =
     customLocalBlobUrl ||
     (isManualStreamOverride
       ? defaultStreamUrl
       : sanitizeStreamUrl(media?.localBlobUrl) ||
+        sambaStreamUrl ||
         sanitizeStreamUrl(selectedEpisode?.playbackUrl) ||
         sanitizeStreamUrl(selectedTrack?.playbackUrl) ||
         sanitizeStreamUrl(media?.playbackUrl) ||
         defaultStreamUrl);
+
+  const [externalPlayerStatus, setExternalPlayerStatus] = useState<string | null>(null);
+
+  const handleLaunchExternalVlc = async () => {
+    const shareName = sambaConfig.share || 'media';
+    const cleanFolder = (media?.recommendedFolderStructure || media?.title || '').replace(/^[/\\]+/, '');
+    const localVolumePath = `/Volumes/${shareName}/${cleanFolder}`;
+    const fullStreamUrl = currentStreamUrl.startsWith('http')
+      ? currentStreamUrl
+      : `${window.location.origin}${currentStreamUrl}`;
+
+    setExternalPlayerStatus('Launching VLC...');
+    let res = await openInVlc(localVolumePath);
+    if (!res.success) {
+      res = await openInVlc(fullStreamUrl);
+    }
+    setExternalPlayerStatus(res.success ? 'Launched in VLC' : res.message);
+    setTimeout(() => setExternalPlayerStatus(null), 3000);
+  };
+
+  const handleLaunchExternalIina = async () => {
+    const shareName = sambaConfig.share || 'media';
+    const cleanFolder = (media?.recommendedFolderStructure || media?.title || '').replace(/^[/\\]+/, '');
+    const localVolumePath = `/Volumes/${shareName}/${cleanFolder}`;
+    const fullStreamUrl = currentStreamUrl.startsWith('http')
+      ? currentStreamUrl
+      : `${window.location.origin}${currentStreamUrl}`;
+
+    setExternalPlayerStatus('Launching IINA...');
+    let res = await openInIina(localVolumePath);
+    if (!res.success) {
+      res = await openInIina(fullStreamUrl);
+    }
+    setExternalPlayerStatus(res.success ? 'Launched in IINA' : res.message);
+    setTimeout(() => setExternalPlayerStatus(null), 3000);
+  };
 
   // Sync volume to element
   useEffect(() => {
@@ -860,6 +918,26 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               )}
             </div>
 
+            {/* Direct External VLC Player Launch Button */}
+            <button
+              onClick={handleLaunchExternalVlc}
+              className="px-2.5 py-1.5 rounded-lg bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+              title="Open currently active video stream in VLC Media Player"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">VLC</span>
+            </button>
+
+            {/* Direct External IINA Player Launch Button */}
+            <button
+              onClick={handleLaunchExternalIina}
+              className="px-2.5 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/40 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+              title="Open currently active video stream in IINA"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">IINA</span>
+            </button>
+
             {/* Toggle Info Overlay Button */}
             <button
               id="player-btn-info-overlay"
@@ -1131,37 +1209,60 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-2 pt-1 max-w-xl">
                     <button
-                      onClick={handleCycleNextStream}
-                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition"
-                      title="Switch to next verified high-definition stream"
+                      onClick={handleLaunchExternalVlc}
+                      className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-amber-500/20 transition"
+                      title="Launch VLC media player with this stream or file"
                     >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>Switch to Next CDN Source</span>
+                      <ExternalLink className="w-4 h-4" />
+                      <span>Launch in VLC</span>
                     </button>
                     <button
-                      onClick={() => {
-                        setSelectedStreamId('local-vault-stream');
-                        setIsManualStreamOverride(true);
-                        setPlaybackError(null);
-                        setTimeout(startPlayback, 100);
-                      }}
-                      className="px-3.5 py-1.5 rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition"
-                      title="Use the local embedded server video stream"
+                      onClick={handleLaunchExternalIina}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 transition"
+                      title="Launch IINA player on macOS"
                     >
-                      <HardDrive className="w-3.5 h-3.5" />
-                      <span>Vault Master Direct Stream</span>
+                      <ExternalLink className="w-4 h-4" />
+                      <span>Launch in IINA</span>
                     </button>
+                    {sambaStreamUrl && (
+                      <button
+                        onClick={() => {
+                          setCustomLocalBlobUrl(null);
+                          setIsManualStreamOverride(false);
+                          setPlaybackError(null);
+                          setTimeout(startPlayback, 100);
+                        }}
+                        className="px-3.5 py-1.5 rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition"
+                        title="Retry direct Samba stream from server"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retry Samba Stream</span>
+                      </button>
+                    )}
                     <button
                       onClick={() => localFileInputRef.current?.click()}
                       className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition"
-                      title="Select and play any local video file directly from your disk"
+                      title="Select and play video file directly from your disk"
                     >
                       <FolderOpen className="w-3.5 h-3.5" />
-                      <span>Select Local File (.mkv/.mp4)</span>
+                      <span>Select Episode File from Disk</span>
+                    </button>
+                    <button
+                      onClick={handleCycleNextStream}
+                      className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition border border-slate-700"
+                      title="Switch to backup CDN sample stream"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>Switch to Backup Stream</span>
                     </button>
                   </div>
+                  {externalPlayerStatus && (
+                    <div className="text-xs font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-3 py-1 rounded-lg">
+                      {externalPlayerStatus}
+                    </div>
+                  )}
                   <p className="text-[11px] text-slate-400 max-w-lg pt-1">
-                    For local Samba shares (e.g. MKV high-bitrate files), you can also use the <strong className="text-slate-300">Open in VLC</strong> or <strong className="text-slate-300">Open in IINA</strong> shortcuts below to launch desktop hardware-accelerated playback.
+                    Note: High-bitrate MKV video or DTS/AC3 audio files can be played smoothly by clicking <strong className="text-amber-300">Launch in VLC</strong> or <strong className="text-indigo-300">Launch in IINA</strong>, or by choosing the file directly.
                   </p>
                 </div>
               )}
@@ -1618,26 +1719,24 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              <a
-                href={`vlc://${currentStreamUrl}`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-amber-300 font-semibold border border-amber-500/30 flex items-center gap-1 transition"
-                title="Launch VLC media player with this stream"
+              <button
+                type="button"
+                onClick={handleLaunchExternalVlc}
+                className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-amber-300 font-semibold border border-amber-500/30 flex items-center gap-1 transition cursor-pointer"
+                title="Launch VLC media player with this stream or file"
               >
                 <ExternalLink className="w-3 h-3" />
                 <span>Open in VLC</span>
-              </a>
-              <a
-                href={`iina://weblink?url=${encodeURIComponent(currentStreamUrl)}`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-indigo-300 font-semibold border border-indigo-500/30 flex items-center gap-1 transition"
+              </button>
+              <button
+                type="button"
+                onClick={handleLaunchExternalIina}
+                className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-indigo-300 font-semibold border border-indigo-500/30 flex items-center gap-1 transition cursor-pointer"
                 title="Launch IINA on macOS"
               >
                 <ExternalLink className="w-3 h-3" />
                 <span>Open in IINA</span>
-              </a>
+              </button>
             </div>
           </div>
         </div>

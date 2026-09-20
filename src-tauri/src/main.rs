@@ -476,6 +476,94 @@ fn probe_local_port(host: String, port: u16) -> NetworkProbeResult {
     }
 }
 
+#[tauri::command]
+fn open_in_system_player(file_path: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open system player: {}", e))?;
+        Ok(format!("Opened {}", file_path))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(&["/C", "start", "", &file_path])
+            .spawn()
+            .map_err(|e| format!("Failed to open system player: {}", e))?;
+        Ok(format!("Opened {}", file_path))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open system player: {}", e))?;
+        Ok(format!("Opened {}", file_path))
+    }
+}
+
+#[tauri::command]
+fn open_in_vlc(file_path: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let res = Command::new("open")
+            .args(&["-a", "VLC", &file_path])
+            .spawn();
+        if let Err(e) = res {
+            Command::new("vlc")
+                .arg(&file_path)
+                .spawn()
+                .map_err(|e2| format!("Failed to launch VLC: {} ({})", e, e2))?;
+        }
+        Ok(format!("Opened {} in VLC", file_path))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let vlc_paths = [
+            "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
+            "C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe",
+        ];
+        let mut launched = false;
+        for vp in vlc_paths {
+            if Path::new(vp).exists() {
+                Command::new(vp).arg(&file_path).spawn().ok();
+                launched = true;
+                break;
+            }
+        }
+        if !launched {
+            Command::new("cmd").args(&["/C", "start", "vlc", &file_path]).spawn().ok();
+        }
+        Ok(format!("Opened in VLC: {}", file_path))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("vlc")
+            .arg(&file_path)
+            .spawn()
+            .map_err(|e| format!("Failed to launch VLC: {}", e))?;
+        Ok(format!("Opened in VLC: {}", file_path))
+    }
+}
+
+#[tauri::command]
+fn open_in_iina(file_path: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(&["-a", "IINA", &file_path])
+            .spawn()
+            .map_err(|e| format!("Failed to launch IINA: {}", e))?;
+        Ok(format!("Opened in IINA: {}", file_path))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("IINA is only available on macOS".to_string())
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -492,7 +580,10 @@ fn main() {
             get_all_media,
             save_media,
             update_watch_progress,
-            generate_synopsis
+            generate_synopsis,
+            open_in_system_player,
+            open_in_vlc,
+            open_in_iina
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

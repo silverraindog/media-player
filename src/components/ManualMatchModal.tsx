@@ -39,6 +39,7 @@ import {
 } from '../utils/mediaExtractor';
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { downloadMediaArtwork } from '../utils/zipDownloader';
+import { saveMediaToTauriDb } from '../utils/tauriBridge';
 
 export interface ManualMatchModalProps {
   isOpen: boolean;
@@ -76,6 +77,12 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
   const [customRating, setCustomRating] = useState<number>(8.5);
   const [customPosterUrl, setCustomPosterUrl] = useState('');
   
+  // Picture / Poster Search states
+  const [pictureSearchQuery, setPictureSearchQuery] = useState('');
+  const [isSearchingPictures, setIsSearchingPictures] = useState(false);
+  const [pictureResults, setPictureResults] = useState<string[]>([]);
+  const [pictureSearchError, setPictureSearchError] = useState<string | null>(null);
+
   // Scraped / Generated result
   const [isSearching, setIsSearching] = useState(false);
   const [isFetchingSynopsisOnly, setIsFetchingSynopsisOnly] = useState(false);
@@ -450,6 +457,47 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
     setEpisodesList((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const handleSearchPictures = async () => {
+    const query = pictureSearchQuery.trim() || customTitle.trim();
+    if (!query) return;
+    setIsSearchingPictures(true);
+    setPictureSearchError(null);
+    try {
+      const res = await fetch('/api/media/fetch-art', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: query,
+          type: mediaType,
+          year: customYear,
+        }),
+      });
+      const data = await res.json();
+      const list: string[] = [];
+      if (Array.isArray(data.posters) && data.posters.length > 0) {
+        list.push(...data.posters);
+      }
+      if (data.posterUrl && !list.includes(data.posterUrl)) {
+        list.unshift(data.posterUrl);
+      }
+      if (data.fanartUrl && !list.includes(data.fanartUrl)) {
+        list.push(data.fanartUrl);
+      }
+      if (list.length === 0) {
+        setPictureSearchError('No matching pictures found for this query. You can paste a direct image URL below.');
+      } else {
+        setPictureResults(list);
+        if (!customPosterUrl) {
+          setCustomPosterUrl(list[0]);
+        }
+      }
+    } catch (err: any) {
+      setPictureSearchError('Failed to search pictures. Check network connection or enter image URL directly.');
+    } finally {
+      setIsSearchingPictures(false);
+    }
+  };
+
   const handleSaveChanges = async (): Promise<MediaMetadata | null> => {
     if (!customTitle.trim()) return null;
     setSaveStatus('Writing to Samba...');
@@ -518,7 +566,23 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
     };
 
     try {
-      // 1. Persist to local SQLite Vault
+      // 1. Persist to in-memory App library state immediately
+      onSaveMatchedMedia(finalized);
+      setPreviewMedia(finalized);
+
+      // 2. Persist to LocalStorage
+      try {
+        const stored = JSON.parse(localStorage.getItem('sambavault_media_library_v2') || '[]');
+        const idx = stored.findIndex((m: any) => m.id === finalized.id || m.title?.toLowerCase() === finalized.title?.toLowerCase());
+        if (idx >= 0) stored[idx] = finalized;
+        else stored.unshift(finalized);
+        localStorage.setItem('sambavault_media_library_v2', JSON.stringify(stored));
+      } catch (e) {}
+
+      // 3. Persist to Tauri SQLite
+      saveMediaToTauriDb(finalized).catch(() => {});
+
+      // 4. Persist to local SQLite Vault via HTTP API
       await fetch('/api/db/media', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -537,9 +601,9 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           recommended_folder: finalized.recommendedFolderStructure,
           raw_data: finalized.source || 'manual-match'
         })
-      });
+      }).catch(() => {});
 
-      // 2. Trigger asynchronous write operation to Samba filesystem (.nfo and local images)
+      // 5. Trigger asynchronous write operation to Samba filesystem (.nfo and local images)
       const rootTag = finalized.type === 'series' ? 'tvshow' : 'movie';
       const nfoContent = `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
 <${rootTag}>
@@ -563,7 +627,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           type: finalized.type,
           nfoContent,
         }),
-      });
+      }).catch(() => {});
 
       setSaveStatus('Saved to Vault');
       return finalized;
@@ -966,6 +1030,114 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
               )}
             </div>
           </form>
+
+          {/* Picture & Poster Artwork Search & Selection */}
+          <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Image className="w-4 h-4" />
+                <span>Search & Select Picture / Poster</span>
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Find online artwork or enter image URL
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={pictureSearchQuery}
+                  onChange={(e) => setPictureSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSearchPictures();
+                    }
+                  }}
+                  placeholder={`Search pictures for "${customTitle || 'title'}"...`}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-3.5 pr-3 py-2 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+              <button
+                type="button"
+                disabled={isSearchingPictures || (!pictureSearchQuery.trim() && !customTitle.trim())}
+                onClick={handleSearchPictures}
+                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <Search className={`w-3.5 h-3.5 ${isSearchingPictures ? 'animate-spin' : ''}`} />
+                <span>{isSearchingPictures ? 'Searching...' : 'Search Pictures'}</span>
+              </button>
+            </div>
+
+            {pictureSearchError && (
+              <p className="text-amber-400 text-xs">{pictureSearchError}</p>
+            )}
+
+            {/* Gallery of retrieved picture options */}
+            {pictureResults.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[10px] text-slate-400 block font-semibold">
+                  Found Picture Options (click to select as cover):
+                </label>
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 max-h-56 overflow-y-auto p-2 bg-slate-900/60 rounded-xl border border-slate-800">
+                  {pictureResults.map((url, idx) => {
+                    const isSelected = customPosterUrl === url;
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => setCustomPosterUrl(url)}
+                        className={`relative group rounded-lg overflow-hidden border-2 cursor-pointer transition aspect-[2/3] bg-slate-950 ${
+                          isSelected
+                            ? 'border-cyan-400 ring-2 ring-cyan-500/50 shadow-md'
+                            : 'border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        <img
+                          src={url}
+                          alt={`Poster ${idx + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                        {isSelected && (
+                          <div className="absolute top-1 right-1 bg-cyan-500 text-black p-0.5 rounded-full">
+                            <Check className="w-3 h-3 stroke-[3]" />
+                          </div>
+                        )}
+                        <div className="absolute inset-x-0 bottom-0 bg-black/75 p-1 text-[9px] text-center text-white opacity-0 group-hover:opacity-100 transition">
+                          {isSelected ? 'Active Cover' : 'Choose this'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Direct Picture URL Input */}
+            <div className="space-y-1 pt-1">
+              <label className="text-[10px] text-slate-400 block">
+                Or enter / paste direct picture image URL:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={customPosterUrl}
+                  onChange={(e) => setCustomPosterUrl(e.target.value)}
+                  placeholder="https://... (direct poster or cover image URL)"
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white text-xs font-mono focus:outline-none focus:border-cyan-500"
+                />
+                {customPosterUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomPosterUrl('')}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white text-xs"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
 
           {/* Generated Synopsis & Media Preview */}
           {previewMedia && (

@@ -150,9 +150,23 @@ export const EpisodeInspector: React.FC<EpisodeInspectorProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">
                       <span className="font-semibold text-xs truncate">{ep.title}</span>
-                      {epCompleted && (
-                        <Check className="w-3 h-3 text-emerald-400 shrink-0" />
-                      )}
+                      <div className="flex items-center gap-1">
+                        {epCompleted && (
+                          <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                        )}
+                        {onPlayMedia && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPlayMedia(media, ep);
+                            }}
+                            className="p-1 rounded bg-indigo-600/80 hover:bg-indigo-500 text-white transition shrink-0 cursor-pointer"
+                            title={`Play Episode ${ep.episodeNumber}`}
+                          >
+                            <Play className="w-2.5 h-2.5 fill-white" />
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
                       {ep.airDate && <span>{ep.airDate}</span>}
@@ -193,12 +207,25 @@ export const EpisodeInspector: React.FC<EpisodeInspectorProps> = ({
                   </div>
                   <h4 className="text-base font-bold text-white">{activeEp.title}</h4>
                 </div>
-                {activeEp.rating && (
-                  <div className="px-2.5 py-1 rounded-lg bg-amber-950/40 border border-amber-800/40 text-amber-400 font-bold text-xs flex items-center gap-1 shrink-0">
-                    <Star className="w-3.5 h-3.5 fill-amber-400" />
-                    <span>{activeEp.rating}</span>
-                  </div>
-                )}
+                <div className="flex items-center gap-2 shrink-0">
+                  {onPlayMedia && (
+                    <button
+                      type="button"
+                      onClick={() => onPlayMedia(media, activeEp)}
+                      className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md shadow-indigo-600/30 flex items-center gap-1.5 transition cursor-pointer"
+                      title="Play this episode"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-white" />
+                      <span>Play Episode</span>
+                    </button>
+                  )}
+                  {activeEp.rating && (
+                    <div className="px-2.5 py-1 rounded-lg bg-amber-950/40 border border-amber-800/40 text-amber-400 font-bold text-xs flex items-center gap-1">
+                      <Star className="w-3.5 h-3.5 fill-amber-400" />
+                      <span>{activeEp.rating}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Watch Progress & Tracking */}

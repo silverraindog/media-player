@@ -17,6 +17,7 @@ interface MediaDetailHeaderProps {
   isFetchingArt?: boolean;
   onForceRefresh?: () => void;
   isForceRefreshing?: boolean;
+  onSearchPicture?: () => void;
 }
 
 export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
@@ -33,6 +34,7 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
   isFetchingArt = false,
   onForceRefresh,
   isForceRefreshing = false,
+  onSearchPicture,
 }) => {
   return (
     <div className="relative h-64 bg-slate-950 shrink-0 overflow-hidden">
@@ -47,11 +49,14 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
       <div className="absolute top-4 left-6 z-20 flex items-center gap-2">
         {onPlayMedia && (
           <button
-            onClick={() => onPlayMedia(media)}
+            onClick={() => {
+              const firstEp = media.type === 'series' ? media.seasons?.[0]?.episodes?.[0] : undefined;
+              onPlayMedia(media, firstEp);
+            }}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition cursor-pointer"
           >
             <Play className="w-4 h-4 fill-white" />
-            <span>{media.type === 'album' ? 'Play Album Audio' : 'Play Video Stream'}</span>
+            <span>{media.type === 'album' ? 'Play Album Audio' : media.type === 'series' ? 'Play Series / Ep 1' : 'Play Video Stream'}</span>
           </button>
         )}
 
@@ -81,6 +86,17 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
           >
             <Wand2 className={`w-3.5 h-3.5 ${isGeneratingFanart ? 'animate-pulse' : ''}`} />
             <span>{isGeneratingFanart ? 'Designing Fanart...' : 'Generate AI Fanart'}</span>
+          </button>
+        )}
+
+        {onSearchPicture && (
+          <button
+            onClick={onSearchPicture}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border backdrop-blur-sm transition cursor-pointer bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border-cyan-500/40"
+            title="Search and change picture / poster for this title"
+          >
+            <ImageIcon className="w-3.5 h-3.5" />
+            <span>Search Picture</span>
           </button>
         )}
 
@@ -142,19 +158,33 @@ export const MediaDetailHeader: React.FC<MediaDetailHeaderProps> = ({
             alt={media.title}
             className="w-full h-full object-cover"
           />
-          {media.posterUrl && (
-            <button
-              onClick={() => {
-                const filename = `${media.title.replace(/[/\\?%*:|"<>]/g, '_')}-${media.type === 'album' ? 'folder' : 'poster'}.jpg`;
-                downloadMediaArtwork(media.posterUrl, filename);
-              }}
-              className="absolute inset-0 bg-slate-950/80 opacity-0 group-hover/poster:opacity-100 flex flex-col items-center justify-center gap-1 text-white text-[10px] font-bold transition cursor-pointer"
-              title="Click to download poster file directly"
-            >
-              <Download className="w-4 h-4 text-indigo-400" />
-              <span>Download Art</span>
-            </button>
-          )}
+          <div className="absolute inset-0 bg-slate-950/85 opacity-0 group-hover/poster:opacity-100 flex flex-col items-center justify-center gap-1.5 p-1 text-white text-[10px] font-bold transition">
+            {onSearchPicture && (
+              <button
+                type="button"
+                onClick={onSearchPicture}
+                className="w-full py-1 px-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white text-[10px] flex items-center justify-center gap-1 cursor-pointer transition"
+                title="Search and change poster"
+              >
+                <ImageIcon className="w-3 h-3" />
+                <span>Change Art</span>
+              </button>
+            )}
+            {media.posterUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  const filename = `${media.title.replace(/[/\\?%*:|"<>]/g, '_')}-${media.type === 'album' ? 'folder' : 'poster'}.jpg`;
+                  downloadMediaArtwork(media.posterUrl, filename);
+                }}
+                className="w-full py-1 px-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center justify-center gap-1 cursor-pointer transition"
+                title="Click to download poster file directly"
+              >
+                <Download className="w-3 h-3 text-indigo-400" />
+                <span>Download</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Title & Metadata */}

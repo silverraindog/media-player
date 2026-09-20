@@ -688,11 +688,61 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
     if (!title) {
       return res.status(400).json({ error: 'title is required' });
     }
-    const art = await fetchMediaArt(title, type, year ? parseInt(year, 10) : undefined);
+    const cleanTitle = String(title).trim();
+    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined);
+
+    const postersSet = new Set<string>();
+    if (art.posterUrl) postersSet.add(art.posterUrl);
+    if (art.fanartUrl) postersSet.add(art.fanartUrl);
+
+    // Also fetch secondary/alternative posters for rich picture selection
+    try {
+      if (type === 'series' || type === 'tv' || type === 'anime') {
+        const tvmazeSearch = await fetch(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(cleanTitle)}`);
+        if (tvmazeSearch.ok) {
+          const list: any = await tvmazeSearch.json();
+          if (Array.isArray(list)) {
+            list.slice(0, 5).forEach((item: any) => {
+              if (item?.show?.image?.original) postersSet.add(item.show.image.original);
+              if (item?.show?.image?.medium) postersSet.add(item.show.image.medium);
+            });
+          }
+        }
+      } else if (type === 'album') {
+        const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=5`);
+        if (itunesRes.ok) {
+          const itunesData: any = await itunesRes.json();
+          if (Array.isArray(itunesData?.results)) {
+            itunesData.results.forEach((item: any) => {
+              if (item?.artworkUrl100) {
+                postersSet.add(item.artworkUrl100.replace('/100x100bb.jpg', '/1000x1000bb.jpg'));
+              }
+            });
+          }
+        }
+      } else {
+        // Movie search
+        const itunesMovie = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=5`);
+        if (itunesMovie.ok) {
+          const itunesData: any = await itunesMovie.json();
+          if (Array.isArray(itunesData?.results)) {
+            itunesData.results.forEach((item: any) => {
+              if (item?.artworkUrl100) {
+                postersSet.add(item.artworkUrl100.replace('/100x100bb.jpg', '/1000x1000bb.jpg'));
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Alternative poster search warning:', e);
+    }
+
     return res.json({
       success: true,
       posterUrl: art.posterUrl,
       fanartUrl: art.fanartUrl,
+      posters: Array.from(postersSet),
       source: art.source,
       title: art.title,
       year: art.year,
@@ -2689,16 +2739,18 @@ app.delete('/api/db/watchlist/:mediaId', async (req: Request, res: Response) => 
 app.post('/api/db/media', async (req: Request, res: Response) => {
   try {
     const media = req.body;
-    if (!media || !media.title || !media.synopsis) {
-      return res.status(400).json({ error: 'Title and synopsis are required to save to SQLite database' });
+    if (!media || !media.title) {
+      return res.status(400).json({ error: 'Title is required to save to SQLite database' });
     }
+
+    const synopsisText = media.overview || media.synopsis || media.tagline || media.title || '';
 
     await saveMediaToDb({
       id: media.id || `media-${Date.now()}`,
       media_type: media.type || media.media_type || 'series',
       title: media.title,
       original_title: media.originalTitle || media.original_title || media.title,
-      synopsis: media.overview || media.synopsis,
+      synopsis: synopsisText,
       year: media.year,
       rating: media.rating,
       poster_url: media.posterUrl || media.poster_url,
@@ -3033,14 +3085,166 @@ app.use(express.static(path.join(process.cwd(), 'public')));
 // Dedicated Samba Network Share video/audio streaming endpoint with full HTTP 206 Partial Content / Range support
 app.get('/api/samba/stream', (req: Request, res: Response) => {
   try {
-    const rawPath = (req.query.path || req.query.file) as string;
+    const rawPath = ((req.query.path || req.query.file) as string || '').trim();
     if (!rawPath) {
       return res.status(400).json({ error: 'path query parameter is required' });
     }
 
-    const fullPath = resolveSambaFullPath(rawPath);
-    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
-      return res.status(404).json({ error: 'File not found on Samba share', path: rawPath });
+    const seasonQuery = req.query.season !== undefined ? parseInt(req.query.season as string, 10) : undefined;
+    const episodeQuery = req.query.episode !== undefined ? parseInt(req.query.episode as string, 10) : undefined;
+    const fileQuery = ((req.query.file || '') as string).trim();
+
+    const cleanRaw = rawPath.replace(/\\/g, '/');
+
+    // Candidate search roots
+    const candidateRoots = [
+      cleanRaw,
+      resolveSambaFullPath(cleanRaw),
+      path.join(SAMBA_SHARE_ROOT, cleanRaw),
+      path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
+      path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
+    ];
+
+    // Also check subdirectories of /Volumes or /mnt if they exist
+    try {
+      if (fs.existsSync('/Volumes')) {
+        const mounted = fs.readdirSync('/Volumes');
+        for (const m of mounted) {
+          if (!m.startsWith('.')) {
+            candidateRoots.push(path.join('/Volumes', m, cleanRaw.replace(/^[/\\]+/, '')));
+          }
+        }
+      }
+    } catch (e) {}
+
+    const videoAudioExtensions = new Set([
+      '.mkv', '.mp4', '.m4v', '.webm', '.avi', '.mov', '.ts', '.m2ts', '.wmv', '.flv',
+      '.mp3', '.flac', '.m4a', '.wav', '.aac', '.ogg', '.opus',
+    ]);
+
+    let fullPath = '';
+
+    // 1. Direct file check across candidate roots
+    for (const root of candidateRoots) {
+      if (fs.existsSync(root)) {
+        try {
+          const stat = fs.statSync(root);
+          if (stat.isFile()) {
+            fullPath = root;
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 2. If path is a directory, find matching episode or media file inside
+    if (!fullPath) {
+      for (const root of candidateRoots) {
+        if (fs.existsSync(root)) {
+          try {
+            const stat = fs.statSync(root);
+            if (stat.isDirectory()) {
+              // Helper to scan directory for media files
+              const findInDir = (dirPath: string, depth = 0): string | null => {
+                if (depth > 3) return null;
+                const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+                
+                // If specific filename requested
+                if (fileQuery) {
+                  for (const entry of entries) {
+                    if (entry.isFile() && entry.name.toLowerCase() === fileQuery.toLowerCase()) {
+                      return path.join(dirPath, entry.name);
+                    }
+                  }
+                }
+
+                // If season & episode requested
+                if (seasonQuery !== undefined && episodeQuery !== undefined) {
+                  // Patterns: S01E02, s1e2, 1x02, E02, Episode 2, etc.
+                  const sPad = String(seasonQuery).padStart(2, '0');
+                  const ePad = String(episodeQuery).padStart(2, '0');
+                  const epPatterns = [
+                    new RegExp(`[sS]0?${seasonQuery}[eE]0?${episodeQuery}\\b`, 'i'),
+                    new RegExp(`\\b${seasonQuery}x0?${episodeQuery}\\b`, 'i'),
+                    new RegExp(`[eE]0?${episodeQuery}\\b`, 'i'),
+                    new RegExp(`episode[ ._-]*0?${episodeQuery}\\b`, 'i'),
+                    new RegExp(`ep[ ._-]*0?${episodeQuery}\\b`, 'i'),
+                  ];
+
+                  // First check files in this directory
+                  for (const entry of entries) {
+                    if (entry.isFile()) {
+                      const ext = path.extname(entry.name).toLowerCase();
+                      if (videoAudioExtensions.has(ext)) {
+                        for (const pat of epPatterns) {
+                          if (pat.test(entry.name)) {
+                            return path.join(dirPath, entry.name);
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // Check season subfolder (e.g. "Season 01", "Season 1", "S01")
+                  for (const entry of entries) {
+                    if (entry.isDirectory()) {
+                      const lower = entry.name.toLowerCase();
+                      if (
+                        lower.includes(`season ${seasonQuery}`) ||
+                        lower.includes(`season ${sPad}`) ||
+                        lower.includes(`season${seasonQuery}`) ||
+                        lower.includes(`season${sPad}`) ||
+                        lower === `s${seasonQuery}` ||
+                        lower === `s${sPad}`
+                      ) {
+                        const foundInSeason = findInDir(path.join(dirPath, entry.name), depth + 1);
+                        if (foundInSeason) return foundInSeason;
+                      }
+                    }
+                  }
+                }
+
+                // Fallback: Return first video/audio file found
+                for (const entry of entries) {
+                  if (entry.isFile()) {
+                    const ext = path.extname(entry.name).toLowerCase();
+                    if (videoAudioExtensions.has(ext)) {
+                      return path.join(dirPath, entry.name);
+                    }
+                  }
+                }
+
+                // Check subdirectories
+                for (const entry of entries) {
+                  if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                    const found = findInDir(path.join(dirPath, entry.name), depth + 1);
+                    if (found) return found;
+                  }
+                }
+
+                return null;
+              };
+
+              const found = findInDir(root);
+              if (found) {
+                fullPath = found;
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    if (!fullPath || !fs.existsSync(fullPath)) {
+      return res.status(404).json({
+        error: 'File not found on Samba share or HDD drive',
+        requestedPath: rawPath,
+        season: seasonQuery,
+        episode: episodeQuery,
+        candidateRoots: candidateRoots.slice(0, 5),
+        message: 'Ensure the Samba share or HDD drive is mounted, or select the video file directly.'
+      });
     }
 
     const stat = fs.statSync(fullPath);
@@ -3057,6 +3261,9 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
       '.mov': 'video/quicktime',
       '.avi': 'video/x-msvideo',
       '.ts': 'video/mp2t',
+      '.m2ts': 'video/mp2t',
+      '.wmv': 'video/x-ms-wmv',
+      '.flv': 'video/x-flv',
       '.mp3': 'audio/mpeg',
       '.flac': 'audio/flac',
       '.wav': 'audio/wav',
@@ -3064,7 +3271,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
       '.aac': 'audio/aac',
       '.ogg': 'audio/ogg',
     };
-    const contentType = mimeMap[ext] || 'application/octet-stream';
+    const contentType = mimeMap[ext] || 'video/mp4';
 
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -3083,6 +3290,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
         'Content-Type': contentType,
+        'Access-Control-Allow-Origin': '*',
       };
       res.writeHead(206, head);
       file.pipe(res);
@@ -3091,6 +3299,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
         'Content-Length': fileSize,
         'Content-Type': contentType,
         'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
       };
       res.writeHead(200, head);
       fs.createReadStream(fullPath).pipe(res);

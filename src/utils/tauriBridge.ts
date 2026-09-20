@@ -224,3 +224,123 @@ export const scanSambaVolume = async (
     error: 'Preview mode: Native volume scan runs when running in desktop mode on mounted share.',
   };
 };
+
+export const openInSystemPlayer = async (filePath: string): Promise<{ success: boolean; message: string }> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const res = await invoke<string>('open_in_system_player', { filePath });
+      return { success: true, message: res || 'Launched system media player' };
+    } catch (e: any) {
+      console.warn('open_in_system_player error:', e);
+      return { success: false, message: e?.message || String(e) };
+    }
+  }
+  return { success: false, message: 'External player launch is available in desktop app mode' };
+};
+
+export const openInVlc = async (filePath: string): Promise<{ success: boolean; message: string }> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const res = await invoke<string>('open_in_vlc', { filePath });
+      return { success: true, message: res || 'Launched VLC' };
+    } catch (e: any) {
+      console.warn('open_in_vlc error:', e);
+      return { success: false, message: e?.message || String(e) };
+    }
+  }
+  // Browser fallback - open vlc:// protocol URL
+  try {
+    window.open(`vlc://${filePath}`, '_blank');
+    return { success: true, message: 'Dispatched VLC URI protocol' };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'Failed to dispatch VLC URI' };
+  }
+};
+
+export const openInIina = async (filePath: string): Promise<{ success: boolean; message: string }> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const res = await invoke<string>('open_in_iina', { filePath });
+      return { success: true, message: res || 'Launched IINA' };
+    } catch (e: any) {
+      console.warn('open_in_iina error:', e);
+      return { success: false, message: e?.message || String(e) };
+    }
+  }
+  // Browser fallback - open iina:// protocol URL
+  try {
+    window.open(`iina://weblink?url=${encodeURIComponent(filePath)}`, '_blank');
+    return { success: true, message: 'Dispatched IINA URI protocol' };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'Failed to dispatch IINA URI' };
+  }
+};
+
+export const getAllMediaFromTauriDb = async (): Promise<any[]> => {
+  if (!isTauriEnvironment()) return [];
+  try {
+    const { invoke } = await import('@tauri-apps/api/tauri');
+    const items = await invoke<any[]>('get_all_media');
+    if (!Array.isArray(items)) return [];
+    return items.map((it) => {
+      let genres: string[] = ['Media'];
+      try {
+        if (it.genres) genres = JSON.parse(it.genres);
+      } catch {
+        if (it.genres) genres = [it.genres];
+      }
+      return {
+        id: it.id,
+        type: it.media_type || 'series',
+        title: it.title,
+        originalTitle: it.original_title || it.title,
+        overview: it.synopsis || '',
+        year: it.year || new Date().getFullYear(),
+        rating: it.rating || 0,
+        posterUrl: it.poster_url || '',
+        fanartUrl: it.fanart_url || it.poster_url || '',
+        genres,
+        recommendedFolderStructure: it.recommended_folder || `${it.media_type === 'series' ? 'Series' : 'Films'}/${it.title}/`,
+        recommendedFilenames: [],
+        source: 'sqlite-vault',
+      };
+    });
+  } catch (err) {
+    console.warn('getAllMediaFromTauriDb error:', err);
+    return [];
+  }
+};
+
+export const saveMediaToTauriDb = async (media: any): Promise<boolean> => {
+  if (!isTauriEnvironment()) return false;
+  try {
+    const { invoke } = await import('@tauri-apps/api/tauri');
+    const dbItem = {
+      id: media.id || `media-${Date.now()}`,
+      media_type: media.type || 'series',
+      title: media.title,
+      original_title: media.originalTitle || media.title,
+      synopsis: media.overview || media.synopsis || media.tagline || media.title || '',
+      year: media.year || null,
+      rating: media.rating || null,
+      poster_url: media.posterUrl || null,
+      fanart_url: media.fanartUrl || null,
+      genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres || null,
+      cast: media.cast ? JSON.stringify(media.cast) : null,
+      recommended_folder: media.recommendedFolderStructure || null,
+      raw_data: JSON.stringify(media),
+      file_size_bytes: null,
+      created_at: null,
+      updated_at: null,
+    };
+    await invoke('save_media', { media: dbItem });
+    return true;
+  } catch (err) {
+    console.warn('saveMediaToTauriDb error:', err);
+    return false;
+  }
+};
+

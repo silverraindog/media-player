@@ -26,10 +26,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -40,7 +40,7 @@ jobs:
         run: npm install --include=optional
 
       - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v0.5.4
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -48,14 +48,14 @@ jobs:
 
       - name: Upload macOS Artifacts
         if: matrix.platform == 'macos-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tauri-app-macos
           path: src-tauri/target/release/bundle/
 
       - name: Upload Windows Artifacts
         if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: tauri-app-windows
           path: src-tauri/target/release/bundle/

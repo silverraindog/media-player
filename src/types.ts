@@ -254,6 +254,7 @@ export interface ClassifierSettings {
   autoImportConfident: boolean; // default true
   alwaysPromptReview: boolean; // default false
   rules: RegexCategoryRule[];
+  categories?: string[];
 }
 
 export type MediaExtensionCategory =

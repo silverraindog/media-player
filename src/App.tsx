@@ -54,6 +54,7 @@ import {
   listMountedVolumes,
   probeLocalNetwork,
   scanSambaVolume,
+  performFastScan,
   VolumeMountInfo,
 } from './utils/tauriBridge';
 import { thumbnailStorage } from './utils/thumbnailStorage';
@@ -1649,48 +1650,59 @@ export default function App() {
   // Recursive Share Scanner & Automatic Metadata Matching
   const handleSyncSamba = async (customScanPath?: string) => {
     setIsSyncingShare(true);
-    showToast('Recursively scanning Samba share & detecting all media directories...');
+    setSyncCurrentPath('Initializing Rust fast-scan (walkdir)...');
+    showToast('Recursively scanning Samba share with Rust walkdir backend...');
 
     try {
       const shareName = sambaConfig.share || 'media';
-      setActiveScanPath(customScanPath || `//${sambaConfig.server || 'nas'}/${shareName}`);
+      const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
+      setActiveScanPath(rootPath);
 
-      // 1. Scan filesystem using native Tauri bridge if desktop or fallback mock
-      const scanResult = await scanSambaVolume(shareName, customScanPath);
+      // 1. Scan filesystem using native Tauri Rust perform_fast_scan command or fallback
+      const scanResult = await performFastScan(rootPath, (count, currentFile) => {
+        setSyncCurrentPath(`[Rust WalkDir] Scanned ${count} files (${currentFile})`);
+      });
 
       let discoveredRelativePaths: string[] = [];
 
       if (scanResult.success && scanResult.items.length > 0) {
         discoveredRelativePaths = scanResult.items.map((it) => it.rel_path);
+        showToast(`Rust fast-scan completed: ${scanResult.items.length} files discovered without UI freezing.`);
       } else {
-        // Full, realistic sample covering all categories from the user's Samba share structure
-        discoveredRelativePaths = [
-          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
-          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
-          'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
-          'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
-          'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
-          'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
-          'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
-          'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.iso',
-          'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
-          'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
-          'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
-          'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
-          'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
-          'Music/Radiohead/OK Computer (1997)/01 - Airbag.opus',
-          'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
-          'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
-          'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
-          'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
-          'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
-          'Books/Comics/Watchmen (1986).cbz',
-          'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
-          'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
-          'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
-          'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
-          'sort/Unsorted.Movie.2024.1080p.mkv',
-        ];
+        // Fallback scan via standard mock / browser volume scanner if Tauri IPC unavailable
+        const fallbackResult = await scanSambaVolume(shareName, customScanPath);
+        if (fallbackResult.success && fallbackResult.items.length > 0) {
+          discoveredRelativePaths = fallbackResult.items.map((it) => it.rel_path);
+        } else {
+          // Full, realistic sample covering all categories from the user's Samba share structure
+          discoveredRelativePaths = [
+            'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
+            'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
+            'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
+            'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
+            'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
+            'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
+            'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
+            'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.iso',
+            'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
+            'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
+            'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
+            'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
+            'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
+            'Music/Radiohead/OK Computer (1997)/01 - Airbag.opus',
+            'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
+            'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
+            'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
+            'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
+            'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
+            'Books/Comics/Watchmen (1986).cbz',
+            'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
+            'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
+            'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
+            'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
+            'sort/Unsorted.Movie.2024.1080p.mkv',
+          ];
+        }
       }
 
       setLastDiscoveredPaths(discoveredRelativePaths);

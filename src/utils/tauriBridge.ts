@@ -185,7 +185,66 @@ export interface ScanVolumeResult {
   error?: string | null;
 }
 
+export const performFastScan = async (
+  rootPath: string,
+  onProgress?: (scannedCount: number, currentFile: string) => void
+): Promise<ScanVolumeResult> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const { listen } = await import('@tauri-apps/api/event');
+
+      if (onProgress) {
+        const unlisten = await listen<any>('scan-progress', (event) => {
+          if (event && event.payload) {
+            onProgress(event.payload.scanned_count || 0, event.payload.current_file || '');
+          }
+        });
+        // cleanup listener after scan
+        setTimeout(() => {
+          try {
+            unlisten();
+          } catch (e) {}
+        }, 120000);
+      }
+
+      const result = await invoke<any>('perform_fast_scan', { rootPath });
+      const items = (result || []).map((it: any) => ({
+        name: it.name,
+        rel_path: it.rel_path,
+        is_dir: it.is_dir,
+        size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
+      }));
+
+      return {
+        success: true,
+        mountPath: rootPath,
+        items,
+        totalScanned: items.length,
+      };
+    } catch (e: any) {
+      console.error('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan failed:', e);
+      return {
+        success: false,
+        mountPath: rootPath,
+        items: [],
+        totalScanned: 0,
+        error: e?.message || String(e),
+      };
+    }
+  }
+
+  return {
+    success: false,
+    mountPath: rootPath,
+    items: [],
+    totalScanned: 0,
+    error: 'Preview mode: perform_fast_scan requires Tauri desktop environment with Rust backend.',
+  };
+};
+
 export const scanSambaVolume = async (
+
   shareName: string,
   customPath?: string
 ): Promise<ScanVolumeResult> => {

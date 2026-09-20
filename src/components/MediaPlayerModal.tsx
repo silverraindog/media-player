@@ -122,14 +122,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   onNavigateToMountHub,
 }) => {
   const { suggestTestConnection, mountFailureReason, evaluateError, resetMonitor } = useSambaErrorMonitor();
-
-  useEffect(() => {
-    if (playbackError) {
-      evaluateError(playbackError);
-    } else {
-      resetMonitor();
-    }
-  }, [playbackError, evaluateError, resetMonitor]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const localFileInputRef = useRef<HTMLInputElement>(null);
@@ -147,6 +139,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [activeSpeedMenu, setActiveSpeedMenu] = useState(false);
   const [activeSourceMenu, setActiveSourceMenu] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (playbackError) {
+      evaluateError(playbackError);
+    } else {
+      resetMonitor();
+    }
+  }, [playbackError, evaluateError, resetMonitor]);
   const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
   const [customLocalBlobUrl, setCustomLocalBlobUrl] = useState<string | null>(null);
   const [customStreamInputUrl, setCustomStreamInputUrl] = useState<string>('');

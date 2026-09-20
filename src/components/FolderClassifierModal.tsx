@@ -153,6 +153,10 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
     }
   };
 
+  const toggleFolderExpand = (id: string) => {
+    setExpandedFolderIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
   const selectedFolders = classifications.filter((c) => c.selectedForImport && c.targetType !== 'ignore');
   const totalSelectedItems = selectedFolders.reduce((acc, curr) => acc + curr.itemCount, 0);
   const confidentFoldersCount = classifications.filter((c) => c.confidence >= confidenceThreshold).length;
@@ -164,6 +168,7 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
       autoImportConfident,
       alwaysPromptReview,
       rules: customRules,
+      categories,
     };
     onUpdateSettings(updatedSettings);
     onConfirmImport(classifications, updatedSettings);

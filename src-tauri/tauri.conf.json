@@ -1,9 +1,8 @@
 {
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
     "devPath": "http://localhost:3000",
-    "distDir": "../dist"
+    "distDir": "../dist",
+    "withGlobalTauri": true
   },
   "package": {
     "productName": "SambaVault",
@@ -15,29 +14,29 @@
     },
     "bundle": {
       "active": true,
-      "targets": "all",
-      "identifier": "com.sambavault.desktop",
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
-      ],
-      "macOS": {
-        "minimumSystemVersion": "10.13",
-        "entitlements": "Entitlements.plist"
-      }
+      "category": "DeveloperTool",
+      "copyright": "",
+      "deb": {
+        "depends": []
+      },
+      "externalBin": [],
+      "icon": [],
+      "identifier": "com.sambavault.app",
+      "resources": [],
+      "shortDescription": "",
+      "targets": "all"
     },
     "security": {
       "csp": null
     },
     "windows": [
       {
-        "title": "SambaVault & Metadata Manager",
-        "width": 1280,
-        "height": 800
+        "fullscreen": false,
+        "height": 800,
+        "resizable": true,
+        "title": "SambaVault Media Manager",
+        "width": 1200
       }
     ]
   }
 }
-

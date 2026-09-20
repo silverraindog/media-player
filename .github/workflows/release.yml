@@ -45,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tauriScript: "npx @tauri-apps/cli@1"
-          bundleIdentifier: "com.sambavault.desktop"
+
 
       - name: Upload macOS Artifacts
         if: matrix.platform == 'macos-latest'

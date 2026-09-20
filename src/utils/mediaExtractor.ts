@@ -135,7 +135,7 @@ export function isSeasonDirectory(folderName: string): boolean {
   return (
     /^(?:season|staffel|saison|temporada|stagione|series)[\s._-]?\d+/i.test(clean) ||
     /^s\d{1,2}(?:[\s._-].*)?$/i.test(clean) ||
-    /^(?:specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(clean) ||
+    /^(?:specials?|extras?|bonus|featurettes?|behind\s*the\s*(?:scenes?|truth|mask|curtain)|making\s*of|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(clean) ||
     /^(?:disc|disk|cd|dvd|part|volume|vol|side)[\s._-]?\d+/i.test(clean) ||
     /^\d{1,3}$/.test(clean) ||
     /^s\d{1,2}$/i.test(clean) ||

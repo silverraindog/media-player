@@ -88,13 +88,23 @@ export const WatchHistoryTab: React.FC<WatchHistoryTabProps> = ({ onOpenDetails 
         fetch('/api/db/history?limit=200'),
         fetch('/api/db/history/stats'),
       ]);
-      const histData = await histRes.json();
-      const statsData = await statsRes.json();
-      if (histData.success) {
-        setHistoryItems(histData.history || []);
-      }
-      if (statsData.success) {
-        setHistoryStats(statsData.stats || null);
+      
+      const histContentType = histRes.headers.get('content-type') || '';
+      const statsContentType = statsRes.headers.get('content-type') || '';
+      
+      if (histContentType.includes('application/json') && statsContentType.includes('application/json')) {
+        const histData = await histRes.json();
+        const statsData = await statsRes.json();
+        if (histData.success) {
+          setHistoryItems(histData.history || []);
+        }
+        if (statsData.success) {
+          setHistoryStats(statsData.stats || null);
+        }
+      } else {
+        console.warn('[WatchHistoryTab] API returned non-JSON response. This usually happens in Desktop/Tauri environments when backend routes are unreachable.');
+        // If we got HTML, it means the backend is failing. We stay with empty items but log it.
+        setHistoryItems([]);
       }
     } catch (err) {
       console.error('Failed to load watch history:', err);

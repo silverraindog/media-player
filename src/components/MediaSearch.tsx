@@ -56,6 +56,7 @@ import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
 import { BulkSubtitlesModal } from './BulkSubtitlesModal';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
+import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
@@ -74,6 +75,7 @@ interface MediaSearchProps {
   selectedMediaType?: 'all' | MediaType;
   onSelectMediaType?: (type: 'all' | MediaType) => void;
   onOpenApiDebugger?: () => void;
+  onOpenClassifierModal?: () => void;
 }
 
 // Curated Category Taxonomy with Icons & Brand Colors
@@ -185,6 +187,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   selectedMediaType,
   onSelectMediaType,
   onOpenApiDebugger,
+  onOpenClassifierModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('all');
@@ -853,23 +856,65 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   };
 
   const handleBatchCategorizeAll = async () => {
+    if (isBatchCategorizing || mediaLibrary.length === 0) return;
     setIsBatchCategorizing(true);
     setBatchCategorizeSuccess(null);
+    
     try {
       const titles = mediaLibrary.map((m) => ({ title: m.title, type: m.type }));
+      
+      // Attempt Batch API
       const res = await fetch('/api/metadata/batch-categorize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items: titles }),
       });
+      
+      const contentType = res.headers.get('content-type') || '';
+      
+      // If we got HTML (SPA fallback), we must engage individual sequential resolution fallback
+      if (contentType.includes('text/html') || !res.ok) {
+        console.warn('[MediaSearch] Batch API failed or returned HTML. Engaging individual resolution fallback.');
+        let successCount = 0;
+        
+        // Loop through and resolve one by one with the resilient knowledge engine
+        for (const item of mediaLibrary) {
+          try {
+            // We use the knowledge resolver which is purely client-side and 100% reliable
+            const resolved = await resolveMediaWithFallback(item.title, item.type, item.year);
+            if (resolved && onSaveCategorizedMedia) {
+              onSaveCategorizedMedia({
+                ...item,
+                ...resolved,
+                id: item.id, // Ensure original ID is preserved so it updates in-place
+                title: item.title, // Ensure original title is preserved so lookup succeeds
+              });
+              successCount++;
+            }
+          } catch (itemErr) {
+            console.warn(`Failed to resolve ${item.title} during fallback:`, itemErr);
+          }
+        }
+        
+        setBatchCategorizeSuccess(`Resilient Fallback: Categorized ${successCount} items!`);
+        setTimeout(() => setBatchCategorizeSuccess(null), 4000);
+        return;
+      }
+
       const data = await res.json();
       if (data.success && Array.isArray(data.results)) {
         data.results.forEach((resItem: any) => {
-          const match = mediaLibrary.find((m) => m.title.toLowerCase() === resItem.title.toLowerCase());
-          if (match && onSaveCategorizedMedia && resItem.genres) {
+          const match = mediaLibrary.find(
+            (m) => m.title.toLowerCase() === (resItem.originalInput || resItem.title || '').toLowerCase()
+          );
+          if (match && onSaveCategorizedMedia) {
             onSaveCategorizedMedia({
               ...match,
-              genres: Array.from(new Set([...(match.genres || []), ...resItem.genres])),
+              genres: Array.from(new Set([...(match.genres || []), ...(resItem.genres || [])])),
+              year: resItem.year || match.year,
+              rating: resItem.rating || match.rating,
+              overview: resItem.overview || match.overview,
+              posterUrl: resItem.posterUrl || match.posterUrl,
             });
           }
         });
@@ -878,6 +923,26 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       }
     } catch (err) {
       console.error('Batch categorize error:', err);
+      // Final attempt: fallback to local resolver if everything else fails
+      let successCount = 0;
+      for (const item of mediaLibrary) {
+        try {
+          const resolved = await resolveMediaWithFallback(item.title, item.type, item.year);
+          if (resolved && onSaveCategorizedMedia) {
+            onSaveCategorizedMedia({
+              ...item,
+              ...resolved,
+              id: item.id,
+              title: item.title,
+            });
+            successCount++;
+          }
+        } catch (itemErr) {
+          console.warn(`Failed to resolve ${item.title} during hard catch fallback:`, itemErr);
+        }
+      }
+      setBatchCategorizeSuccess(`Local Fallback: Categorized ${successCount} items!`);
+      setTimeout(() => setBatchCategorizeSuccess(null), 4000);
     } finally {
       setIsBatchCategorizing(false);
     }
@@ -2194,8 +2259,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-70 group-hover:opacity-85"
                     />
                     
-                    {/* Hover Tooltip */}
-                    <div className="absolute inset-0 z-10 p-4 bg-slate-950/90 backdrop-blur-sm opacity-0 group-hover/poster:opacity-100 transition-opacity flex flex-col justify-end pointer-events-none">
+                    {/* Hover Tooltip - delayed by 10s as requested to prevent obstructing action buttons */}
+                    <div className="absolute inset-0 z-10 p-4 bg-slate-950/90 backdrop-blur-sm opacity-0 group-hover/poster:opacity-100 transition-opacity duration-500 delay-0 group-hover/poster:delay-[10000ms] flex flex-col justify-start pointer-events-none">
                       <div className="text-white text-xs font-semibold mb-1 flex items-center justify-between">
                         <span>{media.rating.toFixed(1)} / 10</span>
                         <span className="text-slate-400 font-normal">{media.genres.slice(0, 2).join(', ')}</span>
@@ -2208,7 +2273,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent"></div>
 
                     {/* Type Badge & Origin Badge & Affinity Badge */}
-                    <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2">
+                    <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2 z-20">
                       <span
                         className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider flex items-center gap-1 shadow-md ${
                           media.type === 'series'
@@ -2266,7 +2331,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     </div>
 
                     {/* Rating badge & Watchlist/Watched toggle buttons */}
-                    <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                    <div className="absolute top-3 right-3 flex items-center gap-1.5 z-20">
                       {/* Watched Toggle Button */}
                       <button
                         id={`watched-toggle-${media.id}`}

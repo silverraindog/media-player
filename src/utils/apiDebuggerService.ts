@@ -89,6 +89,7 @@ class ApiDebuggerStore {
         const id = Math.random().toString(36).substring(2, 9);
         const timestamp = new Date().toISOString();
 
+        let modifiedInput = input;
         let url = '';
         if (typeof input === 'string') {
           url = input;
@@ -96,6 +97,49 @@ class ApiDebuggerStore {
           url = input.toString();
         } else if (input && typeof (input as Request).url === 'string') {
           url = (input as Request).url;
+        }
+
+        const isTauri = typeof window !== 'undefined' && (
+          '__TAURI_IPC__' in window ||
+          (((window as any).location?.origin || '').includes('tauri://')) ||
+          (((window as any).location?.origin || '').includes('localhost:1420'))
+        );
+
+        if (isTauri) {
+          let urlForRewrite = '';
+          if (typeof input === 'string') {
+            urlForRewrite = input;
+          } else if (input instanceof URL) {
+            urlForRewrite = input.pathname + input.search;
+          } else if (input && typeof (input as Request).url === 'string') {
+            const reqUrl = (input as Request).url;
+            if (reqUrl.startsWith('http://') || reqUrl.startsWith('https://')) {
+              try {
+                const parsed = new URL(reqUrl);
+                urlForRewrite = parsed.pathname + parsed.search;
+              } catch {
+                urlForRewrite = reqUrl;
+              }
+            } else {
+              urlForRewrite = reqUrl;
+            }
+          }
+
+          if (urlForRewrite.startsWith('/api/')) {
+            const rewrittenUrlStr = `http://127.0.0.1:3000${urlForRewrite}`;
+            url = rewrittenUrlStr;
+            if (typeof input === 'string') {
+              modifiedInput = rewrittenUrlStr;
+            } else if (input instanceof URL) {
+              modifiedInput = new URL(rewrittenUrlStr);
+            } else if (input) {
+              try {
+                modifiedInput = new Request(rewrittenUrlStr, input as Request);
+              } catch {
+                modifiedInput = rewrittenUrlStr;
+              }
+            }
+          }
         }
 
         const method = (
@@ -150,7 +194,7 @@ class ApiDebuggerStore {
         let durationMs = 0;
 
         try {
-          response = await originalFetch(input, init);
+          response = await originalFetch(modifiedInput, init);
           durationMs = Math.round(performance.now() - startTime);
         } catch (err: any) {
           durationMs = Math.round(performance.now() - startTime);

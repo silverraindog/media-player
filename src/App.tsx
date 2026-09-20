@@ -2202,6 +2202,7 @@ export default function App() {
             selectedMediaType={selectedMediaType}
             onSelectMediaType={setSelectedMediaType}
             onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+            onOpenClassifierModal={() => setIsClassifierModalOpen(true)}
           />
         )}
 

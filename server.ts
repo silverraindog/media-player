@@ -2096,13 +2096,14 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
       const rootContainers = [
         'series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort',
         'downloads', 'complete', 'share', 'storage', 'video', 'movies', 'nas', 'public', 'disk1', 'disk2',
-        'franchises', 'franchise', 'collections', 'collection', 'box sets', 'box sets & collections', 'sagas'
+        'franchises', 'franchise', 'collections', 'collection', 'box sets', 'box sets & collections', 'sagas',
+        'extras', 'specials', 'bonus'
       ];
       const isSeasonOrSubdir = (seg: string) =>
         /^(?:season|staffel|saison|temporada|stagione|series)[\s._-]?\d+/i.test(seg) ||
         /^s\d{1,2}(?:[\s._-].*)?$/i.test(seg) ||
-        /^(?:specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(seg) ||
-        /^(?:disc|disk|cd|dvd|part|volume|vol|side)[\s._-]?\d+/i.test(seg) ||
+        /^(?:specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?|featurette)(?:[\s._-].*)?$/i.test(seg) ||
+        /^(?:disc|disk|cd|dvd|part|volume|vol|side|behind\s*the\s*truth)[\s._-]?\d*/i.test(seg) ||
         /^\d{1,3}$/.test(seg);
 
       let foundSeriesFolder = '';

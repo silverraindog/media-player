@@ -184,11 +184,13 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
             continue;
           }
 
-          // Handle Extras & numbered disc folders (like 'Extras', '4', '5', 'Bonus')
+          // Handle Extras & numbered disc folders (like 'Extras', '4', '5', 'Bonus', 'Behind The Truth')
           if (
             childLower.includes('extras') ||
             childLower.includes('specials') ||
             childLower.includes('bonus') ||
+            childLower.includes('behind the') ||
+            childLower.includes('making of') ||
             /^\d+$/.test(child.name)
           ) {
             const extrasKey = 'Specials & Extras';
@@ -328,41 +330,45 @@ function consolidateSeriesSeasonsAndExtras(seriesNode: SambaShareNode, parentPat
     if (child.type === 'folder') {
       const childLower = child.name.toLowerCase();
 
-      // Check if folder is an extras / specials container
-      if (
-        childLower.includes('extras') ||
-        childLower.includes('specials') ||
-        childLower.includes('bonus') ||
-        /^\d+$/.test(child.name)
-      ) {
-        const extrasKey = 'Specials & Extras';
-        if (!seasonsMap.has(extrasKey)) {
-          seasonsMap.set(extrasKey, {
-            id: `${seriesNode.id}-specials-extras`,
-            name: 'Specials & Extras',
-            path: `${seriesNode.path}/Specials & Extras`,
-            type: 'folder',
-            children: [],
-          });
-        }
-        const extras = seasonsMap.get(extrasKey)!;
-        if (child.children && child.children.length > 0) {
-          const mappedChildren = child.children.map((subChild) => ({
-            ...subChild,
-            name: subChild.name.includes(child.name)
-              ? subChild.name
-              : `${child.name} - ${subChild.name}`,
-            path: `${extras.path}/${subChild.name}`,
-          }));
-          extras.children = [...(extras.children || []), ...mappedChildren];
-        } else {
-          extras.children = [...(extras.children || []), child];
-        }
-        continue;
-      }
-
-      // Check if standard season directory
+      // Check if folder is an extras / specials / season container
       if (isSeasonDirectory(child.name)) {
+        const isExtras = 
+          childLower.includes('extras') || 
+          childLower.includes('specials') || 
+          childLower.includes('bonus') || 
+          childLower.includes('behind the') ||
+          childLower.includes('making of') ||
+          /^\d+$/.test(child.name);
+
+        const extrasKey = 'Specials & Extras';
+        
+        if (isExtras) {
+          if (!seasonsMap.has(extrasKey)) {
+            seasonsMap.set(extrasKey, {
+              id: `${seriesNode.id}-specials-extras`,
+              name: 'Specials & Extras',
+              path: `${seriesNode.path}/Specials & Extras`,
+              type: 'folder',
+              children: [],
+            });
+          }
+          const extras = seasonsMap.get(extrasKey)!;
+          if (child.children && child.children.length > 0) {
+            const mappedChildren = child.children.map((subChild) => ({
+              ...subChild,
+              name: subChild.name.includes(child.name)
+                ? subChild.name
+                : `${child.name} - ${subChild.name}`,
+              path: `${extras.path}/${subChild.name}`,
+            }));
+            extras.children = [...(extras.children || []), ...mappedChildren];
+          } else {
+            extras.children = [...(extras.children || []), child];
+          }
+          continue;
+        }
+
+        // Standard season directory logic
         const seasonMatch = child.name.match(/(?:season|s)[\s._-]?(\d+)/i);
         const seasonNum = seasonMatch ? parseInt(seasonMatch[1], 10) : 1;
         const seasonName = `Season ${String(seasonNum).padStart(2, '0')}`;

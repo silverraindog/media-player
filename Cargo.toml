@@ -1,13 +1,11 @@
 [package]
-name = "media-player-rust"
+name = "media_player_rust"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# The primary cross-platform UI framework
+# Dioxus v0.6 merges desktop windowing targets directly into the main crate features
 dioxus = { version = "0.6", features = ["desktop"] } 
-
-# Backend capabilities previously handled by the Tauri layer
 rusqlite = { version = "0.31", features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

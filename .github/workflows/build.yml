@@ -39,11 +39,14 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Dioxus CLI From Source Repository
+      - name: Install Pre-compiled Dioxus CLI via Binstall
         shell: bash
         run: |
-          # Explicitly targeting the project workspace folder fixes the registry's HTTP 404 clone path failure
-          cargo install --git https://github.com dioxus-cli --force --locked
+          # Fetch the official binary installation manager utility script
+          curl -L --proto '=https' --tlsv1.2 -sSf https://githubusercontent.com | bash
+          
+          # Use binstall to pull down a pre-compiled binary instantly
+          cargo binstall -y dioxus-cli --version 0.6.0-alpha.5
 
       - name: Debug and Bundle Application
         shell: bash

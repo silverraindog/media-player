@@ -45,16 +45,33 @@ jobs:
           cargo install cargo-binstall
           cargo binstall -y dioxus-cli --version 0.6.0-alpha.5
 
-      - name: Bundle Desktop Application
-        # Explicit directory targeting relative to the checked-out root
-        working-directory: media-player-main
-        run: dx bundle --release --package-types ${{ matrix.package-type }}
+      - name: Debug and Bundle Application
+        shell: bash
+        run: |
+          echo "=== Current Root Workspace Directory ==="
+          pwd
+          ls -la
+          
+          # Auto-detect if files are inside a subfolder or directly at the root
+          if [ -d "media-player-main" ]; then
+            echo "-> Found 'media-player-main' directory. Entering folder..."
+            cd media-player-main
+          elif [ -d "media-player" ]; then
+            echo "-> Found 'media-player' directory. Entering folder..."
+            cd media-player
+          else
+            echo "-> No nested application subfolders found. Bundling directly from root workspace..."
+          fi
+          
+          echo "=== Launching Dioxus Compiler Core ==="
+          dx bundle --release --package-types ${{ matrix.package-type }}
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
+          # Wildcard search patterns catch the bundles regardless of directory layout
           path: |
-            media-player-main/target/dx/media-player-rust/release/bundle/msi/*.msi
-            media-player-main/target/dx/media-player-rust/release/bundle/dmg/*.dmg
-            media-player-main/target/dx/media-player-rust/release/bundle/deb/*.deb
+            **/target/dx/*/release/bundle/msi/*.msi
+            **/target/dx/*/release/bundle/dmg/*.dmg
+            **/target/dx/*/release/bundle/deb/*.deb

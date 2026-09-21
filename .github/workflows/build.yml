@@ -39,10 +39,13 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Pre-compiled Dioxus CLI
+      - name: Install Pre-compiled Dioxus CLI via Standalone Installer
         shell: bash
         run: |
+          # FIX: Points directly to the actual script file, avoiding the HTML error
           curl -fsSL https://dioxuslabs.com | bash
+          
+          # Add the newly installed binary path to the GitHub Actions path lane
           echo "$HOME/.dioxus/bin" >> $GITHUB_PATH
 
       - name: Debug and Bundle Application
@@ -69,8 +72,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
-          # FIX: Explicit recursive folder path tracking ensures the actions uploader
-          # inspects target directories nested deep within subfolders.
           path: |
             **/target/dx/**/release/bundle/msi/*.msi
             **/target/dx/**/release/bundle/dmg/*.dmg

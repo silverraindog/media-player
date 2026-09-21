@@ -7,8 +7,9 @@ pub mod sidebar {
         pub samba_status: Signal<bool>,
     }
 
-    pub fn Sidebar(cx: SidebarProps) -> Element {
-        let mut curr = cx.current;
+    #[component]
+    pub fn Sidebar(current: Signal<String>, samba_status: Signal<bool>) -> Element {
+        let mut curr = current;
         rsx! {
             aside { class: "w-64 bg-gray-800 p-4 flex flex-col gap-2",
                 h1 { class: "text-lg font-bold mb-4", "Media Studio" }

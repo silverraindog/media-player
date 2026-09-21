@@ -67,7 +67,7 @@ function getGenAI(): GoogleGenAI | null {
 }
 
 // Robust helper to call Gemini 2.5 Flash with timeout so it never blocks or causes 504/502 Bad Gateway
-async function callGeminiWithTimeout(prompt: string, timeoutMs: number = 4500): Promise<string | null> {
+async function callGeminiWithTimeout(prompt: string, timeoutMs: number = 2500): Promise<string | null> {
   const ai = getGenAI();
   if (!ai) return null;
   try {
@@ -89,7 +89,7 @@ async function callGeminiWithTimeout(prompt: string, timeoutMs: number = 4500): 
       })
       .catch((err) => {
         clearTimeout(timer);
-        console.warn('Gemini 2.5 Flash returned error, seamlessly using knowledge resolver:', err?.message || err);
+        console.warn('Gemini Flash returned error, seamlessly using knowledge resolver:', err?.message || err);
         return null;
       });
 
@@ -273,6 +273,52 @@ function resolveMediaKnowledge(cleanTitle: string, preferredType: string = 'all'
     };
   }
 
+  // 5. Stranger Things
+  if (/stranger\s*things/i.test(lower)) {
+    return {
+      title: 'Stranger Things',
+      originalTitle: 'Stranger Things',
+      type: 'series',
+      year: 2016,
+      premiered: '2016-07-15',
+      primaryCategory: 'Sci-Fi',
+      genres: ['Sci-Fi', 'Horror', 'Drama', 'Fantasy'],
+      tags: ['Upside Down', 'Hawkins', 'Demogorgon', 'Eleven', '80s Nostalgia', 'Supernatural'],
+      overview: 'When a young boy vanishes, a small town uncovers a mystery involving secret experiments, terrifying supernatural forces and one strange little girl.',
+      tagline: 'One summer can change everything.',
+      rating: 8.7,
+      votes: 1250000,
+      runtime: '50 min/ep',
+      directors: ['The Duffer Brothers'],
+      studio: 'Netflix / 21 Laps Entertainment',
+      certification: 'TV-14',
+      country: 'United States',
+      language: 'English',
+      imdbId: 'tt4574334',
+      tmdbId: '66732',
+      recommendedFolderStructure: 'TV Shows/Stranger Things (2016)/Season 01/',
+      recommendedFilenames: [
+        'Stranger Things - S01E01 - Chapter One: The Vanishing of Will Byers.mkv',
+        'tvshow.nfo',
+        'poster.jpg',
+        'fanart.jpg'
+      ],
+      posterUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80',
+      fanartUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
+      seasons: [
+        {
+          seasonNumber: 1,
+          name: 'Season 1',
+          episodeCount: 8,
+          episodes: [
+            { episodeNumber: 1, seasonNumber: 1, title: 'Chapter One: The Vanishing of Will Byers', airDate: '2016-07-15', plot: 'On his way home from a friend\'s house, young Will Byers sees something terrifying. Nearby, a sinister secret lurks in the depths of a government lab.', rating: 8.5 },
+            { episodeNumber: 2, seasonNumber: 1, title: 'Chapter Two: The Weirdo on Maple Street', airDate: '2016-07-15', plot: 'Lucas, Dustin and Mike try to talk to the girl they found in the woods. Hopper questions an anxious Joyce about a disturbing phone call.', rating: 8.4 }
+          ]
+        }
+      ]
+    };
+  }
+
   // General heuristic determination
   let detectedType: 'movie' | 'series' | 'album' =
     preferredType !== 'all' ? (preferredType as any) : 'movie';
@@ -359,8 +405,22 @@ function resolveMediaKnowledge(cleanTitle: string, preferredType: string = 'all'
 // OMDb API Key configuration with user's verified key as fallback
 const OMDB_API_KEY = process.env.OMDB_API_KEY || 'a593ebab';
 
+// Helper for HTTP requests with strict timeouts to prevent hanging endpoints
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 2500): Promise<globalThis.Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timer);
+    return res;
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
 // Helper to fetch metadata from OMDb API
-async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number) {
+async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number): Promise<any> {
   const apiKey = OMDB_API_KEY;
   if (!apiKey) return null;
 
@@ -372,21 +432,19 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
     if (season) url += `&Season=${season}`;
     if (episode) url += `&Episode=${episode}`;
 
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, {}, 2500);
     if (!res.ok) return null;
     const data = await res.json();
     if (data.Response === 'False') return null;
     return data;
   } catch (err) {
-    console.error('OMDb API Error:', err);
+    console.warn('OMDb API fetch error:', err);
     return null;
   }
 }
 
 // Secondary metadata fetcher function in the media extraction service
 // Acts as a fallback if the primary API (e.g., OMDb) fails or returns 404/not found.
-// Specifically queries alternative sources like TVMaze or iTunes/TMDB to ensure
-// series titles like '24' are always resolved with complete synopsis, cast, and artwork.
 async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: string = 'movie', year?: number): Promise<{
   title?: string;
   year?: number;
@@ -402,12 +460,12 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 } | null> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
-  const isSeries = lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime' || /24|breaking bad|season/i.test(cleanTitle);
+  const isSeries = lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime' || /24|breaking bad|season|stranger/i.test(cleanTitle);
 
   // 1. TV Series Fallback: Query TVMaze (keyless, rich episode and cast catalog)
   if (isSeries) {
     try {
-      const tvmazeRes = await fetch(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}&embed[]=episodes&embed[]=cast`);
+      const tvmazeRes = await fetchWithTimeout(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}&embed[]=episodes&embed[]=cast`, {}, 2500);
       if (tvmazeRes.ok) {
         const data: any = await tvmazeRes.json();
         if (data && data.name) {
@@ -420,7 +478,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
             name: c.person?.name || 'Cast Member',
             role: c.character?.name || 'Cast',
           }));
-          const episodes = (data._embedded?.episodes || []).map((e: any) => ({
+          const episodes = (data._embedded?.episodes || []).slice(0, 50).map((e: any) => ({
             seasonNumber: e.season || 1,
             episodeNumber: e.number || 1,
             title: e.name,
@@ -446,13 +504,13 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
         }
       }
     } catch (err) {
-      console.warn('TVMaze secondary metadata resolution error:', err);
+      console.warn('TVMaze secondary metadata resolution warning:', err);
     }
   }
 
   // 2. Movie Fallback: Query iTunes Search API for 1000x1000 authentic theatrical artwork & synopsis
   try {
-    const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=1`);
+    const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=1`, {}, 2500);
     if (itunesRes.ok) {
       const data: any = await itunesRes.json();
       if (data.resultCount > 0 && data.results[0]) {
@@ -471,7 +529,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
       }
     }
   } catch (err) {
-    console.warn('iTunes movie secondary metadata resolution error:', err);
+    console.warn('iTunes movie secondary metadata resolution warning:', err);
   }
 
   return null;
@@ -496,7 +554,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   // 1. Music Albums: Query iTunes Search API for 1000x1000 high-resolution original art
   if (lowerType === 'album' || lowerType === 'music') {
     try {
-      const itunesRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=1`);
+      const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=1`, {}, 2500);
       if (itunesRes.ok) {
         const itunesData: any = await itunesRes.json();
         if (itunesData.resultCount > 0 && itunesData.results[0]?.artworkUrl100) {
@@ -511,17 +569,18 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
         }
       }
     } catch (err) {
-      console.warn('iTunes art search error:', err);
+      console.warn('iTunes art search warning:', err);
     }
   }
 
-  // 2. Query Primary Provider (OMDb API for Movies & Series)
-  let omdbData: any = null;
-  try {
-    omdbData = await fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year);
-  } catch (e) {
-    console.warn('OMDb art fetch error:', e);
-  }
+  // 2. Query Providers IN PARALLEL for rapid response
+  const [omdbResult, secondaryResult] = await Promise.allSettled([
+    fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year),
+    fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year)
+  ]);
+
+  const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
+  const secondaryData = secondaryResult.status === 'fulfilled' ? secondaryResult.value : null;
 
   let posterUrl: string | undefined = undefined;
   let fanartUrl: string | undefined = undefined;
@@ -530,40 +589,15 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
     posterUrl = omdbData.Poster;
   }
 
-  // 3. If primary provider (OMDb) failed, engage secondary metadata provider (TVMaze / TMDB)
-  let secondaryData: any = null;
-  if (!omdbData || omdbData.Response === 'False' || !posterUrl) {
-    secondaryData = await fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year);
-    if (secondaryData) {
-      if (!posterUrl && secondaryData.posterUrl) {
-        posterUrl = secondaryData.posterUrl;
-      }
-      if (!fanartUrl && secondaryData.fanartUrl) {
-        fanartUrl = secondaryData.fanartUrl;
-      }
+  if (secondaryData) {
+    if (!posterUrl && secondaryData.posterUrl) {
+      posterUrl = secondaryData.posterUrl;
+    }
+    if (secondaryData.fanartUrl) {
+      fanartUrl = secondaryData.fanartUrl;
     }
   }
 
-  // 4. For TV Series without backdrop, try TVMaze for wide art
-  if ((lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') && !fanartUrl) {
-    try {
-      const tvmazeRes = await fetch(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}`);
-      if (tvmazeRes.ok) {
-        const tvmazeData: any = await tvmazeRes.json();
-        if (tvmazeData?.image?.original) {
-          if (!posterUrl) {
-            posterUrl = tvmazeData.image.original;
-          } else {
-            fanartUrl = tvmazeData.image.original;
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('TVMaze art search error:', err);
-    }
-  }
-
-  // Fallback fanart to posterUrl if no distinct wide backdrop was retrieved
   if (posterUrl && !fanartUrl) {
     fanartUrl = posterUrl;
   }

@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 use dioxus::prelude::*;
 
-// 1. Declare the modules that contain our migrated code logic
+// Declare the modules that contain our migrated code logic
 mod types;
 mod components;
 mod services;
@@ -27,7 +27,8 @@ fn main() {
 }
 
 fn App() -> Element {
-    let mut current_tab = use_signal(|| "library".to_string());
+    // In Dioxus v0.6, use_signal handle references don't require the mut keyword
+    let current_tab = use_signal(|| "library".to_string());
     let samba_connected = use_signal(|| false);
 
     rsx! {

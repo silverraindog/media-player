@@ -12,9 +12,9 @@ pub mod sidebar {
         rsx! {
             aside { class: "w-64 bg-gray-800 p-4 flex flex-col gap-2",
                 h1 { class: "text-lg font-bold mb-4", "Media Studio" }
-                button { onclick: move |_| curr.set("library".to_string()), "Library" }
-                button { onclick: move |_| curr.set("samba".to_string()), "Samba Hub" }
-                button { onclick: move |_| curr.set("stats".to_string()), "Stats" }
+                button { class: "text-left hover:text-blue-400", onclick: move |_| curr.set("library".to_string()), "Library" }
+                button { class: "text-left hover:text-blue-400", onclick: move |_| curr.set("samba".to_string()), "Samba Hub" }
+                button { class: "text-left hover:text-blue-400", onclick: move |_| curr.set("stats".to_string()), "Stats" }
             }
         }
     }
@@ -30,5 +30,5 @@ pub mod stats {
     pub fn LibraryStatsTab() -> Element { rsx! { div { "Analytics Module" } } }
 }
 
-// Include our existing Samba component module layout
+// Links your fixed samba.rs submodule into the view layer compilation tree
 pub mod samba;

@@ -39,11 +39,14 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Dioxus CLI via Dev Distribution Endpoint
+      - name: Install Pre-compiled Dioxus CLI via Binstall Bootstrapper
         shell: bash
         run: |
-          curl -fsSL https://dioxus.dev | bash
-          echo "$HOME/.dioxus/bin" >> $GITHUB_PATH
+          # Use the official cargo-binstall bootstrap script directly from their repository
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          
+          # Force a pre-compiled native binary download of dioxus-cli
+          cargo binstall -y --force dioxus-cli --version 0.6.0-alpha.5
 
       - name: Debug and Bundle Application
         shell: bash
@@ -69,8 +72,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
-          # FIX: Deep recursive globbing ensures the runner traverses into the precise 
-          # Dioxus v0.6 cross-platform subdirectories to harvest the built outputs.
           path: |
             **/target/dx/**/release/bundle/msi/*.msi
             **/target/dx/**/release/bundle/dmg/*.dmg

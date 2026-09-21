@@ -39,13 +39,13 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Pre-compiled Dioxus CLI via Standalone Installer
+      - name: Install Dioxus CLI via Dev Distribution Endpoint
         shell: bash
         run: |
-          # FIX: Points directly to the actual script file, avoiding the HTML error
-          curl -fsSL https://dioxuslabs.com | bash
+          # Points directly to the actual raw script file, avoiding the HTML error page wrapper
+          curl -fsSL https://dioxus.dev/install.sh | bash
           
-          # Add the newly installed binary path to the GitHub Actions path lane
+          # Inject the tool binary directory directly into the global action executor paths
           echo "$HOME/.dioxus/bin" >> $GITHUB_PATH
 
       - name: Debug and Bundle Application
@@ -73,6 +73,6 @@ jobs:
         with:
           name: media-player-${{ matrix.platform }}
           path: |
-            **/target/dx/**/release/bundle/msi/*.msi
-            **/target/dx/**/release/bundle/dmg/*.dmg
-            **/target/dx/**/release/bundle/deb/*.deb
+            **/target/dx/*/release/bundle/msi/*.msi
+            **/target/dx/*/release/bundle/dmg/*.dmg
+            **/target/dx/*/release/bundle/deb/*.deb

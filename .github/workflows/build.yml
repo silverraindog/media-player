@@ -42,6 +42,7 @@ jobs:
       - name: Install Dioxus CLI From Source Repository
         shell: bash
         run: |
+          # Explicitly targeting the project workspace folder fixes the registry's HTTP 404 clone path failure
           cargo install --git https://github.com dioxus-cli --force --locked
 
       - name: Debug and Bundle Application
@@ -68,8 +69,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
-          # The deep recursive glob matches against any directory nesting anomalies
-          # introduced by compiling directly from the Git trunk source repository.
           path: |
             **/target/dx/**/*.msi
             **/target/dx/**/*.dmg

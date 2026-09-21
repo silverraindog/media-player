@@ -39,14 +39,10 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Dioxus CLI via Standalone Installer
+      - name: Install Pre-compiled Dioxus CLI
         shell: bash
         run: |
-          # Use the official Dioxus shell installer script to download the pre-compiled binary
-          # This completely bypasses crates.io compilation and avoids the tauri-bundler crash
-          curl -fsSL https://dioxuslabs.com/install.sh | bash
-          
-          # Add the newly installed binary path to the GitHub Actions path lane
+          curl -fsSL https://dioxuslabs.com | bash
           echo "$HOME/.dioxus/bin" >> $GITHUB_PATH
 
       - name: Debug and Bundle Application
@@ -56,7 +52,6 @@ jobs:
           pwd
           ls -la
           
-          # Auto-detect if files are inside a subfolder or directly at the root
           if [ -d "media-player-main" ]; then
             echo "-> Found 'media-player-main' directory. Entering folder..."
             cd media-player-main
@@ -74,7 +69,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
+          # FIX: Explicit recursive folder path tracking ensures the actions uploader
+          # inspects target directories nested deep within subfolders.
           path: |
-            **/target/dx/*/release/bundle/msi/*.msi
-            **/target/dx/*/release/bundle/dmg/*.dmg
-            **/target/dx/*/release/bundle/deb/*.deb
+            **/target/dx/**/release/bundle/msi/*.msi
+            **/target/dx/**/release/bundle/dmg/*.dmg
+            **/target/dx/**/release/bundle/deb/*.deb

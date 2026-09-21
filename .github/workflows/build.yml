@@ -45,8 +45,9 @@ jobs:
           # 1. Install the binary dispatcher directly via the internal cargo registry lanes
           cargo install cargo-binstall
           
-          # 2. Instantly fetch the pre-compiled native executable block
-          cargo binstall -y dioxus-cli --version 0.6.0-alpha.5
+          # 2. FIX: Fetch the absolute latest stable release of dioxus-cli 
+          # This version fully understands and parses Rust 2024 workspace editions
+          cargo binstall -y dioxus-cli
 
       - name: Debug and Bundle Application
         shell: bash

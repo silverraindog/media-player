@@ -26,8 +26,8 @@ fn main() {
         .launch(App);
 }
 
+#[component]
 fn App() -> Element {
-    // In Dioxus v0.6, use_signal handle references don't require the mut keyword
     let current_tab = use_signal(|| "library".to_string());
     let samba_connected = use_signal(|| false);
 
@@ -41,11 +41,14 @@ fn App() -> Element {
             }
             
             main { class: "flex-1 overflow-y-auto p-6",
-                match current_tab.read().as_str() {
-                    "library" => rsx! { components::library::LibraryTab {} },
-                    "samba" => rsx! { components::samba::SambaMountHub {} },
-                    "stats" => rsx! { components::stats::LibraryStatsTab {} },
-                    _ => rsx! { div { "Tab not found" } }
+                if current_tab() == "library" {
+                    components::library::LibraryTab {}
+                } else if current_tab() == "samba" {
+                    components::samba::SambaMountHub {}
+                } else if current_tab() == "stats" {
+                    components::stats::LibraryStatsTab {}
+                } else {
+                    div { "Tab not found" }
                 }
             }
         }

@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           cargo install cargo-binstall
-          cargo binstall -y dioxus-cli
+          cargo binstall -y dioxus-cli --version 0.6.3
 
       - name: Debug and Bundle Application
         shell: bash

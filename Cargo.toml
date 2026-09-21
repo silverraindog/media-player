@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # Dioxus v0.6 merges desktop windowing targets directly into the main crate features
-dioxus = { version = "0.6", features = ["desktop"] } 
+dioxus = { version = "0.6.3", features = ["desktop"] } 
 rusqlite = { version = "0.31", features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

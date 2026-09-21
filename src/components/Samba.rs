@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use crate::services::samba_service;
 
+#[component]
 pub fn SambaMountHub() -> Element {
     let mut host = use_signal(|| String::new());
     let mut share = use_signal(|| String::new());
@@ -42,6 +43,14 @@ pub fn SambaMountHub() -> Element {
                         oninput: move |e| share.set(e.value())
                     }
                 }
+                div { class: "flex flex-col",
+                    label { class: "text-sm text-gray-400 mb-1", "Username" }
+                    input { 
+                        class: "bg-gray-700 p-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-white",
+                        value: "{username}",
+                        oninput: move |e| username.set(e.value())
+                    }
+                }
                 
                 button { 
                     class: "w-full py-2 px-4 rounded font-bold text-white transition-colors bg-blue-600 hover:bg-blue-700 disabled:opacity-50",
@@ -50,7 +59,6 @@ pub fn SambaMountHub() -> Element {
                     if *is_loading.read() { "Connecting..." } else { "Mount Remote Directory" }
                 }
 
-                // Dioxus v0.6 removes the inner rsx! macro invocation inside raw conditional loops
                 if !status_message.read().is_empty() {
                     div { class: "mt-4 p-3 bg-gray-900 rounded border border-gray-700 text-sm text-blue-400",
                         "{status_message}"

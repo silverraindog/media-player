@@ -1,12 +1,6 @@
 pub mod sidebar {
     use dioxus::prelude::*;
 
-    #[derive(Props, Clone, PartialEq)]
-    pub struct SidebarProps {
-        pub current: Signal<String>,
-        pub samba_status: Signal<bool>,
-    }
-
     #[component]
     pub fn Sidebar(current: Signal<String>, samba_status: Signal<bool>) -> Element {
         let mut curr = current;
@@ -23,11 +17,13 @@ pub mod sidebar {
 
 pub mod library {
     use dioxus::prelude::*;
+    #[component]
     pub fn LibraryTab() -> Element { rsx! { div { "Library Dashboard Module" } } }
 }
 
 pub mod stats {
     use dioxus::prelude::*;
+    #[component]
     pub fn LibraryStatsTab() -> Element { rsx! { div { "Analytics Module" } } }
 }
 

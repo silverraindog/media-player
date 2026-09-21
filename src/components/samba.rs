@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use crate::services::samba_service;
 
+#[component]
 pub fn SambaMountHub() -> Element {
     let mut host = use_signal(|| String::new());
     let mut share = use_signal(|| String::new());
@@ -40,6 +41,14 @@ pub fn SambaMountHub() -> Element {
                         class: "bg-gray-700 p-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-white",
                         value: "{share}",
                         oninput: move |e| share.set(e.value())
+                    }
+                }
+                div { class: "flex flex-col",
+                    label { class: "text-sm text-gray-400 mb-1", "Username" }
+                    input { 
+                        class: "bg-gray-700 p-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-white",
+                        value: "{username}",
+                        oninput: move |e| username.set(e.value())
                     }
                 }
                 

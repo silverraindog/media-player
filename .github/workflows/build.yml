@@ -42,9 +42,8 @@ jobs:
       - name: Install Dioxus CLI From Source Repository
         shell: bash
         run: |
-          # Pulls down a clean, functional copy directly from the Dioxus master workspace,
-          # explicitly dodging the broken crates.io tauri-bundler package.
-          cargo install --git https://github.com/DioxusLabs/dioxus dioxus-cli --locked
+          # FIX: Added --force to overwrite any pre-existing cached dx binaries safely
+          cargo install --git https://github.com/DioxusLabs/dioxus dioxus-cli --force --locked
 
       - name: Debug and Bundle Application
         shell: bash

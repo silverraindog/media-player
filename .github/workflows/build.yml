@@ -42,8 +42,7 @@ jobs:
       - name: Install Dioxus CLI From Source Repository
         shell: bash
         run: |
-          # FIX: Added --force to overwrite any pre-existing cached dx binaries safely
-          cargo install --git https://github.com/DioxusLabs/dioxus dioxus-cli --force --locked
+          cargo install --git https://github.com dioxus-cli --force --locked
 
       - name: Debug and Bundle Application
         shell: bash
@@ -69,7 +68,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
+          # FIX: Catches any .msi, .dmg, or .deb files generated anywhere deep 
+          # within the target/dx output tree, completely bypassing varying folder naming quirks.
           path: |
-            **/target/dx/**/release/bundle/msi/*.msi
-            **/target/dx/**/release/bundle/dmg/*.dmg
-            **/target/dx/**/release/bundle/deb/*.deb
+            **/target/dx/**/*.msi
+            **/target/dx/**/*.dmg
+            **/target/dx/**/*.deb

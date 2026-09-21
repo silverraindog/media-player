@@ -68,8 +68,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
-          # FIX: Catches any .msi, .dmg, or .deb files generated anywhere deep 
-          # within the target/dx output tree, completely bypassing varying folder naming quirks.
+          # The deep recursive glob matches against any directory nesting anomalies
+          # introduced by compiling directly from the Git trunk source repository.
           path: |
             **/target/dx/**/*.msi
             **/target/dx/**/*.dmg

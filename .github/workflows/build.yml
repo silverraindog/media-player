@@ -31,7 +31,14 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev pkg-config
+
+      - name: Install OpenSSL 3 (macOS Only)
+        if: matrix.platform == 'macos'
+        run: |
+          # Provision the exact missing dynamic link library the pre-built dx binary expects
+          brew install openssl@3
+          echo "DYLD_LIBRARY_PATH=$(brew --prefix openssl@3)/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -42,11 +49,7 @@ jobs:
       - name: Install Pre-compiled Dioxus CLI natively
         shell: bash
         run: |
-          # 1. Install the binary dispatcher directly via the internal cargo registry lanes
           cargo install cargo-binstall
-          
-          # 2. FIX: Fetch the absolute latest stable release of dioxus-cli 
-          # This version fully understands and parses Rust 2024 workspace editions
           cargo binstall -y dioxus-cli
 
       - name: Debug and Bundle Application

@@ -46,16 +46,15 @@ jobs:
           cargo binstall -y dioxus-cli --version 0.6.0-alpha.5
 
       - name: Bundle Desktop Application
-        # Pointing the working directory explicitly to your nested folder
-        working-directory: ./media-player-main
+        # Explicit directory targeting relative to the checked-out root
+        working-directory: media-player-main
         run: dx bundle --release --package-types ${{ matrix.package-type }}
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
-          # Adjusting the upload paths to search within the nested target output folder
           path: |
-            media-player-main/target/dx/*/release/bundle/msi/*.msi
-            media-player-main/target/dx/*/release/bundle/dmg/*.dmg
-            media-player-main/target/dx/*/release/bundle/deb/*.deb
+            media-player-main/target/dx/media-player-rust/release/bundle/msi/*.msi
+            media-player-main/target/dx/media-player-rust/release/bundle/dmg/*.dmg
+            media-player-main/target/dx/media-player-rust/release/bundle/deb/*.deb

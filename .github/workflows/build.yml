@@ -39,11 +39,15 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Pre-compiled Dioxus CLI
+      - name: Install Dioxus CLI via Standalone Installer
         shell: bash
         run: |
-          cargo install cargo-binstall
-          cargo binstall -y dioxus-cli --version 0.6.0-alpha.5
+          # Use the official Dioxus shell installer script to download the pre-compiled binary
+          # This completely bypasses crates.io compilation and avoids the tauri-bundler crash
+          curl -fsSL https://dioxuslabs.com/install.sh | bash
+          
+          # Add the newly installed binary path to the GitHub Actions path lane
+          echo "$HOME/.dioxus/bin" >> $GITHUB_PATH
 
       - name: Debug and Bundle Application
         shell: bash
@@ -70,7 +74,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
-          # Wildcard search patterns catch the bundles regardless of directory layout
           path: |
             **/target/dx/*/release/bundle/msi/*.msi
             **/target/dx/*/release/bundle/dmg/*.dmg

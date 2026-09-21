@@ -39,14 +39,12 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Pre-compiled Dioxus CLI via Binstall Bootstrapper
+      - name: Install Dioxus CLI From Source Repository
         shell: bash
         run: |
-          # Use the official cargo-binstall bootstrap script directly from their repository
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          
-          # Force a pre-compiled native binary download of dioxus-cli
-          cargo binstall -y --force dioxus-cli --version 0.6.0-alpha.5
+          # Pulls down a clean, functional copy directly from the Dioxus master workspace,
+          # explicitly dodging the broken crates.io tauri-bundler package.
+          cargo install --git https://github.com/DioxusLabs/dioxus dioxus-cli --locked
 
       - name: Debug and Bundle Application
         shell: bash

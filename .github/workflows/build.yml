@@ -39,13 +39,13 @@ jobs:
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
 
-      - name: Install Pre-compiled Dioxus CLI via Binstall
+      - name: Install Pre-compiled Dioxus CLI natively
         shell: bash
         run: |
-          # Fetch the official binary installation manager utility script
-          curl -L --proto '=https' --tlsv1.2 -sSf https://githubusercontent.com | bash
+          # 1. Install the binary dispatcher directly via the internal cargo registry lanes
+          cargo install cargo-binstall
           
-          # Use binstall to pull down a pre-compiled binary instantly
+          # 2. Instantly fetch the pre-compiled native executable block
           cargo binstall -y dioxus-cli --version 0.6.0-alpha.5
 
       - name: Debug and Bundle Application

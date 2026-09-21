@@ -42,19 +42,20 @@ jobs:
       - name: Install Pre-compiled Dioxus CLI
         shell: bash
         run: |
-          # Bypasses the broken tauri-bundler crates.io compilation error entirely
           cargo install cargo-binstall
           cargo binstall -y dioxus-cli --version 0.6.0-alpha.5
 
       - name: Bundle Desktop Application
-        # This native invocation replaces your old "npm run build" frontend pipeline
+        # Pointing the working directory explicitly to your nested folder
+        working-directory: ./media-player-main
         run: dx bundle --release --package-types ${{ matrix.package-type }}
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4
         with:
           name: media-player-${{ matrix.platform }}
+          # Adjusting the upload paths to search within the nested target output folder
           path: |
-            target/dx/*/release/bundle/msi/*.msi
-            target/dx/*/release/bundle/dmg/*.dmg
-            target/dx/*/release/bundle/deb/*.deb
+            media-player-main/target/dx/*/release/bundle/msi/*.msi
+            media-player-main/target/dx/*/release/bundle/dmg/*.dmg
+            media-player-main/target/dx/*/release/bundle/deb/*.deb

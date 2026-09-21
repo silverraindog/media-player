@@ -1,63 +1,56 @@
-name: "Build Tauri App (macOS & Windows)"
-
+name: Build and Package Desktop App
 on:
   push:
-    branches: [ "main", "master" ]
-    tags: [ "v*" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
-  build:
-    permissions:
-      contents: write
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  build-desktop:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            name: macOS
-          - platform: windows-latest
-            name: Windows
+          - platform: "windows"
+            os: windows-latest
+            package-type: "msi"
+          - platform: "macos"
+            os: macos-latest
+            package-type: "dmg"
+          - platform: "linux"
+            os: ubuntu-latest
+            package-type: "deb"
 
-    runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
+      - name: Install System Dependencies (Linux Only)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libgtk-3-dev
 
-      - name: Install Rust stable
+      - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Node dependencies
-        run: npm install --include=optional
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
 
-      - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Dioxus CLI
+        run: cargo install dioxus-cli --version 0.6.0-alpha.5  # Lock to your preferred 0.6 pre-release version
+
+      - name: Bundle Desktop Application
+        # This replaces the old npx tauri build pipeline entirely
+        run: dx bundle --release --package-types ${{ matrix.package-type }}
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
         with:
-          tauriScript: "npx @tauri-apps/cli@1"
-
-
-      - name: Upload macOS Artifacts
-        if: matrix.platform == 'macos-latest'
-        uses: actions/upload-artifact@v6
-        with:
-          name: tauri-app-macos
-          path: src-tauri/target/release/bundle/
-
-      - name: Upload Windows Artifacts
-        if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v6
-        with:
-          name: tauri-app-windows
-          path: src-tauri/target/release/bundle/
-
+          name: media-player-${{ matrix.platform }}
+          path: |
+            target/dx/*/release/bundle/msi/*.msi
+            target/dx/*/release/bundle/dmg/*.dmg
+            target/dx/*/release/bundle/deb/*.deb

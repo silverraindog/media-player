@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -344,12 +345,13 @@ async fn scan_samba_volume(
     let path = Path::new(&resolved_path);
 
     if !path.exists() {
+        let err_msg = format!("Volume or path is not mounted: {}", path.display());
         return Ok(ScanVolumeResult {
             success: false,
             mount_path: resolved_path,
             items: Vec::new(),
             total_scanned: 0,
-            error: Some(format!("Volume or path is not mounted: {}", path.display())),
+            error: Some(err_msg),
         });
     }
 

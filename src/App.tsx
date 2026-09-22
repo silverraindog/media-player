@@ -88,8 +88,14 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     urlStr = (input as any).url;
   }
 
-  // Only rewrite to 127.0.0.1:3000 if running inside the native Tauri asset scheme (tauri://)
-  if (isTauriProtocol && urlStr.startsWith('/api/')) {
+  // Only rewrite to 127.0.0.1:3000 if running strictly inside native Tauri desktop app
+  const isActualTauri = typeof window !== 'undefined' && (
+    Boolean((window as any).__TAURI__) ||
+    '__TAURI_IPC__' in window ||
+    (((window as any).location?.origin || '').includes('tauri://'))
+  );
+
+  if (isActualTauri && urlStr.startsWith('/api/')) {
     const rewrittenUrl = `http://127.0.0.1:3000${urlStr}`;
     if (typeof input === 'string') {
       modifiedInput = rewrittenUrl;

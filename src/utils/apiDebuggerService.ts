@@ -100,12 +100,13 @@ class ApiDebuggerStore {
           url = (input as Request).url;
         }
 
-        const isTauriProtocol = typeof window !== 'undefined' && (
-          (((window as any).location?.origin || '').includes('tauri://')) ||
-          (((window as any).location?.origin || '').includes('tauri.localhost'))
+        const isActualTauri = typeof window !== 'undefined' && (
+          Boolean((window as any).__TAURI__) ||
+          '__TAURI_IPC__' in window ||
+          (((window as any).location?.origin || '').includes('tauri://'))
         );
 
-        if (isTauriProtocol) {
+        if (isActualTauri) {
           let urlForRewrite = '';
           if (typeof input === 'string') {
             urlForRewrite = input;

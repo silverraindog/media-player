@@ -30,6 +30,7 @@ import {
 import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
+import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 
 interface WebSearchCategorizerModalProps {
   isOpen: boolean;
@@ -243,23 +244,12 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       const item = incompleteItems[i];
       setBatchProgress({ current: i + 1, total: incompleteItems.length });
       try {
-        const res = await performLoggedFetch('/api/metadata/categorize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: item.title,
-            type: item.type,
-            year: item.year,
-          }),
-        });
-        const data = res.data;
-
-        let itemData: MediaMetadata | null = null;
-        if (res.ok && data?.success && data?.data && typeof data !== 'string') {
-          itemData = data.data;
-        } else {
-          itemData = await resolveMediaWithFallback(item.title, item.type, item.year);
-        }
+        const itemData = await categorizeMediaWithRetry(
+          item.title,
+          item.type,
+          item.year,
+          { maxRetries: 2, timeoutMs: 7000 }
+        ) || await resolveMediaWithFallback(item.title, item.type, item.year);
 
         if (itemData) {
           onSaveCategorizedMedia(itemData);
@@ -289,37 +279,24 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setIsSaved(false);
 
     try {
-      const res = await performLoggedFetch('/api/metadata/categorize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: q,
-          type: targetType || mediaType,
-          year: yearHint ? parseInt(yearHint, 10) : undefined,
-        }),
-      });
+      const parsedYear = yearHint ? parseInt(yearHint, 10) : undefined;
+      let media: MediaMetadata | null = await categorizeMediaWithRetry(
+        q,
+        targetType || mediaType,
+        parsedYear,
+        { maxRetries: 3, timeoutMs: 9000 }
+      );
 
-      const data = res.data;
-      const isHtmlResponse =
-        typeof data === 'string' ||
-        res.headers.get('content-type')?.includes('text/html') ||
-        (typeof data === 'string' && (data.includes('<!doctype') || data.includes('<html'))) ||
-        (data && !data.success);
-
-      let media: MediaMetadata | null = null;
-
-      if (res.ok && !isHtmlResponse && data?.success && data?.data && data.data.title) {
-        media = data.data;
-      } else {
+      if (!media) {
         // Safe and resilient fallback: Primary API failed, returned 404/500, or HTML SPA redirect
-        // Activate secondary metadata fetcher (TVMaze / TMDB fallback) to resolve titles like '24'
+        // Activate secondary metadata fetcher (TVMaze / TMDB fallback) to resolve titles
         console.info(`[Media Resolver] Primary endpoint returned non-JSON / HTML / incomplete for "${q}". Activating secondary metadata fetcher (TVMaze)...`);
 
         try {
           const secondary = await fetchSecondaryMetadata(
             q,
             targetType || mediaType,
-            yearHint ? parseInt(yearHint, 10) : undefined
+            parsedYear
           );
 
           if (secondary) {
@@ -345,7 +322,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             const resolved = await resolveMediaWithFallback(
               q,
               targetType || mediaType,
-              yearHint ? parseInt(yearHint, 10) : undefined
+              parsedYear
             );
             if (resolved) {
               media = resolved;
@@ -356,7 +333,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           const resolved = await resolveMediaWithFallback(
             q,
             targetType || mediaType,
-            yearHint ? parseInt(yearHint, 10) : undefined
+            parsedYear
           );
           if (resolved) {
             media = resolved;
@@ -375,8 +352,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           setSelectedPrimaryCategory(local.genres?.[0] || 'Drama');
           return;
         }
-        const errorString = (typeof data === 'object' && (data?.message || data?.error)) || 'Unable to retrieve media details';
-        throw new Error(errorString);
+        throw new Error('Unable to retrieve media details after retries and fallbacks.');
       }
 
       const finalizedMedia: MediaMetadata = media;

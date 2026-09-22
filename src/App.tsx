@@ -63,6 +63,7 @@ import { detectDuplicatesAndVersionBranches } from './utils/duplicateDetector';
 import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
 import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl } from './utils/pathSanitizer';
+import { categorizeMediaWithRetry } from './utils/metadataCategorizer';
 
 const isTauri = typeof window !== 'undefined' && (
   '__TAURI_IPC__' in window ||

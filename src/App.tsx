@@ -88,72 +88,40 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     urlStr = (input as any).url;
   }
 
-  // Only rewrite to 127.0.0.1:3000 if running strictly inside native Tauri desktop app
-  const isActualTauri = typeof window !== 'undefined' && (
-    Boolean((window as any).__TAURI__) ||
-    '__TAURI_IPC__' in window ||
-    (((window as any).location?.origin || '').includes('tauri://'))
-  );
-
-  if (isActualTauri && urlStr.startsWith('/api/')) {
-    const rewrittenUrl = `http://127.0.0.1:3000${urlStr}`;
-    if (typeof input === 'string') {
-      modifiedInput = rewrittenUrl;
-    } else if (input instanceof URL) {
-      modifiedInput = new URL(rewrittenUrl);
-    } else if (input) {
+// Robust global fetch wrapper with retry logic and local-first fallback
+  const fetchWithRetry = async (
+    url: string,
+    options: RequestInit = {},
+    maxRetries = 3
+  ): Promise<Response> => {
+    let lastError: any;
+    for (let i = 0; i < maxRetries; i++) {
       try {
-        modifiedInput = new Request(rewrittenUrl, input as Request);
-      } catch {
-        modifiedInput = rewrittenUrl;
+        const response = await customFetch(url, options);
+        if (response.ok) return response;
+        throw new Error(`HTTP ${response.status}`);
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[FetchRetry] Attempt ${i + 1}/${maxRetries} failed for ${url}:`, err);
+        await new Promise((r) => setTimeout(r, 500 * Math.pow(2, i))); // Exponential backoff
       }
     }
-  }
 
-  try {
-    const res = await window.fetch(modifiedInput, init);
-    // Cache watch history & watchlist on successful response
-    if (res.ok && urlStr.includes('/api/db/history')) {
-      try {
-        const clone = res.clone();
-        clone.json().then((data) => {
-          if (data && data.success && Array.isArray(data.history)) {
-            localDbFallback.syncWatchHistoryFromApi(data.history);
-          }
-        }).catch(() => {});
-      } catch {}
-    } else if (res.ok && urlStr.includes('/api/db/watchlist')) {
-      try {
-        const clone = res.clone();
-        clone.json().then((data) => {
-          if (data && data.success && Array.isArray(data.watchlist)) {
-            localDbFallback.syncWatchlistFromApi(data.watchlist);
-          }
-        }).catch(() => {});
-      } catch {}
-    }
-    return res;
-  } catch (err: any) {
-    // If a database endpoint fails due to connection refused or offline mode, serve from local storage cache
-    if (urlStr.includes('/api/db/')) {
+    // Fallback for DB routes if all retries fail
+    if (url.includes('/api/db/')) {
       let bodyObj: any = null;
-      if (init?.body && typeof init.body === 'string') {
-        try {
-          bodyObj = JSON.parse(init.body);
-        } catch {}
+      if (options.body && typeof options.body === 'string') {
+        try { bodyObj = JSON.parse(options.body); } catch {}
       }
       const fallback = localDbFallback.handleDbRequestFallback(
-        urlStr,
-        (init?.method || 'GET').toUpperCase(),
+        url,
+        (options.method || 'GET').toUpperCase(),
         bodyObj
       );
-      if (fallback) {
-        return fallback;
-      }
+      if (fallback) return fallback;
     }
-    throw err;
-  }
-};
+    throw lastError;
+  };
 
 const fetch = customFetch;
 
@@ -1187,7 +1155,7 @@ export default function App() {
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>([]);
 
   useEffect(() => {
-    fetch('/api/vault/state')
+    fetchWithRetry('/api/vault/state')
       .then(res => res.json())
       .then(data => {
         if (data.success && data.state) {
@@ -1207,7 +1175,7 @@ export default function App() {
   useEffect(() => {
     if (!isVaultLoaded) return;
     
-    fetch('/api/vault/state', {
+    fetchWithRetry('/api/vault/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1223,7 +1191,7 @@ export default function App() {
 
   // Background SQLite persistent caching reconciliation
   useEffect(() => {
-    fetch('/api/db/media')
+    fetchWithRetry('/api/db/media')
       .then((res) => res.json())
       .then((data) => {
         if (data.success && Array.isArray(data.items) && data.items.length > 0) {

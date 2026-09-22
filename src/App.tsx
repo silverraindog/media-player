@@ -20,6 +20,7 @@ import { WatchlistTab } from './components/WatchlistTab';
 import { WatchHistoryTab } from './components/WatchHistoryTab';
 import { MusicTab } from './components/MusicTab';
 import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
+import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar';
 import { Bug } from 'lucide-react';
 import {
   MediaMetadata,
@@ -721,6 +722,15 @@ export default function App() {
   const [isSyncingShare, setIsSyncingShare] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
   const [syncCurrentPath, setSyncCurrentPath] = useState<string>('');
+  const [syncProgress, setSyncProgress] = useState<SyncProgressState>({
+    isActive: false,
+    phase: 'idle',
+    currentStep: 0,
+    totalSteps: 100,
+    currentPath: '',
+    processedCount: 0,
+    totalCount: 0,
+  });
   const [connectionDetails, setConnectionDetails] = useState<any>(null);
 
   const [sambaTree, setSambaTree] = useState<SambaShareNode[]>(() => {
@@ -1647,21 +1657,95 @@ export default function App() {
     });
   };
 
-  // Recursive Share Scanner & Automatic Metadata Matching
+  // Recursive Share Scanner & Automatic Metadata Matching with Batch Processing & Progress Bar
   const handleSyncSamba = async (customScanPath?: string) => {
     setIsSyncingShare(true);
+    const shareName = sambaConfig.share || 'media';
+    const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
+    setActiveScanPath(rootPath);
     setSyncCurrentPath('Initializing Rust fast-scan (walkdir)...');
     showToast('Recursively scanning Samba share with Rust walkdir backend...');
 
-    try {
-      const shareName = sambaConfig.share || 'media';
-      const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
-      setActiveScanPath(rootPath);
+    // Resilient retry utility with exponential backoff & jitter for network resilience during deep sync
+    async function retryWithExponentialBackoff<T>(
+      fn: () => Promise<T>,
+      options: {
+        maxRetries?: number;
+        initialDelayMs?: number;
+        maxDelayMs?: number;
+        backoffFactor?: number;
+        onRetry?: (attempt: number, maxRetries: number, delayMs: number, error: any) => void;
+      } = {}
+    ): Promise<T> {
+      const maxRetries = options.maxRetries ?? 3;
+      const initialDelayMs = options.initialDelayMs ?? 400;
+      const maxDelayMs = options.maxDelayMs ?? 4000;
+      const backoffFactor = options.backoffFactor ?? 2;
 
-      // 1. Scan filesystem using native Tauri Rust perform_fast_scan command or fallback
-      const scanResult = await performFastScan(rootPath, (count, currentFile) => {
-        setSyncCurrentPath(`[Rust WalkDir] Scanned ${count} files (${currentFile})`);
-      });
+      let attempt = 0;
+      let delay = initialDelayMs;
+
+      while (true) {
+        try {
+          return await fn();
+        } catch (err: any) {
+          attempt++;
+          if (attempt > maxRetries) {
+            throw err;
+          }
+          const jitter = Math.floor(Math.random() * 120);
+          const waitMs = Math.min(maxDelayMs, delay + jitter);
+          if (options.onRetry) {
+            options.onRetry(attempt, maxRetries, waitMs, err);
+          }
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          delay = delay * backoffFactor;
+        }
+      }
+    }
+
+    setSyncProgress({
+      isActive: true,
+      phase: 'scanning',
+      currentStep: 10,
+      totalSteps: 100,
+      currentPath: rootPath,
+      processedCount: 0,
+      totalCount: 0,
+      phaseDescription: 'Traversing Samba shares using native Rust walkdir...',
+      retryCount: 0,
+    });
+
+    try {
+      // 1. Scan filesystem using native Tauri Rust perform_fast_scan command or fallback with retry
+      const scanResult = await retryWithExponentialBackoff(
+        async () => {
+          return await performFastScan(rootPath, (count, currentFile) => {
+            setSyncCurrentPath(`[Rust WalkDir] Scanned ${count} files (${currentFile})`);
+            setSyncProgress((prev) => ({
+              ...prev,
+              currentPath: currentFile,
+              processedCount: count,
+              totalCount: Math.max(prev.totalCount, count),
+              currentStep: Math.min(25, 10 + Math.floor(count / 2)),
+            }));
+          });
+        },
+        {
+          maxRetries: 3,
+          initialDelayMs: 400,
+          onRetry: (attempt, maxRetries, delayMs, error) => {
+            console.warn(`[Sync Traversal Retry] Attempt ${attempt}/${maxRetries} after error:`, error);
+            setSyncProgress((prev) => ({
+              ...prev,
+              retryCount: attempt,
+              maxRetries,
+              retryDelayRemaining: delayMs,
+              phaseDescription: `Transient share traversal glitch. Retrying scan (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
+            }));
+          },
+        }
+      );
 
       let discoveredRelativePaths: string[] = [];
 
@@ -1670,7 +1754,11 @@ export default function App() {
         showToast(`Rust fast-scan completed: ${scanResult.items.length} files discovered without UI freezing.`);
       } else {
         // Fallback scan via standard mock / browser volume scanner if Tauri IPC unavailable
-        const fallbackResult = await scanSambaVolume(shareName, customScanPath);
+        const fallbackResult = await retryWithExponentialBackoff(
+          async () => scanSambaVolume(shareName, customScanPath),
+          { maxRetries: 2, initialDelayMs: 300 }
+        ).catch(() => ({ success: false, items: [] }));
+
         if (fallbackResult.success && fallbackResult.items.length > 0) {
           discoveredRelativePaths = fallbackResult.items.map((it) => it.rel_path);
         } else {
@@ -1708,6 +1796,15 @@ export default function App() {
       setLastDiscoveredPaths(discoveredRelativePaths);
 
       // Run Regex Folder Classification
+      setSyncProgress((prev) => ({
+        ...prev,
+        phase: 'classifying',
+        currentStep: 25,
+        totalCount: discoveredRelativePaths.length,
+        phaseDescription: 'Classifying folders against content rules...',
+        retryCount: 0,
+      }));
+
       const classifications = classifyAllDiscoveredPaths(
         discoveredRelativePaths,
         classifierSettings.rules,
@@ -1721,29 +1818,87 @@ export default function App() {
       if (classifierSettings.alwaysPromptReview || (hasUncertainFolders && !classifierSettings.autoImportConfident)) {
         setIsClassifierModalOpen(true);
         showToast(`Discovered ${classifications.length} folders. Review and confirm category mappings.`);
+        setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
+        setIsSyncingShare(false);
         return;
       }
 
-      // 2. Query the sync-scan endpoint for canonical titles, overview, ratings, and artwork
-      let syncedResults: any[] = [];
-      try {
-        const response = await fetch('/api/samba/sync-scan', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            items: discoveredRelativePaths,
-            shareName,
-          }),
+      // 2. Batch Processing for Metadata Resolution (Sync-Scan) with Exponential Backoff Retries
+      // Break discovered items into optimized batches of 30 to reduce payload size and provide smooth progress feedback
+      const BATCH_SIZE = 30;
+      const batches: string[][] = [];
+      for (let i = 0; i < discoveredRelativePaths.length; i += BATCH_SIZE) {
+        batches.push(discoveredRelativePaths.slice(i, i + BATCH_SIZE));
+      }
+
+      const syncedResults: any[] = [];
+      for (let b = 0; b < batches.length; b++) {
+        const currentBatch = batches[b];
+        const processedSoFar = b * BATCH_SIZE + currentBatch.length;
+
+        setSyncProgress((prev) => ({
+          ...prev,
+          phase: 'enriching',
+          currentStep: 30 + Math.round(((b + 1) / batches.length) * 35),
+          batchIndex: b + 1,
+          totalBatches: batches.length,
+          processedCount: processedSoFar,
+          totalCount: discoveredRelativePaths.length,
+          currentPath: currentBatch[0] || '',
+          phaseDescription: `Batch ${b + 1}/${batches.length}: Querying canonical metadata for ${currentBatch.length} files...`,
+          retryCount: 0,
+        }));
+
+        const batchResults = await retryWithExponentialBackoff(
+          async () => {
+            const response = await fetch('/api/samba/sync-scan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                items: currentBatch,
+                shareName,
+              }),
+            });
+            if (!response.ok) {
+              throw new Error(`Sync-scan endpoint returned HTTP ${response.status}`);
+            }
+            const data = await response.json();
+            if (data.success && Array.isArray(data.results)) {
+              return data.results;
+            }
+            return currentBatch.map((p) => ({ path: p }));
+          },
+          {
+            maxRetries: 3,
+            initialDelayMs: 400,
+            onRetry: (attempt, maxRetries, delayMs, error) => {
+              console.warn(`[Sync-Scan Batch ${b + 1} Retry] Attempt ${attempt}/${maxRetries}:`, error);
+              setSyncProgress((prev) => ({
+                ...prev,
+                retryCount: attempt,
+                maxRetries,
+                retryDelayRemaining: delayMs,
+                phaseDescription: `Batch ${b + 1}/${batches.length}: Transient error. Retrying with backoff (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
+              }));
+            },
+          }
+        ).catch((err) => {
+          console.warn(`Sync-scan batch ${b + 1} fallback after retries exhausted:`, err);
+          return currentBatch.map((p) => ({ path: p }));
         });
-        const data = await response.json();
-        if (data.success && data.results) {
-          syncedResults = data.results;
-        }
-      } catch (err) {
-        console.warn('Backend sync-scan endpoint call failed, applying fallback metadata:', err);
+
+        syncedResults.push(...batchResults);
       }
 
       // 3. Build recursive tree nodes respecting arbitrarily deep directory structures
+      setSyncProgress((prev) => ({
+        ...prev,
+        phase: 'indexing',
+        currentStep: 70,
+        phaseDescription: 'Constructing hierarchical Samba share directory tree...',
+        retryCount: 0,
+      }));
+
       const newTree: SambaShareNode[] = [];
 
       const getOrCreateNodeInTree = (
@@ -1791,7 +1946,7 @@ export default function App() {
           currentNodes.push(folderNode);
         }
 
-        // Check if this folder corresponds to a media title (e.g. Breaking Bad, Interstellar, Random Access Memories)
+        // Check if this folder corresponds to a media title
         const lowerName = segment.toLowerCase();
         const detectedType = detectMediaType(rawPath);
         const isShow =
@@ -1835,10 +1990,17 @@ export default function App() {
       });
 
       setSambaTree(newTree);
-      // Yield to let React render tree before extraction
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       // 4. Extract discovered media into All Media, TV Series, Movies, and Music Albums tabs
+      setSyncProgress((prev) => ({
+        ...prev,
+        phase: 'indexing',
+        currentStep: 80,
+        phaseDescription: 'Extracting media metadata and analyzing multi-version branches...',
+        retryCount: 0,
+      }));
+
       const discoveredMedia = await extractAllMediaFromSambaTreeAsync(newTree, mediaExtensionConfig);
       let detectedBranchCount = 0;
       let detectedFranchiseCount = 0;
@@ -1869,7 +2031,15 @@ export default function App() {
         return enrichedItems;
       });
 
-      // 5. Samba artwork disk verification & fallback creation on the share filesystem
+      // 5. Samba artwork disk verification & fallback creation using Fast Batch-Verify API with Retries
+      setSyncProgress((prev) => ({
+        ...prev,
+        phase: 'verifying',
+        currentStep: 88,
+        phaseDescription: 'Batch verifying artwork on Samba filesystem...',
+        retryCount: 0,
+      }));
+
       let verifiedArtworkCount = 0;
       let fallbackCreatedCount = 0;
       try {
@@ -1884,32 +2054,74 @@ export default function App() {
         };
         findMediaFolders(newTree);
 
-        for (const folder of mediaFolders) {
-          const safePath = encodeSambaPathForUrl(folder.path);
-          const vRes = await fetch(`/api/samba/verify-file?folderPath=${safePath}&filenames=poster.jpg,fanart.jpg`);
-          if (vRes.ok) {
-            const vData = await vRes.json();
-            if (vData.hasAnyArtwork) {
+        if (mediaFolders.length > 0) {
+          // Perform batch verification in a single network request with retry
+          const folderPaths = mediaFolders.map((f) => f.path);
+          const batchData = await retryWithExponentialBackoff(
+            async () => {
+              const res = await fetch('/api/samba/batch-verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folderPaths, filenames: ['poster.jpg', 'fanart.jpg', 'folder.jpg'] }),
+              });
+              if (!res.ok) throw new Error(`batch-verify returned ${res.status}`);
+              return await res.json();
+            },
+            {
+              maxRetries: 3,
+              initialDelayMs: 400,
+              onRetry: (attempt, maxRetries, delayMs) => {
+                setSyncProgress((prev) => ({
+                  ...prev,
+                  retryCount: attempt,
+                  maxRetries,
+                  retryDelayRemaining: delayMs,
+                  phaseDescription: `Artwork verification: Retrying batch check (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
+                }));
+              },
+            }
+          ).catch((e) => {
+            console.warn('Batch verify fallback note:', e);
+            return { success: false, results: {} };
+          });
+
+          const batchResults: Record<string, any> = batchData.success && batchData.results ? batchData.results : {};
+
+          // Handle folders that need artwork written
+          for (const folder of mediaFolders) {
+            const status = batchResults[folder.path];
+            if (status?.hasAnyArtwork) {
               verifiedArtworkCount++;
               folder.artworkStatus = 'synced';
             } else if (folder.matchedMedia && (folder.matchedMedia.posterUrl || folder.matchedMedia.fanartUrl)) {
-              // Trigger fs.writeFile fallback via /api/samba/write-artwork
-              const wRes = await fetch('/api/samba/write-artwork', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  folderPath: sanitizeSambaPath(folder.path),
-                  posterUrl: folder.matchedMedia.posterUrl,
-                  fanartUrl: folder.matchedMedia.fanartUrl,
-                  mediaTitle: folder.matchedMedia.title,
-                  type: folder.matchedMedia.type,
-                }),
-              });
-              const wData = await wRes.json();
-              if (wData.verified) {
-                fallbackCreatedCount++;
-                folder.artworkStatus = 'synced';
-                folder.hasPoster = true;
+              // Trigger artwork fallback write with retry
+              try {
+                const wData = await retryWithExponentialBackoff(
+                  async () => {
+                    const wRes = await fetch('/api/samba/write-artwork', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        folderPath: sanitizeSambaPath(folder.path),
+                        posterUrl: folder.matchedMedia.posterUrl,
+                        fanartUrl: folder.matchedMedia.fanartUrl,
+                        mediaTitle: folder.matchedMedia.title,
+                        type: folder.matchedMedia.type,
+                      }),
+                    });
+                    if (!wRes.ok) throw new Error(`write-artwork returned ${wRes.status}`);
+                    return await wRes.json();
+                  },
+                  { maxRetries: 2, initialDelayMs: 300 }
+                ).catch(() => ({ verified: false }));
+
+                if (wData && wData.verified) {
+                  fallbackCreatedCount++;
+                  folder.artworkStatus = 'synced';
+                  folder.hasPoster = true;
+                }
+              } catch (writeErr) {
+                console.warn('Artwork write fallback note:', writeErr);
               }
             }
           }
@@ -1948,6 +2160,23 @@ export default function App() {
       sendDesktopNotification('Samba Background Sync Complete', {
         body: `Indexed ${discoveredRelativePaths.length} items (${discoveredMedia.length} media files, ${confidentCount} confident folders).`,
       });
+
+      // Mark progress as complete
+      setSyncProgress({
+        isActive: true,
+        phase: 'completed',
+        currentStep: 100,
+        totalSteps: 100,
+        currentPath: `Sync Complete: ${discoveredRelativePaths.length} files scanned`,
+        processedCount: discoveredRelativePaths.length,
+        totalCount: discoveredRelativePaths.length,
+        phaseDescription: `Successfully synchronized ${discoveredRelativePaths.length} media files with zero UI latency.`,
+      });
+
+      // Auto-hide progress indicator after 4.5 seconds
+      setTimeout(() => {
+        setSyncProgress((prev) => (prev.phase === 'completed' ? { ...prev, isActive: false, phase: 'idle' } : prev));
+      }, 4500);
       showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
@@ -2074,9 +2303,25 @@ export default function App() {
       sendDesktopNotification('Samba QuickSync Complete', {
         body: `Shallow scan checked ${topDirs.length} top-level folders in ${duration}ms (${discoveredNewFolders.length} new discovered).`,
       });
+
+      setSyncProgress({
+        isActive: true,
+        phase: 'completed',
+        currentStep: 100,
+        totalSteps: 100,
+        currentPath: 'QuickSync Complete',
+        processedCount: topDirs.length,
+        totalCount: topDirs.length,
+        phaseDescription: `QuickSync verified ${topDirs.length} top-level directories in ${duration}ms.`,
+      });
+
+      setTimeout(() => {
+        setSyncProgress((prev) => (prev.phase === 'completed' ? { ...prev, isActive: false, phase: 'idle' } : prev));
+      }, 3500);
     } catch (err: any) {
       console.error('Error during QuickSync shallow scan:', err);
       showToast(`QuickSync error: ${err?.message || 'Failed to scan top-level directories'}`);
+      setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
     } finally {
       setIsQuickSyncing(false);
       setSyncCurrentPath('');
@@ -2162,30 +2407,38 @@ export default function App() {
         onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
       />
 
-      {/* Persistent Sync Progress Banner */}
-      {(isQuickSyncing || isImportingShare || isSyncingShare) && (
-        <div className="bg-indigo-950/95 border-b border-indigo-800/80 px-4 py-2.5 shadow-lg flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-6 h-6 rounded-lg bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center shrink-0">
-              <span className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></span>
-            </div>
-            <div className="min-w-0 flex items-center gap-2">
-              <span className="text-xs font-bold text-white uppercase tracking-wider shrink-0">
-                {isQuickSyncing ? 'QuickSync Active:' : 'Samba Sync Active:'}
-              </span>
-              <span className="text-xs text-indigo-200 font-mono truncate">
-                {syncCurrentPath || 'Scanning Samba shared directories & inspecting folders...'}
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <div className="w-36 h-2 bg-indigo-900 rounded-full overflow-hidden border border-indigo-800/60 hidden sm:block">
-              <div className="h-full bg-indigo-400 animate-pulse w-3/4 rounded-full"></div>
-            </div>
-            <span className="text-[11px] font-mono text-indigo-300">Processing...</span>
-          </div>
-        </div>
-      )}
+      {/* Real-time Samba Sync & Batch Processing Progress Bar */}
+      <SyncProgressBar
+        progress={
+          syncProgress.isActive
+            ? syncProgress
+            : isQuickSyncing || isImportingShare || isSyncingShare
+            ? {
+                isActive: true,
+                phase: isQuickSyncing ? 'scanning' : isImportingShare ? 'indexing' : 'scanning',
+                currentStep: 45,
+                totalSteps: 100,
+                currentPath: syncCurrentPath || 'Scanning Samba shared directories...',
+                processedCount: 0,
+                totalCount: 0,
+                phaseDescription: isQuickSyncing
+                  ? 'QuickSync: Inspecting top-level directories...'
+                  : isImportingShare
+                  ? 'Importing classified folders...'
+                  : 'Deep scanning Samba share with Rust walkdir...',
+              }
+            : syncProgress
+        }
+        onCancel={() => {
+          setIsSyncingShare(false);
+          setIsQuickSyncing(false);
+          setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
+          showToast('Samba synchronization paused/cancelled by user.');
+        }}
+        onDismiss={() => {
+          setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
+        }}
+      />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">

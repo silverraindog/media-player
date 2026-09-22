@@ -3,6 +3,7 @@ import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { resolveMediaWithFallback } from './clientMediaResolver';
 import { generateTvShowNfo } from './nfoGenerator';
 import { sanitizeSambaPath } from './pathSanitizer';
+import { categorizeMediaWithRetry } from './metadataCategorizer';
 
 export interface DeepRefreshStepUpdate {
   seriesTitle: string;
@@ -90,37 +91,25 @@ export async function queryFallbackProvidersSequentially(
   notify('primary-api', 'querying', `Initiating primary API query for "${cleanTitle}"...`);
 
   try {
-    const res = await fetch('/api/metadata/categorize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ name: cleanTitle, type: 'series', year }),
-    });
+    const meta = await categorizeMediaWithRetry(cleanTitle, 'series', year, { maxRetries: 2, initialDelayMs: 300 });
 
-    const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
-      const data = await res.json();
-      const meta = data.data || data;
-      // Ensure it returned actual enriched series content and not a placeholder
-      if (meta && meta.overview && meta.overview.length > 50 && !meta.overview.includes('Official categorized catalog entry') && meta.posterUrl) {
-        const elapsed = Date.now() - p1Start;
-        notify('primary-api', 'success', `Primary API matched "${meta.title || cleanTitle}" (${elapsed}ms).`, elapsed);
-        return {
-          metadata: {
-            ...meta,
-            type: 'series',
-            source: 'primary-api',
-          },
-          resolvedByProvider: 'Primary API (OMDb)',
-          providerId: 'primary-api',
-          audits,
-        };
-      } else {
-        const elapsed = Date.now() - p1Start;
-        notify('primary-api', 'failed', `Primary API returned sparse or placeholder payload (${elapsed}ms). Continuing to TVMaze.`, elapsed);
-      }
+    // Ensure it returned actual enriched series content and not a placeholder
+    if (meta && meta.overview && meta.overview.length > 50 && !meta.overview.includes('Official categorized catalog entry') && meta.posterUrl) {
+      const elapsed = Date.now() - p1Start;
+      notify('primary-api', 'success', `Primary API matched "${meta.title || cleanTitle}" (${elapsed}ms).`, elapsed);
+      return {
+        metadata: {
+          ...meta,
+          type: 'series',
+          source: 'primary-api',
+        },
+        resolvedByProvider: 'Primary API (OMDb)',
+        providerId: 'primary-api',
+        audits,
+      };
     } else {
       const elapsed = Date.now() - p1Start;
-      notify('primary-api', 'failed', `Primary API returned status ${res.status} (${contentType || 'non-JSON'}). Continuing to TVMaze.`, elapsed);
+      notify('primary-api', 'failed', `Primary API returned sparse or placeholder payload (${elapsed}ms). Continuing to TVMaze.`, elapsed);
     }
   } catch (err: any) {
     const elapsed = Date.now() - p1Start;

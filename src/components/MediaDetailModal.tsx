@@ -14,6 +14,7 @@ import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 import { downloadMediaBundleZip } from '../utils/zipDownloader';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { saveMediaToTauriDb } from '../utils/tauriBridge';
+import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 
 interface MediaDetailModalProps {
   media: MediaMetadata | null;
@@ -643,35 +644,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         method: 'DELETE',
       }).catch(() => {});
 
-      let refreshedData: any = null;
-
-      try {
-        let fetchUrl = '/api/metadata/categorize';
-        if (window.location.origin.includes('tauri://') || (window as any).__TAURI__) {
-          fetchUrl = 'http://127.0.0.1:3000/api/metadata/categorize';
-        }
-
-        const res = await fetch(fetchUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: media.title,
-            type: media.type,
-            year: media.year,
-            forceRefresh: true,
-          }),
-        });
-
-        const contentType = res.headers.get('content-type') || '';
-        if (res.ok && contentType.includes('application/json')) {
-          const json = await res.json();
-          if (json && json.success && json.data) {
-            refreshedData = json.data;
-          }
-        }
-      } catch (directErr) {
-        console.warn('Direct server force refresh failed, falling back to client media resolver:', directErr);
-      }
+      let refreshedData: any = await categorizeMediaWithRetry(media.title, media.type, media.year, { maxRetries: 3 });
 
       if (!refreshedData) {
         refreshedData = await resolveMediaWithFallback(media.title, media.type, media.year);

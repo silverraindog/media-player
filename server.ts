@@ -912,25 +912,42 @@ Ensure high factual accuracy.`;
 // Dedicated Web Search & AI Categorizer for Movie / Series / Media by Name
 app.post('/api/metadata/categorize', async (req: Request, res: Response) => {
   try {
-    const { name, type = 'all', year } = req.body;
-    if (!name || typeof name !== 'string' || !name.trim()) {
+    const rawName = req.body?.name || req.body?.title || req.body?.query || '';
+    const cleanTitle = typeof rawName === 'string' ? rawName.trim() : String(rawName).trim();
+
+    if (!cleanTitle) {
       return res.status(400).json({ error: 'Name/Title is required' });
     }
 
-    const cleanTitle = name.trim();
-    let fallbackData: any = resolveMediaKnowledge(cleanTitle, type, year ? parseInt(year, 10) : undefined);
+    const { type = 'all', year } = req.body || {};
+    const parsedYear = year ? parseInt(String(year), 10) : undefined;
+
+    let fallbackData: any = {};
+    try {
+      fallbackData = resolveMediaKnowledge(cleanTitle, type, !isNaN(parsedYear as number) ? parsedYear : undefined) || {};
+    } catch (knowErr) {
+      console.warn('Knowledge resolution fallback error:', knowErr);
+      fallbackData = {
+        title: cleanTitle,
+        type: type !== 'all' ? type : 'movie',
+        year: parsedYear || 2024,
+        overview: `${cleanTitle} media entry.`,
+        genres: ['Media'],
+      };
+    }
+
     let liveArt: any = {};
 
     // Pre-fetch authentic poster & fanart safely
     try {
-      liveArt = await fetchMediaArt(cleanTitle, type !== 'all' ? type : undefined, year ? parseInt(year, 10) : undefined);
-      if (liveArt.posterUrl) fallbackData.posterUrl = liveArt.posterUrl;
-      if (liveArt.fanartUrl) fallbackData.fanartUrl = liveArt.fanartUrl;
-      if (liveArt.overview) fallbackData.overview = liveArt.overview;
-      if (liveArt.genres) fallbackData.genres = liveArt.genres;
-      if (liveArt.rating) fallbackData.rating = liveArt.rating;
-      if (liveArt.cast) fallbackData.cast = liveArt.cast;
-      if (liveArt.episodes && liveArt.episodes.length > 0) {
+      liveArt = await fetchMediaArt(cleanTitle, type !== 'all' ? type : undefined, !isNaN(parsedYear as number) ? parsedYear : undefined);
+      if (liveArt?.posterUrl) fallbackData.posterUrl = liveArt.posterUrl;
+      if (liveArt?.fanartUrl) fallbackData.fanartUrl = liveArt.fanartUrl;
+      if (liveArt?.overview) fallbackData.overview = liveArt.overview;
+      if (liveArt?.genres) fallbackData.genres = liveArt.genres;
+      if (liveArt?.rating) fallbackData.rating = liveArt.rating;
+      if (liveArt?.cast) fallbackData.cast = liveArt.cast;
+      if (liveArt?.episodes && liveArt.episodes.length > 0) {
         const seasonMap = new Map<number, any[]>();
         liveArt.episodes.forEach((ep: any) => {
           const s = ep.seasonNumber || 1;
@@ -951,7 +968,7 @@ app.post('/api/metadata/categorize', async (req: Request, res: Response) => {
     }
 
     const prompt = `You are a real-time web media scraper and encyclopedic category resolver for Kodi, Jellyfin, Plex, IMDb, and TMDB.
-Perform a web search and metadata categorization for the media item named: "${cleanTitle}" ${year ? `(year: ${year})` : ''} ${type !== 'all' ? `(preferred type: ${type})` : ''}.
+Perform a web search and metadata categorization for the media item named: "${cleanTitle}" ${parsedYear ? `(year: ${parsedYear})` : ''} ${type !== 'all' ? `(preferred type: ${type})` : ''}.
 
 Standard top-level categories include:
 - Sci-Fi (Science Fiction, Cyberpunk, Dystopian, Space Exploration)
@@ -1032,10 +1049,10 @@ Return a single JSON object with EXACT structure:
 
       if (parsed && parsed.title) {
         parsed.id = `${parsed.type || 'media'}-${Date.now()}`;
-        parsed.source = liveArt.posterUrl ? 'omdb-gemini-categorizer' : 'gemini-ai-categorizer';
-        if (liveArt.posterUrl) parsed.posterUrl = liveArt.posterUrl;
-        if (liveArt.fanartUrl) parsed.fanartUrl = liveArt.fanartUrl;
-        if (liveArt.cast && (!parsed.cast || parsed.cast.length === 0)) parsed.cast = liveArt.cast;
+        parsed.source = liveArt?.posterUrl ? 'omdb-gemini-categorizer' : 'gemini-ai-categorizer';
+        if (liveArt?.posterUrl) parsed.posterUrl = liveArt.posterUrl;
+        if (liveArt?.fanartUrl) parsed.fanartUrl = liveArt.fanartUrl;
+        if (liveArt?.cast && (!parsed.cast || parsed.cast.length === 0)) parsed.cast = liveArt.cast;
 
         return res.json({
           success: true,
@@ -1047,7 +1064,7 @@ Return a single JSON object with EXACT structure:
 
     return res.json({
       success: true,
-      source: liveArt.posterUrl ? 'omdb-web-resolver' : 'encyclopedic-web-resolver',
+      source: liveArt?.posterUrl ? 'omdb-web-resolver' : 'encyclopedic-web-resolver',
       data: {
         id: `${fallbackData.type || 'media'}-${Date.now()}`,
         ...fallbackData,
@@ -1055,8 +1072,20 @@ Return a single JSON object with EXACT structure:
     });
   } catch (error: any) {
     console.error('Categorize endpoint fallback:', error);
-    const cleanTitle = (req.body?.name || 'Unknown Media').trim();
-    const fallback = resolveMediaKnowledge(cleanTitle, req.body?.type || 'all', req.body?.year);
+    const rawName = req.body?.name || req.body?.title || req.body?.query || 'Unknown Media';
+    const cleanTitle = typeof rawName === 'string' ? rawName.trim() : String(rawName).trim();
+    let fallback: any = {};
+    try {
+      fallback = resolveMediaKnowledge(cleanTitle, req.body?.type || 'all', req.body?.year);
+    } catch {
+      fallback = {
+        title: cleanTitle,
+        type: req.body?.type || 'movie',
+        year: req.body?.year || 2024,
+        overview: `${cleanTitle} media entry.`,
+        genres: ['Media'],
+      };
+    }
     return res.json({
       success: true,
       source: 'offline-knowledge-engine',
@@ -2025,6 +2054,62 @@ app.all(['/api/samba/verify-file'], async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Verify file error:', err);
     return res.status(500).json({ error: 'Failed to verify file on Samba share', details: err?.message });
+  }
+});
+
+// Batch verify artwork status for multiple Samba folder paths in a single fast I/O call
+app.post('/api/samba/batch-verify', async (req: Request, res: Response) => {
+  try {
+    const { folderPaths, filenames = ['poster.jpg', 'fanart.jpg'] } = req.body || {};
+    if (!Array.isArray(folderPaths) || folderPaths.length === 0) {
+      return res.json({ success: true, results: {} });
+    }
+
+    const results: Record<string, { folderExists: boolean; hasAnyArtwork: boolean; files: Record<string, boolean> }> = {};
+
+    for (const folderPath of folderPaths) {
+      try {
+        const sanitizedRelPath = sanitizeSambaPath(folderPath);
+        const resolvedDir = resolveSambaFullPath(sanitizedRelPath);
+        const folderExists = fs.existsSync(resolvedDir);
+
+        const fileStatuses: Record<string, boolean> = {};
+        for (const fn of filenames) {
+          const cleanFn = sanitizeSambaSegment(fn);
+          const filePath = path.join(resolvedDir, cleanFn);
+          fileStatuses[fn] = folderExists && fs.existsSync(filePath);
+        }
+
+        if (!fileStatuses['poster.jpg'] && folderExists) {
+          const albumPosterPath = path.join(resolvedDir, 'folder.jpg');
+          if (fs.existsSync(albumPosterPath)) {
+            fileStatuses['folder.jpg'] = true;
+          }
+        }
+
+        const hasAnyArtwork = Boolean(fileStatuses['poster.jpg'] || fileStatuses['fanart.jpg'] || fileStatuses['folder.jpg']);
+        results[folderPath] = {
+          folderExists,
+          hasAnyArtwork,
+          files: fileStatuses,
+        };
+      } catch {
+        results[folderPath] = {
+          folderExists: false,
+          hasAnyArtwork: false,
+          files: {},
+        };
+      }
+    }
+
+    return res.json({
+      success: true,
+      count: Object.keys(results).length,
+      results,
+    });
+  } catch (err: any) {
+    console.error('Batch verify error:', err);
+    return res.status(500).json({ error: 'Failed to batch verify Samba paths', details: err?.message });
   }
 });
 

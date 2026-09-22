@@ -12,6 +12,7 @@ import {
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { resolveMediaWithFallback } from './clientMediaResolver';
 import { normalizeFranchiseHierarchy } from './franchiseHierarchy';
+import { categorizeMediaWithRetry } from './metadataCategorizer';
 
 // Comprehensive Media Extension Definitions
 export const SUPPORTED_VIDEO_EXTENSIONS = [
@@ -771,45 +772,7 @@ export async function fetchPrimaryMetadata(
   type: MediaType | 'all' = 'all',
   year?: number
 ): Promise<MediaMetadata | null> {
-  const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
-  if (!cleanTitle) return null;
-
-  try {
-    const res = await fetch('/api/metadata/categorize', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        name: cleanTitle,
-        type: type !== 'all' ? type : undefined,
-        year: year,
-      }),
-    });
-
-    // Check for 404, server error, or desktop HTML SPA redirection
-    if (!res.ok) {
-      console.warn(`[PrimaryFetcher] HTTP error ${res.status} for "${cleanTitle}"`);
-      return null;
-    }
-
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      console.warn(`[PrimaryFetcher] Non-JSON response (${contentType}) received for "${cleanTitle}". Engaging secondary provider.`);
-      return null;
-    }
-
-    const payload = await res.json();
-    if (payload?.success && payload?.data && payload.data.title) {
-      return payload.data as MediaMetadata;
-    }
-
-    return null;
-  } catch (err) {
-    console.warn(`[PrimaryFetcher] Network / fetch error for "${cleanTitle}":`, err);
-    return null;
-  }
+  return categorizeMediaWithRetry(title, type, year, { maxRetries: 3, initialDelayMs: 400 });
 }
 
 /**

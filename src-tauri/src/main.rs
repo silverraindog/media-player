@@ -1,4 +1,3 @@
-#![allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -6,7 +5,6 @@ use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
-use tauri::Manager;
 use walkdir::WalkDir;
 
 mod ai;
@@ -345,13 +343,12 @@ async fn scan_samba_volume(
     let path = Path::new(&resolved_path);
 
     if !path.exists() {
-        let err_msg = format!("Volume or path is not mounted: {}", path.display());
         return Ok(ScanVolumeResult {
             success: false,
-            mount_path: resolved_path,
+            mount_path: resolved_path.clone(),
             items: Vec::new(),
             total_scanned: 0,
-            error: Some(err_msg),
+            error: Some(format!("Volume or path is not mounted: {}", path.display())),
         });
     }
 

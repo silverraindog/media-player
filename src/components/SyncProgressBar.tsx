@@ -314,28 +314,39 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
           </div>
 
           {/* Smooth Animated Progress Track with Framer Motion */}
-          <div className="relative w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800/80 shadow-inner">
+          <div className="relative w-full h-3 bg-slate-950/90 rounded-full overflow-hidden border border-slate-800/80 shadow-inner p-0.5">
             <motion.div
-              className={`h-full rounded-full relative ${
+              className={`h-full rounded-full relative overflow-hidden shadow-sm ${
                 progress.phase === 'error'
                   ? 'bg-rose-500'
                   : progress.phase === 'completed'
-                  ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                  ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-300'
+                  : progress.phase === 'scanning'
+                  ? 'bg-gradient-to-r from-blue-600 via-cyan-500 to-sky-400'
+                  : progress.phase === 'classifying'
+                  ? 'bg-gradient-to-r from-cyan-600 via-teal-500 to-emerald-400'
+                  : progress.phase === 'enriching'
+                  ? 'bg-gradient-to-r from-indigo-500 via-purple-500 to-amber-400'
                   : 'bg-gradient-to-r from-blue-500 via-indigo-500 to-amber-400'
               }`}
               initial={false}
-              animate={{ width: `${Math.max(3, percent)}%` }}
+              animate={{
+                width: `${Math.max(4, percent)}%`,
+              }}
               transition={{
-                duration: 0.6,
-                ease: [0.16, 1, 0.3, 1], // Smooth custom cubic-bezier
+                type: 'spring',
+                stiffness: 120,
+                damping: 20,
+                mass: 0.6,
+                restDelta: 0.001,
               }}
             >
               {/* Shimmer / light pulse effect on active track */}
               {progress.isActive && progress.phase !== 'completed' && (
                 <motion.div
-                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent w-full"
-                  animate={{ x: ['-100%', '100%'] }}
-                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent w-full"
+                  animate={{ x: ['-100%', '200%'] }}
+                  transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
                 />
               )}
             </motion.div>

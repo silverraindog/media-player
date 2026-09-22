@@ -39,6 +39,7 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   SlidersHorizontal,
   X,
   Image as ImageIcon,
@@ -119,6 +120,26 @@ export const FILE_TYPE_OPTIONS = [
 ];
 
 /**
+ * Custom hook for debouncing fast-changing values (e.g., search input)
+ * to throttle local database operations, background index queries, and improve UI performance.
+ */
+export function useDebounce<T>(value: T, delay = 300): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+/**
  * Extracts all file extensions associated with a media item across matchedFilename,
  * recommendedFilenames, recommendedFolderStructure, episodes, and tracks.
  */
@@ -189,7 +210,28 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   onOpenApiDebugger,
   onOpenClassifierModal,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [rawSearchInput, setRawSearchInput] = useState('');
+  // Debounce search input by 300ms to throttle API queries to local database & heavy indexer
+  const debouncedSearchQuery = useDebounce(rawSearchInput, 300);
+  const isDebouncing = rawSearchInput.trim() !== debouncedSearchQuery.trim();
+  const searchQuery = rawSearchInput;
+  const setSearchQuery = setRawSearchInput;
+
+  // Dropdown filter state for MediaType
+  const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
+  const typeDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (typeDropdownRef.current && !typeDropdownRef.current.contains(event.target as Node)) {
+        setIsTypeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [selectedFileType, setSelectedFileType] = useState<string>('all');
@@ -252,29 +294,40 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     });
   }, []);
 
-  // Trigger Smart Search when search query changes
+  // Trigger Smart Search when debounced search query changes (throttling API / SQLite lookups)
   useEffect(() => {
-    const q = searchQuery.trim();
+    const q = debouncedSearchQuery.trim();
     if (!q) {
       setSmartSuggestions([]);
       setIsSmartSearching(false);
       return;
     }
 
+    let isCancelled = false;
+    setIsSmartSearching(true);
+
     const timer = setTimeout(async () => {
-      setIsSmartSearching(true);
       try {
         const res = await globalSearchIndexer.performSmartSearch(q, selectedType);
-        setSmartSuggestions(res.suggestions);
+        if (!isCancelled) {
+          setSmartSuggestions(res.suggestions);
+        }
       } catch (err) {
-        console.warn('Smart search non-fatal error:', err);
+        if (!isCancelled) {
+          console.warn('Smart search non-fatal error:', err);
+        }
       } finally {
-        setIsSmartSearching(false);
+        if (!isCancelled) {
+          setIsSmartSearching(false);
+        }
       }
-    }, 150);
+    }, 100);
 
-    return () => clearTimeout(timer);
-  }, [searchQuery, mediaLibrary, selectedType]);
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [debouncedSearchQuery, mediaLibrary, selectedType]);
 
   useEffect(() => {
     const fetchWatchStatus = async () => {
@@ -690,9 +743,9 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         }
       }
 
-      // Search Query
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
+      // Search Query (filtered using debounced query for maximum UI smoothness)
+      if (debouncedSearchQuery.trim()) {
+        const q = debouncedSearchQuery.toLowerCase().trim();
 
         // Check if query is an explicit genre tag
         const genreTagMatch = q.match(/^genre[:=]\s*(.+)$/i);
@@ -732,7 +785,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
       return true;
     });
-  }, [mediaLibrary, selectedType, originFilter, activeCategory, selectedGenres, yearRange, searchQuery]);
+  }, [mediaLibrary, selectedType, originFilter, activeCategory, selectedGenres, yearRange, debouncedSearchQuery]);
 
   // Apply Sort to Filtered Media (prioritizing Genre Affinity when active)
   const sortedAndFilteredMedia = useMemo(() => {
@@ -1017,11 +1070,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   };
 
   const isAnyFilterActive =
+    selectedType !== 'all' ||
     activeCategory !== 'all' ||
     selectedGenres.length > 0 ||
     yearRange[0] > minLibraryYear ||
     yearRange[1] < maxLibraryYear ||
-    searchQuery.trim().length > 0 ||
+    rawSearchInput.trim().length > 0 ||
     originFilter !== 'all';
 
   return (
@@ -1402,10 +1456,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         </div>
       </div>
 
-      {/* Main Type Tabs & Search Bar */}
-      <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center justify-between">
-        {/* Type Tabs with live counts */}
-        <div className="flex bg-slate-900 p-1.5 rounded-2xl border border-slate-800 text-xs sm:text-sm overflow-x-auto shrink-0">
+      {/* Main Type Tabs, Dropdown Filter & Search Bar */}
+      <div className="flex flex-col xl:flex-row gap-4 items-stretch xl:items-center justify-between">
+        {/* Type Tabs with live counts (Desktop view) */}
+        <div className="hidden sm:flex bg-slate-900 p-1.5 rounded-2xl border border-slate-800 text-xs sm:text-sm overflow-x-auto shrink-0">
           <button
             id="search-filter-all"
             onClick={() => setSelectedType('all')}
@@ -1491,29 +1545,200 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
           </button>
         </div>
 
-        {/* Search Bar */}
-        <form onSubmit={handleSearchSubmit} className="flex-1 max-w-xl flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              id="media-search-input"
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search or enter movie/series name to web categorize..."
-              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-            />
+        {/* Action Controls & Search Input Row */}
+        <div className="flex flex-1 items-center gap-3 flex-wrap lg:flex-nowrap justify-end">
+          {/* Dropdown Filter for MediaType (Interactive dropdown with popover menu + native accessible selector) */}
+          <div ref={typeDropdownRef} className="relative shrink-0">
+            <button
+              id="dropdown-mediatype-trigger"
+              type="button"
+              onClick={() => setIsTypeDropdownOpen((prev) => !prev)}
+              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs sm:text-sm font-semibold transition cursor-pointer shadow-sm ${
+                selectedType !== 'all'
+                  ? selectedType === 'series'
+                    ? 'bg-purple-950/70 border-purple-500/50 text-purple-200 ring-1 ring-purple-500/30'
+                    : selectedType === 'movie'
+                    ? 'bg-cyan-950/70 border-cyan-500/50 text-cyan-200 ring-1 ring-cyan-500/30'
+                    : 'bg-emerald-950/70 border-emerald-500/50 text-emerald-200 ring-1 ring-emerald-500/30'
+                  : 'bg-slate-900 border-slate-800 hover:border-slate-700 text-slate-200 hover:text-white'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {selectedType === 'series' ? (
+                  <Tv className="w-4 h-4 text-purple-400" />
+                ) : selectedType === 'movie' ? (
+                  <Film className="w-4 h-4 text-cyan-400" />
+                ) : selectedType === 'album' ? (
+                  <Music className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <Filter className="w-4 h-4 text-indigo-400" />
+                )}
+                <span>
+                  {selectedType === 'series'
+                    ? 'Series'
+                    : selectedType === 'movie'
+                    ? 'Movies'
+                    : selectedType === 'album'
+                    ? 'Albums'
+                    : 'All Media Types'}
+                </span>
+                <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] font-mono text-slate-300 font-bold border border-slate-700">
+                  {selectedType === 'series'
+                    ? seriesCount
+                    : selectedType === 'movie'
+                    ? moviesCount
+                    : selectedType === 'album'
+                    ? albumsCount
+                    : allCount}
+                </span>
+              </div>
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${isTypeDropdownOpen ? 'rotate-180 text-indigo-400' : ''}`} />
+            </button>
+
+            {/* Dropdown Menu Popover */}
+            <AnimatePresence>
+              {isTypeDropdownOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 6, scale: 0.96 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 4, scale: 0.96 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 mt-2 w-64 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-xl p-1.5 shadow-2xl z-50 space-y-1"
+                >
+                  <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                    Filter Library by Type
+                  </div>
+                  <button
+                    id="dropdown-filter-all"
+                    type="button"
+                    onClick={() => {
+                      setSelectedType('all');
+                      setIsTypeDropdownOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                      selectedType === 'all'
+                        ? 'bg-indigo-600 text-white font-semibold'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Layers className="w-4 h-4 text-indigo-300" />
+                      <span>All Media Types</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-slate-200">
+                      {allCount}
+                    </span>
+                  </button>
+
+                  <button
+                    id="dropdown-filter-series"
+                    type="button"
+                    onClick={() => {
+                      setSelectedType('series');
+                      setIsTypeDropdownOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                      selectedType === 'series'
+                        ? 'bg-purple-600 text-white font-semibold'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Tv className="w-4 h-4 text-purple-300" />
+                      <span>TV Series</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-purple-200">
+                      {seriesCount}
+                    </span>
+                  </button>
+
+                  <button
+                    id="dropdown-filter-movie"
+                    type="button"
+                    onClick={() => {
+                      setSelectedType('movie');
+                      setIsTypeDropdownOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                      selectedType === 'movie'
+                        ? 'bg-cyan-600 text-white font-semibold'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Film className="w-4 h-4 text-cyan-300" />
+                      <span>Movies</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-cyan-200">
+                      {moviesCount}
+                    </span>
+                  </button>
+
+                  <button
+                    id="dropdown-filter-album"
+                    type="button"
+                    onClick={() => {
+                      setSelectedType('album');
+                      setIsTypeDropdownOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                      selectedType === 'album'
+                        ? 'bg-emerald-600 text-white font-semibold'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Music className="w-4 h-4 text-emerald-300" />
+                      <span>Music Albums</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-emerald-200">
+                      {albumsCount}
+                    </span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-          <button
-            id="media-search-submit-btn"
-            type="submit"
-            disabled={isLoading}
-            className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-2 transition shadow-md shadow-indigo-600/20 disabled:opacity-50 cursor-pointer"
-          >
-            <Globe className="w-4 h-4 text-indigo-200" />
-            <span>Search</span>
-          </button>
-        </form>
+
+          {/* Search Bar with Debounce indicator & Clear Action */}
+          <form onSubmit={handleSearchSubmit} className="flex-1 max-w-xl flex gap-2 w-full">
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                id="media-search-input"
+                type="text"
+                value={rawSearchInput}
+                onChange={(e) => setRawSearchInput(e.target.value)}
+                placeholder="Search or enter movie/series name to web categorize..."
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                {isDebouncing && (
+                  <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" title="Debouncing search..." />
+                )}
+                {rawSearchInput && (
+                  <button
+                    type="button"
+                    onClick={() => setRawSearchInput('')}
+                    className="p-1 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+                    title="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+            <button
+              id="media-search-submit-btn"
+              type="submit"
+              disabled={isLoading}
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-2 transition shadow-md shadow-indigo-600/20 disabled:opacity-50 cursor-pointer shrink-0"
+            >
+              <Globe className="w-4 h-4 text-indigo-200" />
+              <span>Search</span>
+            </button>
+          </form>
+        </div>
       </div>
 
       {/* 2-COLUMN LAYOUT: Filter Sidebar (Multi-Select Genres + Date Slider) + Main Content Grid */}
@@ -1536,6 +1761,41 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                 Reset All
               </button>
             )}
+          </div>
+
+          {/* MEDIA TYPE DROPDOWN FILTER IN SIDEBAR */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <label htmlFor="sidebar-mediatype-select" className="font-bold text-slate-200 flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Media Type Filter</span>
+              </label>
+              {selectedType !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedType('all')}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300 underline font-medium cursor-pointer"
+                >
+                  Show All
+                </button>
+              )}
+            </div>
+            <div className="relative">
+              <select
+                id="sidebar-mediatype-select"
+                value={selectedType}
+                onChange={(e) => setSelectedType(e.target.value as 'all' | MediaType)}
+                className="w-full appearance-none bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3.5 py-2.5 pr-9 text-xs text-white font-medium cursor-pointer transition shadow-inner"
+              >
+                <option value="all">🌟 All Media Types ({allCount})</option>
+                <option value="movie">🎬 Movies ({moviesCount})</option>
+                <option value="series">📺 TV Series ({seriesCount})</option>
+                <option value="album">🎵 Music Albums ({albumsCount})</option>
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
+                <ChevronDown className="w-3.5 h-3.5" />
+              </div>
+            </div>
           </div>
 
           {/* DATE-RANGE SLIDER SECTION */}
@@ -1805,6 +2065,24 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             <div className="bg-slate-900/60 border border-slate-800/60 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-slate-400 text-[11px] font-medium">Active Filters:</span>
+                {selectedType !== 'all' && (
+                  <span className={`px-2 py-0.5 rounded-md border text-[11px] flex items-center gap-1 ${
+                    selectedType === 'series'
+                      ? 'bg-purple-950 border-purple-700/60 text-purple-300'
+                      : selectedType === 'movie'
+                      ? 'bg-cyan-950 border-cyan-700/60 text-cyan-300'
+                      : 'bg-emerald-950 border-emerald-700/60 text-emerald-300'
+                  }`}>
+                    <span>Type: {selectedType === 'series' ? 'TV Series' : selectedType === 'movie' ? 'Movies' : 'Music Albums'}</span>
+                    <button
+                      onClick={() => setSelectedType('all')}
+                      className="hover:text-white ml-0.5 cursor-pointer"
+                      title="Clear type filter"
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
                 {activeCategory !== 'all' && (
                   <span className="px-2 py-0.5 rounded-md bg-indigo-950 border border-indigo-700/60 text-indigo-300 text-[11px] flex items-center gap-1">
                     <span>Category: {MOVIE_SERIES_CATEGORIES.find((c) => c.id === activeCategory)?.name}</span>

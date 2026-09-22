@@ -45,10 +45,32 @@ export async function categorizeMediaWithRetry(
     ...options,
   };
 
-  const cleanTitle = (rawTitle || '').replace(/\s*\(\d{4}\).*$/, '').trim();
-  if (!cleanTitle) {
-    console.warn('[Categorizer] Aborting categorize request: empty or invalid title provided.');
+  // 1. Validation Check: Ensure 'name' is correctly populated as a non-empty string
+  const cleanTitle = (typeof rawTitle === 'string' ? rawTitle : String(rawTitle || ''))
+    .replace(/\s*\(\d{4}\).*$/, '')
+    .trim();
+
+  if (!cleanTitle || cleanTitle.length === 0) {
+    console.warn('[Categorizer] ❌ Pre-flight validation failed: \'name\'/title field is empty or missing. Request aborted.');
     return null;
+  }
+
+  // 2. Validation Check: Ensure 'type' is correctly populated with an accepted media category
+  const validTypes: Array<MediaType | 'all'> = ['movie', 'series', 'album', 'all'];
+  let sanitizedType: MediaType | 'all' = 'all';
+  const rawTypeLower = String(type || '').toLowerCase();
+  if (rawTypeLower === 'movie' || rawTypeLower === 'series' || rawTypeLower === 'album') {
+    sanitizedType = rawTypeLower as MediaType;
+  } else if (rawTypeLower === 'music' || rawTypeLower === 'audio' || rawTypeLower === 'track') {
+    sanitizedType = 'album';
+  } else if (rawTypeLower === 'show' || rawTypeLower === 'tv' || rawTypeLower === 'anime') {
+    sanitizedType = 'series';
+  } else {
+    sanitizedType = 'all';
+  }
+
+  if (type && type !== 'all' && !validTypes.includes(type as any)) {
+    console.warn(`[Categorizer] ⚠️ Pre-flight validation warning: 'type' "${type}" normalized to "${sanitizedType}".`);
   }
 
   // Ensure robust payload adhering strictly to what /api/metadata/categorize expects
@@ -56,9 +78,11 @@ export async function categorizeMediaWithRetry(
     name: cleanTitle,
     title: cleanTitle,
     query: cleanTitle,
-    type: type !== 'all' ? type : undefined,
-    year: year ? Number(year) : undefined,
+    type: sanitizedType !== 'all' ? sanitizedType : undefined,
+    year: year && !isNaN(Number(year)) ? Number(year) : undefined,
   };
+
+  console.log(`[Categorizer] 📋 Pre-flight validation passed for "${cleanTitle}". Payload:`, payload);
 
   const startTime = Date.now();
   let lastError: any = null;

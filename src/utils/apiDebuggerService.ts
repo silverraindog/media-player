@@ -6,6 +6,7 @@
  * Accurately diagnoses 404 Not Found, 301/302 Redirects, HTML SPA Fallbacks (e.g. in Tauri),
  * and 500 Server Errors.
  */
+import { localDbFallback } from './localDatabaseFallback';
 
 export type ApiRequestCategory =
   | 'metadata-primary'    // OMDb API
@@ -99,13 +100,12 @@ class ApiDebuggerStore {
           url = (input as Request).url;
         }
 
-        const isTauri = typeof window !== 'undefined' && (
-          '__TAURI_IPC__' in window ||
+        const isTauriProtocol = typeof window !== 'undefined' && (
           (((window as any).location?.origin || '').includes('tauri://')) ||
-          (((window as any).location?.origin || '').includes('localhost:1420'))
+          (((window as any).location?.origin || '').includes('tauri.localhost'))
         );
 
-        if (isTauri) {
+        if (isTauriProtocol) {
           let urlForRewrite = '';
           if (typeof input === 'string') {
             urlForRewrite = input;
@@ -198,6 +198,43 @@ class ApiDebuggerStore {
           durationMs = Math.round(performance.now() - startTime);
         } catch (err: any) {
           durationMs = Math.round(performance.now() - startTime);
+
+          // If it's an internal DB endpoint (e.g. /api/db/history, /api/db/watchlist), fulfill from offline local storage fallback
+          if (url.includes('/api/db/')) {
+            const fallbackResponse = localDbFallback.handleDbRequestFallback(
+              url,
+              method,
+              parsedRequestBody
+            );
+            if (fallbackResponse) {
+              const fallbackLog: ApiLogEntry = {
+                id,
+                timestamp,
+                startTime,
+                durationMs,
+                method,
+                url,
+                targetDomain: self.extractDomain(url),
+                category,
+                requestHeaders,
+                requestBody: parsedRequestBody,
+                rawRequestBody,
+                status: 200,
+                statusText: '200 OK (Offline Local Storage Fallback)',
+                redirected: false,
+                responseHeaders: { 'content-type': 'application/json' },
+                responseBody: { fallback: true, source: 'local_storage' },
+                rawResponseBody: '{"source":"local_storage_cache"}',
+                responseType: 'json',
+                isFailed: false,
+                isMetadataRequest,
+                queryTarget,
+                diagnosticNote: `Backend connection unavailable or port refused on ${url}; seamlessly served from local offline cache.`,
+              };
+              self.addLog(fallbackLog);
+              return fallbackResponse;
+            }
+          }
 
           // Network failure log
           const logEntry: ApiLogEntry = {
@@ -398,6 +435,12 @@ class ApiDebuggerStore {
         errorType = 'api_rejected';
         errorMessage = String(parsedResponseBody.error);
         diagnosticNote = `API endpoint returned an error: "${parsedResponseBody.error}"`;
+      } else if (status === 200 && parsedResponseBody.success) {
+        if (url.includes('/api/db/history') && Array.isArray(parsedResponseBody.history)) {
+          localDbFallback.syncWatchHistoryFromApi(parsedResponseBody.history);
+        } else if (url.includes('/api/db/watchlist') && Array.isArray(parsedResponseBody.watchlist)) {
+          localDbFallback.syncWatchlistFromApi(parsedResponseBody.watchlist);
+        }
       }
     }
 

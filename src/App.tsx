@@ -64,44 +64,196 @@ import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
 import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl } from './utils/pathSanitizer';
 import { categorizeMediaWithRetry } from './utils/metadataCategorizer';
+import { localDbFallback } from './utils/localDatabaseFallback';
+
+const isTauriProtocol = typeof window !== 'undefined' && (
+  (((window as any).location?.origin || '').includes('tauri://')) ||
+  (((window as any).location?.origin || '').includes('tauri.localhost'))
+);
 
 const isTauri = typeof window !== 'undefined' && (
   '__TAURI_IPC__' in window ||
-  (((window as any).location?.origin || '').includes('tauri://')) ||
+  isTauriProtocol ||
   (((window as any).location?.origin || '').includes('localhost:1420'))
 );
 
 const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   let modifiedInput = input;
-  if (isTauri) {
-    let urlStr = '';
+  let urlStr = '';
+  if (typeof input === 'string') {
+    urlStr = input;
+  } else if (input instanceof URL) {
+    urlStr = input.pathname + input.search;
+  } else if (input && typeof (input as any).url === 'string') {
+    urlStr = (input as any).url;
+  }
+
+  // Only rewrite to 127.0.0.1:3000 if running inside the native Tauri asset scheme (tauri://)
+  if (isTauriProtocol && urlStr.startsWith('/api/')) {
+    const rewrittenUrl = `http://127.0.0.1:3000${urlStr}`;
     if (typeof input === 'string') {
-      urlStr = input;
+      modifiedInput = rewrittenUrl;
     } else if (input instanceof URL) {
-      urlStr = input.pathname + input.search;
-    } else if (input && typeof (input as any).url === 'string') {
-      urlStr = (input as any).url;
-    }
-    
-    if (urlStr.startsWith('/api/')) {
-      const rewrittenUrl = `http://127.0.0.1:3000${urlStr}`;
-      if (typeof input === 'string') {
+      modifiedInput = new URL(rewrittenUrl);
+    } else if (input) {
+      try {
+        modifiedInput = new Request(rewrittenUrl, input as Request);
+      } catch {
         modifiedInput = rewrittenUrl;
-      } else if (input instanceof URL) {
-        modifiedInput = new URL(rewrittenUrl);
-      } else if (input) {
-        try {
-          modifiedInput = new Request(rewrittenUrl, input as Request);
-        } catch {
-          modifiedInput = rewrittenUrl;
-        }
       }
     }
   }
-  return window.fetch(modifiedInput, init);
+
+  try {
+    const res = await window.fetch(modifiedInput, init);
+    // Cache watch history & watchlist on successful response
+    if (res.ok && urlStr.includes('/api/db/history')) {
+      try {
+        const clone = res.clone();
+        clone.json().then((data) => {
+          if (data && data.success && Array.isArray(data.history)) {
+            localDbFallback.syncWatchHistoryFromApi(data.history);
+          }
+        }).catch(() => {});
+      } catch {}
+    } else if (res.ok && urlStr.includes('/api/db/watchlist')) {
+      try {
+        const clone = res.clone();
+        clone.json().then((data) => {
+          if (data && data.success && Array.isArray(data.watchlist)) {
+            localDbFallback.syncWatchlistFromApi(data.watchlist);
+          }
+        }).catch(() => {});
+      } catch {}
+    }
+    return res;
+  } catch (err: any) {
+    // If a database endpoint fails due to connection refused or offline mode, serve from local storage cache
+    if (urlStr.includes('/api/db/')) {
+      let bodyObj: any = null;
+      if (init?.body && typeof init.body === 'string') {
+        try {
+          bodyObj = JSON.parse(init.body);
+        } catch {}
+      }
+      const fallback = localDbFallback.handleDbRequestFallback(
+        urlStr,
+        (init?.method || 'GET').toUpperCase(),
+        bodyObj
+      );
+      if (fallback) {
+        return fallback;
+      }
+    }
+    throw err;
+  }
 };
 
 const fetch = customFetch;
+
+/**
+ * Investigates and executes metadata categorization requests with pre-flight payload validation
+ * ('name' and 'type' checks) and comprehensive try-catch error logging to identify and mitigate intermittent 500 errors.
+ */
+export async function handleCategorizeMediaRequest(
+  name: string,
+  type: MediaType | 'all' = 'all',
+  year?: number
+): Promise<MediaMetadata | null> {
+  const startTime = Date.now();
+  console.log(`[App:Categorizer] 🔍 Starting categorization request for "${name}" (type: ${type}, year: ${year || 'N/A'})`);
+
+  // 1. Validation Check: Ensure 'name' is non-empty string
+  const cleanName = (typeof name === 'string' ? name : String(name || '')).replace(/\s*\(\d{4}\).*$/, '').trim();
+  if (!cleanName || cleanName.length === 0) {
+    console.warn(`[App:Categorizer] ❌ Pre-flight validation failed: 'name' is empty or invalid ("${name}"). Aborting request to prevent 400/500 errors.`);
+    return null;
+  }
+
+  // 2. Validation Check: Ensure 'type' is correctly populated
+  const validTypes: Array<MediaType | 'all'> = ['movie', 'series', 'album', 'all'];
+  let sanitizedType: MediaType | 'all' = 'all';
+  const rawTypeLower = String(type || '').toLowerCase();
+  if (rawTypeLower === 'movie' || rawTypeLower === 'series' || rawTypeLower === 'album') {
+    sanitizedType = rawTypeLower as MediaType;
+  } else if (rawTypeLower === 'music' || rawTypeLower === 'audio' || rawTypeLower === 'track') {
+    sanitizedType = 'album';
+  } else if (rawTypeLower === 'show' || rawTypeLower === 'tv' || rawTypeLower === 'anime') {
+    sanitizedType = 'series';
+  } else {
+    sanitizedType = 'all';
+  }
+
+  if (type && type !== 'all' && !validTypes.includes(type as any)) {
+    console.warn(`[App:Categorizer] ⚠️ Pre-flight validation notice: 'type' "${type}" mapped to "${sanitizedType}".`);
+  }
+
+  const payload = {
+    name: cleanName,
+    title: cleanName,
+    type: sanitizedType !== 'all' ? sanitizedType : undefined,
+    year: year && !isNaN(Number(year)) ? Number(year) : undefined,
+    query: cleanName,
+  };
+
+  console.log(`[App:Categorizer] 📋 Pre-flight validation passed. Dispatching payload:`, payload);
+
+  try {
+    const response = await fetch('/api/metadata/categorize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const durationMs = Date.now() - startTime;
+    console.log(`[App:Categorizer] 📡 HTTP ${response.status} ${response.statusText} received in ${durationMs}ms`);
+
+    if (!response.ok) {
+      let errorBody = '';
+      try {
+        const errorJson = await response.json();
+        errorBody = errorJson.error || errorJson.details || JSON.stringify(errorJson);
+      } catch {
+        errorBody = await response.text();
+      }
+
+      console.error(
+        `[App:Categorizer] ❌ Server returned HTTP ${response.status} on /api/metadata/categorize for "${cleanName}". Diagnostic logs:`,
+        {
+          status: response.status,
+          statusText: response.statusText,
+          durationMs,
+          payload,
+          errorBody,
+          endpoint: '/api/metadata/categorize',
+        }
+      );
+
+      // Fallback to client retry mechanism
+      return await categorizeMediaWithRetry(cleanName, sanitizedType, payload.year, { maxRetries: 2 });
+    }
+
+    const data = await response.json();
+    if (data && data.success && data.data) {
+      console.log(`[App:Categorizer] ✅ Successfully categorized "${cleanName}" in ${durationMs}ms (source: ${data.source || 'web'}):`, data.data);
+      return data.data;
+    } else {
+      console.warn(`[App:Categorizer] ⚠️ Unexpected response structure from /api/metadata/categorize:`, data);
+      return data?.data || null;
+    }
+  } catch (networkError: any) {
+    const durationMs = Date.now() - startTime;
+    console.error(`[App:Categorizer] 💥 Exception caught during /api/metadata/categorize for "${cleanName}" (${durationMs}ms):`, {
+      message: networkError?.message || String(networkError),
+      stack: networkError?.stack,
+      payload,
+    });
+    return await categorizeMediaWithRetry(cleanName, sanitizedType, payload.year, { maxRetries: 2 });
+  }
+}
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   server: '',
@@ -1985,10 +2137,19 @@ export default function App() {
         );
       };
 
-      discoveredRelativePaths.forEach((rawPath, idx) => {
-        const parts = rawPath.split('/').filter(Boolean);
-        getOrCreateNodeInTree(newTree, parts, 0, '', rawPath, syncedResults[idx]);
-      });
+      // Process discovered files in optimized batches of 30 to keep UI responsive during tree building
+      const TREE_BATCH_SIZE = 30;
+      for (let i = 0; i < discoveredRelativePaths.length; i += TREE_BATCH_SIZE) {
+        const batchSlice = discoveredRelativePaths.slice(i, i + TREE_BATCH_SIZE);
+        batchSlice.forEach((rawPath, batchOffset) => {
+          const globalIdx = i + batchOffset;
+          const parts = rawPath.split('/').filter(Boolean);
+          getOrCreateNodeInTree(newTree, parts, 0, '', rawPath, syncedResults[globalIdx]);
+        });
+        if (i + TREE_BATCH_SIZE < discoveredRelativePaths.length) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      }
 
       setSambaTree(newTree);
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -2032,7 +2193,7 @@ export default function App() {
         return enrichedItems;
       });
 
-      // 5. Samba artwork disk verification & fallback creation using Fast Batch-Verify API with Retries
+      // 5. Samba artwork disk verification & fallback creation in optimized batches of 30
       setSyncProgress((prev) => ({
         ...prev,
         phase: 'verifying',
@@ -2056,37 +2217,58 @@ export default function App() {
         findMediaFolders(newTree);
 
         if (mediaFolders.length > 0) {
-          // Perform batch verification in a single network request with retry
-          const folderPaths = mediaFolders.map((f) => f.path);
-          const batchData = await retryWithExponentialBackoff(
-            async () => {
-              const res = await fetch('/api/samba/batch-verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ folderPaths, filenames: ['poster.jpg', 'fanart.jpg', 'folder.jpg'] }),
-              });
-              if (!res.ok) throw new Error(`batch-verify returned ${res.status}`);
-              return await res.json();
-            },
-            {
-              maxRetries: 3,
-              initialDelayMs: 400,
-              onRetry: (attempt, maxRetries, delayMs) => {
-                setSyncProgress((prev) => ({
-                  ...prev,
-                  retryCount: attempt,
-                  maxRetries,
-                  retryDelayRemaining: delayMs,
-                  phaseDescription: `Artwork verification: Retrying batch check (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
-                }));
-              },
-            }
-          ).catch((e) => {
-            console.warn('Batch verify fallback note:', e);
-            return { success: false, results: {} };
-          });
+          // Perform batch verification in optimized chunks of 30
+          const ARTWORK_BATCH_SIZE = 30;
+          const batchResults: Record<string, any> = {};
 
-          const batchResults: Record<string, any> = batchData.success && batchData.results ? batchData.results : {};
+          for (let af = 0; af < mediaFolders.length; af += ARTWORK_BATCH_SIZE) {
+            const folderChunk = mediaFolders.slice(af, af + ARTWORK_BATCH_SIZE);
+            const folderPaths = folderChunk.map((f) => f.path);
+            const currentBatchIdx = Math.floor(af / ARTWORK_BATCH_SIZE) + 1;
+            const totalArtworkBatches = Math.ceil(mediaFolders.length / ARTWORK_BATCH_SIZE);
+
+            setSyncProgress((prev) => ({
+              ...prev,
+              phase: 'verifying',
+              currentStep: 88 + Math.round(((af + folderChunk.length) / mediaFolders.length) * 6),
+              batchIndex: currentBatchIdx,
+              totalBatches: totalArtworkBatches,
+              phaseDescription: `Verifying artwork on Samba filesystem (batch ${currentBatchIdx}/${totalArtworkBatches})...`,
+            }));
+
+            const chunkData = await retryWithExponentialBackoff(
+              async () => {
+                const res = await fetch('/api/samba/batch-verify', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ folderPaths, filenames: ['poster.jpg', 'fanart.jpg', 'folder.jpg'] }),
+                });
+                if (!res.ok) throw new Error(`batch-verify returned ${res.status}`);
+                return await res.json();
+              },
+              {
+                maxRetries: 3,
+                initialDelayMs: 400,
+                onRetry: (attempt, maxRetries, delayMs) => {
+                  setSyncProgress((prev) => ({
+                    ...prev,
+                    retryCount: attempt,
+                    maxRetries,
+                    retryDelayRemaining: delayMs,
+                    phaseDescription: `Artwork verification: Retrying batch check ${currentBatchIdx}/${totalArtworkBatches} (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
+                  }));
+                },
+              }
+            ).catch((e) => {
+              console.warn('Batch verify fallback note:', e);
+              return { success: false, results: {} };
+            });
+
+            if (chunkData.success && chunkData.results) {
+              Object.assign(batchResults, chunkData.results);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
 
           // Handle folders that need artwork written
           for (const folder of mediaFolders) {

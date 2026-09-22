@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   FolderSearch,
@@ -12,6 +12,8 @@ import {
   RefreshCw,
   X,
   Check,
+  Clock,
+  Timer,
 } from 'lucide-react';
 
 export interface SyncProgressState {
@@ -29,6 +31,8 @@ export interface SyncProgressState {
   maxRetries?: number;
   retryDelayRemaining?: number;
   phaseDescription?: string;
+  etaSeconds?: number | null;
+  averageBatchTimeMs?: number;
 }
 
 interface SyncProgressBarProps {
@@ -115,6 +119,76 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
   onDismiss,
   className = '',
 }) => {
+  // Store timing history for previous batches to calculate accurate ETA
+  const lastBatchRef = useRef<{ index: number; time: number } | null>(null);
+  const batchDurationsRef = useRef<number[]>([]);
+  const [internalEtaSeconds, setInternalEtaSeconds] = useState<number | null>(null);
+  const [avgBatchDurationMs, setAvgBatchDurationMs] = useState<number | null>(null);
+
+  // Monitor batch progress and calculate rolling average time per batch
+  useEffect(() => {
+    if (!progress.isActive || progress.phase === 'completed' || progress.phase === 'idle') {
+      lastBatchRef.current = null;
+      batchDurationsRef.current = [];
+      setInternalEtaSeconds(null);
+      setAvgBatchDurationMs(null);
+      return;
+    }
+
+    const now = Date.now();
+    const currentBatch = progress.batchIndex;
+
+    if (typeof currentBatch === 'number' && currentBatch > 0) {
+      if (lastBatchRef.current !== null && currentBatch > lastBatchRef.current.index) {
+        const deltaMs = now - lastBatchRef.current.time;
+        // Verify valid duration range between batches (25ms to 90s)
+        if (deltaMs >= 25 && deltaMs <= 90000) {
+          batchDurationsRef.current.push(deltaMs);
+          // Keep a rolling window of the last 10 batches for responsive dynamic ETA
+          if (batchDurationsRef.current.length > 10) {
+            batchDurationsRef.current.shift();
+          }
+
+          const avg =
+            batchDurationsRef.current.reduce((sum, d) => sum + d, 0) /
+            batchDurationsRef.current.length;
+          setAvgBatchDurationMs(Math.round(avg));
+
+          const totalBatches = progress.totalBatches || 0;
+          if (totalBatches > currentBatch) {
+            const remainingBatches = totalBatches - currentBatch;
+            const calculatedEta = Math.max(1, Math.round((remainingBatches * avg) / 1000));
+            setInternalEtaSeconds(calculatedEta);
+          } else {
+            setInternalEtaSeconds(0);
+          }
+        }
+      }
+      lastBatchRef.current = { index: currentBatch, time: now };
+    }
+  }, [progress.batchIndex, progress.totalBatches, progress.isActive, progress.phase]);
+
+  // Use explicit ETA from progress if provided, otherwise fallback to component's calculated ETA
+  const effectiveEta =
+    typeof progress.etaSeconds === 'number'
+      ? progress.etaSeconds
+      : internalEtaSeconds;
+
+  const effectiveAvgMs = progress.averageBatchTimeMs || avgBatchDurationMs;
+
+  const formatEta = (seconds: number): string => {
+    if (seconds <= 0) return '< 5s';
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const remainingSecs = seconds % 60;
+    if (mins < 60) {
+      return remainingSecs > 0 ? `${mins}m ${remainingSecs}s` : `${mins}m`;
+    }
+    const hours = Math.floor(mins / 60);
+    const remainingMins = mins % 60;
+    return `${hours}h ${remainingMins}m`;
+  };
+
   if (!progress.isActive && progress.phase === 'idle') {
     return null;
   }
@@ -206,6 +280,28 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                     </motion.span>
                   )}
 
+                  {/* Dynamic ETA badge based on average batch processing time */}
+                  {effectiveEta !== null && effectiveEta > 0 && progress.phase !== 'completed' && progress.phase !== 'idle' && (
+                    <motion.span
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="px-2 py-0.5 rounded-full bg-cyan-950/90 border border-cyan-500/60 text-cyan-300 text-[10px] font-mono flex items-center gap-1.5 shadow-sm"
+                      title={
+                        effectiveAvgMs
+                          ? `Estimated time remaining based on ~${(effectiveAvgMs / 1000).toFixed(1)}s/batch average`
+                          : 'Estimated time remaining based on previous batches'
+                      }
+                    >
+                      <Clock className="w-2.5 h-2.5 text-cyan-400 animate-pulse" />
+                      <span>ETA: ~{formatEta(effectiveEta)}</span>
+                      {effectiveAvgMs && (
+                        <span className="text-cyan-500/80 text-[9px] hidden lg:inline">
+                          ({(effectiveAvgMs / 1000).toFixed(1)}s/batch)
+                        </span>
+                      )}
+                    </motion.span>
+                  )}
+
                   {/* Exponential backoff retry banner badge */}
                   {progress.retryCount && progress.retryCount > 0 ? (
                     <motion.span
@@ -251,13 +347,18 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                     {percent}%
                   </motion.span>
                 </div>
-                <div className="text-[11px] text-slate-400 font-mono">
+                <div className="text-[11px] text-slate-400 font-mono flex items-center justify-end gap-1.5">
                   {progress.totalCount > 0 ? (
                     <span>
                       {progress.processedCount} / {progress.totalCount} files
                     </span>
                   ) : (
                     <span>Deep traversing...</span>
+                  )}
+                  {effectiveEta !== null && effectiveEta > 0 && progress.phase !== 'completed' && progress.phase !== 'idle' && (
+                    <span className="text-cyan-400 text-[10px] font-mono hidden sm:inline">
+                      (~{formatEta(effectiveEta)} left)
+                    </span>
                   )}
                 </div>
               </div>

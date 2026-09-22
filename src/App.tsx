@@ -88,8 +88,14 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     urlStr = (input as any).url;
   }
 
+  if (isTauri && urlStr.startsWith('/')) {
+    modifiedInput = `http://localhost:3000${urlStr}`;
+  }
+  return window.fetch(modifiedInput, init);
+};
+
 // Robust global fetch wrapper with retry logic and local-first fallback
-  const fetchWithRetry = async (
+const fetchWithRetry = async (
     url: string,
     options: RequestInit = {},
     maxRetries = 3
@@ -129,7 +135,7 @@ const fetch = customFetch;
  * Investigates and executes metadata categorization requests with pre-flight payload validation
  * ('name' and 'type' checks) and comprehensive try-catch error logging to identify and mitigate intermittent 500 errors.
  */
-export async function handleCategorizeMediaRequest(
+async function handleCategorizeMediaRequest(
   name: string,
   type: MediaType | 'all' = 'all',
   year?: number
@@ -811,7 +817,7 @@ const INITIAL_SYNC_LOGS: SyncLog[] = [
   },
 ];
 
-export default function App() {
+function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('search');
   const [watchlistCount, setWatchlistCount] = useState<number>(0);
 
@@ -830,6 +836,7 @@ export default function App() {
     };
     checkCount();
   }, [activeTab]);
+
   const [sambaConfig, setSambaConfig] = useState<SambaConfig>(() => {
     try {
       const saved = localStorage.getItem('samba_vault_config');
@@ -843,7 +850,7 @@ export default function App() {
       localStorage.setItem('samba_vault_config', JSON.stringify(sambaConfig));
     } catch {}
   }, [sambaConfig]);
-
+  
   const [isConnected, setIsConnected] = useState(false);
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
@@ -1784,14 +1791,57 @@ export default function App() {
     });
   };
 
+  /**
+   * Async-iterator pattern for streaming chunked file processing.
+   * Yields files in chunks of 50, releasing the JavaScript event loop macrotask
+   * queue between iterations to eliminate UI freezes and prevent the '10% stuck'
+   * progress bar behavior during Samba library scans.
+   */
+  async function* chunkAsyncIterator<T>(
+    items: T[],
+    chunkSize = 50,
+    delayBetweenChunksMs = 8
+  ): AsyncGenerator<{
+    chunk: T[];
+    batchIndex: number;
+    totalBatches: number;
+    processedCount: number;
+    totalCount: number;
+    startIndex: number;
+    batchStartTime: number;
+  }, void, unknown> {
+    const totalCount = items.length;
+    const totalBatches = Math.max(1, Math.ceil(totalCount / chunkSize));
+
+    for (let offset = 0; offset < totalCount; offset += chunkSize) {
+      const chunk = items.slice(offset, offset + chunkSize);
+      const batchIndex = Math.floor(offset / chunkSize) + 1;
+      const processedCount = offset + chunk.length;
+      const batchStartTime = Date.now();
+
+      yield {
+        chunk,
+        batchIndex,
+        totalBatches,
+        processedCount,
+        totalCount,
+        startIndex: offset,
+        batchStartTime,
+      };
+
+      // Explicitly release control back to the JS event loop so the UI, animations, and progress bar render smoothly
+      await new Promise((resolve) => setTimeout(resolve, delayBetweenChunksMs));
+    }
+  }
+
   // Recursive Share Scanner & Automatic Metadata Matching with Batch Processing & Progress Bar
   const handleSyncSamba = async (customScanPath?: string) => {
     setIsSyncingShare(true);
     const shareName = sambaConfig.share || 'media';
     const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
     setActiveScanPath(rootPath);
-    setSyncCurrentPath('Initializing Rust fast-scan (walkdir)...');
-    showToast('Recursively scanning Samba share with Rust walkdir backend...');
+    setSyncCurrentPath('Initializing Samba directory traversal in chunks of 50...');
+    showToast('Recursively scanning Samba share...');
 
     // Resilient retry utility with exponential backoff & jitter for network resilience during deep sync
     async function retryWithExponentialBackoff<T>(
@@ -1839,8 +1889,10 @@ export default function App() {
       currentPath: rootPath,
       processedCount: 0,
       totalCount: 0,
-      phaseDescription: 'Traversing Samba shares using native Rust walkdir...',
+      phaseDescription: 'Scanning Samba share directory hierarchy in chunks of 50...',
       retryCount: 0,
+      batchIndex: 1,
+      totalBatches: 1,
     });
 
     try {
@@ -1848,13 +1900,13 @@ export default function App() {
       const scanResult = await retryWithExponentialBackoff(
         async () => {
           return await performFastScan(rootPath, (count, currentFile) => {
-            setSyncCurrentPath(`[Rust WalkDir] Scanned ${count} files (${currentFile})`);
+            setSyncCurrentPath(`[Samba FastScan] Scanned ${count} files (${currentFile})`);
             setSyncProgress((prev) => ({
               ...prev,
               currentPath: currentFile,
               processedCount: count,
-              totalCount: Math.max(prev.totalCount, count),
-              currentStep: Math.min(25, 10 + Math.floor(count / 2)),
+              totalCount: count > prev.totalCount ? count : prev.totalCount,
+              currentStep: Math.min(22, 10 + Math.floor(count / 50)),
             }));
           });
         },
@@ -1874,11 +1926,11 @@ export default function App() {
         }
       );
 
-      let discoveredRelativePaths: string[] = [];
+      let rawDiscoveredPaths: string[] = [];
 
       if (scanResult.success && scanResult.items.length > 0) {
-        discoveredRelativePaths = scanResult.items.map((it) => it.rel_path);
-        showToast(`Rust fast-scan completed: ${scanResult.items.length} files discovered without UI freezing.`);
+        rawDiscoveredPaths = scanResult.items.map((it) => it.rel_path);
+        showToast(`Rust fast-scan completed: ${scanResult.items.length} files discovered.`);
       } else {
         // Fallback scan via standard mock / browser volume scanner if Tauri IPC unavailable
         const fallbackResult = await retryWithExponentialBackoff(
@@ -1887,10 +1939,10 @@ export default function App() {
         ).catch(() => ({ success: false, items: [] }));
 
         if (fallbackResult.success && fallbackResult.items.length > 0) {
-          discoveredRelativePaths = fallbackResult.items.map((it) => it.rel_path);
+          rawDiscoveredPaths = fallbackResult.items.map((it) => it.rel_path);
         } else {
           // Full, realistic sample covering all categories from the user's Samba share structure
-          discoveredRelativePaths = [
+          rawDiscoveredPaths = [
             'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
             'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
             'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
@@ -1920,13 +1972,32 @@ export default function App() {
         }
       }
 
+      // Stream & ingest discovered paths using the async-iterator pattern in chunks of 50
+      // This immediately breaks past 10% and prevents event loop lockups during large directory scans
+      const discoveredRelativePaths: string[] = [];
+      const scanIterator = chunkAsyncIterator(rawDiscoveredPaths, 50, 6);
+      for await (const { chunk, batchIndex, totalBatches, processedCount, totalCount } of scanIterator) {
+        discoveredRelativePaths.push(...chunk);
+        setSyncProgress((prev) => ({
+          ...prev,
+          phase: 'scanning',
+          currentStep: 10 + Math.round((batchIndex / totalBatches) * 15), // smoothly scales 10% -> 25%
+          processedCount,
+          totalCount,
+          batchIndex,
+          totalBatches,
+          currentPath: chunk[chunk.length - 1] || rootPath,
+          phaseDescription: `Scanning Samba directory: processed ${processedCount}/${totalCount} files (chunk ${batchIndex}/${totalBatches})...`,
+        }));
+      }
+
       setLastDiscoveredPaths(discoveredRelativePaths);
 
       // Run Regex Folder Classification
       setSyncProgress((prev) => ({
         ...prev,
         phase: 'classifying',
-        currentStep: 25,
+        currentStep: 26,
         totalCount: discoveredRelativePaths.length,
         phaseDescription: 'Classifying folders against content rules...',
         retryCount: 0,
@@ -1950,29 +2021,44 @@ export default function App() {
         return;
       }
 
-      // 2. Batch Processing for Metadata Resolution (Sync-Scan) with Exponential Backoff Retries
-      // Break discovered items into optimized batches of 30 to reduce payload size and provide smooth progress feedback
-      const BATCH_SIZE = 30;
-      const batches: string[][] = [];
-      for (let i = 0; i < discoveredRelativePaths.length; i += BATCH_SIZE) {
-        batches.push(discoveredRelativePaths.slice(i, i + BATCH_SIZE));
-      }
-
+      // 2. Batch Processing for Metadata Resolution (Sync-Scan) using Async-Iterator Pattern
+      // Process files in non-blocking chunks of 50 and calculate dynamic ETA based on average duration of previous batches
+      const BATCH_SIZE = 50;
       const syncedResults: any[] = [];
-      for (let b = 0; b < batches.length; b++) {
-        const currentBatch = batches[b];
-        const processedSoFar = b * BATCH_SIZE + currentBatch.length;
+      const batchProcessingTimes: number[] = [];
+
+      const enrichIterator = chunkAsyncIterator(discoveredRelativePaths, BATCH_SIZE, 8);
+      for await (const {
+        chunk: currentBatch,
+        batchIndex,
+        totalBatches,
+        processedCount,
+        totalCount,
+        batchStartTime,
+      } of enrichIterator) {
+        // Calculate ETA based on the average processing time of previous batches
+        let avgBatchMs = 0;
+        let dynamicEtaSeconds: number | null = null;
+        if (batchProcessingTimes.length > 0) {
+          avgBatchMs = Math.round(
+            batchProcessingTimes.reduce((sum, t) => sum + t, 0) / batchProcessingTimes.length
+          );
+          const remainingBatches = Math.max(0, totalBatches - batchIndex + 1);
+          dynamicEtaSeconds = Math.max(1, Math.round((remainingBatches * avgBatchMs) / 1000));
+        }
 
         setSyncProgress((prev) => ({
           ...prev,
           phase: 'enriching',
-          currentStep: 30 + Math.round(((b + 1) / batches.length) * 35),
-          batchIndex: b + 1,
-          totalBatches: batches.length,
-          processedCount: processedSoFar,
-          totalCount: discoveredRelativePaths.length,
+          currentStep: 28 + Math.round((batchIndex / totalBatches) * 42), // 28% -> 70%
+          batchIndex,
+          totalBatches,
+          processedCount,
+          totalCount,
           currentPath: currentBatch[0] || '',
-          phaseDescription: `Batch ${b + 1}/${batches.length}: Querying canonical metadata for ${currentBatch.length} files...`,
+          etaSeconds: dynamicEtaSeconds,
+          averageBatchTimeMs: avgBatchMs > 0 ? avgBatchMs : undefined,
+          phaseDescription: `Batch ${batchIndex}/${totalBatches} (chunks of 50): Querying canonical metadata for ${currentBatch.length} files...`,
           retryCount: 0,
         }));
 
@@ -1999,20 +2085,27 @@ export default function App() {
             maxRetries: 3,
             initialDelayMs: 400,
             onRetry: (attempt, maxRetries, delayMs, error) => {
-              console.warn(`[Sync-Scan Batch ${b + 1} Retry] Attempt ${attempt}/${maxRetries}:`, error);
+              console.warn(`[Sync-Scan Batch ${batchIndex} Retry] Attempt ${attempt}/${maxRetries}:`, error);
               setSyncProgress((prev) => ({
                 ...prev,
                 retryCount: attempt,
                 maxRetries,
                 retryDelayRemaining: delayMs,
-                phaseDescription: `Batch ${b + 1}/${batches.length}: Transient error. Retrying with backoff (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
+                phaseDescription: `Batch ${batchIndex}/${totalBatches}: Transient error. Retrying with backoff (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
               }));
             },
           }
         ).catch((err) => {
-          console.warn(`Sync-scan batch ${b + 1} fallback after retries exhausted:`, err);
+          console.warn(`Sync-scan batch ${batchIndex} fallback after retries exhausted:`, err);
           return currentBatch.map((p) => ({ path: p }));
         });
+
+        // Record batch duration for rolling ETA calculation
+        const duration = Date.now() - batchStartTime;
+        batchProcessingTimes.push(duration);
+        if (batchProcessingTimes.length > 8) {
+          batchProcessingTimes.shift();
+        }
 
         syncedResults.push(...batchResults);
       }
@@ -2111,18 +2204,20 @@ export default function App() {
         );
       };
 
-      // Process discovered files in optimized batches of 30 to keep UI responsive during tree building
-      const TREE_BATCH_SIZE = 30;
-      for (let i = 0; i < discoveredRelativePaths.length; i += TREE_BATCH_SIZE) {
-        const batchSlice = discoveredRelativePaths.slice(i, i + TREE_BATCH_SIZE);
+      // Process discovered files in chunks of 50 via async-iterator to keep UI responsive during tree building
+      const treeIterator = chunkAsyncIterator(discoveredRelativePaths, 50, 5);
+      for await (const { chunk: batchSlice, batchIndex, totalBatches, startIndex } of treeIterator) {
         batchSlice.forEach((rawPath, batchOffset) => {
-          const globalIdx = i + batchOffset;
+          const globalIdx = startIndex + batchOffset;
           const parts = rawPath.split('/').filter(Boolean);
           getOrCreateNodeInTree(newTree, parts, 0, '', rawPath, syncedResults[globalIdx]);
         });
-        if (i + TREE_BATCH_SIZE < discoveredRelativePaths.length) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
+        setSyncProgress((prev) => ({
+          ...prev,
+          phase: 'indexing',
+          currentStep: 70 + Math.round((batchIndex / totalBatches) * 10),
+          phaseDescription: `Constructing Samba directory tree (chunk ${batchIndex}/${totalBatches})...`,
+        }));
       }
 
       setSambaTree(newTree);
@@ -2167,12 +2262,12 @@ export default function App() {
         return enrichedItems;
       });
 
-      // 5. Samba artwork disk verification & fallback creation in optimized batches of 30
+      // 5. Samba artwork disk verification & fallback creation in optimized chunks of 50
       setSyncProgress((prev) => ({
         ...prev,
         phase: 'verifying',
         currentStep: 88,
-        phaseDescription: 'Batch verifying artwork on Samba filesystem...',
+        phaseDescription: 'Batch verifying artwork on Samba filesystem in chunks of 50...',
         retryCount: 0,
       }));
 
@@ -2191,23 +2286,24 @@ export default function App() {
         findMediaFolders(newTree);
 
         if (mediaFolders.length > 0) {
-          // Perform batch verification in optimized chunks of 30
-          const ARTWORK_BATCH_SIZE = 30;
+          // Perform batch verification in chunks of 50 using async-iterator
           const batchResults: Record<string, any> = {};
+          const artworkIterator = chunkAsyncIterator(mediaFolders, 50, 6);
 
-          for (let af = 0; af < mediaFolders.length; af += ARTWORK_BATCH_SIZE) {
-            const folderChunk = mediaFolders.slice(af, af + ARTWORK_BATCH_SIZE);
+          for await (const {
+            chunk: folderChunk,
+            batchIndex: currentBatchIdx,
+            totalBatches: totalArtworkBatches,
+          } of artworkIterator) {
             const folderPaths = folderChunk.map((f) => f.path);
-            const currentBatchIdx = Math.floor(af / ARTWORK_BATCH_SIZE) + 1;
-            const totalArtworkBatches = Math.ceil(mediaFolders.length / ARTWORK_BATCH_SIZE);
 
             setSyncProgress((prev) => ({
               ...prev,
               phase: 'verifying',
-              currentStep: 88 + Math.round(((af + folderChunk.length) / mediaFolders.length) * 6),
+              currentStep: 88 + Math.round((currentBatchIdx / totalArtworkBatches) * 6),
               batchIndex: currentBatchIdx,
               totalBatches: totalArtworkBatches,
-              phaseDescription: `Verifying artwork on Samba filesystem (batch ${currentBatchIdx}/${totalArtworkBatches})...`,
+              phaseDescription: `Verifying artwork on Samba filesystem (chunk ${currentBatchIdx}/${totalArtworkBatches})...`,
             }));
 
             const chunkData = await retryWithExponentialBackoff(
@@ -2241,7 +2337,6 @@ export default function App() {
             if (chunkData.success && chunkData.results) {
               Object.assign(batchResults, chunkData.results);
             }
-            await new Promise((resolve) => setTimeout(resolve, 5));
           }
 
           // Handle folders that need artwork written
@@ -2830,3 +2925,5 @@ export default function App() {
     </div>
   );
 }
+
+export default App;

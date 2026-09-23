@@ -57,7 +57,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: "./"
-          tauriScript: "npm run tauri"
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { MediaMetadata, TrackMetadata, SambaConfig, SmartPlaylist } from '../types';
 import { SmartPlaylistSidebar } from './SmartPlaylistSidebar';
+import { sanitizeSambaPath } from '../utils/pathSanitizer';
 
 interface MusicTabProps {
   mediaLibrary: MediaMetadata[];
@@ -46,7 +47,7 @@ export const MusicTab: React.FC<MusicTabProps> = ({
     try {
       const res = await fetch('/api/playlists');
       const data = await res.json();
-      if (data.success) {
+      if (data.success && Array.isArray(data.playlists)) {
         setPlaylists(data.playlists);
       }
     } catch (err) {
@@ -93,20 +94,36 @@ export const MusicTab: React.FC<MusicTabProps> = ({
     playlists.find(p => p.id === selectedPlaylistId) || null
   , [playlists, selectedPlaylistId]);
 
-  // Filter media items that are albums or audio books
-  const musicItems = (mediaLibrary || []).filter(
-    (m) =>
-      m &&
-      (m.type === 'album' ||
-        m.recommendedFolderStructure?.toLowerCase().includes('music') ||
-        m.recommendedFolderStructure?.toLowerCase().includes('audio') ||
-        (m.genres && m.genres.some((g) => /music|audio|album|rock|electronic|pop|jazz|classical/i.test(g))))
-  );
+  // Filter media items that are albums or audio books with defensive checks
+  const musicItems = useMemo(() => {
+    if (!Array.isArray(mediaLibrary)) return [];
+    return mediaLibrary.filter((m) => {
+      if (!m) return false;
+      const folder = (m.recommendedFolderStructure || '').toLowerCase();
+      const genres = Array.isArray(m.genres) ? m.genres : [];
+      return (
+        m.type === 'album' ||
+        folder.includes('music') ||
+        folder.includes('audio') ||
+        genres.some((g) => typeof g === 'string' && /music|audio|album|rock|electronic|pop|jazz|classical/i.test(g))
+      );
+    });
+  }, [mediaLibrary]);
 
-  // Extract all unique genres
-  const allGenres = Array.from(
-    new Set(musicItems.flatMap((m) => (m.genres && m.genres.length > 0 ? m.genres : ['Music'])))
-  );
+  // Extract all unique genres safely
+  const allGenres = useMemo(() => {
+    const list: string[] = [];
+    musicItems.forEach((m) => {
+      if (m && Array.isArray(m.genres) && m.genres.length > 0) {
+        m.genres.forEach((g) => {
+          if (g && typeof g === 'string') list.push(g);
+        });
+      } else {
+        list.push('Music');
+      }
+    });
+    return Array.from(new Set(list));
+  }, [musicItems]);
 
   const filteredMusic = useMemo(() => {
     return musicItems.filter((item) => {
@@ -114,28 +131,30 @@ export const MusicTab: React.FC<MusicTabProps> = ({
       const title = (item.title || '').toLowerCase();
       const overview = (item.overview || '').toLowerCase();
       const queryLower = (query || '').toLowerCase().trim();
+      const artists = Array.isArray(item.artists) ? item.artists : [];
+      const genres = Array.isArray(item.genres) ? item.genres : [];
 
       // 1. Check Query
       if (queryLower) {
         const matchesQuery =
           title.includes(queryLower) ||
-          (item.artists && item.artists.some((a) => (a || '').toLowerCase().includes(queryLower))) ||
+          artists.some((a) => (a || '').toLowerCase().includes(queryLower)) ||
           overview.includes(queryLower);
         if (!matchesQuery) return false;
       }
 
       // 2. Check Tab Genre Filter
       const matchesTabGenre =
-        selectedGenre === 'all' || (item.genres && item.genres.includes(selectedGenre));
+        selectedGenre === 'all' || genres.includes(selectedGenre);
       
       if (!matchesTabGenre) return false;
 
       // 3. Check Smart Playlist Rules
-      if (activePlaylist) {
+      if (activePlaylist && activePlaylist.rules) {
         const { rules } = activePlaylist;
         
-        if (rules.genre && !(item.genres && item.genres.some((g) => (g || '').toLowerCase().includes(rules.genre!.toLowerCase())))) return false;
-        if (rules.artist && !(item.artists && item.artists.some((a) => (a || '').toLowerCase().includes(rules.artist!.toLowerCase())))) return false;
+        if (rules.genre && !genres.some((g) => (g || '').toLowerCase().includes(rules.genre!.toLowerCase()))) return false;
+        if (rules.artist && !artists.some((a) => (a || '').toLowerCase().includes(rules.artist!.toLowerCase()))) return false;
         if (rules.yearMin && (item.year || 0) < rules.yearMin) return false;
         if (rules.yearMax && (item.year || 0) > rules.yearMax) return false;
         if (rules.minRating && (item.rating || 0) < rules.minRating) return false;
@@ -145,12 +164,22 @@ export const MusicTab: React.FC<MusicTabProps> = ({
     });
   }, [musicItems, query, selectedGenre, activePlaylist]);
 
+  const getSafeSharePath = (item: MediaMetadata) => {
+    const rawFolder = item.recommendedFolderStructure || ('Music/' + (item.title || 'Album'));
+    const safeFolder = sanitizeSambaPath(rawFolder);
+    const server = sambaConfig?.server || '192.168.1.100';
+    const share = sambaConfig?.share || 'media';
+    return `//${server}/${share}/${safeFolder}`;
+  };
+
   const handleExportM3U = (playlist: SmartPlaylist) => {
-    // Filter items based on this playlist's rules
     const items = musicItems.filter((item) => {
+      if (!item || !playlist.rules) return false;
       const { rules } = playlist;
-      if (rules.genre && !(item.genres && item.genres.some((g) => (g || '').toLowerCase().includes(rules.genre!.toLowerCase())))) return false;
-      if (rules.artist && !(item.artists && item.artists.some((a) => (a || '').toLowerCase().includes(rules.artist!.toLowerCase())))) return false;
+      const genres = Array.isArray(item.genres) ? item.genres : [];
+      const artists = Array.isArray(item.artists) ? item.artists : [];
+      if (rules.genre && !genres.some((g) => (g || '').toLowerCase().includes(rules.genre!.toLowerCase()))) return false;
+      if (rules.artist && !artists.some((a) => (a || '').toLowerCase().includes(rules.artist!.toLowerCase()))) return false;
       if (rules.yearMin && (item.year || 0) < rules.yearMin) return false;
       if (rules.yearMax && (item.year || 0) > rules.yearMax) return false;
       if (rules.minRating && (item.rating || 0) < rules.minRating) return false;
@@ -159,14 +188,15 @@ export const MusicTab: React.FC<MusicTabProps> = ({
 
     let m3uContent = '#EXTM3U\n';
     items.forEach(item => {
-      const tracks = item.tracks && item.tracks.length > 0 ? item.tracks : [{ title: item.title || 'Track', duration: '0:00' }];
+      const tracks = Array.isArray(item.tracks) && item.tracks.length > 0 ? item.tracks : [{ title: item.title || 'Track', duration: '0:00' }];
       tracks.forEach(track => {
-        const artist = item.artists?.join(', ') || 'Various Artists';
-        const title = track.title || item.title || 'Track';
-        const durationSec = 0; // Duration parsing is complex, keeping 0 for now
+        const artists = Array.isArray(item.artists) ? item.artists : [];
+        const artist = artists.length > 0 ? artists.join(', ') : 'Various Artists';
+        const title = track?.title || item.title || 'Track';
+        const durationSec = 0;
         m3uContent += `#EXTINF:${durationSec},${artist} - ${title}\n`;
-        const sharePath = `//${sambaConfig.server || '192.168.1.100'}/${sambaConfig.share || 'media'}/${item.recommendedFolderStructure || 'Music/' + (item.title || 'Album')}`;
-        m3uContent += `${sharePath}/${track.title || 'album'}.mp3\n`;
+        const sharePath = getSafeSharePath(item);
+        m3uContent += `${sharePath}/${track?.title || 'album'}.mp3\n`;
       });
     });
 
@@ -182,7 +212,7 @@ export const MusicTab: React.FC<MusicTabProps> = ({
   };
 
   const handleCopyPath = (item: MediaMetadata) => {
-    const path = `//${sambaConfig.server || '192.168.1.100'}/${sambaConfig.share || 'media'}/${item.recommendedFolderStructure || 'Music/' + (item.title || 'Album')}`;
+    const path = getSafeSharePath(item);
     navigator.clipboard.writeText(path);
     setCopiedId(item.id);
     setTimeout(() => setCopiedId(null), 2000);
@@ -304,119 +334,126 @@ export const MusicTab: React.FC<MusicTabProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-              {filteredMusic.map((album) => (
-                <div
-                  key={album.id}
-                  className="group bg-slate-900 border border-slate-800 hover:border-emerald-500/40 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 flex flex-col"
-                >
-                  {/* Album Art Cover Header */}
-                  <div className="relative aspect-square overflow-hidden bg-slate-950">
-                    <img
-                      src={album.posterUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80'}
-                      alt={album.title || 'Music Album'}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80';
-                      }}
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-80" />
+              {filteredMusic.map((album) => {
+                const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+                const artists = Array.isArray(album.artists) ? album.artists : [];
+                const directors = Array.isArray(album.directors) ? album.directors : [];
+                const artistDisplay = artists.length > 0 ? artists.join(', ') : (directors.length > 0 ? directors.join(', ') : 'Various Artists');
 
-                    {/* Top Badge */}
-                    <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-950/80 backdrop-blur-md border border-emerald-500/30 text-[10px] font-bold text-emerald-300">
-                      <Disc className="w-3 h-3 animate-spin-slow" />
-                      <span>{album.year || 'Album'} • {(album.tracks || []).length || 1} Tracks</span>
-                    </div>
+                return (
+                  <div
+                    key={album.id}
+                    className="group bg-slate-900 border border-slate-800 hover:border-emerald-500/40 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 flex flex-col"
+                  >
+                    {/* Album Art Cover Header */}
+                    <div className="relative aspect-square overflow-hidden bg-slate-950">
+                      <img
+                        src={album.posterUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80'}
+                        alt={album.title || 'Music Album'}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80';
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-80" />
 
-                    {/* Play Album Overlay Button */}
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-[2px]">
-                      <button
-                        onClick={() => onPlayMedia(album, album.tracks?.[0])}
-                        className="w-14 h-14 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-2xl hover:scale-110 transition cursor-pointer"
-                        title="Play Album"
-                      >
-                        <Play className="w-6 h-6 fill-white ml-0.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Album Body Info */}
-                  <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-base font-bold text-white group-hover:text-emerald-300 transition truncate">
-                          {album.title || 'Untitled Album'}
-                        </h3>
-                        <span className="text-xs font-mono text-emerald-400 shrink-0">
-                          ★ {(album.rating ?? 0).toFixed(1)}
-                        </span>
+                      {/* Top Badge */}
+                      <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-950/80 backdrop-blur-md border border-emerald-500/30 text-[10px] font-bold text-emerald-300">
+                        <Disc className="w-3 h-3 animate-spin-slow" />
+                        <span>{album.year || 'Album'} • {tracks.length || 1} Tracks</span>
                       </div>
-                      <p className="text-xs text-slate-400 font-medium truncate flex items-center gap-1">
-                        <Mic2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                        <span>{album.artists?.join(', ') || album.directors?.join(', ') || 'Various Artists'}</span>
-                      </p>
-                      <p className="text-xs text-slate-400 line-clamp-2 pt-1">
-                        {album.overview || 'Audio album imported from Samba network share.'}
-                      </p>
+
+                      {/* Play Album Overlay Button */}
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-[2px]">
+                        <button
+                          onClick={() => onPlayMedia(album, tracks[0])}
+                          className="w-14 h-14 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-2xl hover:scale-110 transition cursor-pointer"
+                          title="Play Album"
+                        >
+                          <Play className="w-6 h-6 fill-white ml-0.5" />
+                        </button>
+                      </div>
                     </div>
 
-                    {/* Tracklist Preview */}
-                    {album.tracks && album.tracks.length > 0 && (
-                      <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2.5 space-y-1.5">
-                        <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 pb-1 border-b border-slate-800">
-                          <span className="flex items-center gap-1">
-                            <ListMusic className="w-3 h-3 text-emerald-400" /> Featured Tracks
+                    {/* Album Body Info */}
+                    <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-base font-bold text-white group-hover:text-emerald-300 transition truncate">
+                            {album.title || 'Untitled Album'}
+                          </h3>
+                          <span className="text-xs font-mono text-emerald-400 shrink-0">
+                            ★ {(album.rating ?? 0).toFixed(1)}
                           </span>
-                          <span>{album.tracks.length} songs</span>
                         </div>
-                        <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
-                          {album.tracks.slice(0, 3).map((track) => (
-                            <button
-                              key={track.trackNumber}
-                              onClick={() => onPlayMedia(album, track)}
-                              className="w-full text-left flex items-center justify-between p-1 rounded hover:bg-slate-800/80 text-[11px] text-slate-300 transition cursor-pointer group/track"
-                            >
-                              <span className="truncate pr-2 group-hover/track:text-emerald-300">
-                                {track.trackNumber}. {track.title}
-                              </span>
-                              <span className="font-mono text-[10px] text-slate-500 shrink-0">
-                                {track.duration}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
+                        <p className="text-xs text-slate-400 font-medium truncate flex items-center gap-1">
+                          <Mic2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <span>{artistDisplay}</span>
+                        </p>
+                        <p className="text-xs text-slate-400 line-clamp-2 pt-1">
+                          {album.overview || 'Audio album imported from Samba network share.'}
+                        </p>
                       </div>
-                    )}
 
-                    {/* Footer Action Buttons */}
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs">
-                      <button
-                        onClick={() => onOpenDetails(album)}
-                        className="flex items-center gap-1.5 text-slate-300 hover:text-white transition cursor-pointer font-semibold"
-                      >
-                        <Info className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Album Details</span>
-                      </button>
+                      {/* Tracklist Preview */}
+                      {tracks.length > 0 && (
+                        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2.5 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 pb-1 border-b border-slate-800">
+                            <span className="flex items-center gap-1">
+                              <ListMusic className="w-3 h-3 text-emerald-400" /> Featured Tracks
+                            </span>
+                            <span>{tracks.length} songs</span>
+                          </div>
+                          <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
+                            {tracks.slice(0, 3).map((track, idx) => (
+                              <button
+                                key={track?.trackNumber || idx}
+                                onClick={() => onPlayMedia(album, track)}
+                                className="w-full text-left flex items-center justify-between p-1 rounded hover:bg-slate-800/80 text-[11px] text-slate-300 transition cursor-pointer group/track"
+                              >
+                                <span className="truncate pr-2 group-hover/track:text-emerald-300">
+                                  {track?.trackNumber || (idx + 1)}. {track?.title || 'Track'}
+                                </span>
+                                <span className="font-mono text-[10px] text-slate-500 shrink-0">
+                                  {track?.duration || '0:00'}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
-                      <div className="flex items-center gap-2">
+                      {/* Footer Action Buttons */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs">
                         <button
-                          onClick={() => handleCopyPath(album)}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
-                          title="Copy Samba share path"
+                          onClick={() => onOpenDetails(album)}
+                          className="flex items-center gap-1.5 text-slate-300 hover:text-white transition cursor-pointer font-semibold"
                         >
-                          {copiedId === album.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                          <Info className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Album Details</span>
                         </button>
-                        <button
-                          onClick={() => onPlayMedia(album, album.tracks?.[0])}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-600/30"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-white" />
-                          <span>Play</span>
-                        </button>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleCopyPath(album)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                            title="Copy Samba share path"
+                          >
+                            {copiedId === album.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            onClick={() => onPlayMedia(album, tracks[0])}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-600/30"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-white" />
+                            <span>Play</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

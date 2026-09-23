@@ -111,9 +111,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     try {
       let targetUrl = url;
       // In Tauri desktop environment, check if local Node server is running on port 3000
-      if (url.startsWith('/api/') && (window.location.origin.includes('tauri://') || (window as any).__TAURI__)) {
+      const isTauriEnv = window.location.protocol === 'tauri:' || 
+                         window.location.origin.includes('tauri.localhost') || 
+                         (window as any).__TAURI__;
+      const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+
+      if (url.startsWith('/api/') && isTauriEnv && !isHttp) {
         try {
-          const testRes = await fetch(`http://127.0.0.1:3000${url}`, { ...options, signal: AbortSignal.timeout(1500) });
+          // Probe local port 3000
+          const testRes = await fetch(`http://127.0.0.1:3000${url}`, { ...options, signal: AbortSignal.timeout(1000) });
           const contentType = testRes.headers.get('content-type') || '';
           if (contentType.includes('application/json')) {
             targetUrl = `http://127.0.0.1:3000${url}`;

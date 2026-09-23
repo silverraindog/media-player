@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MenuBar } from './components/MenuBar';
 import {
   Header,
@@ -72,9 +72,11 @@ const isTauriProtocol = typeof window !== 'undefined' && (
 );
 
 const isTauri = typeof window !== 'undefined' && (
-  '__TAURI_IPC__' in window ||
-  isTauriProtocol ||
-  (((window as any).location?.origin || '').includes('localhost:1420'))
+  Boolean((window as any).__TAURI_IPC__) ||
+  Boolean((window as any).__TAURI__) ||
+  window.location.protocol === 'tauri:' ||
+  window.location.origin.includes('tauri.localhost') ||
+  window.location.origin.includes('localhost:1420')
 );
 
 const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -88,7 +90,9 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     urlStr = (input as any).url;
   }
 
-  if (isTauri && urlStr.startsWith('/')) {
+  // Only rewrite to localhost:3000 if we are EXPLICITLY in a Tauri protocol environment
+  // and trying to reach a relative API path. If we are on http/https, we use relative paths.
+  if (isTauri && urlStr.startsWith('/') && window.location.protocol !== 'http:' && window.location.protocol !== 'https:') {
     modifiedInput = `http://localhost:3000${urlStr}`;
   }
   return window.fetch(modifiedInput, init);

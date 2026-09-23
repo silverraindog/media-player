@@ -90,13 +90,20 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
         fetch('/api/db/stats'),
       ]);
 
-      const mediaData = await mediaRes.json();
-      const progData = await progRes.json();
-      const statsData = await statsRes.json();
+      if (mediaRes.ok) {
+        const mediaData = await mediaRes.json().catch(() => ({ success: false }));
+        if (mediaData.success && Array.isArray(mediaData.items)) setMediaItems(mediaData.items);
+      }
+      
+      if (progRes.ok) {
+        const progData = await progRes.json().catch(() => ({ success: false }));
+        if (progData.success && Array.isArray(progData.progress)) setWatchProgressList(progData.progress);
+      }
 
-      if (mediaData.success) setMediaItems(mediaData.items);
-      if (progData.success) setWatchProgressList(progData.progress);
-      if (statsData.success) setDbStats(statsData.stats);
+      if (statsRes.ok) {
+        const statsData = await statsRes.json().catch(() => ({ success: false }));
+        if (statsData.success && statsData.stats) setDbStats(statsData.stats);
+      }
     } catch (err) {
       console.error('Error fetching SQLite data:', err);
     } finally {
@@ -235,9 +242,18 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
     mediaItems.forEach((m) => {
       let genres: string[] = [];
       try {
-        if (m.genres) genres = JSON.parse(m.genres);
+        const rawGenres = m.genres;
+        if (typeof rawGenres === 'string') {
+          if (rawGenres.startsWith('[') || rawGenres.startsWith('{')) {
+            genres = JSON.parse(rawGenres);
+          } else {
+            genres = rawGenres.split(',').map((g: string) => g.trim()).filter(Boolean);
+          }
+        } else if (Array.isArray(rawGenres)) {
+          genres = rawGenres;
+        }
       } catch {
-        if (m.genres) genres = (m.genres || '').split(',').map((g: string) => g.trim()).filter(Boolean);
+        if (typeof m.genres === 'string') genres = m.genres.split(',').map((g: string) => g.trim()).filter(Boolean);
       }
       genres.forEach((g) => {
         const trimmed = g.trim();
@@ -271,9 +287,11 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
       // Search filter
       const q = searchFilter.toLowerCase();
       if (!q) return true;
+      const title = (item.title || '').toLowerCase();
+      const synopsis = (item.synopsis || '').toLowerCase();
       return (
-        item.title.toLowerCase().includes(q) ||
-        item.synopsis.toLowerCase().includes(q)
+        title.includes(q) ||
+        synopsis.includes(q)
       );
     });
   }, [mediaItems, searchFilter, selectedGenres, selectedMediaType]);
@@ -320,27 +338,31 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
           </div>
         </div>
 
-        {/* Database Quick Stats Bar */}
-        {dbStats && (
-          <div className="mt-4 pt-4 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
-              <span className="text-slate-400 text-[11px] block">SQLite File:</span>
-              <span className="text-slate-200 truncate block">media_vault.sqlite</span>
-            </div>
-            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
-              <span className="text-slate-400 text-[11px] block">Saved Titles:</span>
-              <span className="text-indigo-300 font-bold">{dbStats.totalMediaItems} Media Records</span>
-            </div>
-            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
-              <span className="text-slate-400 text-[11px] block">Active Series Tracked:</span>
-              <span className="text-emerald-300 font-bold">{dbStats.totalSeriesTracked} In-Progress</span>
-            </div>
-            <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
-              <span className="text-slate-400 text-[11px] block">Watched Episodes:</span>
-              <span className="text-purple-300 font-bold">{dbStats.totalWatchedHistory} Completed</span>
-            </div>
+      {/* Database Quick Stats Bar */}
+      {dbStats ? (
+        <div className="mt-4 pt-4 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
+            <span className="text-slate-400 text-[11px] block">SQLite File:</span>
+            <span className="text-slate-200 truncate block">media_vault.sqlite</span>
           </div>
-        )}
+          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
+            <span className="text-slate-400 text-[11px] block">Saved Titles:</span>
+            <span className="text-indigo-300 font-bold">{dbStats.totalMediaItems || 0} Media Records</span>
+          </div>
+          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
+            <span className="text-slate-400 text-[11px] block">Active Series Tracked:</span>
+            <span className="text-emerald-300 font-bold">{dbStats.totalSeriesTracked || 0} In-Progress</span>
+          </div>
+          <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
+            <span className="text-slate-400 text-[11px] block">Watched Episodes:</span>
+            <span className="text-purple-300 font-bold">{dbStats.totalWatchedHistory || 0} Completed</span>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 pt-4 border-t border-slate-800/80 text-center">
+          <span className="text-[10px] text-slate-500 font-mono italic">Waiting for SQLite stats engine...</span>
+        </div>
+      )}
 
         {/* 30s Persistent Caching & Batch Buffer Indicator */}
         <div className="mt-3 pt-3 border-t border-slate-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-slate-950/40 p-3 rounded-xl border border-indigo-900/30">
@@ -714,12 +736,12 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
                           </div>
                         ) : (
                           <div className="group relative">
-                            <p className="line-clamp-3 leading-relaxed">{item.synopsis}</p>
-                            <button
-                              onClick={() => {
-                                setEditingItemId(item.id);
-                                setEditingSynopsis(item.synopsis);
-                              }}
+                          <p className="line-clamp-3 leading-relaxed">{item.synopsis || <span className="text-slate-600 italic">No synopsis available</span>}</p>
+                          <button
+                            onClick={() => {
+                              setEditingItemId(item.id);
+                              setEditingSynopsis(item.synopsis || '');
+                            }}
                               className="mt-1 text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 opacity-80 group-hover:opacity-100"
                             >
                               <Edit3 className="w-3 h-3" />

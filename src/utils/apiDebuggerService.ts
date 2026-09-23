@@ -102,11 +102,17 @@ class ApiDebuggerStore {
 
         const isActualTauri = typeof window !== 'undefined' && (
           Boolean((window as any).__TAURI__) ||
-          '__TAURI_IPC__' in window ||
-          (((window as any).location?.origin || '').includes('tauri://'))
+          Boolean((window as any).__TAURI_IPC__) ||
+          window.location.protocol === 'tauri:' ||
+          window.location.origin.includes('tauri.localhost')
         );
 
-        if (isActualTauri) {
+        const isStandardWeb = typeof window !== 'undefined' && (
+          window.location.protocol === 'http:' ||
+          window.location.protocol === 'https:'
+        );
+
+        if (isActualTauri && !isStandardWeb) {
           let urlForRewrite = '';
           if (typeof input === 'string') {
             urlForRewrite = input;

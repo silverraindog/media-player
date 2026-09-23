@@ -24,10 +24,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Clean Unwanted Lockfiles
+        shell: bash
+        run: rm -f bun.lock bun.lockb yarn.lock pnpm-lock.yaml
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
+          cache: 'npm'
 
       - name: Install System Dependencies (Linux Only)
         if: matrix.platform == 'linux'
@@ -44,7 +49,7 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install Frontend Dependencies
-        run: npm install --include=optional
+        run: npm ci || npm install --include=optional
 
       - name: Build Tauri Desktop Application
         uses: tauri-apps/tauri-action@v0
@@ -52,6 +57,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: "./"
+          tauriScript: "npm run tauri"
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4

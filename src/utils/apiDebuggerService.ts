@@ -206,8 +206,8 @@ class ApiDebuggerStore {
         } catch (err: any) {
           durationMs = Math.round(performance.now() - startTime);
 
-          // If it's an internal DB endpoint (e.g. /api/db/history, /api/db/watchlist), fulfill from offline local storage fallback
-          if (url.includes('/api/db/')) {
+          // If it's an internal API endpoint, fulfill from offline local storage fallback
+          if (url.includes('/api/')) {
             const fallbackResponse = localDbFallback.handleDbRequestFallback(
               url,
               method,

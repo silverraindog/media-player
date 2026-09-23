@@ -40,6 +40,7 @@ interface SyncProgressBarProps {
   onCancel?: () => void;
   onDismiss?: () => void;
   onRetry?: () => void;
+  onForceSkip?: () => void;
   className?: string;
 }
 
@@ -119,6 +120,7 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
   onCancel,
   onDismiss,
   onRetry,
+  onForceSkip,
   className = '',
 }) => {
   // Store timing history for previous batches to calculate accurate ETA
@@ -405,10 +407,21 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                       {onRetry && (
                         <button
                           onClick={onRetry}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-95 cursor-pointer"
                         >
                           <RefreshCw className="w-3 h-3" />
                           Retry Batch
+                        </button>
+                      )}
+
+                      {onForceSkip && (
+                        <button
+                          onClick={onForceSkip}
+                          title="Bypass unresponsive metadata lookups and force skip batch"
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold transition-all shadow-lg shadow-amber-500/20 active:scale-95 cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                          Force Skip
                         </button>
                       )}
                     </motion.div>

@@ -98,27 +98,62 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
   return window.fetch(modifiedInput, init);
 };
 
-// Robust global fetch wrapper with retry logic and local-first fallback
+// Robust global fetch wrapper with retry logic, 5s timeout for metadata/vault calls, and detailed stage logging
 const fetchWithRetry = async (
     url: string,
     options: RequestInit = {},
     maxRetries = 3
   ): Promise<Response> => {
     let lastError: any;
+    const isSpecialCall = url.includes('/api/metadata/categorize') || url.includes('/api/vault/state') || url.includes('/api/samba/');
+    const timeoutMs = isSpecialCall ? 5000 : 15000;
+    const reqId = Math.random().toString(36).substring(2, 7);
+
     for (let i = 0; i < maxRetries; i++) {
+      const startTime = performance.now();
+      console.log(`[FetchStage][${reqId}] 🚀 REQUEST SENT: [Attempt ${i + 1}/${maxRetries}] ${options.method || 'GET'} ${url}`, { body: options.body });
+
       try {
-        const response = await customFetch(url, options);
-        if (response.ok) return response;
+        const controller = new AbortController();
+        console.log(`[FetchStage][${reqId}] ⏳ TIMEOUT WAITING: Started ${timeoutMs}ms timer for ${url}`);
+        
+        const timer = setTimeout(() => {
+          console.warn(`[FetchStage][${reqId}] ⏰ TIMEOUT REACHED: Request to ${url} exceeded ${timeoutMs}ms limit.`);
+          controller.abort();
+        }, timeoutMs);
+
+        let signal = controller.signal;
+        if (options.signal) {
+          if (options.signal.aborted) controller.abort();
+          else options.signal.addEventListener('abort', () => controller.abort());
+        }
+
+        const response = await customFetch(url, { ...options, signal });
+        clearTimeout(timer);
+        const elapsed = Math.round(performance.now() - startTime);
+
+        if (response.ok) {
+          console.log(`[FetchStage][${reqId}] ✅ RESPONSE RECEIVED (OK): ${url} in ${elapsed}ms (Status: ${response.status})`);
+          return response;
+        }
+
+        console.warn(`[FetchStage][${reqId}] ⚠️ RESPONSE RECEIVED (HTTP ERROR): ${url} in ${elapsed}ms (Status: ${response.status})`);
         throw new Error(`HTTP ${response.status}`);
       } catch (err: any) {
         lastError = err;
-        console.warn(`[FetchRetry] Attempt ${i + 1}/${maxRetries} failed for ${url}:`, err);
+        const elapsed = Math.round(performance.now() - startTime);
+        console.error(`[FetchStage][${reqId}] ❌ REQUEST FAILED/STALLED: ${url} after ${elapsed}ms on attempt ${i + 1}:`, err);
+
+        if (isSpecialCall && (err.name === 'AbortError' || err.message?.includes('aborted') || err.message?.includes('timeout') || i === maxRetries - 1)) {
+          window.dispatchEvent(new CustomEvent('sambavault-api-timeout', { detail: { url, message: `Request exceeded ${timeoutMs}ms timeout or failed after ${elapsed}ms.` } }));
+        }
+
         await new Promise((r) => setTimeout(r, 500 * Math.pow(2, i))); // Exponential backoff
       }
     }
 
-    // Fallback for DB routes if all retries fail
-    if (url.includes('/api/db/')) {
+    // Fallback for API routes if all retries fail
+    if (url.includes('/api/')) {
       let bodyObj: any = null;
       if (options.body && typeof options.body === 'string') {
         try { bodyObj = JSON.parse(options.body); } catch {}
@@ -1189,6 +1224,30 @@ function App() {
         setIsVaultLoaded(true);
       })
       .catch(() => setIsVaultLoaded(true));
+  }, []);
+
+  // Listen for API request timeouts on critical endpoints (/api/metadata/categorize, /api/vault/state)
+  useEffect(() => {
+    const handleApiTimeout = (e: any) => {
+      const { url, message } = e.detail || {};
+      setSyncLogs((prev) => [
+        {
+          id: `log-timeout-${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'error',
+          title: `API Timeout: ${url}`,
+          details: `${message || 'Request exceeded 5 second timeout limit.'} Logged and defaulted to offline cache.`,
+          status: 'error',
+        },
+        ...prev,
+      ]);
+      showToast(`Warning: Request to ${url} timed out after 5s. Falling back to local cache.`);
+    };
+
+    window.addEventListener('sambavault-api-timeout', handleApiTimeout as EventListener);
+    return () => {
+      window.removeEventListener('sambavault-api-timeout', handleApiTimeout as EventListener);
+    };
   }, []);
 
   // Sync state to backend on change
@@ -2742,6 +2801,24 @@ function App() {
         onRetry={() => {
           console.log('[SambaSync] User requested manual retry...');
           handleSyncSamba(activeScanPath);
+        }}
+        onForceSkip={() => {
+          abortCurrentSync();
+          setIsSyncingShare(false);
+          setIsQuickSyncing(false);
+          setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
+          setSyncLogs((prev) => [
+            {
+              id: `log-skip-${Date.now()}`,
+              timestamp: new Date().toLocaleTimeString(),
+              type: 'warning',
+              title: 'Metadata Lookup Force Skipped',
+              details: 'User bypassed unresponsive metadata lookups or sync batch via Force Skip.',
+              status: 'warning',
+            },
+            ...prev,
+          ]);
+          showToast('Bypassed unresponsive metadata lookup via Force Skip.');
         }}
       />
 

@@ -23,9 +23,9 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Clean Unwanted Lockfiles
+      - name: Clean Lockfile for Fresh Cross-Platform Resolution
         shell: bash
-        run: rm -f bun.lock bun.lockb yarn.lock pnpm-lock.yaml
+        run: rm -f bun.lock bun.lockb yarn.lock pnpm-lock.yaml package-lock.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

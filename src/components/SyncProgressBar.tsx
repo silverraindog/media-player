@@ -39,6 +39,7 @@ interface SyncProgressBarProps {
   progress: SyncProgressState;
   onCancel?: () => void;
   onDismiss?: () => void;
+  onRetry?: () => void;
   className?: string;
 }
 
@@ -117,6 +118,7 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
   progress,
   onCancel,
   onDismiss,
+  onRetry,
   className = '',
 }) => {
   // Store timing history for previous batches to calculate accurate ETA
@@ -124,6 +126,47 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
   const batchDurationsRef = useRef<number[]>([]);
   const [internalEtaSeconds, setInternalEtaSeconds] = useState<number | null>(null);
   const [avgBatchDurationMs, setAvgBatchDurationMs] = useState<number | null>(null);
+
+  // Stall detection state
+  const lastUpdateRef = useRef<number>(Date.now());
+  const lastProcessedRef = useRef<number>(0);
+  const lastStepRef = useRef<number>(0);
+  const [isStalled, setIsStalled] = useState(false);
+  const [stallDuration, setStallDuration] = useState(0);
+
+  // Monitor updates to detect stalls (e.g. no progress for 20 seconds)
+  useEffect(() => {
+    if (!progress.isActive || progress.phase === 'completed' || progress.phase === 'idle') {
+      setIsStalled(false);
+      setStallDuration(0);
+      return;
+    }
+
+    const checkStall = () => {
+      const now = Date.now();
+      const timeSinceUpdate = now - lastUpdateRef.current;
+      
+      if (timeSinceUpdate > 15000) { // 15 seconds threshold
+        setIsStalled(true);
+        setStallDuration(Math.floor(timeSinceUpdate / 1000));
+      } else {
+        setIsStalled(false);
+        setStallDuration(0);
+      }
+    };
+
+    const interval = setInterval(checkStall, 2000);
+
+    // Update last seen progress
+    if (progress.processedCount !== lastProcessedRef.current || progress.currentStep !== lastStepRef.current) {
+      lastUpdateRef.current = Date.now();
+      lastProcessedRef.current = progress.processedCount;
+      lastStepRef.current = progress.currentStep;
+      setIsStalled(false);
+    }
+
+    return () => clearInterval(interval);
+  }, [progress.processedCount, progress.currentStep, progress.isActive, progress.phase]);
 
   // Monitor batch progress and calculate rolling average time per batch
   useEffect(() => {
@@ -337,6 +380,39 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
             <div className="flex items-center gap-4 shrink-0">
               <div className="text-right">
                 <div className="flex items-center justify-end gap-1.5">
+                  {isStalled && progress.isActive && (
+                    <motion.div
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="flex items-center gap-2 mr-4"
+                    >
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-500/30 animate-pulse">
+                        <Timer className="w-3 h-3" />
+                        Stalled ({stallDuration}s)
+                      </span>
+                      
+                      <button
+                        onClick={() => {
+                          const details = `Phase: ${progress.phase}\nStep: ${progress.currentStep}/${progress.totalSteps}\nFile: ${progress.currentPath}\nProcessed: ${progress.processedCount}/${progress.totalCount}\nBatch: ${progress.batchIndex}/${progress.totalBatches}`;
+                          alert(`Current Sync Status:\n\n${details}`);
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition-all border border-slate-700"
+                      >
+                        <AlertCircle className="w-3 h-3" />
+                        Inspect
+                      </button>
+
+                      {onRetry && (
+                        <button
+                          onClick={onRetry}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          Retry Batch
+                        </button>
+                      )}
+                    </motion.div>
+                  )}
                   <motion.span
                     key={percent}
                     initial={{ scale: 1.1, color: '#818cf8' }}

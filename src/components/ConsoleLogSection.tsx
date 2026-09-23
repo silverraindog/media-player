@@ -20,6 +20,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { SyncLog, DeepRefreshJobState } from '../types';
+import { SyncHealthDashboard } from './SyncHealthDashboard';
 
 interface ConsoleLogSectionProps {
   logs: SyncLog[];
@@ -305,6 +306,9 @@ export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({
           </div>
         </div>
       )}
+
+      {/* Sync Health Trend Visualization */}
+      <SyncHealthDashboard logs={logs} />
 
       {/* Filter and Search Bar */}
       <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 py-3 border-y border-slate-800/50">

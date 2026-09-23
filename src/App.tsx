@@ -855,6 +855,15 @@ function App() {
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
+  const syncAbortControllerRef = useRef<AbortController | null>(null);
+
+  const abortCurrentSync = () => {
+    if (syncAbortControllerRef.current) {
+      console.log('[SambaSync] Aborting current sync operation...');
+      syncAbortControllerRef.current.abort();
+      syncAbortControllerRef.current = null;
+    }
+  };
   const [syncCurrentPath, setSyncCurrentPath] = useState<string>('');
   const [syncProgress, setSyncProgress] = useState<SyncProgressState>({
     isActive: false,
@@ -1836,6 +1845,10 @@ function App() {
 
   // Recursive Share Scanner & Automatic Metadata Matching with Batch Processing & Progress Bar
   const handleSyncSamba = async (customScanPath?: string) => {
+    abortCurrentSync();
+    syncAbortControllerRef.current = new AbortController();
+    const { signal } = syncAbortControllerRef.current;
+
     console.log('[SambaSync] Initializing Full Sync scan...');
     setIsSyncingShare(true);
     const shareName = sambaConfig.share || 'media';
@@ -1867,6 +1880,9 @@ function App() {
         try {
           return await fn();
         } catch (err: any) {
+          if (err.name === 'AbortError') {
+            throw err; // Don't retry if aborted
+          }
           attempt++;
           if (attempt > maxRetries) {
             throw err;
@@ -2031,6 +2047,8 @@ function App() {
         totalCount,
         batchStartTime,
       } of enrichIterator) {
+        if (signal.aborted) break;
+
         // Calculate ETA based on the average processing time of previous batches
         let avgBatchMs = 0;
         let dynamicEtaSeconds: number | null = null;
@@ -2062,6 +2080,7 @@ function App() {
             const response = await fetch('/api/samba/sync-scan', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              signal,
               body: JSON.stringify({
                 items: currentBatch,
                 shareName,
@@ -2707,6 +2726,7 @@ function App() {
             : syncProgress
         }
         onCancel={() => {
+          abortCurrentSync();
           setIsSyncingShare(false);
           setIsQuickSyncing(false);
           setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
@@ -2714,6 +2734,10 @@ function App() {
         }}
         onDismiss={() => {
           setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
+        }}
+        onRetry={() => {
+          console.log('[SambaSync] User requested manual retry...');
+          handleSyncSamba(activeScanPath);
         }}
       />
 

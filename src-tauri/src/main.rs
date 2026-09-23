@@ -482,7 +482,7 @@ async fn open_in_iina(
     let res = Command::new("open").args(["-a", "IINA", &target]).spawn();
 
     #[cfg(not(target_os = "macos"))]
-    let res = Err(std::io::Error::new(
+    let res: Result<std::process::Child, std::io::Error> = Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
         "IINA is macOS only",
     ));

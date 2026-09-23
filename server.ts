@@ -1847,6 +1847,33 @@ try {
     const p = path.join(SAMBA_SHARE_ROOT, folder);
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
   });
+
+  // Seed sample media files into SAMBA_SHARE_ROOT if empty
+  const sampleFiles = [
+    'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
+    'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
+    'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
+    'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
+    'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
+    'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
+    'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
+    'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
+    'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
+    'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
+    'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
+    'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
+  ];
+
+  sampleFiles.forEach((rel) => {
+    const full = path.join(SAMBA_SHARE_ROOT, rel);
+    const dir = path.dirname(full);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(full)) {
+      try {
+        fs.writeFileSync(full, 'SAMPLE_MEDIA_PLACEHOLDER_DATA', 'utf8');
+      } catch (_) {}
+    }
+  });
 } catch (e) {
   console.warn('Failed to initialize SAMBA_SHARE_ROOT:', e);
 }

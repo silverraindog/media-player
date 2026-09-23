@@ -307,42 +307,54 @@ export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({
       )}
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-          <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0 mr-1" />
-          {[
-            { key: 'all', label: 'All Logs' },
-            { key: 'deep_refresh', label: 'Deep Refresh' },
-            { key: 'metadata-missing', label: 'Flagged Missing' },
-            { key: 'success', label: 'Success' },
-            { key: 'samba_pushed', label: 'Samba Disk Writes' },
-            { key: 'connected', label: 'Network' },
-            { key: 'warning', label: 'Warnings' },
-            { key: 'error', label: 'Errors' },
-          ].map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilterType(f.key)}
-              className={`px-2.5 py-1 rounded-lg font-medium transition whitespace-nowrap cursor-pointer text-[11px] ${
-                filterType === f.key
-                  ? 'bg-indigo-600 text-white shadow-sm font-semibold'
-                  : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-750'
-              }`}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 py-3 border-y border-slate-800/50">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <div className="relative min-w-[160px]">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-indigo-400" />
+            <select
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-8 py-2 text-slate-200 text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 appearance-none cursor-pointer font-semibold transition-all hover:bg-slate-900"
             >
-              {f.label}
-            </button>
-          ))}
+              <option value="all">All Event Logs</option>
+              <option value="deep_refresh">Deep Refresh Queries</option>
+              <option value="metadata-missing">Flagged Missing Metadata</option>
+              <option value="success">Successful Operations</option>
+              <option value="samba_pushed">Samba Disk Writes</option>
+              <option value="connected">Network & Connectivity</option>
+              <option value="warning">System Warnings</option>
+              <option value="error">Critical Errors</option>
+            </select>
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500">
+              <ArrowRight className="w-3.5 h-3.5 rotate-90" />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800">
+            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Total:</span>
+            <span className="text-xs font-mono text-indigo-400 font-bold">{filteredLogs.length}</span>
+            <span className="text-[10px] text-slate-600">/</span>
+            <span className="text-xs font-mono text-slate-500">{logs.length}</span>
+          </div>
         </div>
 
-        <div className="relative w-full sm:w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search console logs..."
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500 font-mono"
+            placeholder="Search log titles, details, or timestamps..."
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-slate-200 text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 font-mono transition-all placeholder:text-slate-600"
           />
+          {searchTerm && (
+            <button 
+              onClick={() => setSearchTerm('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-800 rounded-full text-slate-500 transition-colors"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
         </div>
       </div>
 

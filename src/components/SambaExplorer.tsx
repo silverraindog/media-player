@@ -1892,6 +1892,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       {activeSubTab === 'logs' && (
         <ConsoleLogSection
           logs={syncLogs}
+          onClearLogs={setSyncLogs ? () => setSyncLogs([]) : undefined}
           onRetryAllFailed={handleRetryAllFailed}
           onDeepRefresh={handleExecuteDeepRefresh}
           isDeepRefreshing={isDeepRefreshing}

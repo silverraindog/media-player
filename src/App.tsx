@@ -1836,6 +1836,7 @@ function App() {
 
   // Recursive Share Scanner & Automatic Metadata Matching with Batch Processing & Progress Bar
   const handleSyncSamba = async (customScanPath?: string) => {
+    console.log('[SambaSync] Initializing Full Sync scan...');
     setIsSyncingShare(true);
     const shareName = sambaConfig.share || 'media';
     const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
@@ -1884,64 +1885,58 @@ function App() {
     setSyncProgress({
       isActive: true,
       phase: 'scanning',
-      currentStep: 10,
+      currentStep: 1,
       totalSteps: 100,
       currentPath: rootPath,
       processedCount: 0,
       totalCount: 0,
-      phaseDescription: 'Scanning Samba share directory hierarchy in chunks of 50...',
+      phaseDescription: 'Starting Samba share directory hierarchy scan...',
       retryCount: 0,
       batchIndex: 1,
       totalBatches: 1,
     });
 
     try {
+      console.log(`[SambaSync] Attempting native performFastScan for: ${rootPath}`);
       // 1. Scan filesystem using native Tauri Rust perform_fast_scan command or fallback with retry
-      const scanResult = await retryWithExponentialBackoff(
-        async () => {
-          return await performFastScan(rootPath, (count, currentFile) => {
-            setSyncCurrentPath(`[Samba FastScan] Scanned ${count} files (${currentFile})`);
-            setSyncProgress((prev) => ({
-              ...prev,
-              currentPath: currentFile,
-              processedCount: count,
-              totalCount: count > prev.totalCount ? count : prev.totalCount,
-              currentStep: Math.min(22, 10 + Math.floor(count / 50)),
-            }));
-          });
-        },
-        {
-          maxRetries: 3,
-          initialDelayMs: 400,
-          onRetry: (attempt, maxRetries, delayMs, error) => {
-            console.warn(`[Sync Traversal Retry] Attempt ${attempt}/${maxRetries} after error:`, error);
-            setSyncProgress((prev) => ({
-              ...prev,
-              retryCount: attempt,
-              maxRetries,
-              retryDelayRemaining: delayMs,
-              phaseDescription: `Transient share traversal glitch. Retrying scan (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
-            }));
-          },
-        }
-      );
+      const scanResult = await performFastScan(rootPath, (count, currentFile) => {
+        setSyncCurrentPath(`[Samba FastScan] Scanned ${count} files (${currentFile})`);
+        setSyncProgress((prev) => ({
+          ...prev,
+          currentPath: currentFile,
+          processedCount: count,
+          totalCount: count > prev.totalCount ? count : prev.totalCount,
+          currentStep: Math.min(22, 5 + Math.floor(count / 50)),
+        }));
+      }).catch((e) => {
+        console.warn('[SambaSync] performFastScan failed or not available:', e);
+        return { success: false, items: [], error: String(e) };
+      });
 
       let rawDiscoveredPaths: string[] = [];
 
       if (scanResult.success && scanResult.items.length > 0) {
-        rawDiscoveredPaths = scanResult.items.map((it) => it.rel_path);
+        console.log(`[SambaSync] FastScan successful: ${scanResult.items.length} items found.`);
+        rawDiscoveredPaths = scanResult.items.map((it: any) => it.rel_path);
         showToast(`Rust fast-scan completed: ${scanResult.items.length} files discovered.`);
       } else {
-        // Fallback scan via standard mock / browser volume scanner if Tauri IPC unavailable
+        console.log('[SambaSync] FastScan returned no items, falling back to manual volume scan...');
+        setSyncProgress(p => ({ ...p, phaseDescription: 'FastScan unavailable. Falling back to manual volume traversal...', currentStep: 8 }));
+        
         const fallbackResult = await retryWithExponentialBackoff(
-          async () => scanSambaVolume(shareName, customScanPath),
+          async () => scanSambaVolume(shareName, rootPath),
           { maxRetries: 2, initialDelayMs: 300 }
-        ).catch(() => ({ success: false, items: [] }));
-
+        ).catch((e) => {
+          console.warn('[SambaSync] scanSambaVolume failed:', e);
+          return { success: false, items: [] };
+        });
+        
         if (fallbackResult.success && fallbackResult.items.length > 0) {
-          rawDiscoveredPaths = fallbackResult.items.map((it) => it.rel_path);
+          console.log(`[SambaSync] Manual fallback scan successful: ${fallbackResult.items.length} items.`);
+          rawDiscoveredPaths = fallbackResult.items.map((it: any) => it.rel_path);
         } else {
-          // Full, realistic sample covering all categories from the user's Samba share structure
+          console.log('[SambaSync] All scanning methods failed. Using local sample data for preview.');
+          setSyncProgress(p => ({ ...p, phaseDescription: 'Network scan failed. Using sample media for preview mode...', currentStep: 10 }));
           rawDiscoveredPaths = [
             'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
             'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
@@ -2441,8 +2436,21 @@ function App() {
 
   // Non-recursive shallow scan of top-level Samba directories
   const handleQuickSyncSamba = async () => {
+    console.log('[QuickSync] Starting shallow scan...');
     setIsQuickSyncing(true);
     setSyncCurrentPath('Samba Share / Top-Level Directory Scan');
+    
+    setSyncProgress({
+      isActive: true,
+      phase: 'scanning',
+      currentStep: 5,
+      totalSteps: 100,
+      currentPath: 'Connecting to Samba...',
+      processedCount: 0,
+      totalCount: 0,
+      phaseDescription: 'QuickSync: Initializing shallow scan of top-level directories...',
+    });
+    
     showToast('QuickSync: Performing shallow scan of top-level Samba directories...');
 
     const startTime = performance.now();
@@ -2450,17 +2458,24 @@ function App() {
       let topDirs: { name: string; path: string; isDirectory: boolean; itemCount?: number; subFolders?: string[] }[] = [];
       
       try {
+        console.log('[QuickSync] Fetching /api/samba/quick-scan');
+        setSyncProgress(p => ({ ...p, currentStep: 25, currentPath: '/api/samba/quick-scan' }));
         const res = await fetch('/api/samba/quick-scan');
         if (res.ok) {
           const data = await res.json();
           if (data.topLevelDirectories && Array.isArray(data.topLevelDirectories)) {
             topDirs = data.topLevelDirectories;
+            console.log(`[QuickSync] API returned ${topDirs.length} directories.`);
           }
+        } else {
+          console.warn(`[QuickSync] API error: ${res.status} ${res.statusText}`);
         }
       } catch (e) {
-        console.warn('Quick-scan API note:', e);
+        console.warn('[QuickSync] API fetch failed:', e);
       }
 
+      setSyncProgress(p => ({ ...p, currentStep: 45, phaseDescription: 'Processing discovered directories...' }));
+      
       if (topDirs.length === 0) {
         topDirs = [
           { name: 'Movies', path: 'Movies', isDirectory: true, subFolders: ['Interstellar (2014)', 'Dune - Part Two (2024)', 'Avatar - The Way of Water (2022)', 'Oppenheimer (2023)', 'The Dark Knight (2008)'] },
@@ -2476,17 +2491,16 @@ function App() {
         ];
       }
 
-      // Clone existing samba tree to attach newly discovered folders without re-indexing
-      const newTree: SambaShareNode[] = JSON.parse(JSON.stringify(sambaTree));
-      const existingTopNames = new Set(newTree.map((n) => n.name.toLowerCase()));
+      // Efficiently update existing samba tree
+      const newTree: SambaShareNode[] = [...sambaTree];
       const discoveredNewFolders: string[] = [];
 
       for (const entry of topDirs) {
         setSyncCurrentPath(`Samba Share / ${entry.path || entry.name}`);
         const topNameLower = entry.name.toLowerCase();
-        const existingNode = newTree.find((n) => n.name.toLowerCase() === topNameLower);
+        const existingNodeIndex = newTree.findIndex((n) => n.name.toLowerCase() === topNameLower);
 
-        if (!existingNode) {
+        if (existingNodeIndex === -1) {
           // Newly discovered top-level folder
           const newNode: SambaShareNode = {
             id: `root-${entry.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`,
@@ -2505,22 +2519,33 @@ function App() {
           };
           newTree.push(newNode);
           discoveredNewFolders.push(entry.name);
-        } else if (entry.subFolders && Array.isArray(entry.subFolders) && existingNode.children) {
+        } else {
           // Check shallow subfolders
-          const existingSubNames = new Set(
-            existingNode.children.map((c: SambaShareNode) => c.name.toLowerCase())
-          );
-          for (const subName of entry.subFolders) {
-            if (!existingSubNames.has(subName.toLowerCase())) {
-              existingNode.children.push({
-                id: `subfolder-${subName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`,
-                name: subName,
-                path: `${existingNode.path}/${subName}`,
-                type: 'folder' as const,
-                artworkStatus: 'pending' as const,
-                children: [],
-              });
-              discoveredNewFolders.push(`${existingNode.name}/${subName}`);
+          const existingNode = { ...newTree[existingNodeIndex] };
+          if (entry.subFolders && Array.isArray(entry.subFolders) && existingNode.children) {
+            const existingSubNames = new Set(
+              existingNode.children.map((c: SambaShareNode) => c.name.toLowerCase())
+            );
+            const updatedChildren = [...existingNode.children];
+            let changed = false;
+
+            for (const subName of entry.subFolders) {
+              if (!existingSubNames.has(subName.toLowerCase())) {
+                updatedChildren.push({
+                  id: `subfolder-${subName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`,
+                  name: subName,
+                  path: `${existingNode.path}/${subName}`,
+                  type: 'folder' as const,
+                  artworkStatus: 'pending' as const,
+                  children: [],
+                });
+                discoveredNewFolders.push(`${existingNode.name}/${subName}`);
+                changed = true;
+              }
+            }
+            if (changed) {
+              existingNode.children = updatedChildren;
+              newTree[existingNodeIndex] = existingNode;
             }
           }
         }
@@ -2668,13 +2693,13 @@ function App() {
             ? {
                 isActive: true,
                 phase: isQuickSyncing ? 'scanning' : isImportingShare ? 'indexing' : 'scanning',
-                currentStep: 45,
+                currentStep: 1,
                 totalSteps: 100,
                 currentPath: syncCurrentPath || 'Scanning Samba shared directories...',
                 processedCount: 0,
                 totalCount: 0,
                 phaseDescription: isQuickSyncing
-                  ? 'QuickSync: Inspecting top-level directories...'
+                  ? 'QuickSync: Initializing shallow scan...'
                   : isImportingShare
                   ? 'Importing classified folders...'
                   : 'Deep scanning Samba share with Rust walkdir...',

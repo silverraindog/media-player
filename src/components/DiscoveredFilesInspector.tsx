@@ -43,10 +43,7 @@ interface DiscoveredRowProps {
   watchedMap: Record<string, boolean>;
 }
 
-const DiscoveredFileRow: React.FC<{
-  index: number;
-  style: React.CSSProperties;
-} & DiscoveredRowProps> = ({ index, style, files, onSelectNode, getFormatBadgeStyle, watchedMap }) => {
+const DiscoveredFileRow: any = ({ index, style, files, onSelectNode, getFormatBadgeStyle, watchedMap }: any) => {
   const item = files[index];
   if (!item) return null;
 
@@ -363,18 +360,20 @@ export const DiscoveredFilesInspector: React.FC<DiscoveredFilesInspectorProps> =
               <p>No files match the active category and extension filters.</p>
             </div>
           ) : (
-            <List
-              rowCount={filteredFiles.length}
-              rowHeight={56}
-              rowComponent={DiscoveredFileRow}
-              rowProps={{
-                files: filteredFiles,
-                onSelectNode,
-                getFormatBadgeStyle,
-                watchedMap,
-              }}
-              style={{ height: 288, width: '100%' }}
-            />
+            <div style={{ height: 288, width: '100%' }}>
+              {React.createElement(List as any, {
+                rowCount: filteredFiles.length,
+                rowHeight: 56,
+                rowComponent: DiscoveredFileRow,
+                rowProps: {
+                  files: filteredFiles,
+                  onSelectNode,
+                  getFormatBadgeStyle,
+                  watchedMap,
+                },
+                style: { height: 288, width: '100%' },
+              })}
+            </div>
           )}
         </div>
       </div>

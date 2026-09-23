@@ -10,6 +10,8 @@ export interface EpisodeMetadata {
   runtime?: string;
   thumbUrl?: string;
   playbackUrl?: string;
+  filePath?: string;
+  filename?: string;
 }
 
 export interface SeasonMetadata {
@@ -72,6 +74,8 @@ export interface MediaMetadata {
   actors?: CastMember[];
   primaryCategory?: string;
   nfoContent?: string;
+  path?: string;
+  synopsis?: string;
   recommendedFolderStructure: string;
   recommendedFilenames: string[];
   matchedFilename?: string;
@@ -104,6 +108,7 @@ export interface SambaConfig {
   isGuest: boolean;
   targetPlatform: 'macos' | 'linux' | 'windows' | 'all';
   baseMountPath: string; // /Volumes/media (macOS), /mnt/media (Linux), Z: (Windows)
+  mountPath?: string;
 }
 
 export interface ParsedFileInfo {
@@ -148,7 +153,7 @@ export interface SambaShareNode {
 export interface SyncLog {
   id: string;
   timestamp: string;
-  type: 'metadata_created' | 'samba_pushed' | 'file_renamed' | 'nfo_downloaded' | 'mount_script_copied' | 'connected' | 'db_saved' | 'progress_updated' | 'deep_refresh';
+  type: 'metadata_created' | 'samba_pushed' | 'file_renamed' | 'nfo_downloaded' | 'mount_script_copied' | 'connected' | 'db_saved' | 'progress_updated' | 'deep_refresh' | 'warning' | 'error';
   title: string;
   details: string;
   status: 'success' | 'pending' | 'warning' | 'error' | 'metadata-missing';

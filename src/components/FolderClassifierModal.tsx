@@ -723,27 +723,28 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                   ))}
                 </div>
               </div>
-              {activeTab === 'categories' && (
-                <div className="p-4 space-y-4">
-                  <h3 className="text-sm font-bold text-white">Manage Media Categories</h3>
-                  <div className="flex gap-2">
-                    <input type="text" id="new-cat-input" placeholder="New Category..." className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
-                    <button onClick={() => {
-                        const input = document.getElementById('new-cat-input') as HTMLInputElement;
-                        handleAddCategory(input.value);
-                        input.value = '';
-                    }} className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold">Add</button>
+            </div>
+          )}
+
+          {activeTab === 'categories' && (
+            <div className="p-4 space-y-4">
+              <h3 className="text-sm font-bold text-white">Manage Media Categories</h3>
+              <div className="flex gap-2">
+                <input type="text" id="new-cat-input" placeholder="New Category..." className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white" />
+                <button onClick={() => {
+                    const input = document.getElementById('new-cat-input') as HTMLInputElement;
+                    handleAddCategory(input.value);
+                    input.value = '';
+                }} className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold">Add</button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {categories.map(cat => (
+                  <div key={cat} className="flex items-center gap-1 bg-slate-800 px-2 py-1 rounded text-xs text-slate-200">
+                    {cat}
+                    <button onClick={() => handleRemoveCategory(cat)} className="text-slate-400 hover:text-white">×</button>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {categories.map(cat => (
-                      <div key={cat} className="flex items-center gap-1 bg-slate-800 px-2 py-1 rounded text-xs text-slate-200">
-                        {cat}
-                        <button onClick={() => handleRemoveCategory(cat)} className="text-slate-400 hover:text-white">×</button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                ))}
+              </div>
             </div>
           )}
         </div>

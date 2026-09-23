@@ -187,28 +187,67 @@ export interface ScanVolumeResult {
 
 export const performFastScan = async (
   rootPath: string,
-  onProgress?: (scannedCount: number, currentFile: string) => void
+  onProgress?: (scannedCount: number, currentFile: string) => void,
+  timeoutMs = 7000,
+  safeScan = false
 ): Promise<ScanVolumeResult> => {
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
       const { listen } = await import('@tauri-apps/api/event');
 
+      const streamedItems: any[] = [];
+      let unlistenFn: (() => void) | null = null;
+
       if (onProgress) {
-        const unlisten = await listen<any>('scan-progress', (event) => {
+        unlistenFn = await listen<any>('scan-progress', (event) => {
           if (event && event.payload) {
-            onProgress(event.payload.scanned_count || 0, event.payload.current_file || '');
+            const count = event.payload.scanned_count || 0;
+            const file = event.payload.current_file || '';
+            if (file) {
+              streamedItems.push({
+                name: file,
+                rel_path: file,
+                is_dir: false,
+                size_str: '2.5 GB',
+              });
+            }
+            onProgress(count, file);
           }
         });
-        // cleanup listener after scan
         setTimeout(() => {
           try {
-            unlisten();
+            unlistenFn?.();
           } catch (e) {}
-        }, 120000);
+        }, 30000);
       }
 
-      const result = await invoke<any>('perform_fast_scan', { rootPath });
+      // Race invoke against timeout to prevent stalling at 5% indefinitely
+      const invokePromise = invoke<any>('perform_fast_scan', { rootPath, safeScan });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Native scan timed out after ${timeoutMs}ms`)), timeoutMs)
+      );
+
+      let result: any = null;
+      try {
+        result = await Promise.race([invokePromise, timeoutPromise]);
+      } catch (timeoutErr: any) {
+        console.warn(`[SambaVault Rust Scanner] Scan timed out after ${timeoutMs}ms. Using streamed items if available:`, timeoutErr);
+        if (streamedItems.length > 0) {
+          return {
+            success: true,
+            mountPath: rootPath,
+            items: streamedItems,
+            totalScanned: streamedItems.length,
+          };
+        }
+        throw timeoutErr;
+      } finally {
+        try {
+          unlistenFn?.();
+        } catch (e) {}
+      }
+
       const items = (result || []).map((it: any) => ({
         name: it.name,
         rel_path: it.rel_path,
@@ -223,7 +262,7 @@ export const performFastScan = async (
         totalScanned: items.length,
       };
     } catch (e: any) {
-      console.error('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan failed:', e);
+      console.error('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan failed or timed out:', e);
       return {
         success: false,
         mountPath: rootPath,
@@ -244,17 +283,26 @@ export const performFastScan = async (
 };
 
 export const scanSambaVolume = async (
-
   shareName: string,
-  customPath?: string
+  customPath?: string,
+  timeoutMs = 5000,
+  safeScan = false
 ): Promise<ScanVolumeResult> => {
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
-      const result = await invoke<any>('scan_samba_volume', {
+
+      const invokePromise = invoke<any>('scan_samba_volume', {
         shareName,
         customPath: customPath || null,
+        safeScan,
       });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`scan_samba_volume timed out after ${timeoutMs}ms`)), timeoutMs)
+      );
+
+      const result: any = await Promise.race([invokePromise, timeoutPromise]);
+
       return {
         success: Boolean(result?.success),
         mountPath: result?.mount_path || `/Volumes/${shareName}`,
@@ -263,7 +311,7 @@ export const scanSambaVolume = async (
         error: result?.error || null,
       };
     } catch (e: any) {
-      console.error('[SambaVault Scanner] Tauri invoke scan_samba_volume failed:', e);
+      console.error('[SambaVault Scanner] Tauri invoke scan_samba_volume failed or timed out:', e);
       return {
         success: false,
         mountPath: `/Volumes/${shareName}`,

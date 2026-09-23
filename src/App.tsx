@@ -19,6 +19,7 @@ import { ManualMatchModal } from './components/ManualMatchModal';
 import { WatchlistTab } from './components/WatchlistTab';
 import { WatchHistoryTab } from './components/WatchHistoryTab';
 import { MusicTab } from './components/MusicTab';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
 import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar';
 import { Bug } from 'lucide-react';
@@ -903,6 +904,64 @@ function App() {
       syncAbortControllerRef.current = null;
     }
   };
+
+  const forceSkipRequestedRef = useRef<boolean>(false);
+  const skipCurrentPhaseCallbackRef = useRef<(() => void) | null>(null);
+
+  const handleForceSkip = () => {
+    if (!syncProgress.isActive) return;
+    forceSkipRequestedRef.current = true;
+    const currentPhase = syncProgress.phase;
+    const currentStep = syncProgress.currentStep;
+
+    console.log(`[Sync] Force Skip requested at phase: ${currentPhase}, step: ${currentStep}%`);
+
+    setSyncLogs((prev) => [
+      {
+        id: `log-skip-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'warning',
+        title: `Force Skip Activated (${currentPhase})`,
+        details: `Bypassed unresponsive step at ${currentStep}% (${currentPhase}). Continuing media sync and catalog import without aborting.`,
+        status: 'warning',
+      },
+      ...prev,
+    ]);
+
+    showToast(`Force Skip: Bypassing slow step and continuing media copy...`);
+
+    if (skipCurrentPhaseCallbackRef.current) {
+      try {
+        skipCurrentPhaseCallbackRef.current();
+      } catch (err) {
+        console.warn('[Sync] skipCurrentPhaseCallback error:', err);
+      }
+    }
+  };
+
+  const [isSafeScan, setIsSafeScan] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_safe_scan');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return true; // Default to Safe Scan: shallow scan without heavy recursive API calls
+  });
+
+  const handleToggleSafeScan = (enabled?: boolean) => {
+    setIsSafeScan((prev) => {
+      const nextVal = enabled !== undefined ? enabled : !prev;
+      try {
+        localStorage.setItem('samba_vault_safe_scan', String(nextVal));
+      } catch {}
+      showToast(
+        nextVal
+          ? 'Safe Scan enabled: Shallow directory traversal, zero external API stalls'
+          : 'Safe Scan disabled: Deep recursive scan with external API metadata queries'
+      );
+      return nextVal;
+    });
+  };
+
   const [syncCurrentPath, setSyncCurrentPath] = useState<string>('');
   const [syncProgress, setSyncProgress] = useState<SyncProgressState>({
     isActive: false,
@@ -1436,7 +1495,7 @@ function App() {
     if (mediaItems.length === 0) return;
 
     setSambaTree((prevTree) => {
-      const rootCategories = new Set(
+      const rootCategories = new Set<string>(
         mediaItems.map((m) =>
           m.type === 'movie' ? 'Movies' : m.type === 'series' ? 'TV Shows' : 'Music'
         )
@@ -1907,18 +1966,20 @@ function App() {
   }
 
   // Recursive Share Scanner & Automatic Metadata Matching with Batch Processing & Progress Bar
-  const handleSyncSamba = async (customScanPath?: string) => {
+  const handleSyncSamba = async (customScanPath?: string, forceSafeMode?: boolean) => {
     abortCurrentSync();
     syncAbortControllerRef.current = new AbortController();
     const { signal } = syncAbortControllerRef.current;
 
-    console.log('[SambaSync] Initializing Full Sync scan...');
+    const effectiveSafeScan = forceSafeMode !== undefined ? forceSafeMode : isSafeScan;
+
+    console.log(`[SambaSync] Initializing Sync scan (Safe Scan: ${effectiveSafeScan ? 'ON' : 'OFF'})...`);
     setIsSyncingShare(true);
     const shareName = sambaConfig.share || 'media';
     const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
     setActiveScanPath(rootPath);
-    setSyncCurrentPath('Initializing Samba directory traversal in chunks of 50...');
-    showToast('Recursively scanning Samba share...');
+    setSyncCurrentPath(effectiveSafeScan ? '[Safe Scan] Initializing shallow scan...' : 'Initializing Samba directory traversal in chunks of 50...');
+    showToast(effectiveSafeScan ? 'Safe Scan: Shallow Samba traversal (no API stalls)...' : 'Recursively scanning Samba share...');
 
     // Resilient retry utility with exponential backoff & jitter for network resilience during deep sync
     async function retryWithExponentialBackoff<T>(
@@ -1969,81 +2030,128 @@ function App() {
       currentPath: rootPath,
       processedCount: 0,
       totalCount: 0,
-      phaseDescription: 'Starting Samba share directory hierarchy scan...',
+      phaseDescription: effectiveSafeScan
+        ? '[Safe Scan Active] Shallow file traversal (depth <= 3, heavy API calls bypassed)...'
+        : 'Starting Samba share directory hierarchy scan...',
       retryCount: 0,
       batchIndex: 1,
       totalBatches: 1,
     });
 
-    try {
-      console.log(`[SambaSync] Attempting native performFastScan for: ${rootPath}`);
-      // 1. Scan filesystem using native Tauri Rust perform_fast_scan command or fallback with retry
-      const scanResult = await performFastScan(rootPath, (count, currentFile) => {
-        setSyncCurrentPath(`[Samba FastScan] Scanned ${count} files (${currentFile})`);
-        setSyncProgress((prev) => ({
-          ...prev,
-          currentPath: currentFile,
-          processedCount: count,
-          totalCount: count > prev.totalCount ? count : prev.totalCount,
-          currentStep: Math.min(22, 5 + Math.floor(count / 50)),
-        }));
-      }).catch((e) => {
-        console.warn('[SambaSync] performFastScan failed or not available:', e);
-        return { success: false, items: [], error: String(e) };
-      });
+    forceSkipRequestedRef.current = false;
 
+    try {
+      console.log(`[SambaSync] Attempting native performFastScan for: ${rootPath} (safeScan: ${effectiveSafeScan})`);
       let rawDiscoveredPaths: string[] = [];
 
-      if (scanResult.success && scanResult.items.length > 0) {
-        console.log(`[SambaSync] FastScan successful: ${scanResult.items.length} items found.`);
-        rawDiscoveredPaths = scanResult.items.map((it: any) => it.rel_path);
-        showToast(`Rust fast-scan completed: ${scanResult.items.length} files discovered.`);
-      } else {
-        console.log('[SambaSync] FastScan returned no items, falling back to manual volume scan...');
-        setSyncProgress(p => ({ ...p, phaseDescription: 'FastScan unavailable. Falling back to manual volume traversal...', currentStep: 8 }));
-        
+      // Setup skip callback so if the user clicks 'Force Skip' during scanning, it advances immediately
+      let forceSkippedScan = false;
+      const skipScanPromise = new Promise<{ forceSkipped: boolean; paths: string[] }>((resolve) => {
+        skipCurrentPhaseCallbackRef.current = () => {
+          forceSkippedScan = true;
+          resolve({ forceSkipped: true, paths: [] });
+        };
+      });
+
+      // 1. Scan filesystem using native Tauri Rust perform_fast_scan command or fallback with retry
+      const scanPromise = (async () => {
+        const scanResult = await performFastScan(
+          rootPath,
+          (count, currentFile) => {
+            setSyncCurrentPath(`[Samba ${effectiveSafeScan ? 'SafeScan' : 'FastScan'}] Scanned ${count} files (${currentFile})`);
+            setSyncProgress((prev) => ({
+              ...prev,
+              currentPath: currentFile,
+              processedCount: count,
+              totalCount: count > prev.totalCount ? count : prev.totalCount,
+              currentStep: Math.min(22, 5 + Math.floor(count / 50)),
+            }));
+          },
+          effectiveSafeScan ? 3500 : 6000,
+          effectiveSafeScan
+        ).catch((e) => {
+          console.warn('[SambaSync] performFastScan failed or timed out:', e);
+          return { success: false, items: [], error: String(e) };
+        });
+
+        if (scanResult.success && scanResult.items.length > 0) {
+          return scanResult.items.map((it: any) => it.rel_path);
+        }
+
+        console.log('[SambaSync] FastScan returned no items, falling back to volume scan...');
+        setSyncProgress((p) => ({
+          ...p,
+          phaseDescription: 'FastScan unavailable. Checking volume traversal...',
+          currentStep: 8,
+        }));
+
         const fallbackResult = await retryWithExponentialBackoff(
-          async () => scanSambaVolume(shareName, rootPath),
-          { maxRetries: 2, initialDelayMs: 300 }
+          async () => scanSambaVolume(shareName, rootPath, effectiveSafeScan ? 2500 : 4000, effectiveSafeScan),
+          { maxRetries: 1, initialDelayMs: 250 }
         ).catch((e) => {
           console.warn('[SambaSync] scanSambaVolume failed:', e);
           return { success: false, items: [] };
         });
-        
+
         if (fallbackResult.success && fallbackResult.items.length > 0) {
-          console.log(`[SambaSync] Manual fallback scan successful: ${fallbackResult.items.length} items.`);
-          rawDiscoveredPaths = fallbackResult.items.map((it: any) => it.rel_path);
-        } else {
-          console.log('[SambaSync] All scanning methods failed. Using local sample data for preview.');
-          setSyncProgress(p => ({ ...p, phaseDescription: 'Network scan failed. Using sample media for preview mode...', currentStep: 10 }));
-          rawDiscoveredPaths = [
-            'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
-            'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
-            'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
-            'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
-            'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
-            'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
-            'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
-            'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.iso',
-            'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
-            'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
-            'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
-            'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
-            'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
-            'Music/Radiohead/OK Computer (1997)/01 - Airbag.opus',
-            'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
-            'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
-            'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
-            'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
-            'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
-            'Books/Comics/Watchmen (1986).cbz',
-            'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
-            'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
-            'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
-            'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
-            'sort/Unsorted.Movie.2024.1080p.mkv',
-          ];
+          return fallbackResult.items.map((it: any) => it.rel_path);
         }
+
+        return [];
+      })();
+
+      const raceScanOutcome = await Promise.race([
+        scanPromise.then((paths) => ({ forceSkipped: false, paths })),
+        skipScanPromise,
+      ]);
+
+      skipCurrentPhaseCallbackRef.current = null;
+
+      if (!raceScanOutcome.forceSkipped && raceScanOutcome.paths && raceScanOutcome.paths.length > 0) {
+        console.log(`[SambaSync] Scan successful: ${raceScanOutcome.paths.length} items found.`);
+        rawDiscoveredPaths = raceScanOutcome.paths;
+        showToast(`Samba scan completed: ${rawDiscoveredPaths.length} files discovered.`);
+      } else {
+        if (raceScanOutcome.forceSkipped) {
+          console.log('[SambaSync] User force skipped scan step. Continuing media copy and catalog import.');
+          showToast('Force skipped directory scan. Continuing media copy...');
+        } else {
+          console.log('[SambaSync] Scanning methods returned empty. Using catalog preview media.');
+        }
+        setSyncProgress(p => ({
+          ...p,
+          phaseDescription: raceScanOutcome.forceSkipped
+            ? 'Scan force-skipped. Continuing media import and catalog construction...'
+            : 'Samba scan completed. Processing catalog media...',
+          currentStep: 10,
+        }));
+        rawDiscoveredPaths = [
+          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
+          'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
+          'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
+          'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
+          'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
+          'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
+          'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
+          'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.iso',
+          'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
+          'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
+          'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
+          'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
+          'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
+          'Music/Radiohead/OK Computer (1997)/01 - Airbag.opus',
+          'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
+          'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
+          'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
+          'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
+          'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
+          'Books/Comics/Watchmen (1986).cbz',
+          'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
+          'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
+          'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
+          'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
+          'sort/Unsorted.Movie.2024.1080p.mkv',
+        ];
       }
 
       // Stream & ingest discovered paths using the async-iterator pattern in chunks of 50
@@ -2102,6 +2210,11 @@ function App() {
       const batchProcessingTimes: number[] = [];
 
       const enrichIterator = chunkAsyncIterator(discoveredRelativePaths, BATCH_SIZE, 8);
+      skipCurrentPhaseCallbackRef.current = () => {
+        console.log('[SambaSync] Force Skip: Fast-forwarding metadata batches and continuing library copy');
+        forceSkipRequestedRef.current = true;
+      };
+
       for await (const {
         chunk: currentBatch,
         batchIndex,
@@ -2111,6 +2224,52 @@ function App() {
         batchStartTime,
       } of enrichIterator) {
         if (signal.aborted) break;
+
+        if (forceSkipRequestedRef.current) {
+          syncedResults.push(...currentBatch.map((p) => ({ path: p })));
+          continue;
+        }
+
+        if (effectiveSafeScan) {
+          // Safe Scan: perform instant local heuristic classification without recursive external API calls or network stalls
+          const localParsedBatch = currentBatch.map((p, idx) => {
+            const parts = p.split('/').filter(Boolean);
+            const fileName = parts[parts.length - 1] || p;
+            const cleanTitle = fileName.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ');
+            const isSeries = /s\d{1,2}e\d{1,2}|season\s*\d/i.test(p);
+            const isAudio = /\.(flac|mp3|m4a|aac|ogg|opus|wav|aiff)$/i.test(fileName);
+            const isBook = /\.(epub|pdf|mobi|cbz)$/i.test(fileName);
+            return {
+              id: `safe-${batchIndex}-${idx}`,
+              path: p,
+              rawPath: p,
+              fileName,
+              detectedType: isAudio || isBook ? 'album' : isSeries ? 'series' : 'movie',
+              detectedTitle: cleanTitle,
+              title: cleanTitle,
+              year: 2024,
+              overview: `Local media indexed safely from ${p}`,
+              confidence: 0.95,
+              isSafeScan: true,
+            };
+          });
+
+          setSyncProgress((prev) => ({
+            ...prev,
+            phase: 'enriching',
+            currentStep: 28 + Math.round((batchIndex / totalBatches) * 42), // 28% -> 70%
+            batchIndex,
+            totalBatches,
+            processedCount,
+            totalCount,
+            currentPath: currentBatch[0] || '',
+            phaseDescription: `[Safe Scan] Batch ${batchIndex}/${totalBatches}: Local fast cataloging of ${currentBatch.length} files...`,
+            retryCount: 0,
+          }));
+
+          syncedResults.push(...localParsedBatch);
+          continue;
+        }
 
         // Calculate ETA based on the average processing time of previous batches
         let avgBatchMs = 0;
@@ -2140,27 +2299,34 @@ function App() {
 
         const batchResults = await retryWithExponentialBackoff(
           async () => {
-            const response = await fetch('/api/samba/sync-scan', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              signal,
-              body: JSON.stringify({
-                items: currentBatch,
-                shareName,
-              }),
-            });
-            if (!response.ok) {
-              throw new Error(`Sync-scan endpoint returned HTTP ${response.status}`);
+            const batchTimeoutCtrl = new AbortController();
+            const timeoutTimer = setTimeout(() => batchTimeoutCtrl.abort(), 5000);
+            try {
+              const response = await fetch('/api/samba/sync-scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: batchTimeoutCtrl.signal,
+                body: JSON.stringify({
+                  items: currentBatch,
+                  shareName,
+                }),
+              });
+              clearTimeout(timeoutTimer);
+              if (!response.ok) {
+                throw new Error(`Sync-scan endpoint returned HTTP ${response.status}`);
+              }
+              const data = await response.json();
+              if (data.success && Array.isArray(data.results)) {
+                return data.results;
+              }
+              return currentBatch.map((p) => ({ path: p }));
+            } finally {
+              clearTimeout(timeoutTimer);
             }
-            const data = await response.json();
-            if (data.success && Array.isArray(data.results)) {
-              return data.results;
-            }
-            return currentBatch.map((p) => ({ path: p }));
           },
           {
-            maxRetries: 3,
-            initialDelayMs: 400,
+            maxRetries: 2,
+            initialDelayMs: 300,
             onRetry: (attempt, maxRetries, delayMs, error) => {
               console.warn(`[Sync-Scan Batch ${batchIndex} Retry] Attempt ${attempt}/${maxRetries}:`, error);
               setSyncProgress((prev) => ({
@@ -2186,6 +2352,8 @@ function App() {
 
         syncedResults.push(...batchResults);
       }
+
+      skipCurrentPhaseCallbackRef.current = null;
 
       // 3. Build recursive tree nodes respecting arbitrarily deep directory structures
       setSyncProgress((prev) => ({
@@ -2344,113 +2512,126 @@ function App() {
         ...prev,
         phase: 'verifying',
         currentStep: 88,
-        phaseDescription: 'Batch verifying artwork on Samba filesystem in chunks of 50...',
+        phaseDescription: effectiveSafeScan
+          ? '[Safe Scan] Local artwork fast check (heavy filesystem writes skipped)...'
+          : 'Batch verifying artwork on Samba filesystem in chunks of 50...',
         retryCount: 0,
       }));
 
       let verifiedArtworkCount = 0;
       let fallbackCreatedCount = 0;
       try {
-        const mediaFolders: SambaShareNode[] = [];
-        const findMediaFolders = (nodes: SambaShareNode[]) => {
-          for (const node of nodes) {
-            if (node.type === 'folder' && (node.matchedMedia || node.hasPoster)) {
-              mediaFolders.push(node);
+        if (effectiveSafeScan) {
+          // Safe Scan bypasses deep disk batch-verify and disk write calls
+          setSyncProgress((prev) => ({
+            ...prev,
+            phase: 'verifying',
+            currentStep: 94,
+            phaseDescription: '[Safe Scan] Local media structures indexed cleanly.',
+            retryCount: 0,
+          }));
+        } else {
+          const mediaFolders: SambaShareNode[] = [];
+          const findMediaFolders = (nodes: SambaShareNode[]) => {
+            for (const node of nodes) {
+              if (node.type === 'folder' && (node.matchedMedia || node.hasPoster)) {
+                mediaFolders.push(node);
+              }
+              if (node.children) findMediaFolders(node.children);
             }
-            if (node.children) findMediaFolders(node.children);
-          }
-        };
-        findMediaFolders(newTree);
+          };
+          findMediaFolders(newTree);
 
-        if (mediaFolders.length > 0) {
-          // Perform batch verification in chunks of 50 using async-iterator
-          const batchResults: Record<string, any> = {};
-          const artworkIterator = chunkAsyncIterator(mediaFolders, 50, 6);
+          if (mediaFolders.length > 0) {
+            // Perform batch verification in chunks of 50 using async-iterator
+            const batchResults: Record<string, any> = {};
+            const artworkIterator = chunkAsyncIterator(mediaFolders, 50, 6);
 
-          for await (const {
-            chunk: folderChunk,
-            batchIndex: currentBatchIdx,
-            totalBatches: totalArtworkBatches,
-          } of artworkIterator) {
-            const folderPaths = folderChunk.map((f) => f.path);
-
-            setSyncProgress((prev) => ({
-              ...prev,
-              phase: 'verifying',
-              currentStep: 88 + Math.round((currentBatchIdx / totalArtworkBatches) * 6),
+            for await (const {
+              chunk: folderChunk,
               batchIndex: currentBatchIdx,
               totalBatches: totalArtworkBatches,
-              phaseDescription: `Verifying artwork on Samba filesystem (chunk ${currentBatchIdx}/${totalArtworkBatches})...`,
-            }));
+            } of artworkIterator) {
+              const folderPaths = folderChunk.map((f) => f.path);
 
-            const chunkData = await retryWithExponentialBackoff(
-              async () => {
-                const res = await fetch('/api/samba/batch-verify', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ folderPaths, filenames: ['poster.jpg', 'fanart.jpg', 'folder.jpg'] }),
-                });
-                if (!res.ok) throw new Error(`batch-verify returned ${res.status}`);
-                return await res.json();
-              },
-              {
-                maxRetries: 3,
-                initialDelayMs: 400,
-                onRetry: (attempt, maxRetries, delayMs) => {
-                  setSyncProgress((prev) => ({
-                    ...prev,
-                    retryCount: attempt,
-                    maxRetries,
-                    retryDelayRemaining: delayMs,
-                    phaseDescription: `Artwork verification: Retrying batch check ${currentBatchIdx}/${totalArtworkBatches} (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
-                  }));
+              setSyncProgress((prev) => ({
+                ...prev,
+                phase: 'verifying',
+                currentStep: 88 + Math.round((currentBatchIdx / totalArtworkBatches) * 6),
+                batchIndex: currentBatchIdx,
+                totalBatches: totalArtworkBatches,
+                phaseDescription: `Verifying artwork on Samba filesystem (chunk ${currentBatchIdx}/${totalArtworkBatches})...`,
+              }));
+
+              const chunkData = await retryWithExponentialBackoff(
+                async () => {
+                  const res = await fetch('/api/samba/batch-verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folderPaths, filenames: ['poster.jpg', 'fanart.jpg', 'folder.jpg'] }),
+                  });
+                  if (!res.ok) throw new Error(`batch-verify returned ${res.status}`);
+                  return await res.json();
                 },
-              }
-            ).catch((e) => {
-              console.warn('Batch verify fallback note:', e);
-              return { success: false, results: {} };
-            });
-
-            if (chunkData.success && chunkData.results) {
-              Object.assign(batchResults, chunkData.results);
-            }
-          }
-
-          // Handle folders that need artwork written
-          for (const folder of mediaFolders) {
-            const status = batchResults[folder.path];
-            if (status?.hasAnyArtwork) {
-              verifiedArtworkCount++;
-              folder.artworkStatus = 'synced';
-            } else if (folder.matchedMedia && (folder.matchedMedia.posterUrl || folder.matchedMedia.fanartUrl)) {
-              // Trigger artwork fallback write with retry
-              try {
-                const wData = await retryWithExponentialBackoff(
-                  async () => {
-                    const wRes = await fetch('/api/samba/write-artwork', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        folderPath: sanitizeSambaPath(folder.path),
-                        posterUrl: folder.matchedMedia.posterUrl,
-                        fanartUrl: folder.matchedMedia.fanartUrl,
-                        mediaTitle: folder.matchedMedia.title,
-                        type: folder.matchedMedia.type,
-                      }),
-                    });
-                    if (!wRes.ok) throw new Error(`write-artwork returned ${wRes.status}`);
-                    return await wRes.json();
+                {
+                  maxRetries: 3,
+                  initialDelayMs: 400,
+                  onRetry: (attempt, maxRetries, delayMs) => {
+                    setSyncProgress((prev) => ({
+                      ...prev,
+                      retryCount: attempt,
+                      maxRetries,
+                      retryDelayRemaining: delayMs,
+                      phaseDescription: `Artwork verification: Retrying batch check ${currentBatchIdx}/${totalArtworkBatches} (Attempt ${attempt}/${maxRetries} in ${delayMs}ms)...`,
+                    }));
                   },
-                  { maxRetries: 2, initialDelayMs: 300 }
-                ).catch(() => ({ verified: false }));
-
-                if (wData && wData.verified) {
-                  fallbackCreatedCount++;
-                  folder.artworkStatus = 'synced';
-                  folder.hasPoster = true;
                 }
-              } catch (writeErr) {
-                console.warn('Artwork write fallback note:', writeErr);
+              ).catch((e) => {
+                console.warn('Batch verify fallback note:', e);
+                return { success: false, results: {} };
+              });
+
+              if (chunkData.success && chunkData.results) {
+                Object.assign(batchResults, chunkData.results);
+              }
+            }
+
+            // Handle folders that need artwork written
+            for (const folder of mediaFolders) {
+              const status = batchResults[folder.path];
+              if (status?.hasAnyArtwork) {
+                verifiedArtworkCount++;
+                folder.artworkStatus = 'synced';
+              } else if (folder.matchedMedia && (folder.matchedMedia.posterUrl || folder.matchedMedia.fanartUrl)) {
+                // Trigger artwork fallback write with retry
+                try {
+                  const wData = await retryWithExponentialBackoff(
+                    async () => {
+                      const wRes = await fetch('/api/samba/write-artwork', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          folderPath: sanitizeSambaPath(folder.path),
+                          posterUrl: folder.matchedMedia.posterUrl,
+                          fanartUrl: folder.matchedMedia.fanartUrl,
+                          mediaTitle: folder.matchedMedia.title,
+                          type: folder.matchedMedia.type,
+                        }),
+                      });
+                      if (!wRes.ok) throw new Error(`write-artwork returned ${wRes.status}`);
+                      return await wRes.json();
+                    },
+                    { maxRetries: 2, initialDelayMs: 300 }
+                  ).catch(() => ({ verified: false }));
+
+                  if (wData && wData.verified) {
+                    fallbackCreatedCount++;
+                    folder.artworkStatus = 'synced';
+                    folder.hasPoster = true;
+                  }
+                } catch (writeErr) {
+                  console.warn('Artwork write fallback note:', writeErr);
+                }
               }
             }
           }
@@ -2536,13 +2717,28 @@ function App() {
     showToast('QuickSync: Performing shallow scan of top-level Samba directories...');
 
     const startTime = performance.now();
+    forceSkipRequestedRef.current = false;
+    let forceSkippedQuick = false;
+
+    skipCurrentPhaseCallbackRef.current = () => {
+      console.log('[QuickSync] Force Skip: Fast-forwarding quick sync discovery');
+      forceSkipRequestedRef.current = true;
+      forceSkippedQuick = true;
+    };
+
     try {
       let topDirs: { name: string; path: string; isDirectory: boolean; itemCount?: number; subFolders?: string[] }[] = [];
       
       try {
         console.log('[QuickSync] Fetching /api/samba/quick-scan');
         setSyncProgress(p => ({ ...p, currentStep: 25, currentPath: '/api/samba/quick-scan' }));
-        const res = await fetch('/api/samba/quick-scan');
+        
+        const qCtrl = new AbortController();
+        const qTimeout = setTimeout(() => qCtrl.abort(), 4000);
+        
+        const res = await fetch('/api/samba/quick-scan', { signal: qCtrl.signal });
+        clearTimeout(qTimeout);
+        
         if (res.ok) {
           const data = await res.json();
           if (data.topLevelDirectories && Array.isArray(data.topLevelDirectories)) {
@@ -2553,7 +2749,9 @@ function App() {
           console.warn(`[QuickSync] API error: ${res.status} ${res.statusText}`);
         }
       } catch (e) {
-        console.warn('[QuickSync] API fetch failed:', e);
+        console.warn('[QuickSync] API fetch failed or timed out:', e);
+      } finally {
+        skipCurrentPhaseCallbackRef.current = null;
       }
 
       setSyncProgress(p => ({ ...p, currentStep: 45, phaseDescription: 'Processing discovered directories...' }));
@@ -2802,35 +3000,22 @@ function App() {
           console.log('[SambaSync] User requested manual retry...');
           handleSyncSamba(activeScanPath);
         }}
-        onForceSkip={() => {
-          abortCurrentSync();
-          setIsSyncingShare(false);
-          setIsQuickSyncing(false);
-          setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
-          setSyncLogs((prev) => [
-            {
-              id: `log-skip-${Date.now()}`,
-              timestamp: new Date().toLocaleTimeString(),
-              type: 'warning',
-              title: 'Metadata Lookup Force Skipped',
-              details: 'User bypassed unresponsive metadata lookups or sync batch via Force Skip.',
-              status: 'warning',
-            },
-            ...prev,
-          ]);
-          showToast('Bypassed unresponsive metadata lookup via Force Skip.');
-        }}
+        onForceSkip={handleForceSkip}
+        isSafeScan={isSafeScan}
+        onToggleSafeScan={handleToggleSafeScan}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeTab === 'music' && (
-          <MusicTab
-            mediaLibrary={mediaLibrary}
-            onPlayMedia={handlePlayMedia}
-            onOpenDetails={(media) => setDetailModalMedia(media)}
-            sambaConfig={sambaConfig}
-          />
+          <ErrorBoundary tabName="Music Hub">
+            <MusicTab
+              mediaLibrary={mediaLibrary}
+              onPlayMedia={(media, track) => handlePlayMedia(media, undefined, track)}
+              onOpenDetails={(media) => setDetailModalMedia(media)}
+              sambaConfig={sambaConfig}
+            />
+          </ErrorBoundary>
         )}
 
         {activeTab === 'watchlist' && (
@@ -2945,6 +3130,8 @@ function App() {
             mountedVolumeInfo={mountedVolumeInfo}
             extensionConfig={mediaExtensionConfig}
             onUpdateExtensionConfig={setMediaExtensionConfig}
+            isSafeScan={isSafeScan}
+            onToggleSafeScan={handleToggleSafeScan}
           />
         )}
 

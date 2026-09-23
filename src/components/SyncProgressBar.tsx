@@ -14,6 +14,8 @@ import {
   Check,
   Clock,
   Timer,
+  Shield,
+  ShieldCheck,
 } from 'lucide-react';
 
 export interface SyncProgressState {
@@ -41,6 +43,8 @@ interface SyncProgressBarProps {
   onDismiss?: () => void;
   onRetry?: () => void;
   onForceSkip?: () => void;
+  isSafeScan?: boolean;
+  onToggleSafeScan?: (enabled: boolean) => void;
   className?: string;
 }
 
@@ -121,6 +125,8 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
   onDismiss,
   onRetry,
   onForceSkip,
+  isSafeScan = false,
+  onToggleSafeScan,
   className = '',
 }) => {
   // Store timing history for previous batches to calculate accurate ETA
@@ -360,6 +366,43 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                         {progress.retryDelayRemaining ? ` (${progress.retryDelayRemaining}ms)` : ''}
                       </span>
                     </motion.span>
+                  ) : null}
+
+                  {/* Safe Scan Mode Toggle Badge / Button */}
+                  {onToggleSafeScan ? (
+                    <motion.button
+                      type="button"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => onToggleSafeScan(!isSafeScan)}
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-mono flex items-center gap-1.5 transition-all cursor-pointer shadow-sm border ${
+                        isSafeScan
+                          ? 'bg-emerald-950/90 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/90 shadow-emerald-950/30 ring-1 ring-emerald-500/20'
+                          : 'bg-slate-800/90 border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-750'
+                      }`}
+                      title={
+                        isSafeScan
+                          ? 'Safe Scan Active: Shallow file traversal without deep recursive lookups or heavy API calls. Click to toggle.'
+                          : 'Safe Scan OFF: Full deep scan with heavy external lookups. Click to activate Safe Scan.'
+                      }
+                    >
+                      {isSafeScan ? (
+                        <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <Shield className="w-3 h-3 text-slate-400" />
+                      )}
+                      <span className="font-semibold">{isSafeScan ? 'Safe Scan: ON' : 'Safe Scan: OFF'}</span>
+                    </motion.button>
+                  ) : isSafeScan ? (
+                    <span
+                      className="px-2 py-0.5 rounded-full text-[10px] font-mono flex items-center gap-1.5 bg-emerald-950/90 border border-emerald-500/60 text-emerald-300"
+                      title="Safe Scan Active: Shallow traversal without heavy API calls"
+                    >
+                      <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                      <span className="font-semibold">Safe Scan</span>
+                    </span>
                   ) : null}
                 </div>
 

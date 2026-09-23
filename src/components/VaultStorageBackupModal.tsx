@@ -62,8 +62,8 @@ export const VaultStorageBackupModal: React.FC<VaultStorageBackupModalProps> = (
 
   if (!isOpen) return null;
 
-  const countSyncedSeries = syncLogs.filter((l) => l.status === 'synced' || l.status === 'verified').length;
-  const countFailedSeries = syncLogs.filter((l) => l.status === 'failed' || l.status === 'metadata-missing').length;
+  const countSyncedSeries = syncLogs.filter((l) => l.status === 'success').length;
+  const countFailedSeries = syncLogs.filter((l) => l.status === 'error' || l.status === 'metadata-missing').length;
 
   const handleExportBackup = () => {
     try {

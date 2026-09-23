@@ -94,28 +94,35 @@ export const MusicTab: React.FC<MusicTabProps> = ({
   , [playlists, selectedPlaylistId]);
 
   // Filter media items that are albums or audio books
-  const musicItems = mediaLibrary.filter(
+  const musicItems = (mediaLibrary || []).filter(
     (m) =>
-      m.type === 'album' ||
-      m.recommendedFolderStructure?.toLowerCase().includes('music') ||
-      m.recommendedFolderStructure?.toLowerCase().includes('audio') ||
-      (m.genres && m.genres.some((g) => /music|audio|album|rock|electronic|pop|jazz|classical/i.test(g)))
+      m &&
+      (m.type === 'album' ||
+        m.recommendedFolderStructure?.toLowerCase().includes('music') ||
+        m.recommendedFolderStructure?.toLowerCase().includes('audio') ||
+        (m.genres && m.genres.some((g) => /music|audio|album|rock|electronic|pop|jazz|classical/i.test(g))))
   );
 
   // Extract all unique genres
   const allGenres = Array.from(
-    new Set(musicItems.flatMap((m) => m.genres || ['Music']))
+    new Set(musicItems.flatMap((m) => (m.genres && m.genres.length > 0 ? m.genres : ['Music'])))
   );
 
   const filteredMusic = useMemo(() => {
     return musicItems.filter((item) => {
+      if (!item) return false;
+      const title = (item.title || '').toLowerCase();
+      const overview = (item.overview || '').toLowerCase();
+      const queryLower = (query || '').toLowerCase().trim();
+
       // 1. Check Query
-      const matchesQuery =
-        item.title.toLowerCase().includes(query.toLowerCase()) ||
-        (item.artists && item.artists.some((a) => a.toLowerCase().includes(query.toLowerCase()))) ||
-        item.overview.toLowerCase().includes(query.toLowerCase());
-      
-      if (!matchesQuery) return false;
+      if (queryLower) {
+        const matchesQuery =
+          title.includes(queryLower) ||
+          (item.artists && item.artists.some((a) => (a || '').toLowerCase().includes(queryLower))) ||
+          overview.includes(queryLower);
+        if (!matchesQuery) return false;
+      }
 
       // 2. Check Tab Genre Filter
       const matchesTabGenre =
@@ -127,11 +134,11 @@ export const MusicTab: React.FC<MusicTabProps> = ({
       if (activePlaylist) {
         const { rules } = activePlaylist;
         
-        if (rules.genre && !(item.genres && item.genres.some(g => g.toLowerCase().includes(rules.genre!.toLowerCase())))) return false;
-        if (rules.artist && !(item.artists && item.artists.some(a => a.toLowerCase().includes(rules.artist!.toLowerCase())))) return false;
-        if (rules.yearMin && item.year < rules.yearMin) return false;
-        if (rules.yearMax && item.year > rules.yearMax) return false;
-        if (rules.minRating && item.rating < rules.minRating) return false;
+        if (rules.genre && !(item.genres && item.genres.some((g) => (g || '').toLowerCase().includes(rules.genre!.toLowerCase())))) return false;
+        if (rules.artist && !(item.artists && item.artists.some((a) => (a || '').toLowerCase().includes(rules.artist!.toLowerCase())))) return false;
+        if (rules.yearMin && (item.year || 0) < rules.yearMin) return false;
+        if (rules.yearMax && (item.year || 0) > rules.yearMax) return false;
+        if (rules.minRating && (item.rating || 0) < rules.minRating) return false;
       }
 
       return true;
@@ -140,25 +147,25 @@ export const MusicTab: React.FC<MusicTabProps> = ({
 
   const handleExportM3U = (playlist: SmartPlaylist) => {
     // Filter items based on this playlist's rules
-    const items = musicItems.filter(item => {
+    const items = musicItems.filter((item) => {
       const { rules } = playlist;
-      if (rules.genre && !(item.genres && item.genres.some(g => g.toLowerCase().includes(rules.genre!.toLowerCase())))) return false;
-      if (rules.artist && !(item.artists && item.artists.some(a => a.toLowerCase().includes(rules.artist!.toLowerCase())))) return false;
-      if (rules.yearMin && item.year < rules.yearMin) return false;
-      if (rules.yearMax && item.year > rules.yearMax) return false;
-      if (rules.minRating && item.rating < rules.minRating) return false;
+      if (rules.genre && !(item.genres && item.genres.some((g) => (g || '').toLowerCase().includes(rules.genre!.toLowerCase())))) return false;
+      if (rules.artist && !(item.artists && item.artists.some((a) => (a || '').toLowerCase().includes(rules.artist!.toLowerCase())))) return false;
+      if (rules.yearMin && (item.year || 0) < rules.yearMin) return false;
+      if (rules.yearMax && (item.year || 0) > rules.yearMax) return false;
+      if (rules.minRating && (item.rating || 0) < rules.minRating) return false;
       return true;
     });
 
     let m3uContent = '#EXTM3U\n';
     items.forEach(item => {
-      const tracks = item.tracks && item.tracks.length > 0 ? item.tracks : [{ title: item.title, duration: '0:00' }];
+      const tracks = item.tracks && item.tracks.length > 0 ? item.tracks : [{ title: item.title || 'Track', duration: '0:00' }];
       tracks.forEach(track => {
         const artist = item.artists?.join(', ') || 'Various Artists';
-        const title = track.title || item.title;
+        const title = track.title || item.title || 'Track';
         const durationSec = 0; // Duration parsing is complex, keeping 0 for now
         m3uContent += `#EXTINF:${durationSec},${artist} - ${title}\n`;
-        const sharePath = `//${sambaConfig.server}/${sambaConfig.share}/${item.recommendedFolderStructure || 'Music/' + item.title}`;
+        const sharePath = `//${sambaConfig.server || '192.168.1.100'}/${sambaConfig.share || 'media'}/${item.recommendedFolderStructure || 'Music/' + (item.title || 'Album')}`;
         m3uContent += `${sharePath}/${track.title || 'album'}.mp3\n`;
       });
     });
@@ -167,7 +174,7 @@ export const MusicTab: React.FC<MusicTabProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${playlist.name.replace(/\s+/g, '_')}.m3u`;
+    link.download = `${(playlist.name || 'playlist').replace(/\s+/g, '_')}.m3u`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -175,7 +182,7 @@ export const MusicTab: React.FC<MusicTabProps> = ({
   };
 
   const handleCopyPath = (item: MediaMetadata) => {
-    const path = `//${sambaConfig.server}/${sambaConfig.share}/${item.recommendedFolderStructure || 'Music/' + item.title}`;
+    const path = `//${sambaConfig.server || '192.168.1.100'}/${sambaConfig.share || 'media'}/${item.recommendedFolderStructure || 'Music/' + (item.title || 'Album')}`;
     navigator.clipboard.writeText(path);
     setCopiedId(item.id);
     setTimeout(() => setCopiedId(null), 2000);
@@ -305,16 +312,19 @@ export const MusicTab: React.FC<MusicTabProps> = ({
                   {/* Album Art Cover Header */}
                   <div className="relative aspect-square overflow-hidden bg-slate-950">
                     <img
-                      src={album.posterUrl}
-                      alt={album.title}
+                      src={album.posterUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80'}
+                      alt={album.title || 'Music Album'}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80';
+                      }}
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-80" />
 
                     {/* Top Badge */}
                     <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-950/80 backdrop-blur-md border border-emerald-500/30 text-[10px] font-bold text-emerald-300">
                       <Disc className="w-3 h-3 animate-spin-slow" />
-                      <span>{album.year} • {(album.tracks || []).length || 10} Tracks</span>
+                      <span>{album.year || 'Album'} • {(album.tracks || []).length || 1} Tracks</span>
                     </div>
 
                     {/* Play Album Overlay Button */}
@@ -334,10 +344,10 @@ export const MusicTab: React.FC<MusicTabProps> = ({
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between gap-2">
                         <h3 className="text-base font-bold text-white group-hover:text-emerald-300 transition truncate">
-                          {album.title}
+                          {album.title || 'Untitled Album'}
                         </h3>
                         <span className="text-xs font-mono text-emerald-400 shrink-0">
-                          ★ {album.rating.toFixed(1)}
+                          ★ {(album.rating ?? 0).toFixed(1)}
                         </span>
                       </div>
                       <p className="text-xs text-slate-400 font-medium truncate flex items-center gap-1">
@@ -345,7 +355,7 @@ export const MusicTab: React.FC<MusicTabProps> = ({
                         <span>{album.artists?.join(', ') || album.directors?.join(', ') || 'Various Artists'}</span>
                       </p>
                       <p className="text-xs text-slate-400 line-clamp-2 pt-1">
-                        {album.overview}
+                        {album.overview || 'Audio album imported from Samba network share.'}
                       </p>
                     </div>
 

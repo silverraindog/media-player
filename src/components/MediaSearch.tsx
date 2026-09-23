@@ -1714,7 +1714,9 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
                 {isDebouncing && (
-                  <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" title="Debouncing search..." />
+                  <span title="Debouncing search...">
+                    <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
+                  </span>
                 )}
                 {rawSearchInput && (
                   <button

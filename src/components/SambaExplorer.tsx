@@ -37,6 +37,8 @@ import {
   X,
   AlertCircle,
   AlertTriangle,
+  Shield,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   SambaConfig,
@@ -307,6 +309,8 @@ interface SambaExplorerProps {
   mountedVolumeInfo?: any;
   extensionConfig?: MediaScanExtensionConfig;
   onUpdateExtensionConfig?: (config: MediaScanExtensionConfig) => void;
+  isSafeScan?: boolean;
+  onToggleSafeScan?: (enabled: boolean) => void;
 }
 
 export const SambaExplorer: React.FC<SambaExplorerProps> = ({
@@ -329,6 +333,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   mountedVolumeInfo = null,
   extensionConfig,
   onUpdateExtensionConfig,
+  isSafeScan = false,
+  onToggleSafeScan,
 }) => {
   const [selectedNode, setSelectedNode] = useState<SambaShareNode | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({
@@ -1194,7 +1200,11 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       currentSeriesTitle: 'Completed',
       currentProviderIndex: 4,
       activeProviderName: 'Completed',
-      providers: FALLBACK_PROVIDERS_CHAIN.map((p) => ({ ...p, status: 'success' })),
+      providers: FALLBACK_PROVIDERS_CHAIN.map((p) => ({
+        providerId: p.id,
+        providerName: p.name,
+        status: 'success' as const,
+      })),
       overallProgress: 100,
       results: resolvedResults,
     });
@@ -1706,6 +1716,31 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <span>Preview Mode: {isPreviewMode ? 'ON' : 'OFF'}</span>
             </button>
 
+            {/* Safe Scan Mode Toggle Button */}
+            {onToggleSafeScan && (
+              <button
+                id="samba-safe-scan-toggle-btn"
+                onClick={() => onToggleSafeScan(!isSafeScan)}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border transition shadow cursor-pointer select-none ${
+                  isSafeScan
+                    ? 'bg-emerald-950/70 hover:bg-emerald-900/90 text-emerald-200 border-emerald-500/50 shadow-emerald-950/40 ring-1 ring-emerald-500/20'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border-slate-700'
+                }`}
+                title={
+                  isSafeScan
+                    ? 'Safe Scan Active: Limits scan depth to top directory levels and bypasses heavy recursive external API lookups to prevent UI lockups or black screens. Click to turn OFF.'
+                    : 'Safe Scan is OFF: Scans perform deep recursive traversal with canonical API queries. Click to turn ON.'
+                }
+              >
+                {isSafeScan ? (
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Shield className="w-3.5 h-3.5 text-slate-400" />
+                )}
+                <span>Safe Scan: {isSafeScan ? 'ON' : 'OFF'}</span>
+              </button>
+            )}
+
             {/* QuickSync Shallow Scan Button */}
             {onQuickSync && (
               <button
@@ -1729,11 +1764,27 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               id="samba-sync-share-btn"
               onClick={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
               disabled={isSyncing || isQuickSyncing}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
-              title="Recursively scan the Samba share, detect movies/series across any folder layout, and pull metadata"
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer disabled:opacity-50 border ${
+                isSafeScan
+                  ? 'bg-slate-800 hover:bg-slate-750 text-emerald-200 border-emerald-500/40 hover:border-emerald-500/60'
+                  : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700 hover:border-slate-600'
+              }`}
+              title={
+                isSafeScan
+                  ? 'Safe Scan: Fast shallow directory scan using local heuristic classification without external API stalls'
+                  : 'Recursively scan the Samba share, detect movies/series across any folder layout, and pull metadata'
+              }
             >
-              <RotateCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-indigo-400' : 'text-slate-400'}`} />
-              <span>{isSyncing ? 'Deep Scanning...' : 'Full Deep Sync'}</span>
+              <RotateCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-emerald-400' : isSafeScan ? 'text-emerald-400' : 'text-slate-400'}`} />
+              <span>
+                {isSyncing
+                  ? isSafeScan
+                    ? 'Safe Scanning...'
+                    : 'Deep Scanning...'
+                  : isSafeScan
+                  ? 'Safe Sync Share'
+                  : 'Full Deep Sync'}
+              </span>
             </button>
 
             {/* Verify Share Artwork & Persistence Button */}
@@ -1783,7 +1834,13 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             />
           </div>
 
-          <div className="text-[11px] text-slate-400">
+          <div className="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap">
+            {isSafeScan && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-mono text-[10px]">
+                <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                Safe Scan Active (Shallow traversal, zero API stalls)
+              </span>
+            )}
             <span>Supports any folder naming (e.g. <em>Series</em>, <em>Anime</em>, <em>Films</em>, without requiring &quot;TV Shows&quot;).</span>
           </div>
         </div>

@@ -69,6 +69,10 @@ async fn perform_fast_scan(
     window: tauri::Window,
     root_path: Option<String>,
     rootPath: Option<String>,
+    safe_scan: Option<bool>,
+    safeScan: Option<bool>,
+    max_depth: Option<usize>,
+    maxDepth: Option<usize>,
 ) -> Result<Vec<ScannedFileItem>, String> {
     let target = root_path.or(rootPath).unwrap_or_default();
     let path = Path::new(&target);
@@ -76,12 +80,22 @@ async fn perform_fast_scan(
         return Err(format!("Root path does not exist: {}", target));
     }
 
+    let is_safe = safe_scan.or(safeScan).unwrap_or(false);
+    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 3 } else { 10 });
+    let max_scan_items = if is_safe { 4000 } else { 20000 };
+
     let mut items = Vec::new();
     let mut scanned_count = 0;
 
-    let walker = WalkDir::new(path).follow_links(true).into_iter();
+    let walker = WalkDir::new(path)
+        .follow_links(false)
+        .max_depth(depth_limit)
+        .into_iter();
 
     for entry in walker.filter_map(|e| e.ok()) {
+        if scanned_count >= max_scan_items {
+            break;
+        }
         let entry_path = entry.path();
         if entry_path == path {
             continue;
@@ -336,6 +350,10 @@ async fn scan_samba_volume(
     custom_path: Option<String>,
     customPath: Option<String>,
     extensions: Option<Vec<String>>,
+    safe_scan: Option<bool>,
+    safeScan: Option<bool>,
+    max_depth: Option<usize>,
+    maxDepth: Option<usize>,
 ) -> Result<ScanVolumeResult, String> {
     let target_share = share_name.or(shareName).unwrap_or_default();
     let default_mount = format!("/Volumes/{}", target_share);
@@ -352,6 +370,10 @@ async fn scan_samba_volume(
         });
     }
 
+    let is_safe = safe_scan.or(safeScan).unwrap_or(false);
+    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 3 } else { 10 });
+    let max_scan_items = if is_safe { 4000 } else { 20000 };
+
     let allowed_exts: Option<HashSet<String>> = extensions.map(|exts| {
         exts.into_iter()
             .map(|e| e.to_lowercase().trim_start_matches('.').to_string())
@@ -361,8 +383,14 @@ async fn scan_samba_volume(
     let mut items = Vec::new();
     let mut scanned_count = 0;
 
-    let walker = WalkDir::new(path).follow_links(true).into_iter();
+    let walker = WalkDir::new(path)
+        .follow_links(false)
+        .max_depth(depth_limit)
+        .into_iter();
     for entry in walker.filter_map(|e| e.ok()) {
+        if scanned_count >= max_scan_items {
+            break;
+        }
         let entry_path = entry.path();
         if entry_path == path {
             continue;

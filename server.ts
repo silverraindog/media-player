@@ -2301,7 +2301,7 @@ app.all('/api/samba/quick-scan', (req: Request, res: Response) => {
 // Recursive Media Finder & Metadata Sync for any Samba share structure
 app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
   try {
-    const { items, shareName } = req.body;
+    const { items, shareName, safeScan = false } = req.body;
     // items: array of relative paths or filenames, e.g. ["Breaking Bad/Season 01/S01E01.mkv", "Interstellar.2014.mkv"]
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'items array of paths/filenames is required' });
@@ -2429,10 +2429,10 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
       };
     });
 
-    if (!ai) {
+    if (safeScan || !ai) {
       return res.json({
         success: true,
-        source: 'local-heuristic',
+        source: 'local-heuristic-safe',
         results: parsedItems,
       });
     }

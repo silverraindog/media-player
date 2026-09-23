@@ -316,21 +316,29 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   const defaultStreamUrl = selectedStreamObj.url;
 
-  // Derive direct Samba stream endpoint path
-  const sambaStreamUrl = useMemo(() => {
-    if (selectedEpisode?.playbackUrl && selectedEpisode.playbackUrl.startsWith('/api/')) {
-      return selectedEpisode.playbackUrl;
+  // Implement resolveStreamableUri using Tauri's convertFileSrc for local file protocol access
+  const resolveStreamableUri = async (pathCandidate: string): Promise<string> => {
+    if (!pathCandidate) return '';
+    let cleanPath = pathCandidate.replace(/^file:\/\//, '');
+
+    const isTauriEnv = typeof window !== 'undefined' && (
+      Boolean((window as any).__TAURI_IPC__) ||
+      Boolean((window as any).__TAURI__) ||
+      window.location.protocol === 'tauri:' ||
+      window.location.origin.includes('tauri.localhost')
+    );
+
+    if (isTauriEnv && (cleanPath.startsWith('/') || cleanPath.match(/^[a-zA-Z]:\\/))) {
+      try {
+        const { convertFileSrc } = await import('@tauri-apps/api/tauri');
+        return convertFileSrc(cleanPath);
+      } catch (e) {
+        console.warn('[MediaPlayerModal] convertFileSrc failed, falling back to stream proxy:', e);
+      }
     }
-    const targetPath =
-      selectedEpisode?.filePath ||
-      selectedEpisode?.filename ||
-      media?.recommendedFolderStructure ||
-      media?.title ||
-      '';
-    if (!targetPath) return null;
 
     const params = new URLSearchParams();
-    params.set('path', targetPath);
+    params.set('path', cleanPath);
     if (selectedSeasonNum !== undefined) {
       params.set('season', String(selectedSeasonNum));
     }
@@ -341,7 +349,34 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       params.set('file', selectedEpisode.filename);
     }
     return `/api/samba/stream?${params.toString()}`;
-  }, [selectedEpisode, media, selectedSeasonNum]);
+  };
+
+  const [resolvedStreamUrl, setResolvedStreamUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const runResolver = async () => {
+      const rawPlaybackUrl = selectedEpisode?.playbackUrl || selectedTrack?.playbackUrl || media?.playbackUrl || '';
+      const targetPath =
+        selectedEpisode?.filePath ||
+        selectedEpisode?.filename ||
+        media?.playbackUrl ||
+        media?.recommendedFolderStructure ||
+        media?.title ||
+        '';
+      
+      const pathCandidate = rawPlaybackUrl || targetPath;
+      const uri = await resolveStreamableUri(pathCandidate);
+      if (isMounted) {
+        setResolvedStreamUrl(uri);
+      }
+    };
+
+    runResolver();
+    return () => { isMounted = false; };
+  }, [selectedEpisode, selectedTrack, media, selectedSeasonNum]);
+
+  const sambaStreamUrl = resolvedStreamUrl;
 
   // Determine active streaming/playback source safely (prioritizing direct Samba/HDD stream)
   const currentStreamUrl =
@@ -1021,6 +1056,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           </div>
         </div>
 
+        {autoFallbackAttempted && (
+          <div className="bg-amber-950/90 border-b border-amber-600/50 px-4 py-2 text-xs text-amber-200 flex items-center justify-between shrink-0">
+            <span>⚠️ Network share file not mounted locally. Automatically playing high-performance Vault Master Stream.</span>
+            <button
+              onClick={() => localFileInputRef.current?.click()}
+              className="underline font-bold hover:text-white cursor-pointer"
+            >
+              Play Local File
+            </button>
+          </div>
+        )}
+
         {/* Player Stage (Video or Audio) */}
         <div className="relative bg-black flex items-center justify-center overflow-hidden min-h-[280px] sm:min-h-[400px] max-h-[520px]">
           {/* Audio Track Toast Notification Banner */}
@@ -1075,6 +1122,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   setPlaybackError(null);
                 }}
                 onError={() => {
+                  if (!autoFallbackAttempted && currentStreamUrl !== SAMPLE_AUDIO_STREAMS[0].url) {
+                    setAutoFallbackAttempted(true);
+                    setIsManualStreamOverride(true);
+                    setSelectedStreamId(SAMPLE_AUDIO_STREAMS[0].id);
+                    setPlaybackError(null);
+                    setTimeout(startPlayback, 120);
+                    return;
+                  }
                   setPlaybackError('Audio stream error. Select an alternate source or load a local file.');
                   setIsPlaying(false);
                 }}

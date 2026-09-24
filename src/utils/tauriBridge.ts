@@ -273,12 +273,41 @@ export const performFastScan = async (
     }
   }
 
+  // Browser fallback using recursive Express backend API
+  try {
+    const response = await fetch('/api/samba/scan-volume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sharePath: rootPath }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.items) {
+        if (onProgress) {
+          data.items.forEach((item: any, idx: number) => {
+            if (!item.is_dir) {
+              onProgress(idx + 1, item.rel_path);
+            }
+          });
+        }
+        return {
+          success: true,
+          mountPath: rootPath,
+          items: data.items,
+          totalScanned: data.totalScanned,
+        };
+      }
+    }
+  } catch (e: any) {
+    console.warn('[performFastScan Fallback] API error:', e);
+  }
+
   return {
     success: false,
     mountPath: rootPath,
     items: [],
     totalScanned: 0,
-    error: 'Preview mode: perform_fast_scan requires Tauri desktop environment with Rust backend.',
+    error: 'Preview mode API fallback failed.',
   };
 };
 
@@ -322,13 +351,34 @@ export const scanSambaVolume = async (
     }
   }
 
-  // Preview fallback: simulate scanner
+  // Browser fallback using recursive Express backend API
+  try {
+    const response = await fetch('/api/samba/scan-volume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sharePath: customPath || '' }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.items) {
+        return {
+          success: true,
+          mountPath: `/Volumes/${shareName}`,
+          items: data.items,
+          totalScanned: data.totalScanned,
+        };
+      }
+    }
+  } catch (e: any) {
+    console.warn('[scanSambaVolume Fallback] API error:', e);
+  }
+
   return {
     success: false,
     mountPath: `/Volumes/${shareName}`,
     items: [],
     totalScanned: 0,
-    error: 'Preview mode: Native volume scan runs when running in desktop mode on mounted share.',
+    error: 'Preview mode API fallback failed.',
   };
 };
 

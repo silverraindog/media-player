@@ -2211,6 +2211,76 @@ app.post(['/api/samba/rename-item', '/api/samba/quick-rename'], async (req: Requ
   }
 });
 
+// Recursive Directory Walker Helper
+function walkDirectoryRecursive(dir: string, baseDir: string, results: any[] = [], errors: string[] = []): { items: any[], errors: string[] } {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.')) continue;
+        results.push({
+          name: entry.name,
+          rel_path: relPath,
+          is_dir: true,
+          size_str: '0 MB'
+        });
+        walkDirectoryRecursive(fullPath, baseDir, results, errors);
+      } else if (entry.isFile()) {
+        if (entry.name.startsWith('.')) continue;
+        let sizeStr = '0 MB';
+        try {
+          const stat = fs.statSync(fullPath);
+          sizeStr = `${Math.round(stat.size / (1024 * 1024))} MB`;
+        } catch (_) {}
+        results.push({
+          name: entry.name,
+          rel_path: relPath,
+          is_dir: false,
+          size_str: sizeStr
+        });
+      }
+    }
+  } catch (err: any) {
+    errors.push(`Error reading ${dir}: ${err.message}`);
+  }
+  return { items: results, errors };
+}
+
+// Recursive Scan Volume Endpoint
+app.all('/api/samba/scan-volume', (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
+    const targetRoot = customSharePath ? resolveSambaFullPath(customSharePath) : SAMBA_SHARE_ROOT;
+
+    // Ensure root exists
+    if (!fs.existsSync(targetRoot)) {
+      fs.mkdirSync(targetRoot, { recursive: true });
+    }
+
+    const { items, errors } = walkDirectoryRecursive(targetRoot, targetRoot);
+    const durationMs = Date.now() - startTime;
+
+    return res.json({
+      success: true,
+      scanMode: 'recursive',
+      items,
+      errors,
+      totalScanned: items.length,
+      durationMs,
+      timestamp: Date.now(),
+    });
+  } catch (err: any) {
+    console.error('Recursive scan error:', err);
+    return res.status(500).json({
+      error: 'Failed to perform recursive scan on Samba share',
+      details: err?.message,
+    });
+  }
+});
+
 // Shallow Non-Recursive QuickScan Endpoint for Top-Level Samba Directories
 app.all('/api/samba/quick-scan', (req: Request, res: Response) => {
   const startTime = Date.now();

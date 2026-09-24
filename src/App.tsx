@@ -19,6 +19,7 @@ import { ManualMatchModal } from './components/ManualMatchModal';
 import { WatchlistTab } from './components/WatchlistTab';
 import { WatchHistoryTab } from './components/WatchHistoryTab';
 import { MusicTab } from './components/MusicTab';
+import { YouTubeTab } from './components/YouTubeTab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
 import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar';
@@ -3015,6 +3016,12 @@ function App() {
               onOpenDetails={(media) => setDetailModalMedia(media)}
               sambaConfig={sambaConfig}
             />
+          </ErrorBoundary>
+        )}
+
+        {activeTab === 'youtube' && (
+          <ErrorBoundary tabName="YouTube Hub">
+            <YouTubeTab />
           </ErrorBoundary>
         )}
 

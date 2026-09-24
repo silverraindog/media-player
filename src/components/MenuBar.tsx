@@ -29,6 +29,7 @@ import {
   FolderSearch,
   Zap,
   Bug,
+  Youtube,
 } from 'lucide-react';
 import { SambaConfig, MediaType, AppTab } from '../types';
 import { Bookmark, BarChart3, History } from 'lucide-react';
@@ -802,9 +803,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           </div>
         </div>
 
-        {/* ROW 2: Responsive Grid for Content Categories (Movies, Series, Music, Watchlist, Stats) */}
+        {/* ROW 2: Responsive Grid for Content Categories (Movies, Series, Music, Watchlist, YouTube, Stats) */}
         <div className="bg-slate-900/80 px-3 sm:px-6 lg:px-8 py-1 border-t border-slate-850">
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-1.5 sm:gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-1.5 sm:gap-2">
             {/* 1. Movies */}
             <button
               id="category-nav-movies-btn"
@@ -874,7 +875,22 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘W</span>
             </button>
 
-            {/* 5. Stats */}
+            {/* 5. YouTube Feed */}
+            <button
+              id="category-nav-youtube-btn"
+              onClick={() => setActiveTab('youtube')}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'youtube'
+                  ? 'bg-red-600 text-white shadow-xs ring-1 ring-red-400/50 font-bold'
+                  : 'bg-slate-950/70 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800/80'
+              }`}
+            >
+              <Youtube className={`w-3.5 h-3.5 ${activeTab === 'youtube' ? 'text-white' : 'text-red-400'}`} />
+              <span>YouTube</span>
+              <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘Y</span>
+            </button>
+
+            {/* 6. Stats */}
             <button
               id="category-nav-stats-btn"
               onClick={() => setActiveTab('stats')}

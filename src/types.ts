@@ -344,7 +344,8 @@ export type AppTab =
   | 'samba-mount'
   | 'explorer'
   | 'nfo-studio'
-  | 'sqlite-vault';
+  | 'sqlite-vault'
+  | 'youtube';
 
 export interface WatchHistoryItem {
   id: string;

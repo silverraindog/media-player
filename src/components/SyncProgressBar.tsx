@@ -16,7 +16,19 @@ import {
   Timer,
   Shield,
   ShieldCheck,
+  Compass,
+  AlertTriangle,
 } from 'lucide-react';
+
+export interface RecursiveAuditProgress {
+  isAuditing: boolean;
+  currentDepth: number;
+  maxDepthLimit: number;
+  beyond25Count: number;
+  totalAudited: number;
+  currentFolder?: string;
+  status: 'scanning' | 'auditing_deep' | 'verified_clean' | 'barrier_alert';
+}
 
 export interface SyncProgressState {
   isActive: boolean;
@@ -28,6 +40,7 @@ export interface SyncProgressState {
   totalCount: number;
   batchIndex?: number;
   totalBatches?: number;
+  chunkSize?: number;
   errorMessage?: string;
   retryCount?: number;
   maxRetries?: number;
@@ -35,6 +48,7 @@ export interface SyncProgressState {
   phaseDescription?: string;
   etaSeconds?: number | null;
   averageBatchTimeMs?: number;
+  auditProgress?: RecursiveAuditProgress;
 }
 
 interface SyncProgressBarProps {
@@ -584,6 +598,195 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
               )}
             </motion.div>
           </div>
+
+          {/* Secondary Progress Indicator: Recursive Depth & 25+ Item Audit Scan */}
+          {progress.isActive && progress.auditProgress && (
+            <motion.div
+              id="sync-recursive-audit-indicator"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25 }}
+              className="bg-slate-950/80 border border-cyan-500/30 rounded-xl p-2.5 text-xs text-slate-300 shadow-inner space-y-2"
+            >
+              {/* Secondary Audit Header */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md bg-cyan-950/90 text-cyan-300 border border-cyan-500/40 text-[10px] font-bold font-mono uppercase tracking-wider flex items-center gap-1.5 shadow-sm">
+                    <Compass className="w-3 h-3 text-cyan-400 animate-spin-slow" />
+                    <span>Recursive Depth Audit</span>
+                  </span>
+
+                  <span className="font-mono text-xs font-semibold text-slate-200">
+                    Depth Level{' '}
+                    <span className="text-cyan-400 font-bold">
+                      {progress.auditProgress.currentDepth || 1}
+                    </span>{' '}
+                    <span className="text-slate-500">/</span>{' '}
+                    <span className="text-slate-400">
+                      {progress.auditProgress.maxDepthLimit || 30} max
+                    </span>
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 text-[11px] font-mono">
+                  {progress.auditProgress.beyond25Count > 0 ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">
+                      <Sparkles className="w-3 h-3 text-emerald-400" />
+                      <strong>+{progress.auditProgress.beyond25Count}</strong> files beyond 25-item limit
+                    </span>
+                  ) : progress.auditProgress.status === 'barrier_alert' ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-500/30">
+                      <AlertTriangle className="w-3 h-3 text-amber-400" />
+                      Capped at 25 files (Increase depth limit)
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">
+                      Audited {progress.auditProgress.totalAudited || progress.processedCount} files
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Depth Visualizer Bar */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
+                  <span className="truncate max-w-[280px] sm:max-w-md">
+                    {progress.auditProgress.currentFolder ? (
+                      <>
+                        Folder:{' '}
+                        <span className="text-slate-200 font-semibold">
+                          {progress.auditProgress.currentFolder}
+                        </span>
+                      </>
+                    ) : (
+                      'Traversing hierarchy across configured depth limit...'
+                    )}
+                  </span>
+                  <span className="text-cyan-300 shrink-0 font-semibold">
+                    {Math.min(
+                      100,
+                      Math.round(
+                        ((progress.auditProgress.currentDepth || 1) /
+                          (progress.auditProgress.maxDepthLimit || 30)) *
+                          100
+                      )
+                    )}
+                    % depth
+                  </span>
+                </div>
+
+                {/* Secondary Progress Bar for Depth Level */}
+                <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden border border-slate-800 relative">
+                  <motion.div
+                    className="h-full bg-gradient-to-r from-cyan-500 via-indigo-500 to-emerald-400 rounded-full"
+                    animate={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(
+                          6,
+                          ((progress.auditProgress.currentDepth || 1) /
+                            (progress.auditProgress.maxDepthLimit || 30)) *
+                            100
+                        )
+                      )}%`,
+                    }}
+                    transition={{ duration: 0.3 }}
+                  />
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Chunk Progress Breakdown Section */}
+          {progress.isActive && progress.totalBatches && progress.totalBatches > 1 && progress.phase !== 'completed' && (
+            <motion.div
+              id="sync-chunk-progress-breakdown"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25 }}
+              className="bg-slate-950/70 border border-slate-800/90 rounded-xl p-2.5 text-xs text-slate-300 shadow-inner space-y-2"
+            >
+              {/* Chunk Header & Metrics Row */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md bg-indigo-950/90 text-indigo-300 border border-indigo-500/40 text-[10px] font-bold font-mono uppercase tracking-wider flex items-center gap-1.5 shadow-sm">
+                    <Layers className="w-3 h-3 text-indigo-400" />
+                    <span>Chunk Progress</span>
+                  </span>
+                  <span className="font-mono text-slate-200 text-xs font-semibold">
+                    Batch <span className="text-indigo-400">{progress.batchIndex || 1}</span> of{' '}
+                    <span className="text-slate-100">{progress.totalBatches}</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
+                    ({Math.round(((progress.batchIndex || 1) / progress.totalBatches) * 100)}% batches processed)
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3 text-[11px] font-mono text-slate-400">
+                  {progress.totalCount > 0 && (
+                    <span className="text-slate-300">
+                      Processing items{' '}
+                      <span className="text-cyan-300 font-semibold">
+                        {((progress.batchIndex || 1) - 1) * (progress.chunkSize || 50) + 1}
+                      </span>{' '}
+                      –{' '}
+                      <span className="text-cyan-300 font-semibold">
+                        {Math.min((progress.batchIndex || 1) * (progress.chunkSize || 50), progress.totalCount)}
+                      </span>{' '}
+                      <span className="text-slate-400">of {progress.totalCount}</span>
+                    </span>
+                  )}
+                  {effectiveAvgMs && (
+                    <span className="text-indigo-300 hidden sm:inline border-l border-slate-800 pl-3">
+                      ⚡ ~{(effectiveAvgMs / 1000).toFixed(1)}s / chunk
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Segmented Chunk Pips Visualizer */}
+              <div className="space-y-1">
+                <div className="flex items-center gap-1 overflow-hidden w-full">
+                  {Array.from({ length: Math.min(progress.totalBatches, 40) }).map((_, idx) => {
+                    const batchNum = idx + 1;
+                    const isCompleted = (progress.batchIndex || 1) > batchNum;
+                    const isCurrent = (progress.batchIndex || 1) === batchNum;
+                    return (
+                      <div
+                        key={idx}
+                        className={`h-2 flex-1 rounded-sm transition-all duration-300 relative overflow-hidden ${
+                          isCompleted
+                            ? 'bg-emerald-500 shadow-sm shadow-emerald-500/20'
+                            : isCurrent
+                            ? 'bg-indigo-500 ring-1 ring-indigo-400 shadow-sm shadow-indigo-500/40'
+                            : 'bg-slate-800/80 border border-slate-700/40'
+                        }`}
+                        title={`Batch ${batchNum}/${progress.totalBatches} ${
+                          isCompleted ? '(Completed)' : isCurrent ? '(Currently Processing)' : '(Pending)'
+                        }`}
+                      >
+                        {isCurrent && (
+                          <motion.div
+                            className="absolute inset-0 bg-white/50"
+                            animate={{ opacity: [0.3, 1, 0.3] }}
+                            transition={{ duration: 0.8, repeat: Infinity, ease: 'easeInOut' }}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {progress.totalBatches > 40 && (
+                  <p className="text-[10px] text-slate-400 font-mono text-right">
+                    Showing 40 of {progress.totalBatches} total processing chunks
+                  </p>
+                )}
+              </div>
+            </motion.div>
+          )}
         </div>
       </motion.div>
     </AnimatePresence>

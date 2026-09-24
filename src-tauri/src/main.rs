@@ -81,8 +81,9 @@ async fn perform_fast_scan(
     }
 
     let is_safe = safe_scan.or(safeScan).unwrap_or(false);
-    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 3 } else { 10 });
-    let max_scan_items = if is_safe { 4000 } else { 20000 };
+    // Support deep recursive folder structures (e.g. Series/Show/Season 01/Extra/file.mkv)
+    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 12 } else { 30 });
+    let max_scan_items = if is_safe { 50000 } else { 500000 };
 
     let mut items = Vec::new();
     let mut scanned_count = 0;
@@ -120,12 +121,12 @@ async fn perform_fast_scan(
 
         scanned_count += 1;
 
-        if scanned_count % 25 == 0 {
+        if scanned_count % 50 == 0 || scanned_count == 1 {
             let _ = window.emit(
                 "scan-progress",
                 ScanProgressEvent {
                     scanned_count,
-                    current_file: name.clone(),
+                    current_file: rel_path.clone(),
                 },
             );
         }
@@ -371,8 +372,8 @@ async fn scan_samba_volume(
     }
 
     let is_safe = safe_scan.or(safeScan).unwrap_or(false);
-    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 3 } else { 10 });
-    let max_scan_items = if is_safe { 4000 } else { 20000 };
+    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 12 } else { 30 });
+    let max_scan_items = if is_safe { 50000 } else { 500000 };
 
     let allowed_exts: Option<HashSet<String>> = extensions.map(|exts| {
         exts.into_iter()
@@ -428,12 +429,12 @@ async fn scan_samba_volume(
         let size = if is_dir { 0 } else { metadata.len() };
         scanned_count += 1;
 
-        if scanned_count % 30 == 0 {
+        if scanned_count % 50 == 0 || scanned_count == 1 {
             let _ = window.emit(
                 "scan-progress",
                 ScanProgressEvent {
                     scanned_count,
-                    current_file: name.clone(),
+                    current_file: rel_path.clone(),
                 },
             );
         }

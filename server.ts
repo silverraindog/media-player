@@ -1838,6 +1838,233 @@ app.post('/api/samba/probe-stream', async (req: Request, res: Response) => {
 
 // Designated root directory for the local/mounted Samba share
 const SAMBA_SHARE_ROOT = process.env.SAMBA_SHARE_PATH || path.join(process.cwd(), 'samba_share');
+
+// Comprehensive sample media paths generator for populating large realistic libraries
+function getComprehensiveSampleFilePaths(): string[] {
+  const list: string[] = [];
+
+  // 1. Movies (MKV, MP4, ISO with .nfo, .srt, poster.jpg, fanart.jpg)
+  const movies = [
+    { title: 'Interstellar', year: 2014, res: '1080p BluRay x265', ext: 'mp4' },
+    { title: 'Dune - Part Two', year: 2024, res: '2160p UHD HDR', ext: 'mkv' },
+    { title: 'Dune - Part One', year: 2021, res: '2160p UHD HDR', ext: 'mkv' },
+    { title: 'Oppenheimer', year: 2023, res: '2160p IMAX DTS-HD', ext: 'mp4' },
+    { title: 'The Dark Knight', year: 2008, res: '1080p Remux', ext: 'mkv' },
+    { title: 'Inception', year: 2010, res: '1080p DTS-MA', ext: 'mkv' },
+    { title: 'Avatar - The Way of Water', year: 2022, res: '2160p 3D Atmos', ext: 'iso' },
+    { title: 'Blade Runner 2049', year: 2017, res: '2160p HDR10', ext: 'mkv' },
+    { title: 'The Matrix', year: 1999, res: '2160p Dolby Vision', ext: 'mkv' },
+    { title: 'Pulp Fiction', year: 1994, res: '1080p Criterion', ext: 'mp4' },
+    { title: 'Fight Club', year: 1999, res: '1080p Special Edition', ext: 'mkv' },
+    { title: 'Gladiator', year: 2000, res: '2160p Extended Cut', ext: 'mkv' },
+    { title: 'Spider-Man - Across the Spider-Verse', year: 2023, res: '2160p Atmos', ext: 'mkv' },
+    { title: 'Top Gun - Maverick', year: 2022, res: '2160p IMAX Enhanced', ext: 'mkv' },
+    { title: 'Everything Everywhere All at Once', year: 2022, res: '1080p TrueHD', ext: 'mp4' },
+    { title: 'Alien', year: 1979, res: '2160p Director Cut', ext: 'mkv' },
+    { title: 'Aliens', year: 1986, res: '1080p Special Edition', ext: 'mkv' },
+    { title: 'Parasite', year: 2019, res: '1080p BluRay', ext: 'mkv' },
+    { title: 'Whiplash', year: 2014, res: '1080p DTS', ext: 'mkv' },
+    { title: 'Mad Max - Fury Road', year: 2015, res: '2160p Black and Chrome', ext: 'mkv' },
+    { title: 'Arrival', year: 2016, res: '1080p DTS-HD', ext: 'mkv' },
+    { title: 'The Grand Budapest Hotel', year: 2014, res: '1080p Criterion', ext: 'mp4' },
+    { title: 'Spirited Away', year: 2001, res: '1080p Studio Ghibli', ext: 'mkv' },
+    { title: 'Princess Mononoke', year: 1997, res: '1080p Studio Ghibli', ext: 'mkv' },
+    { title: 'The Lord of the Rings - The Fellowship of the Ring', year: 2001, res: '2160p Extended Edition', ext: 'mkv' },
+    { title: 'The Lord of the Rings - The Two Towers', year: 2002, res: '2160p Extended Edition', ext: 'mkv' },
+    { title: 'The Lord of the Rings - The Return of the King', year: 2003, res: '2160p Extended Edition', ext: 'mkv' },
+    { title: '2001 - A Space Odyssey', year: 1968, res: '2160p 70mm Transfer', ext: 'mkv' },
+    { title: 'GoodFellas', year: 1990, res: '1080p 25th Anniversary', ext: 'mp4' },
+    { title: 'Schindler\'s List', year: 1993, res: '2160p Definitive Edition', ext: 'mkv' },
+  ];
+
+  for (const m of movies) {
+    const dir = `Movies/${m.title} (${m.year})`;
+    list.push(`${dir}/${m.title} (${m.year}) [${m.res}].${m.ext}`);
+    list.push(`${dir}/${m.title} (${m.year}).en.srt`);
+    list.push(`${dir}/movie.nfo`);
+    list.push(`${dir}/poster.jpg`);
+    list.push(`${dir}/fanart.jpg`);
+  }
+
+  // 2. TV Series (All seasons and episodes)
+  const series = [
+    { title: 'Breaking Bad', year: 2008, seasons: 5, eps: 13, ext: 'mkv' },
+    { title: 'Better Call Saul', year: 2015, seasons: 6, eps: 10, ext: 'mkv' },
+    { title: 'Severance', year: 2022, seasons: 2, eps: 9, ext: 'mkv' },
+    { title: 'Stranger Things', year: 2016, seasons: 4, eps: 8, ext: 'mkv' },
+    { title: 'The Last of Us', year: 2023, seasons: 2, eps: 9, ext: 'mkv' },
+    { title: 'Game of Thrones', year: 2011, seasons: 8, eps: 10, ext: 'mkv' },
+    { title: 'House of the Dragon', year: 2022, seasons: 2, eps: 10, ext: 'mkv' },
+    { title: 'Succession', year: 2018, seasons: 4, eps: 10, ext: 'mkv' },
+    { title: 'The Bear', year: 2022, seasons: 3, eps: 10, ext: 'mkv' },
+    { title: 'The Sopranos', year: 1999, seasons: 6, eps: 13, ext: 'mkv' },
+    { title: 'The Wire', year: 2002, seasons: 5, eps: 12, ext: 'mkv' },
+    { title: 'Chernobyl', year: 2019, seasons: 1, eps: 5, ext: 'mkv' },
+    { title: 'Band of Brothers', year: 2001, seasons: 1, eps: 10, ext: 'mkv' },
+    { title: 'Ted Lasso', year: 2020, seasons: 3, eps: 12, ext: 'mkv' },
+    { title: 'The Mandalorian', year: 2019, seasons: 3, eps: 8, ext: 'mkv' },
+    { title: 'Andor', year: 2022, seasons: 2, eps: 12, ext: 'mkv' },
+    { title: 'Dark', year: 2017, seasons: 3, eps: 8, ext: 'mkv' },
+    { title: 'Peaky Blinders', year: 2013, seasons: 6, eps: 6, ext: 'mkv' },
+    { title: 'Battlestar Galactica', year: 2004, seasons: 4, eps: 20, ext: 'mp4' },
+  ];
+
+  for (const s of series) {
+    const sDir = `Series/${s.title} (${s.year})`;
+    list.push(`${sDir}/tvshow.nfo`);
+    list.push(`${sDir}/poster.jpg`);
+    list.push(`${sDir}/fanart.jpg`);
+
+    for (let season = 1; season <= s.seasons; season++) {
+      const sPad = season.toString().padStart(2, '0');
+      const seasonDir = `${sDir}/Season ${sPad}`;
+      list.push(`${seasonDir}/season${sPad}-poster.jpg`);
+
+      for (let ep = 1; ep <= s.eps; ep++) {
+        const epPad = ep.toString().padStart(2, '0');
+        list.push(`${seasonDir}/${s.title} - S${sPad}E${epPad}.${s.ext}`);
+        list.push(`${seasonDir}/${s.title} - S${sPad}E${epPad}.en.srt`);
+        list.push(`${seasonDir}/${s.title} - S${sPad}E${epPad}.nfo`);
+      }
+    }
+  }
+
+  // 3. Music (FLAC / MP3 / OPUS tracks)
+  const music = [
+    {
+      artist: 'Daft Punk',
+      album: 'Random Access Memories (2013)',
+      tracks: [
+        '01 - Give Life Back to Music.flac',
+        '02 - The Game of Love.flac',
+        '03 - Giorgio by Moroder.flac',
+        '04 - Within.flac',
+        '05 - Instant Crush.flac',
+        '06 - Lose Yourself to Dance.flac',
+        '07 - Touch.flac',
+        '08 - Get Lucky.flac',
+        '09 - Beyond.flac',
+        '10 - Motherboard.flac',
+        '11 - Fragments of Time.flac',
+        '12 - Doin\' It Right.flac',
+        '13 - Contact.flac',
+      ],
+    },
+    {
+      artist: 'Pink Floyd',
+      album: 'The Dark Side of the Moon (1973)',
+      tracks: [
+        '01 - Speak to Me.flac',
+        '02 - Breathe.flac',
+        '03 - On the Run.flac',
+        '04 - Time.flac',
+        '05 - The Great Gig in the Sky.flac',
+        '06 - Money.flac',
+        '07 - Us and Them.flac',
+        '08 - Any Colour You Like.flac',
+        '09 - Brain Damage.flac',
+        '10 - Eclipse.flac',
+      ],
+    },
+    {
+      artist: 'Radiohead',
+      album: 'OK Computer (1997)',
+      tracks: [
+        '01 - Airbag.opus',
+        '02 - Paranoid Android.opus',
+        '03 - Subterranean Homesick Alien.opus',
+        '04 - Exit Music.opus',
+        '05 - Let Down.opus',
+        '06 - Karma Police.opus',
+        '07 - Electioneering.opus',
+        '08 - Climbing Up the Walls.opus',
+        '09 - No Surprises.opus',
+        '10 - Lucky.opus',
+        '11 - The Tourist.opus',
+      ],
+    },
+    {
+      artist: 'Miles Davis',
+      album: 'Kind of Blue (1959)',
+      tracks: [
+        '01 - So What.flac',
+        '02 - Freddie Freeloader.flac',
+        '03 - Blue in Green.flac',
+        '04 - All Blues.flac',
+        '05 - Flamenco Sketches.flac',
+      ],
+    },
+  ];
+
+  for (const m of music) {
+    const aDir = `Music/${m.artist}/${m.album}`;
+    list.push(`${aDir}/album.nfo`);
+    list.push(`${aDir}/folder.jpg`);
+    list.push(`${aDir}/cover.jpg`);
+    for (const t of m.tracks) {
+      list.push(`${aDir}/${t}`);
+    }
+  }
+
+  // 4. Franchises
+  const franchises = [
+    {
+      name: 'Star Wars',
+      titles: [
+        'Star Wars - Episode IV - A New Hope (1977)',
+        'Star Wars - Episode V - The Empire Strikes Back (1980)',
+        'Star Wars - Episode VI - Return of the Jedi (1983)',
+        'Star Wars - Episode I - The Phantom Menace (1999)',
+        'Star Wars - Episode II - Attack of the Clones (2002)',
+        'Star Wars - Episode III - Revenge of the Sith (2005)',
+        'Rogue One - A Star Wars Story (2016)',
+      ],
+    },
+    {
+      name: 'Marvel Cinematic Universe',
+      titles: [
+        'Iron Man (2008)',
+        'The Incredible Hulk (2008)',
+        'Iron Man 2 (2010)',
+        'Thor (2011)',
+        'Captain America - The First Avenger (2011)',
+        'The Avengers (2012)',
+        'Guardians of the Galaxy (2014)',
+        'Avengers - Infinity War (2018)',
+        'Avengers - Endgame (2019)',
+      ],
+    },
+  ];
+
+  for (const f of franchises) {
+    for (const t of f.titles) {
+      const fDir = `Franchises/${f.name}/${t}`;
+      list.push(`${fDir}/${t}.mp4`);
+      list.push(`${fDir}/${t}.en.srt`);
+      list.push(`${fDir}/movie.nfo`);
+      list.push(`${fDir}/poster.jpg`);
+      list.push(`${fDir}/fanart.jpg`);
+    }
+  }
+
+  // 5. Audiobooks, Books, Documentaries, Anime
+  list.push('Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b');
+  list.push('Audio books/J.R.R. Tolkien/The Hobbit/Chapter 02 - Roast Mutton.m4b');
+  list.push('Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b');
+  list.push('Audio books/James Clear/Atomic Habits (2018)/02 - How Your Habits Shape Your Identity.m4b');
+  list.push('Books/Sci-Fi/Dune - Frank Herbert (1965).epub');
+  list.push('Books/Sci-Fi/Neuromancer - William Gibson (1984).epub');
+  list.push('Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf');
+  list.push('Books/Comics/Watchmen (1986).cbz');
+  list.push('Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv');
+  list.push('Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E02.1080p.mkv');
+  list.push('Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv');
+  list.push('Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E02.Ocean.2160p.mkv');
+  list.push('sort/Unsorted.Movie.2024.1080p.mkv');
+
+  return list;
+}
+
 try {
   if (!fs.existsSync(SAMBA_SHARE_ROOT)) {
     fs.mkdirSync(SAMBA_SHARE_ROOT, { recursive: true });
@@ -1848,43 +2075,9 @@ try {
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
   });
 
-  // Seed sample media files into SAMBA_SHARE_ROOT if empty
-  const sampleFiles = [
-    'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
-    'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
-    'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E03 - And the Bag\'s in the River.mkv',
-    'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
-    'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
-    'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E02 - The Weirdo on Maple Street.mkv',
-    'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E03 - Holly, Jolly.mkv',
-    'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
-    'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
-    'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
-    'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.mkv',
-    'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
-    'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
-    'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
-    'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
-    'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
-    'Music/Pink Floyd/The Dark Side of the Moon (1973)/03 - On the Run.mp3',
-    'Music/Pink Floyd/The Dark Side of the Moon (1973)/04 - Time.mp3',
-    'Music/Radiohead/OK Computer (1997)/01 - Airbag.mp3',
-    'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
-    'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
-    'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
-    'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
-    'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
-    'Books/Comics/Watchmen (1986).cbz',
-    'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
-    'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E02.1080p.mkv',
-    'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
-    'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E02.Ocean.2160p.mkv',
-    'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
-    'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
-    'sort/Unsorted.Movie.2024.1080p.mkv',
-  ];
-
-  sampleFiles.forEach((rel) => {
+  // Seed sample media files into SAMBA_SHARE_ROOT
+  const allSampleFiles = getComprehensiveSampleFilePaths();
+  allSampleFiles.forEach((rel) => {
     const full = path.join(SAMBA_SHARE_ROOT, rel);
     const dir = path.dirname(full);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -2247,7 +2440,14 @@ app.post(['/api/samba/rename-item', '/api/samba/quick-rename'], async (req: Requ
 });
 
 // Recursive Directory Walker Helper
-function walkDirectoryRecursive(dir: string, baseDir: string, results: any[] = [], errors: string[] = []): { items: any[], errors: string[] } {
+function walkDirectoryRecursive(
+  dir: string,
+  baseDir: string,
+  results: any[] = [],
+  errors: string[] = [],
+  currentDepth: number = 0,
+  maxDepth: number = 30
+): { items: any[]; errors: string[] } {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
@@ -2259,9 +2459,11 @@ function walkDirectoryRecursive(dir: string, baseDir: string, results: any[] = [
           name: entry.name,
           rel_path: relPath,
           is_dir: true,
-          size_str: '0 MB'
+          size_str: '0 MB',
         });
-        walkDirectoryRecursive(fullPath, baseDir, results, errors);
+        if (currentDepth < maxDepth) {
+          walkDirectoryRecursive(fullPath, baseDir, results, errors, currentDepth + 1, maxDepth);
+        }
       } else if (entry.isFile()) {
         if (entry.name.startsWith('.')) continue;
         let sizeStr = '0 MB';
@@ -2273,7 +2475,7 @@ function walkDirectoryRecursive(dir: string, baseDir: string, results: any[] = [
           name: entry.name,
           rel_path: relPath,
           is_dir: false,
-          size_str: sizeStr
+          size_str: sizeStr,
         });
       }
     }
@@ -2288,6 +2490,7 @@ app.all('/api/samba/scan-volume', (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
     const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
+    const maxDepth = Number(req.body?.max_depth || req.body?.maxDepth || req.query?.max_depth || req.query?.maxDepth) || 30;
     const targetRoot = customSharePath ? resolveSambaFullPath(customSharePath) : SAMBA_SHARE_ROOT;
 
     // Ensure root exists
@@ -2295,12 +2498,13 @@ app.all('/api/samba/scan-volume', (req: Request, res: Response) => {
       fs.mkdirSync(targetRoot, { recursive: true });
     }
 
-    const { items, errors } = walkDirectoryRecursive(targetRoot, targetRoot);
+    const { items, errors } = walkDirectoryRecursive(targetRoot, targetRoot, [], [], 0, maxDepth);
     const durationMs = Date.now() - startTime;
 
     return res.json({
       success: true,
       scanMode: 'recursive',
+      maxDepth,
       items,
       errors,
       totalScanned: items.length,
@@ -2313,6 +2517,37 @@ app.all('/api/samba/scan-volume', (req: Request, res: Response) => {
       error: 'Failed to perform recursive scan on Samba share',
       details: err?.message,
     });
+  }
+});
+
+// Endpoint to generate large realistic Samba share structure with thousands of files
+app.post('/api/samba/generate-large-library', (req: Request, res: Response) => {
+  try {
+    const allSampleFiles = getComprehensiveSampleFilePaths();
+    let createdCount = 0;
+    allSampleFiles.forEach((rel) => {
+      const full = path.join(SAMBA_SHARE_ROOT, rel);
+      const dir = path.dirname(full);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      if (!fs.existsSync(full)) {
+        try {
+          fs.writeFileSync(full, 'SAMPLE_MEDIA_PLACEHOLDER_DATA', 'utf8');
+          createdCount++;
+        } catch (_) {}
+      }
+    });
+
+    const { items } = walkDirectoryRecursive(SAMBA_SHARE_ROOT, SAMBA_SHARE_ROOT);
+
+    return res.json({
+      success: true,
+      message: `Generated library in Samba share with ${items.length} total items (${createdCount} new files written).`,
+      totalFiles: items.filter(i => !i.is_dir).length,
+      totalDirectories: items.filter(i => i.is_dir).length,
+      totalItems: items.length,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to generate large library', details: err?.message });
   }
 });
 

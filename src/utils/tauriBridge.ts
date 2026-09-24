@@ -177,64 +177,145 @@ export interface ScannedShareItem {
   extension?: string;
 }
 
+export interface DirectoryDepthStats {
+  dirPath: string;
+  depth: number;
+  directFiles: number;
+  totalSubtreeFiles: number;
+  directDirectories: number;
+  extensions: Record<string, number>;
+  sampleFiles: string[];
+}
+
+export interface ScanDepthDiagnosticReport {
+  scannerName: string;
+  rootPath: string;
+  durationMs?: number;
+  totalDiscoveredItems: number;
+  totalFiles: number;
+  totalDirectories: number;
+  maxDepthReached: number;
+  depthHistogram: Record<number, { directories: number; files: number }>;
+  extensionSummary: Record<string, number>;
+  visitedDirectories: DirectoryDepthStats[];
+  emptyDirectories: string[];
+  potentialBarriers: string[];
+  isExactly25Files: boolean;
+}
+
 export interface ScanVolumeResult {
   success: boolean;
   mountPath: string;
   items: ScannedShareItem[];
   totalScanned: number;
   error?: string | null;
+  diagnostics?: ScanDepthDiagnosticReport;
 }
 
 /**
- * Diagnostic logger that calculates and logs the recursive depth and file count
- * for every directory visited during volume scanning to diagnose sync thresholds
- * or premature stopping (e.g. at 25 files).
+ * Deep-dive diagnostic analyzer and logger that tracks folder discovery depth,
+ * file distribution, file extensions, and hidden barriers (e.g. depth caps,
+ * 25-file throttle boundaries, permissions blocks, or timeout truncations).
  */
 export function logDirectoryTraversalDiagnostics(
   scannerName: string,
   rootPath: string,
-  items: ScannedShareItem[]
-): { visitedDirectories: Array<{ dirPath: string; depth: number; directFiles: number; totalFiles: number }> } {
-  const dirMap = new Map<string, { directFiles: number; totalFiles: number; depth: number }>();
+  items: ScannedShareItem[],
+  durationMs?: number,
+  options?: { safeScan?: boolean; timeoutMs?: number }
+): ScanDepthDiagnosticReport {
+  const dirMap = new Map<string, DirectoryDepthStats>();
+  const extensionSummary: Record<string, number> = {};
+  const depthHistogram: Record<number, { directories: number; files: number }> = {};
 
   // Ensure root directory entry exists
-  dirMap.set('.', { directFiles: 0, totalFiles: 0, depth: 0 });
+  dirMap.set('.', {
+    dirPath: rootPath || '/',
+    depth: 0,
+    directFiles: 0,
+    totalSubtreeFiles: 0,
+    directDirectories: 0,
+    extensions: {},
+    sampleFiles: [],
+  });
 
   const fileItems = (items || []).filter((it) => !it.is_dir);
   const dirItems = (items || []).filter((it) => it.is_dir);
 
-  // 1. Ingest explicitly returned directory items
+  // 1. Ingest explicit directory items and compute initial directory depths
   for (const item of dirItems) {
     const rawPath = item.rel_path || item.name || '';
     const cleanDir = rawPath.replace(/^[/\\]+|[/\\]+$/g, '').replace(/\\/g, '/');
     if (!cleanDir || cleanDir === '.') continue;
-    const depth = cleanDir.split('/').filter(Boolean).length;
+    const segments = cleanDir.split('/').filter(Boolean);
+    const depth = segments.length;
+
     if (!dirMap.has(cleanDir)) {
-      dirMap.set(cleanDir, { directFiles: 0, totalFiles: 0, depth });
+      dirMap.set(cleanDir, {
+        dirPath: cleanDir,
+        depth,
+        directFiles: 0,
+        totalSubtreeFiles: 0,
+        directDirectories: 0,
+        extensions: {},
+        sampleFiles: [],
+      });
     }
+
+    // Register this folder as direct child of its immediate parent
+    const parentDir = segments.length > 1 ? segments.slice(0, -1).join('/') : '.';
+    if (!dirMap.has(parentDir)) {
+      dirMap.set(parentDir, {
+        dirPath: parentDir === '.' ? (rootPath || '/') : parentDir,
+        depth: parentDir === '.' ? 0 : segments.length - 1,
+        directFiles: 0,
+        totalSubtreeFiles: 0,
+        directDirectories: 0,
+        extensions: {},
+        sampleFiles: [],
+      });
+    }
+    dirMap.get(parentDir)!.directDirectories += 1;
   }
 
-  // 2. Ingest directories and compute file counts from all discovered file items
+  // 2. Ingest files, populate per-directory counts, extensions, sample items, and depth trees
   for (const file of fileItems) {
     const cleanRelPath = (file.rel_path || file.name || '').replace(/^[/\\]+/g, '').replace(/\\/g, '/');
     const segments = cleanRelPath.split('/').filter(Boolean);
+    const fileName = segments[segments.length - 1] || file.name || '';
+    const extMatch = fileName.match(/\.([0-9a-z_-]+)$/i);
+    const ext = extMatch ? extMatch[1].toLowerCase() : 'no_ext';
+
+    // Global extension tally
+    extensionSummary[ext] = (extensionSummary[ext] || 0) + 1;
+
     const parentSegments = segments.slice(0, -1);
+    const fileDepth = parentSegments.length;
 
     if (parentSegments.length === 0) {
-      // Direct child file of root
+      // Direct root file
       const rootEntry = dirMap.get('.')!;
       rootEntry.directFiles += 1;
-      rootEntry.totalFiles += 1;
+      rootEntry.totalSubtreeFiles += 1;
+      rootEntry.extensions[ext] = (rootEntry.extensions[ext] || 0) + 1;
+      if (rootEntry.sampleFiles.length < 5) rootEntry.sampleFiles.push(fileName);
     } else {
       const directParent = parentSegments.join('/');
       if (!dirMap.has(directParent)) {
         dirMap.set(directParent, {
+          dirPath: directParent,
+          depth: fileDepth,
           directFiles: 0,
-          totalFiles: 0,
-          depth: parentSegments.length,
+          totalSubtreeFiles: 0,
+          directDirectories: 0,
+          extensions: {},
+          sampleFiles: [],
         });
       }
-      dirMap.get(directParent)!.directFiles += 1;
+      const directParentEntry = dirMap.get(directParent)!;
+      directParentEntry.directFiles += 1;
+      directParentEntry.extensions[ext] = (directParentEntry.extensions[ext] || 0) + 1;
+      if (directParentEntry.sampleFiles.length < 5) directParentEntry.sampleFiles.push(fileName);
 
       // Accumulate file count for each ancestor directory
       let accumulated = '';
@@ -242,78 +323,163 @@ export function logDirectoryTraversalDiagnostics(
         accumulated = accumulated ? `${accumulated}/${parentSegments[i]}` : parentSegments[i];
         if (!dirMap.has(accumulated)) {
           dirMap.set(accumulated, {
-            directFiles: 0,
-            totalFiles: 0,
+            dirPath: accumulated,
             depth: i + 1,
+            directFiles: 0,
+            totalSubtreeFiles: 0,
+            directDirectories: 0,
+            extensions: {},
+            sampleFiles: [],
           });
         }
-        dirMap.get(accumulated)!.totalFiles += 1;
+        dirMap.get(accumulated)!.totalSubtreeFiles += 1;
       }
 
       // Root ancestor tally
-      dirMap.get('.')!.totalFiles += 1;
+      dirMap.get('.')!.totalSubtreeFiles += 1;
     }
   }
 
   // Sort visited directories by depth, then alphabetically
-  const sortedDirs = Array.from(dirMap.entries())
-    .map(([dirPath, data]) => ({
-      dirPath: dirPath === '.' ? (rootPath || '/') : dirPath,
-      depth: data.depth,
-      directFiles: data.directFiles,
-      totalFiles: data.totalFiles,
-    }))
-    .sort((a, b) => (a.depth !== b.depth ? a.depth - b.depth : a.dirPath.localeCompare(b.dirPath)));
-
-  const totalDiscoveredFiles = fileItems.length;
-  const maxDepthReached = sortedDirs.reduce((max, d) => Math.max(max, d.depth), 0);
-
-  console.group(`[${scannerName}] Visited Directories Diagnostics (Root: "${rootPath}")`);
-  console.info(
-    `[${scannerName}] Traversal Overview: Visited ${sortedDirs.length} directory node(s) across max depth ${maxDepthReached}. ` +
-      `Discovered ${totalDiscoveredFiles} total file(s) (${dirItems.length} explicit directory entries, ${items?.length || 0} total items returned).`
+  const visitedDirectories = Array.from(dirMap.values()).sort((a, b) =>
+    a.depth !== b.depth ? a.depth - b.depth : a.dirPath.localeCompare(b.dirPath)
   );
 
-  // Log every directory visited with its recursive depth and file count
-  sortedDirs.forEach((dir) => {
-    console.log(
-      `[${scannerName}] Directory visited: "${dir.dirPath}" | Recursive depth: ${dir.depth} | File count: ${dir.directFiles} direct (Total in subtree: ${dir.totalFiles})`
-    );
+  const totalFiles = fileItems.length;
+  const totalDirectories = dirItems.length > 0 ? dirItems.length : visitedDirectories.length - 1;
+  const maxDepthReached = visitedDirectories.reduce((max, d) => Math.max(max, d.depth), 0);
+
+  // Compute depth histogram
+  visitedDirectories.forEach((d) => {
+    if (!depthHistogram[d.depth]) {
+      depthHistogram[d.depth] = { directories: 0, files: 0 };
+    }
+    if (d.depth > 0) depthHistogram[d.depth].directories += 1;
+    depthHistogram[d.depth].files += d.directFiles;
   });
 
-  // Provide explicit troubleshooting insight if scan results in 25 files
-  if (totalDiscoveredFiles === 25) {
-    console.warn(
-      `[${scannerName}] [Sync Analysis: Exactly 25 Files Discovered] ` +
-        `The scanner returned exactly 25 files. Possible culprits: ` +
-        `1) Native Tauri 'perform_fast_scan' progress throttle (emits progress event when scanned_count % 25 == 0, falling back to streamed items on early timeout). ` +
-        `2) SafeScan max_depth constraint (default max_depth=3 or safeScan=true) preventing deeper subdirectories from being traversed. ` +
-        `3) Directory filter or UI fallback defaulting to 25 items.`
+  // Identify empty directories (discovered folders with 0 files directly and in subtree)
+  const emptyDirectories = visitedDirectories
+    .filter((d) => d.depth > 0 && d.totalSubtreeFiles === 0 && d.directFiles === 0)
+    .map((d) => d.dirPath);
+
+  // 3. Automated Barrier and Limit Detection Engine
+  const potentialBarriers: string[] = [];
+
+  // Barrier 1: Exactly 25 files check
+  const isExactly25Files = totalFiles === 25;
+  if (isExactly25Files) {
+    potentialBarriers.push(
+      'SYNC BARRIER DETECTED: Exactly 25 files were discovered. This matches common progress throttle intervals (count % 25 == 0) or mock catalog fallback limits. Check if the scan timed out prematurely or hit a depth boundary.'
     );
+  }
+
+  // Barrier 2: Shallow Max Depth Barrier (e.g. depth <= 2 while TV Series / Music require depth 3-5)
+  if (maxDepthReached <= 2 && totalFiles > 0) {
+    potentialBarriers.push(
+      `DEPTH BARRIER WARNING: Max traversal depth reached was only ${maxDepthReached}. Standard Samba series structures (Series/Show/Season 01/Episode.mkv) and music albums (Music/Artist/Album/Track.flac) require depth >= 3 or 4. Verify max_depth or safeScan settings.`
+    );
+  }
+
+  // Barrier 3: High count of empty directories
+  if (emptyDirectories.length > 5) {
+    potentialBarriers.push(
+      `DIRECTORY BARRIER: ${emptyDirectories.length} subdirectories returned 0 media files (e.g., "${emptyDirectories.slice(0, 3).join('", "')}"). Check for permission restrictions, symlinks, or unsupported file extensions.`
+    );
+  }
+
+  // Barrier 4: Timeout or Duration Warning
+  if (durationMs && durationMs > 5000 && totalFiles < 50) {
+    potentialBarriers.push(
+      `LATENCY BARRIER: Scan took ${(durationMs / 1000).toFixed(2)}s for only ${totalFiles} files. Network latency or SMB socket timeouts may be throttling traversal speed.`
+    );
+  }
+
+  const report: ScanDepthDiagnosticReport = {
+    scannerName,
+    rootPath,
+    durationMs,
+    totalDiscoveredItems: items?.length || 0,
+    totalFiles,
+    totalDirectories,
+    maxDepthReached,
+    depthHistogram,
+    extensionSummary,
+    visitedDirectories,
+    emptyDirectories,
+    potentialBarriers,
+    isExactly25Files,
+  };
+
+  // Structured Console Diagnostic Groups
+  console.group(`🔍 [${scannerName}] Deep-Dive Samba Scan Diagnostics | Root: "${rootPath}"`);
+  console.info(
+    `📊 [${scannerName}] Summary: Discovered ${totalFiles} file(s) across ${visitedDirectories.length} directory node(s) ` +
+      `(Max Depth: ${maxDepthReached}${durationMs ? ` in ${(durationMs / 1000).toFixed(2)}s` : ''}).`
+  );
+
+  console.groupCollapsed(`📁 [${scannerName}] Folder Depth Tree & File Counts (${visitedDirectories.length} nodes)`);
+  visitedDirectories.forEach((dir) => {
+    const indent = '  '.repeat(dir.depth);
+    const extList = Object.entries(dir.extensions)
+      .map(([ext, count]) => `${count} .${ext}`)
+      .join(', ');
+    console.log(
+      `${indent}📂 [Depth ${dir.depth}] "${dir.dirPath}" ➔ Direct Files: ${dir.directFiles} (Subtree Total: ${dir.totalSubtreeFiles})${extList ? ` [${extList}]` : ''}${dir.sampleFiles.length > 0 ? ` (e.g. ${dir.sampleFiles.slice(0, 2).join(', ')})` : ''}`
+    );
+  });
+  console.groupEnd();
+
+  console.groupCollapsed(`📈 [${scannerName}] Depth Histogram & Extension Breakdown`);
+  console.table(
+    Object.entries(depthHistogram).map(([depth, stats]) => ({
+      Depth: Number(depth),
+      Directories: stats.directories,
+      'Direct Files': stats.files,
+    }))
+  );
+  console.log(`📦 Extension Breakdown:`, extensionSummary);
+  console.groupEnd();
+
+  if (potentialBarriers.length > 0) {
+    console.group(`⚠️ [${scannerName}] Potential Sync Barriers & Bottlenecks (${potentialBarriers.length})`);
+    potentialBarriers.forEach((barrier, idx) => {
+      console.warn(`[Barrier ${idx + 1}] ${barrier}`);
+    });
+    console.groupEnd();
   }
 
   console.groupEnd();
 
-  return { visitedDirectories: sortedDirs };
+  return report;
 }
 
 export const performFastScan = async (
   rootPath: string,
   onProgress?: (scannedCount: number, currentFile: string) => void,
-  timeoutMs = 7000,
-  safeScan = false
+  timeoutMs = 180000,
+  safeScan = false,
+  max_depth?: number
 ): Promise<ScanVolumeResult> => {
+  const startTime = performance.now();
+  const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 12 : 30;
+
+  console.log(
+    `[recursive_limit] performFastScan initialized: target="${rootPath}", max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`
+  );
+
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
       const { listen } = await import('@tauri-apps/api/event');
 
-      const streamedItems: any[] = [];
       let unlistenFn: (() => void) | null = null;
+      let streamedEventCount = 0;
 
       if (onProgress) {
         unlistenFn = await listen<any>('scan-progress', (event) => {
           if (event && event.payload) {
+            streamedEventCount++;
             const count = event.payload.scanned_count || 0;
             const file = event.payload.current_file || '';
             if (file) {
@@ -322,27 +488,28 @@ export const performFastScan = async (
               const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : rootPath;
               const depth = parts.length > 1 ? parts.length - 1 : 0;
               console.log(
-                `[performFastScan:StreamProgress] Visited dir: "${dir}" | Depth: ${depth} | Progress item count: ${count} | File: "${file}"`
+                `[performFastScan:StreamEvent #${streamedEventCount}] Visited dir: "${dir}" | Depth: ${depth} | Discovered items: ${count} | Item: "${file}"`
               );
-              streamedItems.push({
-                name: file,
-                rel_path: file,
-                is_dir: false,
-                size_str: '2.5 GB',
-              });
+              if (count === 25) {
+                console.log(
+                  `[recursive_limit] Stream reached item #25 boundary. Continuing traversal to audit items #26+...`
+                );
+              }
             }
             onProgress(count, file);
           }
         });
-        setTimeout(() => {
-          try {
-            unlistenFn?.();
-          } catch (e) {}
-        }, 30000);
       }
 
-      // Race invoke against timeout to prevent stalling at 5% indefinitely
-      const invokePromise = invoke<any>('perform_fast_scan', { rootPath, safeScan });
+      // Race invoke against timeout to prevent hanging forever if unmounted
+      const invokePromise = invoke<any>('perform_fast_scan', {
+        rootPath,
+        root_path: rootPath,
+        safeScan,
+        safe_scan: safeScan,
+        maxDepth: effectiveMaxDepth,
+        max_depth: effectiveMaxDepth,
+      });
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error(`Native scan timed out after ${timeoutMs}ms`)), timeoutMs)
       );
@@ -351,16 +518,11 @@ export const performFastScan = async (
       try {
         result = await Promise.race([invokePromise, timeoutPromise]);
       } catch (timeoutErr: any) {
-        console.warn(`[SambaVault Rust Scanner] Scan timed out after ${timeoutMs}ms. Using streamed items if available:`, timeoutErr);
-        if (streamedItems.length > 0) {
-          logDirectoryTraversalDiagnostics('performFastScan:StreamFallback', rootPath, streamedItems);
-          return {
-            success: true,
-            mountPath: rootPath,
-            items: streamedItems,
-            totalScanned: streamedItems.length,
-          };
-        }
+        const elapsed = Math.round(performance.now() - startTime);
+        console.warn(`[SambaVault Rust Scanner] Scan timed out or failed after ${elapsed}ms:`, timeoutErr);
+        console.warn(
+          `[recursive_limit] Native scan interrupted at elapsed ${elapsed}ms before completion. Check for backend timeout or unmounted SMB socket.`
+        );
         throw timeoutErr;
       } finally {
         try {
@@ -368,6 +530,7 @@ export const performFastScan = async (
         } catch (e) {}
       }
 
+      const durationMs = Math.round(performance.now() - startTime);
       const items = (result || []).map((it: any) => ({
         name: it.name,
         rel_path: it.rel_path,
@@ -375,17 +538,35 @@ export const performFastScan = async (
         size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
       }));
 
-      // Log recursive depth and file count for every directory visited
-      logDirectoryTraversalDiagnostics('performFastScan:NativeTauri', rootPath, items);
+      console.log(
+        `[recursive_limit] performFastScan completed in ${durationMs}ms: retrieved ${items.length} items with max_depth=${effectiveMaxDepth}. ` +
+          (items.length === 25
+            ? '⚠️ RESULT CONTAINS EXACTLY 25 ITEMS. Auditing for silent termination / buffer limit.'
+            : `✅ Successfully bypassed 25-item boundary with ${items.length} discovered items.`)
+      );
+
+      // Deep-dive recursive depth and barrier analysis
+      const diagnostics = logDirectoryTraversalDiagnostics(
+        'performFastScan:NativeTauri',
+        rootPath,
+        items,
+        durationMs,
+        { safeScan, timeoutMs }
+      );
 
       return {
         success: true,
         mountPath: rootPath,
         items,
         totalScanned: items.length,
+        diagnostics,
       };
     } catch (e: any) {
+      const durationMs = Math.round(performance.now() - startTime);
       console.error('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan failed or timed out:', e);
+      console.log(
+        `[recursive_limit] performFastScan errored in ${durationMs}ms: max_depth=${effectiveMaxDepth}, error="${e?.message || e}"`
+      );
       return {
         success: false,
         mountPath: rootPath,
@@ -401,11 +582,17 @@ export const performFastScan = async (
     const response = await fetch('/api/samba/scan-volume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sharePath: rootPath }),
+      body: JSON.stringify({
+        sharePath: rootPath,
+        max_depth: effectiveMaxDepth,
+        maxDepth: effectiveMaxDepth,
+      }),
     });
     if (response.ok) {
       const data = await response.json();
       if (data.success && data.items) {
+        const durationMs = Math.round(performance.now() - startTime);
+
         if (onProgress) {
           data.items.forEach((item: any, idx: number) => {
             if (!item.is_dir) {
@@ -413,22 +600,33 @@ export const performFastScan = async (
               const parts = clean.split('/').filter(Boolean);
               const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : rootPath;
               const depth = parts.length > 1 ? parts.length - 1 : 0;
-              console.log(
-                `[performFastScan:BrowserProgress] Scanned item ${idx + 1}/${data.items.length} | Directory: "${dir}" | Depth: ${depth} | File: "${item.rel_path}"`
-              );
               onProgress(idx + 1, item.rel_path);
             }
           });
         }
 
-        // Log recursive depth and file count for every directory visited in browser fallback
-        logDirectoryTraversalDiagnostics('performFastScan:BrowserFallback', rootPath, data.items);
+        console.log(
+          `[recursive_limit] performFastScan (Browser Fallback) completed in ${durationMs}ms: retrieved ${data.items.length} items with max_depth=${effectiveMaxDepth}. ` +
+            (data.items.length === 25
+              ? '⚠️ RESULT CONTAINS EXACTLY 25 ITEMS.'
+              : `✅ Successfully retrieved ${data.items.length} items.`)
+        );
+
+        // Deep-dive recursive depth and barrier analysis for browser fallback
+        const diagnostics = logDirectoryTraversalDiagnostics(
+          'performFastScan:BrowserFallback',
+          rootPath,
+          data.items,
+          durationMs,
+          { safeScan, timeoutMs }
+        );
 
         return {
           success: true,
           mountPath: rootPath,
           items: data.items,
-          totalScanned: data.totalScanned,
+          totalScanned: data.totalScanned || data.items.length,
+          diagnostics,
         };
       }
     }
@@ -448,10 +646,17 @@ export const performFastScan = async (
 export const scanSambaVolume = async (
   shareName: string,
   customPath?: string,
-  timeoutMs = 5000,
-  safeScan = false
+  timeoutMs = 180000,
+  safeScan = false,
+  max_depth?: number
 ): Promise<ScanVolumeResult> => {
+  const startTime = performance.now();
   const mountLocation = customPath || `/Volumes/${shareName}`;
+  const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 12 : 30;
+
+  console.log(
+    `[recursive_limit] scanSambaVolume initialized: target="${mountLocation}", max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`
+  );
 
   if (isTauriEnvironment()) {
     try {
@@ -459,14 +664,21 @@ export const scanSambaVolume = async (
 
       const invokePromise = invoke<any>('scan_samba_volume', {
         shareName,
+        share_name: shareName,
         customPath: customPath || null,
+        custom_path: customPath || null,
         safeScan,
+        safe_scan: safeScan,
+        maxDepth: effectiveMaxDepth,
+        max_depth: effectiveMaxDepth,
       });
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error(`scan_samba_volume timed out after ${timeoutMs}ms`)), timeoutMs)
       );
 
       const result: any = await Promise.race([invokePromise, timeoutPromise]);
+      const durationMs = Math.round(performance.now() - startTime);
+
       const items = (result?.items || []).map((it: any) => ({
         name: it.name,
         rel_path: it.rel_path,
@@ -474,8 +686,21 @@ export const scanSambaVolume = async (
         size_str: it.size_str || `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
       }));
 
-      // Log recursive depth and file count for every directory visited
-      logDirectoryTraversalDiagnostics('scanSambaVolume:NativeTauri', mountLocation, items);
+      console.log(
+        `[recursive_limit] scanSambaVolume completed in ${durationMs}ms: retrieved ${items.length} items with max_depth=${effectiveMaxDepth}. ` +
+          (items.length === 25
+            ? '⚠️ RESULT CONTAINS EXACTLY 25 ITEMS. Auditing for silent termination / buffer limit.'
+            : `✅ Successfully discovered ${items.length} items.`)
+      );
+
+      // Deep-dive recursive depth and barrier analysis
+      const diagnostics = logDirectoryTraversalDiagnostics(
+        'scanSambaVolume:NativeTauri',
+        mountLocation,
+        items,
+        durationMs,
+        { safeScan, timeoutMs }
+      );
 
       return {
         success: Boolean(result?.success),
@@ -483,9 +708,14 @@ export const scanSambaVolume = async (
         items,
         totalScanned: result?.total_scanned || items.length,
         error: result?.error || null,
+        diagnostics,
       };
     } catch (e: any) {
+      const durationMs = Math.round(performance.now() - startTime);
       console.error('[SambaVault Scanner] Tauri invoke scan_samba_volume failed or timed out:', e);
+      console.log(
+        `[recursive_limit] scanSambaVolume errored in ${durationMs}ms: max_depth=${effectiveMaxDepth}, error="${e?.message || e}"`
+      );
       return {
         success: false,
         mountPath: mountLocation,
@@ -501,19 +731,36 @@ export const scanSambaVolume = async (
     const response = await fetch('/api/samba/scan-volume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sharePath: customPath || '' }),
+      body: JSON.stringify({
+        sharePath: customPath || '',
+        max_depth: effectiveMaxDepth,
+        maxDepth: effectiveMaxDepth,
+      }),
     });
     if (response.ok) {
       const data = await response.json();
       if (data.success && data.items) {
-        // Log recursive depth and file count for every directory visited in browser fallback
-        logDirectoryTraversalDiagnostics('scanSambaVolume:BrowserFallback', mountLocation, data.items);
+        const durationMs = Math.round(performance.now() - startTime);
+
+        console.log(
+          `[recursive_limit] scanSambaVolume (Browser Fallback) completed in ${durationMs}ms: retrieved ${data.items.length} items with max_depth=${effectiveMaxDepth}.`
+        );
+
+        // Deep-dive recursive depth and barrier analysis for browser fallback
+        const diagnostics = logDirectoryTraversalDiagnostics(
+          'scanSambaVolume:BrowserFallback',
+          mountLocation,
+          data.items,
+          durationMs,
+          { safeScan, timeoutMs }
+        );
 
         return {
           success: true,
           mountPath: mountLocation,
           items: data.items,
-          totalScanned: data.totalScanned,
+          totalScanned: data.totalScanned || data.items.length,
+          diagnostics,
         };
       }
     }

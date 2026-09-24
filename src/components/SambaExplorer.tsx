@@ -40,6 +40,7 @@ import {
   Shield,
   ShieldCheck,
   PieChart,
+  Compass,
 } from 'lucide-react';
 import {
   SambaConfig,
@@ -301,7 +302,7 @@ interface SambaExplorerProps {
   onOpenDetails: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
   onRefreshSamba: () => void;
-  onSyncSamba?: (customScanPath?: string) => Promise<void>;
+  onSyncSamba?: (customScanPath?: string, depthLimit?: number) => Promise<void>;
   onQuickSync?: () => Promise<void> | void;
   isQuickSyncing?: boolean;
   onOpenClassifierModal?: () => void;
@@ -314,6 +315,8 @@ interface SambaExplorerProps {
   onUpdateExtensionConfig?: (config: MediaScanExtensionConfig) => void;
   isSafeScan?: boolean;
   onToggleSafeScan?: (enabled: boolean) => void;
+  depthLimit?: number;
+  onUpdateDepthLimit?: (limit: number) => void;
 }
 
 export const SambaExplorer: React.FC<SambaExplorerProps> = ({
@@ -338,7 +341,10 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onUpdateExtensionConfig,
   isSafeScan = false,
   onToggleSafeScan,
+  depthLimit = 30,
+  onUpdateDepthLimit,
 }) => {
+  const [currentDepthLimit, setCurrentDepthLimit] = useState<number>(depthLimit || sambaConfig.depthLimit || 30);
   const [selectedNode, setSelectedNode] = useState<SambaShareNode | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({
     'root-movies': true,
@@ -429,15 +435,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         .map((log) => log.title || log.details || 'Unknown sync error');
 
       setStatsData({
-        totalScanned: totalFiles || 25,
-        parsedSuccessfully: parsed || 22,
-        missingMetadata: missingMetadataCount || 3,
+        totalScanned: totalFiles,
+        parsedSuccessfully: parsed,
+        missingMetadata: missingMetadataCount,
         errorsCount: syncErrors.length,
-        errorList: syncErrors.length > 0 ? syncErrors : ['Warning: Read operations restricted on non-media subdirectory'],
-        missingMetadataItems: missingItemsList.length > 0 ? missingItemsList : [
-          { name: 'S01E01 - Pilot.mp4', path: 'TV Shows/Battlestar Galactica/S01E01 - Pilot.mp4', reason: 'Missing local NFO metadata' },
-          { name: 'Battlestar Galactica (2004) - Poster.jpg', path: 'TV Shows/Battlestar Galactica/poster.jpg', reason: 'Missing premium backdrop artwork' }
-        ],
+        errorList: syncErrors,
+        missingMetadataItems: missingItemsList,
       });
       setShowStatsOverlay(true);
     }
@@ -571,6 +574,28 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       setTimeout(() => setCopyToast(null), 2500);
     }
     setContextMenu({ visible: false, x: 0, y: 0, node: null });
+  };
+
+  const [isGeneratingLibrary, setIsGeneratingLibrary] = useState(false);
+
+  const handleGenerateLargeSampleLibrary = async () => {
+    setIsGeneratingLibrary(true);
+    try {
+      const res = await fetch('/api/samba/generate-large-library', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setCopyToast(data.message || 'Populated Samba share with comprehensive media library!');
+        setTimeout(() => setCopyToast(null), 4000);
+        // Trigger sync to index all newly written files
+        if (onSyncSamba) {
+          onSyncSamba();
+        }
+      }
+    } catch (e: any) {
+      console.error('Failed to generate large library:', e);
+    } finally {
+      setIsGeneratingLibrary(false);
+    }
   };
 
   // Execute Quick Rename: updates both Samba physical file and SQLite vault
@@ -1868,7 +1893,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             {/* Sync Share Media Button */}
             <button
               id="samba-sync-share-btn"
-              onClick={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
+              onClick={() => onSyncSamba && onSyncSamba(customScanPath || undefined, currentDepthLimit)}
               disabled={isSyncing || isQuickSyncing}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer disabled:opacity-50 border ${
                 isSafeScan
@@ -1878,7 +1903,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               title={
                 isSafeScan
                   ? 'Safe Scan: Fast shallow directory scan using local heuristic classification without external API stalls'
-                  : 'Recursively scan the Samba share, detect movies/series across any folder layout, and pull metadata'
+                  : `Recursively scan the Samba share up to depth limit ${currentDepthLimit}, detect movies/series across any folder layout, and pull metadata`
               }
             >
               <RotateCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-emerald-400' : isSafeScan ? 'text-emerald-400' : 'text-slate-400'}`} />
@@ -1891,6 +1916,18 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                   ? 'Safe Sync Share'
                   : 'Full Deep Sync'}
               </span>
+            </button>
+
+            {/* Populate/Generate Large Realistic Library Button */}
+            <button
+              id="samba-generate-large-btn"
+              onClick={handleGenerateLargeSampleLibrary}
+              disabled={isGeneratingLibrary || isSyncing}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-950/60 hover:bg-purple-900/70 text-purple-200 text-xs font-semibold border border-purple-500/40 transition shadow cursor-pointer disabled:opacity-50"
+              title="Generate a realistic multi-thousand media file catalog on the Samba share with all seasons, episodes, tracks, and audiobooks"
+            >
+              <Sparkles className={`w-3.5 h-3.5 text-purple-300 ${isGeneratingLibrary ? 'animate-spin' : ''}`} />
+              <span>{isGeneratingLibrary ? 'Writing 2,500+ Files...' : 'Populate 2,500+ Files'}</span>
             </button>
 
             {/* Verify Share Artwork & Persistence Button */}
@@ -1926,18 +1963,66 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         )}
 
         {/* Custom Folder & Advanced Scan Path Bar */}
-        <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2 text-slate-400 flex-wrap">
-            <FolderSearch className="w-4 h-4 text-indigo-400 shrink-0" />
-            <span>Scan custom mount or directory path:</span>
-            <input
-              id="samba-custom-scan-path"
-              type="text"
-              value={customScanPath}
-              onChange={(e) => setCustomScanPath(e.target.value)}
-              placeholder={`Default: /Volumes/${sambaConfig.share || 'media'}`}
-              className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-200 font-mono text-xs focus:outline-none focus:border-indigo-500 w-64"
-            />
+        <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-3 text-slate-400 flex-wrap">
+            <div className="flex items-center gap-2">
+              <FolderSearch className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span>Path:</span>
+              <input
+                id="samba-custom-scan-path"
+                type="text"
+                value={customScanPath}
+                onChange={(e) => setCustomScanPath(e.target.value)}
+                placeholder={`Default: /Volumes/${sambaConfig.share || 'media'}`}
+                className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-200 font-mono text-xs focus:outline-none focus:border-indigo-500 w-56"
+              />
+            </div>
+
+            {/* Configurable Depth Limit Controls */}
+            <div className="flex items-center gap-2 border-l border-slate-800 pl-3">
+              <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <label htmlFor="samba-depth-limit-input" className="text-slate-300 font-medium">
+                Depth Limit:
+              </label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  id="samba-depth-limit-input"
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={currentDepthLimit}
+                  onChange={(e) => {
+                    const val = Math.max(1, Math.min(60, Number(e.target.value) || 30));
+                    setCurrentDepthLimit(val);
+                    onUpdateDepthLimit?.(val);
+                  }}
+                  className="bg-slate-950 border border-slate-700 focus:border-cyan-500 rounded-lg px-2 py-1 text-cyan-300 font-mono text-xs w-16 text-center focus:outline-none"
+                  title="Configure max directory recursion depth limit (1 to 60 levels) for deep folder structures"
+                />
+                <span className="text-[10px] text-slate-500 font-mono">levels</span>
+              </div>
+
+              {/* Quick Depth Presets */}
+              <div className="flex items-center gap-1">
+                {[12, 30, 50].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      setCurrentDepthLimit(preset);
+                      onUpdateDepthLimit?.(preset);
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition ${
+                      currentDepthLimit === preset
+                        ? 'bg-cyan-950 text-cyan-300 border border-cyan-500/40'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800'
+                    }`}
+                  >
+                    {preset === 12 ? '12 (Fast)' : preset === 30 ? '30 (Std)' : '50 (Deep)'}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap">
@@ -1947,7 +2032,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 Safe Scan Active (Shallow traversal, zero API stalls)
               </span>
             )}
-            <span>Supports any folder naming (e.g. <em>Series</em>, <em>Anime</em>, <em>Films</em>, without requiring &quot;TV Shows&quot;).</span>
+            <span>Supports any folder naming (e.g. <em>Series</em>, <em>Anime</em>, <em>Films</em>).</span>
           </div>
         </div>
       </div>

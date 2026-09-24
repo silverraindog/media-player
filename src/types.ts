@@ -109,6 +109,7 @@ export interface SambaConfig {
   targetPlatform: 'macos' | 'linux' | 'windows' | 'all';
   baseMountPath: string; // /Volumes/media (macOS), /mnt/media (Linux), Z: (Windows)
   mountPath?: string;
+  depthLimit?: number; // User-configurable recursion depth limit (e.g. 30)
 }
 
 export interface ParsedFileInfo {

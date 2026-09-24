@@ -1851,17 +1851,37 @@ try {
   // Seed sample media files into SAMBA_SHARE_ROOT if empty
   const sampleFiles = [
     'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
+    'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv',
+    'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E03 - And the Bag\'s in the River.mkv',
     'Series/Severance (2022)/Season 1/Severance - S01E01 - Good News About Hell.mkv',
     'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv',
+    'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E02 - The Weirdo on Maple Street.mkv',
+    'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E03 - Holly, Jolly.mkv',
+    'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv',
     'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
     'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
+    'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.mkv',
     'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mp4',
+    'Movies/The Dark Knight (2008)/The Dark Knight (2008) [1080p].mkv',
     'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
     'Music/Pink Floyd/The Dark Side of the Moon (1973)/01 - Speak to Me.mp3',
+    'Music/Pink Floyd/The Dark Side of the Moon (1973)/02 - Breathe.mp3',
+    'Music/Pink Floyd/The Dark Side of the Moon (1973)/03 - On the Run.mp3',
+    'Music/Pink Floyd/The Dark Side of the Moon (1973)/04 - Time.mp3',
+    'Music/Radiohead/OK Computer (1997)/01 - Airbag.mp3',
+    'Music/Miles Davis/Kind of Blue (1959)/01 - So What.flac',
     'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b',
+    'Audio books/James Clear/Atomic Habits (2018)/01 - The Fundamentals.m4b',
     'Books/Sci-Fi/Dune - Frank Herbert (1965).epub',
+    'Books/Non-Fiction/Thinking Fast and Slow - Daniel Kahneman.pdf',
+    'Books/Comics/Watchmen (1986).cbz',
     'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E01.1080p.mkv',
+    'Anime/Attack on Titan (2013)/Season 1/Attack.on.Titan.S01E02.1080p.mkv',
     'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
+    'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E02.Ocean.2160p.mkv',
+    'Franchises/Star Wars/Star Wars - Episode IV - A New Hope (1977)/Star Wars - Episode IV - A New Hope (1977).mp4',
+    'Franchises/Marvel Cinematic Universe/Iron Man (2008)/Iron Man (2008).mkv',
+    'sort/Unsorted.Movie.2024.1080p.mkv',
   ];
 
   sampleFiles.forEach((rel) => {
@@ -1904,7 +1924,22 @@ function sanitizeSambaPath(rawPath: string): string {
 }
 
 function resolveSambaFullPath(rawPath: string): string {
-  const sanitized = sanitizeSambaPath(rawPath);
+  if (!rawPath) return SAMBA_SHARE_ROOT;
+  let cleanPath = rawPath.replace(/\\/g, '/');
+
+  // Strip leading slash
+  if (cleanPath.startsWith('/')) {
+    cleanPath = cleanPath.slice(1);
+  }
+
+  // If the path starts with Volumes/
+  if (cleanPath.startsWith('Volumes/')) {
+    const parts = cleanPath.split('/').filter(Boolean);
+    // Volumes/media/Movies -> Parts are ["Volumes", "media", "Movies"] -> Parts.slice(2) is ["Movies"]
+    cleanPath = parts.slice(2).join('/');
+  }
+
+  const sanitized = sanitizeSambaPath(cleanPath);
   // Prevent directory traversal attacks
   const safeRelPath = path.normalize(sanitized).replace(/^(\.\.[\/\\])+/, '');
   return path.join(SAMBA_SHARE_ROOT, safeRelPath);

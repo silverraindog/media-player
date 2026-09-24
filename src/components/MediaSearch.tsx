@@ -40,6 +40,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   SlidersHorizontal,
   X,
   Image as ImageIcon,
@@ -234,6 +235,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const [genreSearchInput, setGenreSearchInput] = useState<string>('');
+  const [showAllGenreChips, setShowAllGenreChips] = useState<boolean>(false);
   const [selectedFileType, setSelectedFileType] = useState<string>('all');
   const [internalSelectedType, setInternalSelectedType] = useState<'all' | MediaType>('all');
   const selectedType = selectedMediaType !== undefined ? selectedMediaType : internalSelectedType;
@@ -542,14 +545,28 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     return counts;
   }, [mediaLibrary, selectedType]);
 
-  // Extract all available genres with item counts
+  // Extract all available genres with item counts directly from mediaLibrary state
   const availableGenres = useMemo(() => {
     const genreMap = new Map<string, number>();
     mediaLibrary.forEach((m) => {
       if (selectedType !== 'all' && m.type !== selectedType) return;
-      m.genres?.forEach((g) => {
+      let genresList: string[] = [];
+      if (Array.isArray(m.genres)) {
+        genresList = m.genres;
+      } else if (typeof m.genres === 'string') {
+        try {
+          const parsed = JSON.parse(m.genres);
+          if (Array.isArray(parsed)) genresList = parsed;
+          else genresList = (m.genres as string).split(',').map((s) => s.trim());
+        } catch {
+          genresList = (m.genres as string).split(',').map((s) => s.trim());
+        }
+      }
+
+      genresList.forEach((g) => {
+        if (!g) return;
         const trimmed = g.trim();
-        if (trimmed) {
+        if (trimmed && trimmed.length > 1) {
           genreMap.set(trimmed, (genreMap.get(trimmed) || 0) + 1);
         }
       });
@@ -558,6 +575,40 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([name, count]) => ({ name, count }));
   }, [mediaLibrary, selectedType]);
+
+  // Dynamic filter chips to display based on search filter & expand state
+  const displayedGenreChips = useMemo(() => {
+    let list = availableGenres;
+    if (genreSearchInput.trim()) {
+      const q = genreSearchInput.toLowerCase().trim();
+      list = list.filter((g) => g.name.toLowerCase().includes(q));
+    } else if (!showAllGenreChips && list.length > 12) {
+      list = list.slice(0, 12);
+    }
+    return list;
+  }, [availableGenres, genreSearchInput, showAllGenreChips]);
+
+  // Contextual icon / emoji for recognized genre names
+  const getGenreIcon = (genre: string): string => {
+    const g = genre.toLowerCase();
+    if (g.includes('sci-fi') || g.includes('science fiction') || g.includes('space') || g.includes('dystopian')) return '🚀';
+    if (g.includes('action') || g.includes('superhero') || g.includes('explosive')) return '💥';
+    if (g.includes('drama') || g.includes('tragedy')) return '🎭';
+    if (g.includes('comedy') || g.includes('sitcom') || g.includes('humor')) return '😂';
+    if (g.includes('thriller') || g.includes('suspense') || g.includes('espionage')) return '🔍';
+    if (g.includes('crime') || g.includes('gangster') || g.includes('noir') || g.includes('detective')) return '🕵️';
+    if (g.includes('horror') || g.includes('slasher') || g.includes('zombie')) return '👻';
+    if (g.includes('animation') || g.includes('anime') || g.includes('cartoon')) return '🎨';
+    if (g.includes('documentary') || g.includes('docuseries') || g.includes('biography') || g.includes('history')) return '📽️';
+    if (g.includes('romance') || g.includes('romantic')) return '💖';
+    if (g.includes('fantasy') || g.includes('mythical') || g.includes('sorcery')) return '🧙';
+    if (g.includes('mystery') || g.includes('whodunit')) return '🧩';
+    if (g.includes('adventure')) return '🧭';
+    if (g.includes('rock') || g.includes('metal') || g.includes('punk')) return '🎸';
+    if (g.includes('electronic') || g.includes('synth') || g.includes('dance') || g.includes('disco')) return '🎛️';
+    if (g.includes('music') || g.includes('audio') || g.includes('pop') || g.includes('jazz')) return '🎵';
+    return '🏷️';
+  };
 
   // Handle multi-select genre toggle
   const handleToggleGenre = (genreName: string) => {
@@ -730,7 +781,19 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
       // Multi-select Genre Filter: Matches if media has ANY of the selected genres
       if (selectedGenres.length > 0) {
-        const hasAnySelectedGenre = media.genres?.some((g) =>
+        let mediaGenres: string[] = [];
+        if (Array.isArray(media.genres)) {
+          mediaGenres = media.genres;
+        } else if (typeof media.genres === 'string') {
+          try {
+            const parsed = JSON.parse(media.genres);
+            if (Array.isArray(parsed)) mediaGenres = parsed;
+            else mediaGenres = (media.genres as string).split(',').map((s) => s.trim());
+          } catch {
+            mediaGenres = (media.genres as string).split(',').map((s) => s.trim());
+          }
+        }
+        const hasAnySelectedGenre = mediaGenres.some((g) =>
           selectedGenres.some((sg) => sg.toLowerCase() === g.toLowerCase())
         );
         if (!hasAnySelectedGenre) return false;
@@ -1063,6 +1126,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const handleResetAllFilters = () => {
     setActiveCategory('all');
     setSelectedGenres([]);
+    setGenreSearchInput('');
     setYearRange([minLibraryYear, maxLibraryYear]);
     setSearchQuery('');
     setSelectedType('all');
@@ -1962,6 +2026,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                         onChange={() => handleToggleGenre(g.name)}
                         className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 bg-slate-900 cursor-pointer"
                       />
+                      <span>{getGenreIcon(g.name)}</span>
                       <span>{g.name}</span>
                     </div>
                     <span
@@ -2059,6 +2124,144 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* DYNAMIC GENRE FILTER CHIPS SECTION */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-purple-500/10 border border-purple-500/25 text-purple-400">
+                  <Filter className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-white text-sm">Library Genres</h3>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] font-mono text-purple-300 border border-purple-500/30">
+                      {availableGenres.length} {availableGenres.length === 1 ? 'Genre' : 'Genres'}
+                    </span>
+                    {selectedGenres.length > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-purple-600 text-[10px] font-bold text-white font-mono shadow-sm">
+                        {selectedGenres.length} Selected
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Dynamically generated from your media library — click chips to filter titles
+                  </p>
+                </div>
+              </div>
+
+              {/* Quick Actions: Search input, All / Clear buttons */}
+              <div className="flex items-center gap-2">
+                {availableGenres.length > 6 && (
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Find genre..."
+                      value={genreSearchInput}
+                      onChange={(e) => setGenreSearchInput(e.target.value)}
+                      className="w-36 sm:w-44 pl-8 pr-6 py-1 bg-slate-950/80 border border-slate-700/80 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/40 transition"
+                    />
+                    {genreSearchInput && (
+                      <button
+                        type="button"
+                        onClick={() => setGenreSearchInput('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {selectedGenres.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAllGenres}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/40 text-purple-300 text-xs font-semibold transition cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Clear ({selectedGenres.length})</span>
+                  </button>
+                )}
+
+                {availableGenres.length > 12 && !genreSearchInput && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllGenreChips((prev) => !prev)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer"
+                  >
+                    <span>{showAllGenreChips ? 'Show Top 12' : `All (${availableGenres.length})`}</span>
+                    {showAllGenreChips ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Dynamic Genre Filter Chips Flow */}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {/* All Genres Root Chip */}
+              <button
+                type="button"
+                id="genre-chip-all"
+                onClick={handleClearAllGenres}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer border ${
+                  selectedGenres.length === 0
+                    ? 'bg-purple-600 border-purple-500 text-white shadow-md shadow-purple-600/30 ring-1 ring-purple-400'
+                    : 'bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700'
+                }`}
+                title="Show all media across all genres"
+              >
+                <span>🌟</span>
+                <span>All Genres</span>
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                    selectedGenres.length === 0 ? 'bg-purple-800 text-purple-100 font-bold' : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {mediaLibrary.filter((m) => selectedType === 'all' || m.type === selectedType).length}
+                </span>
+              </button>
+
+              {/* Dynamically Generated Genre Chips */}
+              {displayedGenreChips.map((genre) => {
+                const isSelected = selectedGenres.includes(genre.name);
+                const chipId = `genre-chip-${genre.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+
+                return (
+                  <button
+                    key={genre.name}
+                    id={chipId}
+                    type="button"
+                    onClick={() => handleToggleGenre(genre.name)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 transition cursor-pointer border ${
+                      isSelected
+                        ? 'bg-purple-600 border-purple-500 text-white shadow-md shadow-purple-600/30 ring-1 ring-purple-400 font-bold'
+                        : 'bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700'
+                    }`}
+                    title={`${isSelected ? 'Deselect' : 'Select'} ${genre.name} (${genre.count} items)`}
+                  >
+                    <span>{getGenreIcon(genre.name)}</span>
+                    <span>{genre.name}</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono transition ${
+                        isSelected ? 'bg-purple-900 text-purple-100 font-bold' : 'bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {genre.count}
+                    </span>
+                    {isSelected && <Check className="w-3 h-3 text-white ml-0.5" />}
+                  </button>
+                );
+              })}
+
+              {displayedGenreChips.length === 0 && genreSearchInput && (
+                <div className="py-2 text-xs text-slate-500 italic">
+                  No genres found matching "{genreSearchInput}"
+                </div>
+              )}
             </div>
           </div>
 

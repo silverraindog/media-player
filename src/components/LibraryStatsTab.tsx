@@ -44,8 +44,10 @@ import {
   LargestMediaItem,
   MediaType,
   MediaMetadata,
+  SambaShareNode,
 } from '../types';
 import { BatchMetadataEnricher } from './BatchMetadataEnricher';
+import { SambaStorageSummaryDashboard } from './SambaStorageSummaryDashboard';
 
 interface LibraryStatsTabProps {
   onNavigateToVault: () => void;
@@ -53,6 +55,7 @@ interface LibraryStatsTabProps {
   mediaLibrary: MediaMetadata[];
   onUpdateMedia: (updatedItems: MediaMetadata[]) => void;
   showToast: (msg: string) => void;
+  sambaTree?: SambaShareNode[];
 }
 
 type GenreSortOption = 'storage-desc' | 'count-desc' | 'rating-desc' | 'name-asc';
@@ -63,6 +66,7 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
   mediaLibrary,
   onUpdateMedia,
   showToast,
+  sambaTree,
 }) => {
   const [statsData, setStatsData] = useState<LibraryDistributionStatsResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -310,6 +314,15 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
 
   return (
     <div id="library-stats-container" className="space-y-6 pb-12">
+      {/* Samba Tree Hierarchy Storage Summary Dashboard */}
+      {sambaTree && sambaTree.length > 0 && (
+        <SambaStorageSummaryDashboard
+          sambaTree={sambaTree}
+          onOpenDetails={onOpenDetails}
+          defaultExpanded={true}
+        />
+      )}
+
       {/* Top Header Card */}
       <div className="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">

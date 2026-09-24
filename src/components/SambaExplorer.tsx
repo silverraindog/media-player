@@ -39,6 +39,7 @@ import {
   AlertTriangle,
   Shield,
   ShieldCheck,
+  PieChart,
 } from 'lucide-react';
 import {
   SambaConfig,
@@ -49,6 +50,7 @@ import {
   DeepRefreshJobState,
   DeepRefreshProviderAudit,
 } from '../types';
+import { SambaStorageSummaryDashboard } from './SambaStorageSummaryDashboard';
 import { DiscoveredFilesInspector } from './DiscoveredFilesInspector';
 import { ConsoleLogSection } from './ConsoleLogSection';
 import { MediaExtensionManager } from './MediaExtensionManager';
@@ -351,7 +353,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [customScanPath, setCustomScanPath] = useState('');
-  const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs'>('explorer');
+  const [activeSubTab, setActiveSubTab] = useState<'explorer' | 'files' | 'logs' | 'storage'>('explorer');
   const [isBatchRenamerOpen, setIsBatchRenamerOpen] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ percentage: number; currentItem: string; count: number } | null>(null);
 
@@ -1996,8 +1998,17 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         onTriggerScan={() => onSyncSamba && onSyncSamba(customScanPath || undefined)}
       />
 
-      {/* Sub-navigation for Discovered Files, Directory Explorer, and Console Logs */}
-      <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+      {/* Storage Hierarchy Dashboard Summary (Movies / Series / Music) */}
+      {activeSubTab !== 'storage' && (
+        <SambaStorageSummaryDashboard
+          sambaTree={sambaTree}
+          onOpenDetails={onOpenDetails}
+          defaultExpanded={false}
+        />
+      )}
+
+      {/* Sub-navigation for Discovered Files, Directory Explorer, Console Logs, and Storage */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
         <button
           onClick={() => setActiveSubTab('files')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
@@ -2033,6 +2044,18 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           <Terminal className="w-4 h-4 text-purple-300" />
           <span>3. Application Console Logs</span>
         </button>
+
+        <button
+          onClick={() => setActiveSubTab('storage')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+            activeSubTab === 'storage'
+              ? 'bg-amber-600 text-white shadow'
+              : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+          }`}
+        >
+          <PieChart className="w-4 h-4 text-amber-300" />
+          <span>4. Storage Hierarchy Details</span>
+        </button>
       </div>
 
       {activeSubTab === 'files' && (
@@ -2065,6 +2088,16 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             path: m.node.path,
           }))}
         />
+      )}
+
+      {activeSubTab === 'storage' && (
+        <div className="space-y-4">
+          <SambaStorageSummaryDashboard
+            sambaTree={sambaTree}
+            onOpenDetails={onOpenDetails}
+            defaultExpanded={true}
+          />
+        </div>
       )}
 
       {activeSubTab === 'explorer' && (

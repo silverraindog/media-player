@@ -2076,7 +2076,7 @@ function App() {
         });
 
         if (scanResult.success && scanResult.items.length > 0) {
-          return scanResult.items.map((it: any) => it.rel_path);
+          return scanResult.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
         }
 
         console.log('[SambaSync] FastScan returned no items, falling back to volume scan...');
@@ -2095,7 +2095,7 @@ function App() {
         });
 
         if (fallbackResult.success && fallbackResult.items.length > 0) {
-          return fallbackResult.items.map((it: any) => it.rel_path);
+          return fallbackResult.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
         }
 
         return [];
@@ -3097,6 +3097,7 @@ function App() {
             mediaLibrary={mediaLibrary}
             onUpdateMedia={(updated) => setMediaLibrary(updated)}
             showToast={showToast}
+            sambaTree={sambaTree}
           />
         )}
 

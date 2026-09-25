@@ -558,6 +558,17 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                             <ChevronRight className="w-4 h-4" />
                           )}
                         </button>
+                        <button
+                          onClick={() => {
+                            const newIgnoredPaths = [...(settings.ignoredPaths || []), item.relativePath];
+                            onUpdateSettings({ ...settings, ignoredPaths: newIgnoredPaths });
+                            setClassifications(prev => prev.filter(c => c.id !== item.id));
+                          }}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900 text-slate-400 hover:text-rose-200 transition cursor-pointer"
+                          title="Permanently ignore this folder in future scans"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
 

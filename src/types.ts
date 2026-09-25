@@ -263,6 +263,7 @@ export interface ClassifierSettings {
   alwaysPromptReview: boolean; // default false
   rules: RegexCategoryRule[];
   categories?: string[];
+  ignoredPaths?: string[];
 }
 
 export type MediaExtensionCategory =

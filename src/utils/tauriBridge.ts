@@ -462,7 +462,7 @@ export const performFastScan = async (
   max_depth?: number
 ): Promise<ScanVolumeResult> => {
   const startTime = performance.now();
-  const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 12 : 30;
+  const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 20 : 60;
 
   console.log(
     `[recursive_limit] performFastScan initialized: target="${rootPath}", max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`
@@ -652,7 +652,7 @@ export const scanSambaVolume = async (
 ): Promise<ScanVolumeResult> => {
   const startTime = performance.now();
   const mountLocation = customPath || `/Volumes/${shareName}`;
-  const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 12 : 30;
+  const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 20 : 60;
 
   console.log(
     `[recursive_limit] scanSambaVolume initialized: target="${mountLocation}", max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`

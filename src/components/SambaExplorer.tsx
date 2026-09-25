@@ -983,6 +983,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     const failedLogs = syncLogs.filter((l) => {
       const isFailed =
         l.status === 'error' ||
+        l.status === 'metadata-missing' ||
         l.details.toLowerCase().includes('fail') ||
         l.details.toLowerCase().includes('error');
       if (!isFailed) return false;

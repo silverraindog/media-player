@@ -427,7 +427,11 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                     initial={{ opacity: 0.7 }}
                     animate={{ opacity: 1 }}
                     transition={{ duration: 0.15 }}
-                    className="text-slate-300 font-mono text-xs truncate max-w-md md:max-w-2xl"
+                    className={`font-mono text-xs truncate max-w-md md:max-w-2xl transition-all duration-300 ${
+                      progress.isActive && progress.phase !== 'completed'
+                        ? 'text-indigo-300 animate-pulse font-medium'
+                        : 'text-slate-300'
+                    }`}
                   >
                     {progress.phaseDescription || progress.currentPath || 'Processing Samba media hierarchy...'}
                   </motion.p>

@@ -20,6 +20,7 @@ import {
   Zap,
   RotateCw,
   Bug,
+  Settings,
 } from 'lucide-react';
 import { SambaConfig, AppTab } from '../types';
 
@@ -354,6 +355,32 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <FileCode2 className="w-4 h-4 text-purple-300" />
               <span>NFO / XML Studio</span>
+            </button>
+
+            <button
+              id="tab-console"
+              onClick={() => setActiveTab('console')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'console'
+                  ? 'bg-cyan-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Terminal className="w-4 h-4 text-cyan-400" />
+              <span>Console Logs</span>
+            </button>
+
+            <button
+              id="tab-settings"
+              onClick={() => setActiveTab('settings')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'settings'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Settings className="w-4 h-4 text-indigo-300" />
+              <span>Settings</span>
             </button>
           </div>
         </div>

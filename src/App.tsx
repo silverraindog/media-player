@@ -20,9 +20,13 @@ import { WatchlistTab } from './components/WatchlistTab';
 import { WatchHistoryTab } from './components/WatchHistoryTab';
 import { MusicTab } from './components/MusicTab';
 import { YouTubeTab } from './components/YouTubeTab';
+import { ConsoleTab } from './components/ConsoleTab';
+import { SettingsTab } from './components/SettingsTab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
 import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar';
+import { logger } from './utils/loggerService';
+import { syncScheduler } from './utils/syncScheduler';
 import { Bug } from 'lucide-react';
 import {
   MediaMetadata,
@@ -1022,6 +1026,14 @@ function App() {
     } catch {}
   }, [classifierSettings]);
 
+  // Register syncScheduler handler to execute background cron syncs
+  useEffect(() => {
+    syncScheduler.registerSyncHandler(async () => {
+      logger.info('SyncScheduler triggered background Samba sync execution.', 'Scheduler');
+      await handleSyncSamba();
+    });
+  }, [sambaConfig, isSafeScan, scanDepthLimit]);
+
   const [isClassifierModalOpen, setIsClassifierModalOpen] = useState(false);
   const [isApiDebuggerOpen, setIsApiDebuggerOpen] = useState(false);
   const [manualMatchModalState, setManualMatchModalState] = useState<{
@@ -1963,6 +1975,10 @@ function App() {
     console.log(
       `[SambaSync] Initializing Sync scan (Safe Scan: ${effectiveSafeScan ? 'ON' : 'OFF'}, Depth Limit: ${effectiveDepthLimit})...`
     );
+    logger.info(
+      `Initializing Samba sync scan on "${customScanPath || sambaConfig.mountPath || '//' + (sambaConfig.server || 'nas') + '/' + (sambaConfig.share || 'media')}" (SafeScan: ${effectiveSafeScan ? 'ON' : 'OFF'}, Depth: ${effectiveDepthLimit})`,
+      'Sync'
+    );
     setIsSyncingShare(true);
     const shareName = sambaConfig.share || 'media';
     const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
@@ -2757,6 +2773,15 @@ function App() {
 
       // 6. Update sync logs and connection status
       setIsConnected(true);
+      logger.success(
+        `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) across share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'}.`,
+        'Sync',
+        {
+          totalFiles: discoveredRelativePaths.length,
+          mediaExtracted: discoveredMedia.length,
+          multiVersionBranches: detectedBranchCount,
+        }
+      );
       setSyncLogs((prev) => [
         {
           id: `log-art-${Date.now()}`,
@@ -2805,6 +2830,7 @@ function App() {
       showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
+      logger.error(`Samba sync failed: ${err?.message || err}`, 'Sync', { error: String(err) });
       showToast(`Scan error: ${err?.message || 'Failed to scan share'}`);
     } finally {
       setIsSyncingShare(false);
@@ -3279,6 +3305,19 @@ function App() {
             initialMedia={nfoStudioMedia}
             sambaConfig={sambaConfig}
             onPushNfoToSamba={handlePushNfoToSamba}
+          />
+        )}
+
+        {activeTab === 'console' && <ConsoleTab />}
+
+        {activeTab === 'settings' && (
+          <SettingsTab
+            classifierSettings={classifierSettings}
+            onUpdateClassifierSettings={(newSettings) => setClassifierSettings(newSettings)}
+            sambaConfig={sambaConfig}
+            onClearThumbnailCache={handleClearThumbnailCache}
+            onExportLibraryBackup={handleExportJsonBackup}
+            onManualTriggerSync={() => handleSyncSamba()}
           />
         )}
       </main>

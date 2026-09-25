@@ -790,6 +790,34 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <HardDrive className="w-3.5 h-3.5 text-amber-400" />
               <span>Mounts</span>
             </button>
+
+            {/* Console Log Button */}
+            <button
+              id="mgmt-nav-console-btn"
+              onClick={() => setActiveTab('console')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'console'
+                  ? 'bg-cyan-600 text-white shadow-xs ring-1 ring-cyan-400/50'
+                  : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Console</span>
+            </button>
+
+            {/* Settings & Schedule Button */}
+            <button
+              id="mgmt-nav-settings-btn"
+              onClick={() => setActiveTab('settings')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'settings'
+                  ? 'bg-indigo-600 text-white shadow-xs ring-1 ring-indigo-400/50'
+                  : 'bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800'
+              }`}
+            >
+              <Settings className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Settings</span>
+            </button>
           </div>
 
           {/* Right Status Summary */}

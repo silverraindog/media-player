@@ -349,7 +349,9 @@ export type AppTab =
   | 'explorer'
   | 'nfo-studio'
   | 'sqlite-vault'
-  | 'youtube';
+  | 'youtube'
+  | 'console'
+  | 'settings';
 
 export interface WatchHistoryItem {
   id: string;
@@ -503,6 +505,38 @@ export interface GenreAffinityScore {
   totalDurationMinutes: number;
   completedCount: number;
   percentage?: number;
+}
+
+export type ConsoleLogLevel = 'info' | 'success' | 'warn' | 'error' | 'debug';
+
+export type ConsoleLogCategory = 
+  | 'Sync'
+  | 'Samba'
+  | 'Mount'
+  | 'Database'
+  | 'Scanner'
+  | 'Scheduler'
+  | 'Auth'
+  | 'System';
+
+export interface ConsoleLogEntry {
+  id: string;
+  timestamp: string; // ISO string
+  level: ConsoleLogLevel;
+  category: ConsoleLogCategory;
+  message: string;
+  details?: any;
+}
+
+export interface SyncScheduleConfig {
+  enabled: boolean;
+  intervalPreset: '15m' | '1h' | '6h' | 'daily_3am' | 'daily_12pm' | 'weekly_sun' | 'custom';
+  cronExpression: string; // 5-field cron syntax
+  lastRunAt?: string;
+  lastRunStatus?: 'success' | 'error' | 'warning' | 'idle';
+  lastRunSummary?: string;
+  nextRunAt?: string;
+  showToastOnRun?: boolean;
 }
 
 

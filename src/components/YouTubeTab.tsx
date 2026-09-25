@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, GoogleAuthProvider, User } from '../lib/firebase';
 import { fetchSubscriptions, fetchChannelUploads, YouTubeSubscription, YouTubeVideo } from '../services/youtubeService';
+import { logger } from '../utils/loggerService';
 
 interface SyncLog {
   timestamp: string;
@@ -103,6 +104,16 @@ export const YouTubeTab: React.FC = () => {
     } catch (e: any) {
       console.error('[YouTubeTab] Firebase Auth popup error caught:', e);
       const isCancelled = e?.code === 'auth/cancelled-popup-request';
+      if (isCancelled) {
+        logger.warn(
+          'Firebase Auth popup cancelled (auth/cancelled-popup-request) due to preview iframe sandbox or popup blocker. Executing client-side GIS fallback.',
+          'Auth',
+          { code: e?.code, isIframe: window.self !== window.top, origin: window.location.origin }
+        );
+      } else {
+        logger.error(`Firebase Auth error: ${e?.message || e}`, 'Auth', { error: e });
+      }
+
       const detailMsg = isCancelled 
         ? 'Firebase Authentication popup request cancelled (auth/cancelled-popup-request). This typically happens in iframe previews due to cross-origin sandbox restrictions or popup blockers.' 
         : `Firebase Authentication failed: ${e?.message || e}`;

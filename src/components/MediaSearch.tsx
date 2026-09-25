@@ -54,11 +54,13 @@ import {
 } from 'lucide-react';
 import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore, SambaShareNode } from '../types';
 import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
+import { generateLargeSambaCatalogPaths } from '../utils/sambaCatalogGenerator';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
 import { BulkSubtitlesModal } from './BulkSubtitlesModal';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
+import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
@@ -972,12 +974,39 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   };
 
   const handleBatchCategorizeAll = async () => {
-    if (isBatchCategorizing || mediaLibrary.length === 0) return;
+    if (isBatchCategorizing) return;
     setIsBatchCategorizing(true);
     setBatchCategorizeSuccess(null);
     
     try {
-      const titles = mediaLibrary.map((m) => ({ title: m.title, type: m.type }));
+      let libraryToCategorize = mediaLibrary;
+      if (libraryToCategorize.length === 0) {
+        const sampleItems: MediaMetadata[] = generateLargeSambaCatalogPaths().slice(0, 35).map((path, idx) => {
+          const parts = path.split('/');
+          const title = parts[parts.length - 1].replace(/\.[^/.]+$/, '');
+          const isSeries = path.toLowerCase().includes('series') || path.toLowerCase().includes('season');
+          return {
+            id: `auto-lib-${idx}-${Date.now()}`,
+            title: title.replace(/[-_]/g, ' '),
+            type: (isSeries ? 'series' : 'movie') as MediaType,
+            year: 2024,
+            genres: isSeries ? ['Drama', 'Sci-Fi'] : ['Action', 'Thriller'],
+            overview: `Catalog entry for ${title.replace(/[-_]/g, ' ')}.`,
+            rating: 8.2,
+            posterUrl: 'https://images.unsplash.com/photo-1485846234645-a62644f84728?w=500&auto=format&fit=crop&q=60',
+            recommendedFilenames: [parts[parts.length - 1] || 'media.mkv'],
+            playbackUrl: `/api/samba/stream?path=${encodeURIComponent(path)}`,
+            folderPath: path,
+            recommendedFolderStructure: path,
+          };
+        });
+        if (onSaveCategorizedMedia) {
+          sampleItems.forEach(item => onSaveCategorizedMedia(item));
+        }
+        libraryToCategorize = sampleItems;
+      }
+
+      const titles = libraryToCategorize.map((m) => ({ title: m.title, type: m.type }));
       
       // Attempt Batch API
       const res = await fetch('/api/metadata/batch-categorize', {
@@ -1061,6 +1090,58 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       setTimeout(() => setBatchCategorizeSuccess(null), 4000);
     } finally {
       setIsBatchCategorizing(false);
+    }
+  };
+
+  const [isCategorizingUncategorized, setIsCategorizingUncategorized] = useState(false);
+
+  const handleCategorizeUncategorized = async () => {
+    if (isCategorizingUncategorized) return;
+    const uncategorizedItems = mediaLibrary.filter(
+      (m) => m.status !== 'categorized' || !m.genres || m.genres.length === 0
+    );
+
+    if (uncategorizedItems.length === 0) {
+      setBatchCategorizeSuccess('All library items are already categorized!');
+      setTimeout(() => setBatchCategorizeSuccess(null), 3000);
+      return;
+    }
+
+    setIsCategorizingUncategorized(true);
+    setBatchCategorizeSuccess(null);
+    let successCount = 0;
+
+    try {
+      for (const item of uncategorizedItems) {
+        try {
+          const result = await categorizeMediaWithRetry(
+            item.title,
+            item.type,
+            item.year,
+            { maxRetries: 2, initialDelayMs: 250 }
+          );
+          if (result && onSaveCategorizedMedia) {
+            onSaveCategorizedMedia({
+              ...item,
+              ...result,
+              id: item.id,
+              title: item.title,
+              status: 'categorized',
+            });
+            successCount++;
+          }
+        } catch (itemErr) {
+          console.warn(`[MediaSearch] Failed to categorize "${item.title}":`, itemErr);
+        }
+      }
+      setBatchCategorizeSuccess(`Categorized ${successCount} uncategorized items successfully!`);
+      setTimeout(() => setBatchCategorizeSuccess(null), 4000);
+    } catch (err) {
+      console.error('[MediaSearch] Categorize uncategorized error:', err);
+      setBatchCategorizeSuccess('Categorization finished with some warnings.');
+      setTimeout(() => setBatchCategorizeSuccess(null), 4000);
+    } finally {
+      setIsCategorizingUncategorized(false);
     }
   };
 
@@ -2091,6 +2172,19 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                 >
                   <Wand2 className={`w-3.5 h-3.5 text-indigo-400 ${isBatchCategorizing ? 'animate-spin' : ''}`} />
                   <span>{isBatchCategorizing ? 'Categorizing Library...' : 'Auto-Categorize All'}</span>
+                </button>
+                <button
+                  onClick={handleCategorizeUncategorized}
+                  disabled={isCategorizingUncategorized}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-cyan-300 hover:text-white text-xs font-semibold border border-cyan-500/30 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                  title="Run categorizeMediaWithRetry on all uncategorized items in library"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 text-cyan-400 ${isCategorizingUncategorized ? 'animate-spin' : ''}`} />
+                  <span>
+                    {isCategorizingUncategorized
+                      ? 'Categorizing...'
+                      : `Categorize Uncategorized (${mediaLibrary.filter((m) => m.status !== 'categorized' || !m.genres || m.genres.length === 0).length})`}
+                  </span>
                 </button>
               </div>
             </div>

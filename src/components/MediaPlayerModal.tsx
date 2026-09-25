@@ -34,7 +34,7 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
-import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath } from '../utils/tauriBridge';
+import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes } from '../utils/tauriBridge';
 import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
 
 interface MediaPlayerModalProps {
@@ -154,6 +154,42 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
   const [isManualStreamOverride, setIsManualStreamOverride] = useState(false);
   const [autoFallbackAttempted, setAutoFallbackAttempted] = useState(false);
+  const [isVolumeMounted, setIsVolumeMounted] = useState<boolean>(true);
+  const [systemVolumes, setSystemVolumes] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const verifyVolume = async () => {
+      try {
+        const vols = await listMountedVolumes();
+        setSystemVolumes(vols || []);
+        const share = sambaConfig.share || 'media';
+        const expectedPath = sambaConfig.mountPath || sambaConfig.baseMountPath || `/Volumes/${share}`;
+        const targetPath = media?.folderPath || media?.playbackUrl || expectedPath;
+
+        const found = (vols || []).some((v) =>
+          targetPath.toLowerCase().includes(v.toLowerCase()) ||
+          v.toLowerCase().includes(share.toLowerCase()) ||
+          v.toLowerCase().includes('volumes')
+        );
+
+        const isTauriEnv = typeof window !== 'undefined' && (
+          Boolean((window as any).__TAURI_IPC__) ||
+          Boolean((window as any).__TAURI__) ||
+          window.location.protocol === 'tauri:'
+        );
+        if (isTauriEnv && vols && vols.length > 0) {
+          setIsVolumeMounted(found);
+        } else {
+          setIsVolumeMounted(true);
+        }
+      } catch (err) {
+        console.warn('[MediaPlayerModal] Volume verification check error:', err);
+        setIsVolumeMounted(true);
+      }
+    };
+    verifyVolume();
+  }, [isOpen, media, sambaConfig]);
 
   // Info Overlay & Subtitles state
   const [showInfoOverlay, setShowInfoOverlay] = useState(false);
@@ -356,8 +392,28 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   useEffect(() => {
     let isMounted = true;
     const runResolver = async () => {
-      const rawPlaybackUrl = selectedEpisode?.playbackUrl || selectedTrack?.playbackUrl || media?.playbackUrl || '';
+      let dbRecord: any = null;
+      if (media?.id || media?.title) {
+        try {
+          const res = await fetch('/api/db/media');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && Array.isArray(data.items)) {
+              dbRecord = data.items.find((m: any) =>
+                m.id === media.id || (m.title && media.title && m.title.toLowerCase() === media.title.toLowerCase())
+              );
+            }
+          }
+        } catch (e) {
+          console.warn('[MediaPlayerModal] Failed to query media from SQLite DB:', e);
+        }
+      }
+
+      const rawPlaybackUrl = dbRecord?.playbackUrl || dbRecord?.folderPath || selectedEpisode?.playbackUrl || selectedTrack?.playbackUrl || media?.playbackUrl || '';
       const targetPath =
+        dbRecord?.folderPath ||
+        dbRecord?.playbackUrl ||
+        dbRecord?.recommendedFolderStructure ||
         selectedEpisode?.filePath ||
         selectedEpisode?.filename ||
         media?.playbackUrl ||
@@ -1055,6 +1111,31 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             </button>
           </div>
         </div>
+
+        {!isVolumeMounted && (
+          <div className="bg-rose-950/95 border-b border-rose-600/60 px-4 py-2.5 text-xs text-rose-200 flex items-center justify-between shrink-0 shadow-md">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>
+                <strong>Volume Not Mounted:</strong> Share <code className="bg-rose-900/80 px-1 py-0.5 rounded font-mono text-rose-100">//{sambaConfig.server || 'nas.local'}/{sambaConfig.share || 'media'}</code> was not found in system volumes.
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                if (onNavigateToMountHub) {
+                  onClose();
+                  onNavigateToMountHub();
+                } else if (onTestConnection) {
+                  onTestConnection();
+                }
+              }}
+              className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg shadow transition cursor-pointer flex items-center gap-1.5"
+            >
+              <HardDrive className="w-3.5 h-3.5" />
+              <span>Mount Volume</span>
+            </button>
+          </div>
+        )}
 
         {autoFallbackAttempted && (
           <div className="bg-amber-950/90 border-b border-amber-600/50 px-4 py-2 text-xs text-amber-200 flex items-center justify-between shrink-0">

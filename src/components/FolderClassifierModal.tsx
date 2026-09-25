@@ -26,7 +26,7 @@ import {
   MediaType,
   SambaConfig,
 } from '../types';
-import { DEFAULT_REGEX_RULES } from '../utils/folderClassifier';
+import { DEFAULT_REGEX_RULES, classifyFolder } from '../utils/folderClassifier';
 
 interface FolderClassifierModalProps {
   isOpen: boolean;
@@ -124,6 +124,28 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
   const selectAll = () => {
     setClassifications((prev) => prev.map((c) => ({ ...c, selectedForImport: true })));
   };
+
+  const selectAllAndApplyRules = () => {
+    setClassifications((prev) =>
+      prev.map((c) => {
+        const classification = classifyFolder(c.folderName, c.sampleFiles, customRules, confidenceThreshold);
+        return {
+          ...c,
+          selectedForImport: true,
+          targetType: classification.detectedType,
+          confidence: classification.confidence,
+          isConfident: classification.isConfident,
+          matchedRuleName: classification.matchedRuleName,
+          matchedRegexPattern: classification.matchedRegexPattern,
+        };
+      })
+    );
+  };
+  
+  // Need to import classifyFolder, but FolderClassifierModal.tsx currently does not. 
+  // Let's check imports. It imports DEFAULT_REGEX_RULES from ../utils/folderClassifier.
+  // I need to add classifyFolder to the import.
+
 
   const selectConfidentOnly = () => {
     setClassifications((prev) =>
@@ -296,10 +318,16 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
                 Select All
               </button>
               <button
+                onClick={selectAllAndApplyRules}
+                className="px-2.5 py-1 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 text-[11px] font-medium border border-emerald-800/40 transition cursor-pointer"
+              >
+                Select All & Categorize
+              </button>
+              <button
                 onClick={selectConfidentOnly}
                 className="px-2.5 py-1 rounded-lg bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 text-[11px] font-medium border border-indigo-800/40 transition cursor-pointer"
               >
-                Confident Only ({confidentFoldersCount})
+                Confident Only
               </button>
               <button
                 onClick={deselectAll}

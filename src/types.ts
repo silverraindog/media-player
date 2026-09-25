@@ -68,6 +68,7 @@ export interface MediaMetadata {
   logoUrl?: string;
   playbackUrl?: string;
   localBlobUrl?: string;
+  folderPath?: string;
   seasons?: SeasonMetadata[];
   tracks?: TrackMetadata[];
   cast?: CastMember[];
@@ -83,6 +84,7 @@ export interface MediaMetadata {
   versions?: MediaVersionBranch[];
   selectedVersionId?: string;
   isMultiVersion?: boolean;
+  status?: 'categorized' | 'pending' | 'draft' | string;
 }
 
 export interface MediaVersionBranch {

@@ -24,7 +24,7 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     tmdbId: '1396',
     posterUrl: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
     fanartUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
-    recommendedFolderStructure: 'TV Shows/Breaking Bad (2008)/Season 01/',
+    recommendedFolderStructure: 'series/Breaking Bad (2008)/Season 01/',
     recommendedFilenames: [
       'Breaking Bad - S01E01 - Pilot.mkv',
       'Breaking Bad - S01E02 - Cat\'s in the Bag....mkv',
@@ -167,7 +167,7 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     tmdbId: '95396',
     posterUrl: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=800&auto=format&fit=crop&q=80',
     fanartUrl: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=1600&auto=format&fit=crop&q=80',
-    recommendedFolderStructure: 'TV Shows/Severance (2022)/Season 01/',
+    recommendedFolderStructure: 'series/Severance (2022)/Season 01/',
     recommendedFilenames: [
       'Severance - S01E01 - Good News About Hell.mkv',
       'Severance - S01E02 - Half Loop.mkv',
@@ -211,7 +211,7 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     tmdbId: '1973',
     posterUrl: 'https://static.tvmaze.com/uploads/images/original_untouched/4/10492.jpg',
     fanartUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1600&auto=format&fit=crop&q=80',
-    recommendedFolderStructure: 'TV Shows/24 (2001)/Season 01/',
+    recommendedFolderStructure: 'series/24 (2001)/Season 01/',
     recommendedFilenames: [
       '24 - S01E01 - 12-00 AM - 1-00 AM.mkv',
       '24 - S01E02 - 1-00 AM - 2-00 AM.mkv',
@@ -346,7 +346,7 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     imdbId: 'tt4574334',
     posterUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
     fanartUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1600&auto=format&fit=crop&q=80',
-    recommendedFolderStructure: 'TV Shows/Stranger Things (2016)/Season 01/',
+    recommendedFolderStructure: 'series/Stranger Things (2016)/Season 01/',
     recommendedFilenames: [
       'Stranger Things - S01E01 - Chapter One: The Vanishing of Will Byers.mkv',
       'tvshow.nfo',

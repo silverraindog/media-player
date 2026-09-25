@@ -27,6 +27,8 @@ import {
   CRON_PRESETS,
   parseCronToHumanText,
   calculateNextRunDate,
+  timeAndDaysToCron,
+  cronToTimeAndDays,
 } from '../utils/syncScheduler';
 import { logger } from '../utils/loggerService';
 
@@ -52,6 +54,72 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [isSyncRunning, setIsSyncRunning] = useState(false);
   const [mountMappingsCount, setMountMappingsCount] = useState<number>(0);
   const [clearedMappingsToast, setClearedMappingsToast] = useState(false);
+
+  // Schedule Visual Mode: 'daily_time' | 'interval' | 'advanced_cron'
+  const [scheduleUiTab, setScheduleUiTab] = useState<'daily_time' | 'interval' | 'advanced_cron'>(() => {
+    if (scheduleConfig.intervalPreset === 'custom') {
+      return scheduleConfig.cronExpression.includes('*/') ? 'interval' : 'daily_time';
+    }
+    if (['15m', '1h', '6h'].includes(scheduleConfig.intervalPreset)) {
+      return 'interval';
+    }
+    return 'daily_time';
+  });
+
+  // Timepicker & Days State
+  const initialTimeAndDays = cronToTimeAndDays(scheduleConfig.cronExpression);
+  const [selectedTime, setSelectedTime] = useState<string>(initialTimeAndDays.time);
+  const [selectedDays, setSelectedDays] = useState<number[]>(initialTimeAndDays.days);
+
+  // Sync state when scheduleConfig updates
+  useEffect(() => {
+    const parsed = cronToTimeAndDays(scheduleConfig.cronExpression);
+    setSelectedTime(parsed.time);
+    setSelectedDays(parsed.days);
+    setCustomCronInput(scheduleConfig.cronExpression);
+  }, [scheduleConfig.cronExpression]);
+
+  // Handlers for Visual Schedule Builder
+  const handleTimeChange = (newTime: string) => {
+    setSelectedTime(newTime);
+    const generatedCron = timeAndDaysToCron(newTime, selectedDays);
+    const updated = syncScheduler.saveConfig({
+      intervalPreset: 'custom',
+      cronExpression: generatedCron,
+    });
+    setScheduleConfig(updated);
+  };
+
+  const handleToggleDay = (dayIndex: number) => {
+    let nextDays: number[];
+    if (selectedDays.includes(dayIndex)) {
+      if (selectedDays.length === 1) return; // Keep at least 1 day selected
+      nextDays = selectedDays.filter((d) => d !== dayIndex);
+    } else {
+      nextDays = [...selectedDays, dayIndex].sort((a, b) => a - b);
+    }
+    setSelectedDays(nextDays);
+    const generatedCron = timeAndDaysToCron(selectedTime, nextDays);
+    const updated = syncScheduler.saveConfig({
+      intervalPreset: 'custom',
+      cronExpression: generatedCron,
+    });
+    setScheduleConfig(updated);
+  };
+
+  const handleQuickDayPreset = (preset: 'everyday' | 'weekdays' | 'weekends') => {
+    let nextDays = [0, 1, 2, 3, 4, 5, 6];
+    if (preset === 'weekdays') nextDays = [1, 2, 3, 4, 5];
+    if (preset === 'weekends') nextDays = [0, 6];
+
+    setSelectedDays(nextDays);
+    const generatedCron = timeAndDaysToCron(selectedTime, nextDays);
+    const updated = syncScheduler.saveConfig({
+      intervalPreset: 'custom',
+      cronExpression: generatedCron,
+    });
+    setScheduleConfig(updated);
+  };
 
   // Load mount mappings count
   useEffect(() => {
@@ -234,64 +302,272 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           </div>
         </div>
 
-        {/* Schedule Interval Presets Grid */}
-        <div className="space-y-3 pt-2">
-          <label className="text-xs font-bold text-slate-300 block">Select Sync Interval Preset:</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {(Object.keys(CRON_PRESETS) as Array<keyof typeof CRON_PRESETS>).map((presetKey) => {
-              const preset = CRON_PRESETS[presetKey];
-              const isSelected = scheduleConfig.intervalPreset === presetKey;
-
-              return (
-                <button
-                  key={presetKey}
-                  onClick={() => handleSelectPreset(presetKey)}
-                  className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between space-y-1.5 ${
-                    isSelected
-                      ? 'bg-indigo-950/80 border-indigo-500 shadow-md ring-1 ring-indigo-500/50'
-                      : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
-                  }`}
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span className="text-xs font-bold text-white">{preset.label}</span>
-                    <span className="text-[10px] font-mono text-amber-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
-                      {presetKey === 'custom' ? customCronInput : preset.cron}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 leading-snug">{preset.description}</p>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Custom Cron Input Box (If Custom Selected) */}
-        {scheduleConfig.intervalPreset === 'custom' && (
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3 animate-in fade-in duration-200">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-200">Custom 5-Field Cron Expression:</label>
-              <span className="text-[11px] text-indigo-400 font-medium">Format: minute hour day-of-month month day-of-week</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <input
-                type="text"
-                value={customCronInput}
-                onChange={(e) => setCustomCronInput(e.target.value)}
-                placeholder="e.g. 0 3 * * *"
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-amber-300 focus:outline-none focus:border-indigo-500"
-              />
+        {/* Visual Schedule Builder Controls */}
+        <div className="space-y-4 pt-2">
+          {/* Visual Mode Selector Segmented Tabs */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <label className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <Sliders className="w-4 h-4 text-indigo-400" />
+              Configure Schedule Mode:
+            </label>
+            <div className="inline-flex p-1 rounded-xl bg-slate-950 border border-slate-800 gap-1">
               <button
-                onClick={handleApplyCustomCron}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg shadow transition cursor-pointer"
+                type="button"
+                onClick={() => setScheduleUiTab('daily_time')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                  scheduleUiTab === 'daily_time'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
               >
-                Apply Custom Cron
+                <Clock className="w-3.5 h-3.5" /> Daily Timepicker
+              </button>
+              <button
+                type="button"
+                onClick={() => setScheduleUiTab('interval')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                  scheduleUiTab === 'interval'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Repeating Interval
+              </button>
+              <button
+                type="button"
+                onClick={() => setScheduleUiTab('advanced_cron')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                  scheduleUiTab === 'advanced_cron'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <FolderSync className="w-3.5 h-3.5" /> Advanced Cron
               </button>
             </div>
-            <p className="text-xs text-slate-400">
-              Human Translation: <span className="text-cyan-300 font-semibold">{parseCronToHumanText(customCronInput)}</span>
-            </p>
           </div>
-        )}
+
+          {/* TAB 1: DAILY TIMEPICKER & DAYS SELECTOR */}
+          {scheduleUiTab === 'daily_time' && (
+            <div className="space-y-5 animate-in fade-in duration-200">
+              {/* Visual Timepicker Box */}
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/40 border border-indigo-900/50 space-y-4 shadow-xl">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center space-x-2">
+                    <Clock className="w-5 h-5 text-indigo-400" />
+                    <span className="text-sm font-bold text-white">Daily Run Timepicker</span>
+                  </div>
+                  <span className="text-xs px-3 py-1 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-700/50 font-mono font-bold">
+                    {(() => {
+                      const [hStr, mStr] = selectedTime.split(':');
+                      const h = parseInt(hStr || '3', 10);
+                      const m = parseInt(mStr || '0', 10);
+                      const ampm = h >= 12 ? 'PM' : 'AM';
+                      const formattedHour = h % 12 === 0 ? 12 : h % 12;
+                      const formattedMin = String(m).padStart(2, '0');
+                      return `${formattedHour}:${formattedMin} ${ampm} (${selectedTime})`;
+                    })()}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                      Set Execution Time:
+                    </label>
+                    <input
+                      type="time"
+                      value={selectedTime}
+                      onChange={(e) => handleTimeChange(e.target.value)}
+                      className="w-full bg-slate-900 border border-indigo-500/50 rounded-xl px-4 py-3 text-base font-bold text-amber-300 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 transition shadow-inner cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                      Quick Time Presets:
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleTimeChange('03:00')}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer text-left ${
+                          selectedTime === '03:00'
+                            ? 'bg-indigo-600 text-white border-indigo-400 font-bold'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        🌙 03:00 AM (Overnight)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTimeChange('08:00')}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer text-left ${
+                          selectedTime === '08:00'
+                            ? 'bg-indigo-600 text-white border-indigo-400 font-bold'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        🌅 08:00 AM (Morning)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTimeChange('12:00')}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer text-left ${
+                          selectedTime === '12:00'
+                            ? 'bg-indigo-600 text-white border-indigo-400 font-bold'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        ☀️ 12:00 PM (Noon)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTimeChange('18:00')}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer text-left ${
+                          selectedTime === '18:00'
+                            ? 'bg-indigo-600 text-white border-indigo-400 font-bold'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                        }`}
+                      >
+                        🌆 06:00 PM (Evening)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Days of the Week Selection Card */}
+              <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Calendar className="w-4 h-4 text-cyan-400" />
+                    <span className="text-xs font-bold text-white">Repeat Days of the Week</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleQuickDayPreset('everyday')}
+                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-[11px] font-semibold border border-slate-800 transition cursor-pointer"
+                    >
+                      Every Day
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleQuickDayPreset('weekdays')}
+                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-[11px] font-semibold border border-slate-800 transition cursor-pointer"
+                    >
+                      Mon-Fri
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleQuickDayPreset('weekends')}
+                      className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-[11px] font-semibold border border-slate-800 transition cursor-pointer"
+                    >
+                      Sat-Sun
+                    </button>
+                  </div>
+                </div>
+
+                {/* Day Buttons */}
+                <div className="grid grid-cols-7 gap-2 pt-1">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((dayName, idx) => {
+                    const isSelected = selectedDays.includes(idx);
+                    return (
+                      <button
+                        key={dayName}
+                        type="button"
+                        onClick={() => handleToggleDay(idx)}
+                        className={`py-2.5 rounded-xl text-xs font-bold border transition cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-600/30'
+                            : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:border-slate-700'
+                        }`}
+                      >
+                        <span>{dayName}</span>
+                        {isSelected && <Check className="w-3 h-3 text-white" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: REPEATING INTERVAL GRID */}
+          {scheduleUiTab === 'interval' && (
+            <div className="space-y-3 animate-in fade-in duration-200">
+              <label className="text-xs font-bold text-slate-300 block">Select Repeat Interval:</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {[
+                  { key: '15m', label: 'Every 15 Minutes', cron: '*/15 * * * *', desc: 'Runs automatically every 15 minutes' },
+                  { key: '30m', label: 'Every 30 Minutes', cron: '*/30 * * * *', desc: 'Runs automatically every 30 minutes' },
+                  { key: '1h', label: 'Every 1 Hour', cron: '0 * * * *', desc: 'Runs at minute 0 of every hour' },
+                  { key: '3h', label: 'Every 3 Hours', cron: '0 */3 * * *', desc: 'Runs every 3 hours' },
+                  { key: '6h', label: 'Every 6 Hours', cron: '0 */6 * * *', desc: 'Runs every 6 hours' },
+                  { key: '12h', label: 'Every 12 Hours', cron: '0 */12 * * *', desc: 'Runs twice a day' },
+                ].map((item) => {
+                  const isSelected = scheduleConfig.cronExpression === item.cron;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => {
+                        const updated = syncScheduler.saveConfig({
+                          intervalPreset: item.key as any,
+                          cronExpression: item.cron,
+                        });
+                        setScheduleConfig(updated);
+                      }}
+                      className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between space-y-1.5 ${
+                        isSelected
+                          ? 'bg-indigo-950/80 border-indigo-500 shadow-md ring-1 ring-indigo-500/50'
+                          : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs font-bold text-white">{item.label}</span>
+                        <span className="text-[10px] font-mono text-amber-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                          {item.cron}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-snug">{item.desc}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: ADVANCED CRON */}
+          {scheduleUiTab === 'advanced_cron' && (
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-200">Custom 5-Field Unix Cron Expression:</label>
+                <span className="text-[11px] text-indigo-400 font-medium">Format: min hour dom month dow</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="text"
+                  value={customCronInput}
+                  onChange={(e) => setCustomCronInput(e.target.value)}
+                  placeholder="e.g. 0 3 * * *"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-xs font-mono text-amber-300 focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleApplyCustomCron}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow transition cursor-pointer"
+                >
+                  Apply Custom Cron
+                </button>
+              </div>
+              <p className="text-xs text-slate-400">
+                Human Translation: <span className="text-cyan-300 font-semibold">{parseCronToHumanText(customCronInput)}</span>
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* SECTION 2: AI & FOLDER CLASSIFIER RULES */}

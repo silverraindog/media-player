@@ -13,6 +13,7 @@ import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { resolveMediaWithFallback } from './clientMediaResolver';
 import { normalizeFranchiseHierarchy } from './franchiseHierarchy';
 import { categorizeMediaWithRetry } from './metadataCategorizer';
+import { logger } from './loggerService';
 
 // Comprehensive Media Extension Definitions
 export const SUPPORTED_VIDEO_EXTENSIONS = [
@@ -667,6 +668,7 @@ export async function extractAllMediaFromSambaTreeAsync(
       if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
         const item = nodeToMediaMetadata(node, parentPath);
         if (item) {
+          logger.info(`[Scanner] Discovered ${item.type.toUpperCase()} folder "${node.name}" -> Title: "${item.title}" (${item.year}) at "${fullPath}"`, 'Scanner');
           mergeOrAdd(item);
         }
       }
@@ -674,6 +676,7 @@ export async function extractAllMediaFromSambaTreeAsync(
       if (isMediaFile(node.name, config)) {
         const item = nodeToMediaMetadata(node, parentPath);
         if (item) {
+          logger.debug(`[Scanner] Discovered media file "${node.name}" -> "${item.title}"`, 'Scanner');
           mergeOrAdd(item);
         }
       }
@@ -867,7 +870,7 @@ export async function fetchSecondaryMetadata(
             seasons: seasons.length > 0 ? seasons : undefined,
             cast: cast.length > 0 ? cast : undefined,
             source: 'secondary-tvmaze-fallback',
-            recommendedFolderStructure: `TV Shows/${showTitle} (${premieredYear})/Season 01/`,
+            recommendedFolderStructure: `series/${showTitle} (${premieredYear})/Season 01/`,
             recommendedFilenames: [
               `${showTitle} - S01E01 [1080p].mkv`,
               'tvshow.nfo',

@@ -87,8 +87,19 @@ export const YouTubeTab: React.FC = () => {
   const handleFirebaseGoogleSignIn = async () => {
     setErrorMsg(null);
     setIsLoading(true);
+
+    const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+    if (isIframe) {
+      addLog('Inside preview iframe sandbox. Directly launching Google Identity OAuth client...', 'info');
+      logger.info('Preview iframe detected. Launching Google Identity OAuth Client...', 'Auth');
+      setIsLoading(false);
+      handleGoogleIdentityLogin();
+      return;
+    }
+
     try {
-      console.log('[YouTubeTab] Launching Firebase Popup Sign-in with diagnostics...');
+      console.log('[YouTubeTab] Launching Firebase Popup Sign-in...');
       const result = await signInWithPopup(auth, googleProvider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
       const token = credential?.accessToken;
@@ -98,29 +109,23 @@ export const YouTubeTab: React.FC = () => {
         localStorage.setItem('youtube_access_token', token);
         fetchYouTubeData(token);
       } else {
-        console.warn('[YouTubeTab] Firebase login succeeded but no credential token was found. Falling back to Google Identity Services...');
         handleGoogleIdentityLogin();
       }
     } catch (e: any) {
-      console.error('[YouTubeTab] Firebase Auth popup error caught:', e);
-      const isCancelled = e?.code === 'auth/cancelled-popup-request';
+      console.warn('[YouTubeTab] Firebase Auth popup result:', e);
+      const isCancelled = e?.code === 'auth/cancelled-popup-request' || e?.isIframePreview;
+
       if (isCancelled) {
-        logger.warn(
-          'Firebase Auth popup cancelled (auth/cancelled-popup-request) due to preview iframe sandbox or popup blocker. Executing client-side GIS fallback.',
-          'Auth',
-          { code: e?.code, isIframe: window.self !== window.top, origin: window.location.origin }
+        logger.info(
+          'Preview iframe constraint detected (auth/cancelled-popup-request). Automatically switching to Google Identity OAuth client.',
+          'Auth'
         );
+        setErrorMsg(null); // Clear error alert
+        handleGoogleIdentityLogin();
       } else {
         logger.error(`Firebase Auth error: ${e?.message || e}`, 'Auth', { error: e });
+        setErrorMsg(`Firebase Authentication failed: ${e?.message || e}`);
       }
-
-      const detailMsg = isCancelled 
-        ? 'Firebase Authentication popup request cancelled (auth/cancelled-popup-request). This typically happens in iframe previews due to cross-origin sandbox restrictions or popup blockers.' 
-        : `Firebase Authentication failed: ${e?.message || e}`;
-      
-      setErrorMsg(detailMsg);
-      console.log('[YouTubeTab] Initiating Google Identity Services fallback client flow...');
-      handleGoogleIdentityLogin();
     } finally {
       setIsLoading(false);
     }

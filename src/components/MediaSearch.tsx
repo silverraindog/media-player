@@ -58,6 +58,8 @@ import { generateLargeSambaCatalogPaths } from '../utils/sambaCatalogGenerator';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
 import { BulkSubtitlesModal } from './BulkSubtitlesModal';
+import { logger } from '../utils/loggerService';
+import { listMountedVolumes } from '../utils/tauriBridge';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
@@ -481,12 +483,107 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const verifyFileIntegrity = async (media: MediaMetadata, e?: React.MouseEvent) => {
     e?.stopPropagation();
     setFileIntegrityMap((prev) => ({ ...prev, [media.id]: 'verifying' }));
-    await new Promise((r) => setTimeout(r, 650));
-    const isReachable = Math.random() > 0.15; // 85% success rate for simulation
-    setFileIntegrityMap((prev) => ({
-      ...prev,
-      [media.id]: isReachable ? 'reachable' : 'corrupted',
-    }));
+
+    logger.info(`Starting File Integrity verification check for "${media.title}"...`, 'Database');
+
+    try {
+      let vols: string[] = [];
+      try {
+        vols = await listMountedVolumes();
+      } catch (err) {
+        console.warn('Failed to query mounted volumes in verifyFileIntegrity:', err);
+      }
+
+      if (!vols || vols.length === 0) {
+        vols = ['/Volumes/media', '/mnt/media', '/Volumes/share', '/Volumes/disk1', '/Volumes'];
+      }
+
+      const cleanTitle = (media.title || '').trim();
+      const year = media.year;
+      const mediaType = media.type || 'series';
+
+      const titleVariants: string[] = [cleanTitle];
+      if (year) titleVariants.push(`${cleanTitle} (${year})`);
+      const noBrackets = cleanTitle.replace(/\s*\([^)]*\)/g, '').trim();
+      if (noBrackets && noBrackets !== cleanTitle) {
+        titleVariants.push(noBrackets);
+        if (year) titleVariants.push(`${noBrackets} (${year})`);
+      }
+
+      const categories = [
+        'series', 'tv shows', 'tv', 'shows', 'movies', 'music', 'comedy', "comedy's", 'comedy’s',
+        'drama', 'dramas', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi', ''
+      ];
+
+      const candidates: string[] = [];
+
+      // Add normalized direct paths from media (replacing TV Shows with series)
+      const rawPaths = [
+        media.folderPath,
+        media.playbackUrl,
+        media.recommendedFolderStructure,
+      ].filter(Boolean) as string[];
+
+      for (const p of rawPaths) {
+        const normalized = p.replace(/\\/g, '/').replace(/^TV Shows\//i, 'series/').replace(/\/TV Shows\//i, '/series/');
+        candidates.push(normalized);
+
+        const cleanRel = normalized.replace(/^[/\\]+/, '');
+        for (const vol of vols) {
+          const normVol = vol.replace(/\\/g, '/');
+          candidates.push(`${normVol}/${cleanRel}`);
+        }
+      }
+
+      // Generate systematic candidates across volumes and categories
+      for (const vol of vols) {
+        if (!vol) continue;
+        const normVol = vol.replace(/\\/g, '/');
+        for (const cat of categories) {
+          for (const tVar of titleVariants) {
+            const parts = [normVol];
+            if (cat) parts.push(cat);
+            parts.push(tVar);
+            if (mediaType === 'series') parts.push('Season 01');
+
+            candidates.push(parts.join('/'));
+          }
+        }
+      }
+
+      const uniqueCandidates = Array.from(new Set(candidates)).filter(Boolean);
+
+      logger.debug(`[File Integrity] Probing ${uniqueCandidates.length} candidate paths for "${media.title}"...`, 'Database');
+
+      const response = await fetch('/api/samba/verify-paths', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: uniqueCandidates }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.exists && data.verifiedPath) {
+          logger.success(
+            `[File Integrity] File Verified & Accessible for "${media.title}" at: ${data.verifiedPath}`,
+            'Database',
+            { verifiedPath: data.verifiedPath }
+          );
+          setFileIntegrityMap((prev) => ({ ...prev, [media.id]: 'reachable' }));
+          return;
+        }
+      }
+
+      logger.warn(
+        `[File Integrity] Path unreachable on local system for "${media.title}". Checked ${uniqueCandidates.length} candidate paths.`,
+        'Database',
+        { testedPaths: uniqueCandidates.slice(0, 10) }
+      );
+      setFileIntegrityMap((prev) => ({ ...prev, [media.id]: 'corrupted' }));
+    } catch (err: any) {
+      logger.error(`[File Integrity] Check error for "${media.title}": ${err?.message || err}`, 'Database');
+      setFileIntegrityMap((prev) => ({ ...prev, [media.id]: 'corrupted' }));
+    }
   };
   const toggleWatchedStatus = async (media: MediaMetadata, e?: React.MouseEvent) => {
     e?.stopPropagation();

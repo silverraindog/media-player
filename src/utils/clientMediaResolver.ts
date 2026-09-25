@@ -25,7 +25,7 @@ const ENCYCLOPEDIC_CATALOG: Record<string, Partial<MediaMetadata>> = {
     language: 'English',
     imdbId: 'tt0285331',
     tmdbId: '1973',
-    recommendedFolderStructure: 'TV Shows/24 (2001)/Season 01/',
+    recommendedFolderStructure: 'series/24 (2001)/Season 01/',
     recommendedFilenames: [
       '24 - S01E01 - 12-00am-1-00am.mkv',
       '24 - S01E02 - 1-00am-2-00am.mkv',
@@ -84,7 +84,7 @@ const ENCYCLOPEDIC_CATALOG: Record<string, Partial<MediaMetadata>> = {
     language: 'English',
     imdbId: 'tt0903747',
     tmdbId: '1396',
-    recommendedFolderStructure: 'TV Shows/Breaking Bad (2008)/Season 01/',
+    recommendedFolderStructure: 'series/Breaking Bad (2008)/Season 01/',
     recommendedFilenames: ['Breaking Bad - S01E01 - Pilot.mkv', 'tvshow.nfo', 'poster.jpg', 'fanart.jpg'],
     posterUrl: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
     fanartUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
@@ -105,7 +105,7 @@ const ENCYCLOPEDIC_CATALOG: Record<string, Partial<MediaMetadata>> = {
     directors: ['Ben Stiller', 'Aoife McArdle'],
     studio: 'Apple TV+ / Red Hour Productions',
     certification: 'TV-MA',
-    recommendedFolderStructure: 'TV Shows/Severance (2022)/Season 01/',
+    recommendedFolderStructure: 'series/Severance (2022)/Season 01/',
     recommendedFilenames: ['Severance - S01E01 - Good News About Hell.mkv', 'tvshow.nfo', 'poster.jpg'],
     posterUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
     fanartUrl: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1600&auto=format&fit=crop&q=80',
@@ -122,7 +122,7 @@ const ENCYCLOPEDIC_CATALOG: Record<string, Partial<MediaMetadata>> = {
     tagline: 'Kindness makes a comeback.',
     rating: 8.8,
     studio: 'Apple TV+ / Warner Bros Television',
-    recommendedFolderStructure: 'TV Shows/Ted Lasso (2020)/Season 01/',
+    recommendedFolderStructure: 'series/Ted Lasso (2020)/Season 01/',
     recommendedFilenames: ['Ted Lasso - S01E01 - Pilot.mkv', 'tvshow.nfo', 'poster.jpg'],
     posterUrl: 'https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=800&auto=format&fit=crop&q=80',
   },
@@ -194,7 +194,7 @@ async function fetchFromTVMaze(cleanTitle: string): Promise<Partial<MediaMetadat
       country: data.network?.country?.name || 'United States',
       language: data.language || 'English',
       seasons: seasons.length > 0 ? seasons : undefined,
-      recommendedFolderStructure: `TV Shows/${data.name} (${premieredYear})/Season 01/`,
+      recommendedFolderStructure: `series/${data.name} (${premieredYear})/Season 01/`,
       recommendedFilenames: [
         `${data.name} - S01E01.mkv`,
         'tvshow.nfo',
@@ -244,7 +244,7 @@ export async function resolveMediaWithFallback(
         language: profile.language || 'English',
         imdbId: profile.imdbId || '',
         tmdbId: profile.tmdbId || '',
-        recommendedFolderStructure: profile.recommendedFolderStructure || `TV Shows/${profile.title} (${profile.year})/Season 01/`,
+        recommendedFolderStructure: profile.recommendedFolderStructure || `series/${profile.title} (${profile.year})/Season 01/`,
         recommendedFilenames: profile.recommendedFilenames || ['tvshow.nfo', 'poster.jpg'],
         posterUrl: profile.posterUrl || '',
         fanartUrl: profile.fanartUrl || '',
@@ -273,7 +273,7 @@ export async function resolveMediaWithFallback(
         studio: tvmazeResult.studio || 'Television Network',
         country: tvmazeResult.country || 'United States',
         language: tvmazeResult.language || 'English',
-        recommendedFolderStructure: tvmazeResult.recommendedFolderStructure || `TV Shows/${tvmazeResult.title} (${tvmazeResult.year})/Season 01/`,
+        recommendedFolderStructure: tvmazeResult.recommendedFolderStructure || `series/${tvmazeResult.title} (${tvmazeResult.year})/Season 01/`,
         recommendedFilenames: tvmazeResult.recommendedFilenames || ['tvshow.nfo', 'poster.jpg'],
         posterUrl: tvmazeResult.posterUrl || 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80',
         fanartUrl: tvmazeResult.fanartUrl || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
@@ -308,7 +308,7 @@ export async function resolveMediaWithFallback(
 
   const folder =
     detectedType === 'series'
-      ? `TV Shows/${cleanTitle} (${effectiveYear})/Season 01/`
+      ? `series/${cleanTitle} (${effectiveYear})/Season 01/`
       : detectedType === 'album'
       ? `Music/${cleanTitle} (${effectiveYear})/`
       : `Movies/${cleanTitle} (${effectiveYear})/`;

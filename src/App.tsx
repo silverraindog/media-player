@@ -2289,6 +2289,11 @@ function App() {
       const scanIterator = chunkAsyncIterator(rawDiscoveredPaths, 50, 6);
       for await (const { chunk, batchIndex, totalBatches, processedCount, totalCount } of scanIterator) {
         discoveredRelativePaths.push(...chunk);
+        logger.debug(
+          `[Scanner] Batch ${batchIndex}/${totalBatches}: Traversed ${chunk.length} items (Total: ${processedCount}/${totalCount}). Sample: "${chunk[0] || ''}"`,
+          'Scanner',
+          { samplePaths: chunk.slice(0, 5) }
+        );
         setSyncProgress((prev) => ({
           ...prev,
           phase: 'scanning',

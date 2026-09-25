@@ -50,11 +50,61 @@ export const CRON_PRESETS: Record<SyncScheduleConfig['intervalPreset'], { label:
   },
 };
 
+export function timeAndDaysToCron(timeStr: string, days: number[] = [0, 1, 2, 3, 4, 5, 6]): string {
+  const [hStr, mStr] = (timeStr || '03:00').split(':');
+  const h = parseInt(hStr || '3', 10);
+  const m = parseInt(mStr || '0', 10);
+
+  const validH = isNaN(h) ? 3 : Math.min(23, Math.max(0, h));
+  const validM = isNaN(m) ? 0 : Math.min(59, Math.max(0, m));
+
+  let dowPart = '*';
+  if (days.length > 0 && days.length < 7) {
+    const sorted = Array.from(new Set(days)).sort((a, b) => a - b);
+    dowPart = sorted.join(',');
+  }
+
+  return `${validM} ${validH} * * ${dowPart}`;
+}
+
+export function cronToTimeAndDays(cronExpr: string): { time: string; days: number[] } {
+  const clean = (cronExpr || '').trim();
+  const parts = clean.split(/\s+/);
+
+  if (parts.length === 5) {
+    const [minStr, hourStr, , , dowStr] = parts;
+    const m = parseInt(minStr, 10);
+    const h = parseInt(hourStr, 10);
+
+    const validTime = !isNaN(m) && !isNaN(h)
+      ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+      : '03:00';
+
+    let days = [0, 1, 2, 3, 4, 5, 6];
+    if (dowStr !== '*') {
+      const parsedDays = dowStr
+        .split(',')
+        .map((d) => parseInt(d.trim(), 10))
+        .filter((d) => !isNaN(d) && d >= 0 && d <= 6);
+      if (parsedDays.length > 0) {
+        days = parsedDays;
+      }
+    }
+
+    return { time: validTime, days };
+  }
+
+  return { time: '03:00', days: [0, 1, 2, 3, 4, 5, 6] };
+}
+
 export function parseCronToHumanText(cronExpr: string): string {
   const clean = cronExpr.trim();
   if (clean === '*/15 * * * *') return 'Every 15 minutes';
+  if (clean === '*/30 * * * *') return 'Every 30 minutes';
   if (clean === '0 * * * *') return 'Every hour at minute 0';
+  if (clean === '0 */3 * * *') return 'Every 3 hours';
   if (clean === '0 */6 * * *') return 'Every 6 hours';
+  if (clean === '0 */12 * * *') return 'Every 12 hours';
   if (clean === '0 3 * * *') return 'Daily at 3:00 AM';
   if (clean === '0 12 * * *') return 'Daily at 12:00 PM (Noon)';
   if (clean === '0 2 * * 0') return 'Weekly on Sunday at 2:00 AM';
@@ -63,7 +113,7 @@ export function parseCronToHumanText(cronExpr: string): string {
   if (parts.length !== 5) return 'Invalid cron syntax (expected 5 fields)';
 
   const [min, hour, dom, month, dow] = parts;
-  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayNamesShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   let timeStr = '';
   if (hour !== '*' && min !== '*') {
@@ -80,11 +130,22 @@ export function parseCronToHumanText(cronExpr: string): string {
   if (dom === '*' && month === '*' && dow === '*') {
     return timeStr ? `Daily ${timeStr}` : `Every hour at minute ${min}`;
   }
+
   if (dow !== '*') {
-    const dIndex = parseInt(dow, 10);
-    const dName = dayNames[dIndex] || `Day ${dow}`;
-    return `Weekly on ${dName} ${timeStr}`;
+    const dowParts = dow.split(',').map((d) => parseInt(d.trim(), 10)).filter((d) => !isNaN(d));
+    if (dowParts.length === 5 && [1, 2, 3, 4, 5].every((d) => dowParts.includes(d))) {
+      return `Every Weekday (Mon–Fri) ${timeStr}`;
+    }
+    if (dowParts.length === 2 && [0, 6].every((d) => dowParts.includes(d))) {
+      return `Every Weekend (Sat, Sun) ${timeStr}`;
+    }
+    if (dowParts.length === 7) {
+      return `Every Day ${timeStr}`;
+    }
+    const names = dowParts.map((d) => dayNamesShort[d % 7] || `Day ${d}`).join(', ');
+    return `Every ${names} ${timeStr}`;
   }
+
   if (dom !== '*') {
     return `Monthly on day ${dom} ${timeStr}`;
   }

@@ -4,6 +4,7 @@ import {
   FolderScanClassification,
   ClassifierSettings,
 } from '../types';
+import { logger } from './loggerService';
 
 export const DEFAULT_REGEX_RULES: RegexCategoryRule[] = [
   {
@@ -207,6 +208,11 @@ export function classifyAllDiscoveredPaths(
 
   groups.forEach((data, folderName) => {
     const classification = classifyFolder(folderName, data.files, rules, threshold);
+    logger.debug(
+      `[Scanner] Classified directory "${folderName}" (${data.files.length} files) -> ${classification.detectedType.toUpperCase()} via "${classification.matchedRuleName}" (${Math.round(classification.confidence * 100)}% confidence)`,
+      'Scanner',
+      { folder: folderName, count: data.files.length, type: classification.detectedType, samples: data.files.slice(0, 3) }
+    );
     results.push({
       id: `folder-class-${folderName.replace(/[^a-zA-Z0-9]/g, '-')}`,
       folderName,

@@ -3135,6 +3135,45 @@ app.get('/api/samba/supported-extensions', (req: Request, res: Response) => {
   });
 });
 
+// Endpoint to verify which path candidate physically exists on disk
+app.post('/api/samba/verify-paths', (req: Request, res: Response) => {
+  try {
+    const { paths } = req.body;
+    if (!Array.isArray(paths)) {
+      return res.status(400).json({ error: 'paths parameter must be an array of strings' });
+    }
+    
+    console.log(`[Samba Path Verifier] Verifying ${paths.length} candidate paths...`);
+    for (const rawPath of paths) {
+      if (!rawPath) continue;
+      const cleanPath = path.normalize(rawPath.trim().replace(/^file:\/\//, ''));
+      try {
+        if (fs.existsSync(cleanPath)) {
+          const stat = fs.statSync(cleanPath);
+          console.log(`[Samba Path Verifier] Match found! Path exists on local system: ${cleanPath} (${stat.isDirectory() ? 'Directory' : 'File'})`);
+          return res.json({
+            success: true,
+            exists: true,
+            verifiedPath: cleanPath,
+            isDirectory: stat.isDirectory(),
+          });
+        }
+      } catch (e) {
+        // Suppress individual stat errors
+      }
+    }
+    
+    return res.json({
+      success: true,
+      exists: false,
+      verifiedPath: null,
+    });
+  } catch (err: any) {
+    console.error('[Samba Path Verifier] Error checking paths:', err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
 
 
 // ==========================================
@@ -3709,7 +3748,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
             if (stat.isDirectory()) {
               // Helper to scan directory for media files
               const findInDir = (dirPath: string, depth = 0): string | null => {
-                if (depth > 3) return null;
+                if (depth > 10) return null;
                 const entries = fs.readdirSync(dirPath, { withFileTypes: true });
                 
                 // If specific filename requested

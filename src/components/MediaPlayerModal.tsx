@@ -157,6 +157,29 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [isVolumeMounted, setIsVolumeMounted] = useState<boolean>(true);
   const [systemVolumes, setSystemVolumes] = useState<string[]>([]);
 
+  // Persistent mapping table that links library entries to verified local mount points
+  const [mountMappings, setMountMappings] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_mount_mappings');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const saveMountMapping = (mediaIdOrPath: string, localVerifiedPath: string) => {
+    if (!mediaIdOrPath || !localVerifiedPath) return;
+    setMountMappings((prev) => {
+      const updated = { ...prev, [mediaIdOrPath]: localVerifiedPath };
+      try {
+        localStorage.setItem('samba_vault_mount_mappings', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save mount mapping:', e);
+      }
+      return updated;
+    });
+  };
+
   useEffect(() => {
     if (!isOpen) return;
     const verifyVolume = async () => {
@@ -421,8 +444,152 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         media?.title ||
         '';
       
-      const pathCandidate = rawPlaybackUrl || targetPath;
-      const uri = await resolveStreamableUri(pathCandidate);
+      const pathCandidate = (rawPlaybackUrl || targetPath).replace(/\\/g, '/');
+      const mediaIdOrTitle = media?.id || media?.title || 'generic';
+
+      // 1. Check if we already have a persistent verified mapping for this entry
+      const existingMappedPath = mountMappings[mediaIdOrTitle];
+      let finalPathToResolve = pathCandidate;
+      let matchedAndVerified = false;
+
+      if (existingMappedPath) {
+        console.log(`[Mount Mapping] Found existing persistent path mapping for "${mediaIdOrTitle}": ${existingMappedPath}`);
+        try {
+          const checkRes = await fetch('/api/samba/verify-paths', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: [existingMappedPath] }),
+          });
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            if (checkData.success && checkData.exists) {
+              console.log(`[Mount Mapping] Persistent mapping verified successfully: ${existingMappedPath}`);
+              finalPathToResolve = existingMappedPath;
+              matchedAndVerified = true;
+              if (isMounted) {
+                setIsVolumeMounted(true);
+                setAutoFallbackAttempted(false);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[Mount Mapping] Failed to verify existing mapping:', e);
+        }
+      }
+
+      // 2. If no persistent mapping, or mapping is invalid, perform dynamic mount scan
+      if (!matchedAndVerified) {
+        let vols = systemVolumes;
+        if (vols.length === 0) {
+          try {
+            vols = await listMountedVolumes();
+            if (isMounted && vols && vols.length > 0) {
+              setSystemVolumes(vols);
+            }
+          } catch (e) {
+            console.warn('[Mount Mapping] Failed to list system volumes:', e);
+          }
+        }
+
+        if (vols && vols.length > 0) {
+          // Construct candidates across all volumes, titles, and typical categories
+          const cleanTitle = (media?.title || '').trim();
+          const year = media?.year;
+          const mediaType = media?.type || 'series';
+
+          const titleVariants: string[] = [];
+          if (cleanTitle) {
+            titleVariants.push(cleanTitle);
+            if (year) titleVariants.push(`${cleanTitle} (${year})`);
+            const noBrackets = cleanTitle.replace(/\s*\([^)]*\)/g, '').trim();
+            if (noBrackets && noBrackets !== cleanTitle) {
+              titleVariants.push(noBrackets);
+              if (year) titleVariants.push(`${noBrackets} (${year})`);
+            }
+          }
+
+          const categories = [
+            'series', 'tv shows', 'tv', 'shows', 'movies', 'music', 'comedy', "comedy's", 'comedy’s',
+            'drama', 'dramas', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi', ''
+          ];
+
+          let seasonStr = '';
+          if (mediaType === 'series') {
+            const sNum = selectedSeasonNum || selectedEpisode?.seasonNumber || 1;
+            seasonStr = `Season ${String(sNum).padStart(2, '0')}`;
+          }
+
+          const candidates: string[] = [];
+          for (const vol of vols) {
+            if (!vol) continue;
+            const normVol = vol.replace(/\\/g, '/');
+
+            // Formulate candidates for matching
+            for (const cat of categories) {
+              for (const tVar of titleVariants) {
+                const parts = [normVol];
+                if (cat) parts.push(cat);
+                parts.push(tVar);
+                if (seasonStr) parts.push(seasonStr);
+                
+                const dirCandidate = parts.join('/');
+                candidates.push(dirCandidate);
+
+                if (selectedEpisode?.filename) {
+                  candidates.push(`${dirCandidate}/${selectedEpisode.filename}`);
+                }
+                if (selectedEpisode?.filePath) {
+                  const filename = selectedEpisode.filePath.replace(/\\/g, '/').split('/').pop();
+                  if (filename) {
+                    candidates.push(`${dirCandidate}/${filename}`);
+                  }
+                }
+              }
+            }
+          }
+
+          // Add some other general mappings (e.g., direct volume relative paths)
+          if (pathCandidate) {
+            const cleanRel = pathCandidate.replace(/^[/\\]+/, '').replace(/^TV Shows\//i, 'series/');
+            const cleanRelDirect = pathCandidate.replace(/^[/\\]+/, '').replace(/^TV Shows\//i, '');
+            for (const vol of vols) {
+              const normVol = vol.replace(/\\/g, '/');
+              candidates.push(`${normVol}/${cleanRel}`);
+              candidates.push(`${normVol}/${cleanRelDirect}`);
+              candidates.push(`${normVol}/${pathCandidate.replace(/^[/\\]+/, '')}`);
+            }
+          }
+
+          const uniqueCandidates = Array.from(new Set(candidates)).filter(Boolean);
+
+          if (uniqueCandidates.length > 0) {
+            try {
+              const response = await fetch('/api/samba/verify-paths', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paths: uniqueCandidates }),
+              });
+              if (response.ok) {
+                const resData = await response.json();
+                if (resData.success && resData.exists && resData.verifiedPath) {
+                  console.log(`[Mount Mapping] Dynamic scan successfully resolved local path: ${resData.verifiedPath}`);
+                  finalPathToResolve = resData.verifiedPath;
+                  saveMountMapping(mediaIdOrTitle, resData.verifiedPath);
+                  matchedAndVerified = true;
+                  if (isMounted) {
+                    setIsVolumeMounted(true);
+                    setAutoFallbackAttempted(false);
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('[Mount Mapping] Failed to verify path candidates:', e);
+            }
+          }
+        }
+      }
+
+      const uri = await resolveStreamableUri(finalPathToResolve);
       if (isMounted) {
         setResolvedStreamUrl(uri);
       }
@@ -430,7 +597,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
     runResolver();
     return () => { isMounted = false; };
-  }, [selectedEpisode, selectedTrack, media, selectedSeasonNum]);
+  }, [selectedEpisode, selectedTrack, media, selectedSeasonNum, mountMappings, systemVolumes]);
 
   const sambaStreamUrl = resolvedStreamUrl;
 
@@ -539,6 +706,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     if (!el) return;
 
     setPlaybackError(null);
+    try {
+      el.load();
+    } catch (e) {
+      console.warn('Media load error:', e);
+    }
     const playPromise = el.play();
     if (playPromise !== undefined) {
       playPromise

@@ -356,7 +356,8 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     const rootContainers = [
       'series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort',
       'downloads', 'complete', 'share', 'storage', 'video', 'movies', 'nas', 'public', 'disk1', 'disk2',
-      'franchises', 'franchise', 'collections', 'collection', 'box sets', 'box sets & collections', 'box sets and collections', 'sagas'
+      'franchises', 'franchise', 'collections', 'collection', 'box sets', 'box sets & collections', 'box sets and collections', 'sagas',
+      'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'
     ];
     
     // Find the nearest folder that isn't a root container and isn't a season or extras subfolder
@@ -456,7 +457,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
       : fullPath.toLowerCase().includes('franchises') 
       ? ['Franchise', 'Action', 'Sci-Fi'] 
       : mediaType === 'series' 
-      ? ['TV Series', 'Imported'] 
+      ? ['series', 'Imported'] 
       : mediaType === 'album' 
       ? ['Music', 'Lossless Audio'] 
       : ['Feature Film', 'Imported'],
@@ -536,7 +537,7 @@ export function extractAllMediaFromSambaTree(
           c.type === 'folder' && isSeasonDirectory(c.name)
         );
 
-        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage'].includes(node.name.toLowerCase());
+        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage', 'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'].includes(node.name.toLowerCase());
         const isSeasonFolder = isSeasonDirectory(node.name);
 
         if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
@@ -720,7 +721,7 @@ export function parsedFileToMediaMetadata(item: ParsedFileInfo): MediaMetadata {
     title: item.detectedTitle,
     year: item.detectedYear || new Date().getFullYear(),
     overview: `Imported via Batch Renamer from release: "${item.originalFilename}". Tagged for Samba storage.`,
-    genres: ['Imported Media', type === 'series' ? 'TV Series' : type === 'album' ? 'Audio Album' : 'Feature Film'],
+    genres: ['Imported Media', type === 'series' ? 'series' : type === 'album' ? 'Audio Album' : 'Feature Film'],
     rating: 8.5,
     posterUrl: posterUrl,
     playbackUrl: defaultPlayback,

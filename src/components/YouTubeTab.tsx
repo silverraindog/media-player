@@ -85,7 +85,9 @@ export const YouTubeTab: React.FC = () => {
 
   const handleFirebaseGoogleSignIn = async () => {
     setErrorMsg(null);
+    setIsLoading(true);
     try {
+      console.log('[YouTubeTab] Launching Firebase Popup Sign-in with diagnostics...');
       const result = await signInWithPopup(auth, googleProvider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
       const token = credential?.accessToken;
@@ -95,13 +97,21 @@ export const YouTubeTab: React.FC = () => {
         localStorage.setItem('youtube_access_token', token);
         fetchYouTubeData(token);
       } else {
-        // Fallback to GIS client or prompt user
+        console.warn('[YouTubeTab] Firebase login succeeded but no credential token was found. Falling back to Google Identity Services...');
         handleGoogleIdentityLogin();
       }
     } catch (e: any) {
-      console.error('Firebase Auth popup error:', e);
-      setErrorMsg(`Firebase authentication failed: ${e?.message || e}`);
+      console.error('[YouTubeTab] Firebase Auth popup error caught:', e);
+      const isCancelled = e?.code === 'auth/cancelled-popup-request';
+      const detailMsg = isCancelled 
+        ? 'Firebase Authentication popup request cancelled (auth/cancelled-popup-request). This typically happens in iframe previews due to cross-origin sandbox restrictions or popup blockers.' 
+        : `Firebase Authentication failed: ${e?.message || e}`;
+      
+      setErrorMsg(detailMsg);
+      console.log('[YouTubeTab] Initiating Google Identity Services fallback client flow...');
       handleGoogleIdentityLogin();
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -264,7 +274,7 @@ export const YouTubeTab: React.FC = () => {
                 onClick={handleFirebaseGoogleSignIn}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer active:scale-95"
               >
-                <LogIn className="w-4 h-4" /> Sign In with Firebase & Google
+                <LogIn className="w-4 h-4" /> Sign In with Google
               </button>
             )}
           </div>

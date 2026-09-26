@@ -554,30 +554,66 @@ export const performFastScan = async (
         { safeScan, timeoutMs }
       );
 
-      return {
-        success: true,
-        mountPath: rootPath,
-        items,
-        totalScanned: items.length,
-        diagnostics,
-      };
+      if (items.length > 0) {
+        return {
+          success: true,
+          mountPath: rootPath,
+          items,
+          totalScanned: items.length,
+          diagnostics,
+        };
+      }
+
+      console.warn(`[performFastScan] Native Tauri scan found 0 items at "${rootPath}". Checking alternate mounted volumes or server backend API...`);
+
+      // Check if the share was mounted under an alternate volume name (e.g. /Volumes/Media or /Volumes/media-1)
+      try {
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        const allVols = await invoke<string[]>('list_mounted_volumes').catch(() => []);
+        const cleanShare = rootPath.replace(/^[/\\]+/, '').split('/').pop() || 'media';
+        const matchVol = (allVols || []).find(
+          (v) => v.toLowerCase() === cleanShare.toLowerCase() || v.toLowerCase().includes(cleanShare.toLowerCase())
+        );
+        if (matchVol && `/Volumes/${matchVol}` !== rootPath) {
+          console.log(`[performFastScan] Re-trying native scan on alternative volume: /Volumes/${matchVol}`);
+          const altResult = await invoke<any>('perform_fast_scan', {
+            rootPath: `/Volumes/${matchVol}`,
+            root_path: `/Volumes/${matchVol}`,
+            safeScan,
+            safe_scan: safeScan,
+            maxDepth: effectiveMaxDepth,
+            max_depth: effectiveMaxDepth,
+          }).catch(() => []);
+          if (altResult && altResult.length > 0) {
+            const altItems = altResult.map((it: any) => ({
+              name: it.name,
+              rel_path: it.rel_path,
+              is_dir: it.is_dir,
+              size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
+            }));
+            return {
+              success: true,
+              mountPath: `/Volumes/${matchVol}`,
+              items: altItems,
+              totalScanned: altItems.length,
+              diagnostics: logDirectoryTraversalDiagnostics(
+                'performFastScan:NativeTauriAlt',
+                `/Volumes/${matchVol}`,
+                altItems,
+                durationMs,
+                { safeScan, timeoutMs }
+              ),
+            };
+          }
+        }
+      } catch (_) {}
     } catch (e: any) {
       const durationMs = Math.round(performance.now() - startTime);
-      console.error('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan failed or timed out:', e);
-      console.log(
-        `[recursive_limit] performFastScan errored in ${durationMs}ms: max_depth=${effectiveMaxDepth}, error="${e?.message || e}"`
-      );
-      return {
-        success: false,
-        mountPath: rootPath,
-        items: [],
-        totalScanned: 0,
-        error: e?.message || String(e),
-      };
+      console.warn('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan returned error; checking backend fallback:', e);
     }
   }
 
-  // Browser fallback using recursive Express backend API
+  // Fallback using recursive Express backend API (scans local samba_share or proxy)
   try {
     const response = await fetch('/api/samba/scan-volume', {
       method: 'POST',
@@ -702,31 +738,24 @@ export const scanSambaVolume = async (
         { safeScan, timeoutMs }
       );
 
-      return {
-        success: Boolean(result?.success),
-        mountPath: result?.mount_path || mountLocation,
-        items,
-        totalScanned: result?.total_scanned || items.length,
-        error: result?.error || null,
-        diagnostics,
-      };
+      if (items.length > 0) {
+        return {
+          success: Boolean(result?.success),
+          mountPath: result?.mount_path || mountLocation,
+          items,
+          totalScanned: result?.total_scanned || items.length,
+          error: result?.error || null,
+          diagnostics,
+        };
+      }
+      console.warn(`[scanSambaVolume] Native scan returned 0 items on "${mountLocation}". Falling back to server backend API...`);
     } catch (e: any) {
       const durationMs = Math.round(performance.now() - startTime);
-      console.error('[SambaVault Scanner] Tauri invoke scan_samba_volume failed or timed out:', e);
-      console.log(
-        `[recursive_limit] scanSambaVolume errored in ${durationMs}ms: max_depth=${effectiveMaxDepth}, error="${e?.message || e}"`
-      );
-      return {
-        success: false,
-        mountPath: mountLocation,
-        items: [],
-        totalScanned: 0,
-        error: e?.message || String(e),
-      };
+      console.warn('[SambaVault Scanner] Tauri invoke scan_samba_volume failed; checking backend fallback:', e);
     }
   }
 
-  // Browser fallback using recursive Express backend API
+  // Browser/Proxy fallback using recursive Express backend API
   try {
     const response = await fetch('/api/samba/scan-volume', {
       method: 'POST',
@@ -1012,6 +1041,23 @@ export const validateSambaPlaybackPath = (
     valid: true,
     message: `Resolved for ${platform}: ${resolvedPath}`,
   };
+};
+
+export const openExternalUrl = async (url: string): Promise<boolean> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { open } = await import('@tauri-apps/api/shell');
+      await open(url);
+      return true;
+    } catch (e) {
+      console.warn('Tauri shell open error:', e);
+    }
+  }
+  if (typeof window !== 'undefined') {
+    const w = window.open(url, '_blank', 'noopener,noreferrer');
+    return Boolean(w);
+  }
+  return false;
 };
 
 

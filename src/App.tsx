@@ -2069,8 +2069,23 @@ function App() {
       const scanPromise = (async () => {
         const scanTimeout = effectiveSafeScan ? 30000 : 180000;
 
+        let resolvedScanPath = rootPath;
+        if (isTauri) {
+          try {
+            const mountedVols = await listMountedVolumes().catch(() => []);
+            const cleanShare = (shareName || 'media').toLowerCase();
+            const matchVol = (mountedVols || []).find(
+              (v) => v.toLowerCase() === cleanShare || v.toLowerCase().startsWith(cleanShare)
+            );
+            if (matchVol && `/Volumes/${matchVol}` !== resolvedScanPath) {
+              console.log(`[SambaSync] Auto-resolved mount path from /Volumes/${matchVol}`);
+              resolvedScanPath = `/Volumes/${matchVol}`;
+            }
+          } catch (_) {}
+        }
+
         const scanResult = await performFastScan(
-          rootPath,
+          resolvedScanPath,
           (count, currentFile) => {
             const clean = (currentFile || '').replace(/^[/\\]+/g, '').replace(/\\/g, '/');
             const parts = clean.split('/').filter(Boolean);
@@ -2090,7 +2105,7 @@ function App() {
                 maxDepthLimit: effectiveDepthLimit,
                 beyond25Count: beyond25,
                 totalAudited: count,
-                currentFolder: parts.slice(0, -1).join('/') || rootPath,
+                currentFolder: parts.slice(0, -1).join('/') || resolvedScanPath,
                 status: count >= 25 ? 'auditing_deep' : 'scanning',
               },
             }));
@@ -2115,7 +2130,7 @@ function App() {
         }));
 
         const fallbackResult = await retryWithExponentialBackoff(
-          async () => scanSambaVolume(shareName, rootPath, scanTimeout, effectiveSafeScan, effectiveDepthLimit),
+          async () => scanSambaVolume(shareName, resolvedScanPath, scanTimeout, effectiveSafeScan, effectiveDepthLimit),
           { maxRetries: 1, initialDelayMs: 250 }
         ).catch((e) => {
           console.warn('[SambaSync] scanSambaVolume failed:', e);
@@ -2124,6 +2139,29 @@ function App() {
 
         if (fallbackResult.success && fallbackResult.items.length > 0) {
           return fallbackResult.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
+        }
+
+        // Secondary fallback: query server Samba backend API
+        console.log('[SambaSync] Local scans returned 0 items. Checking server API proxy /api/samba/scan-volume...');
+        try {
+          const apiRes = await fetch('/api/samba/scan-volume', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sharePath: resolvedScanPath,
+              mountPath: resolvedScanPath,
+              maxDepth: effectiveDepthLimit,
+            }),
+          });
+          if (apiRes.ok) {
+            const apiData = await apiRes.json();
+            if (apiData.success && Array.isArray(apiData.items) && apiData.items.length > 0) {
+              console.log(`[SambaSync] Server API returned ${apiData.items.length} items from share!`);
+              return apiData.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
+            }
+          }
+        } catch (apiErr) {
+          console.warn('[SambaSync] Server API fallback check error:', apiErr);
         }
 
         return [];
@@ -2773,63 +2811,103 @@ function App() {
       }
 
       // 6. Update sync logs and connection status
-      setIsConnected(true);
-      logger.resolveIncident();
-      logger.success(
-        `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) across share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'}.`,
-        'Sync',
-        {
-          totalFiles: discoveredRelativePaths.length,
-          mediaExtracted: discoveredMedia.length,
-          multiVersionBranches: detectedBranchCount,
-        }
-      );
-      setSyncLogs((prev) => [
-        {
-          id: `log-art-${Date.now()}`,
-          timestamp: new Date().toLocaleTimeString(),
-          type: 'samba_pushed',
-          title: `Artwork Verification on Samba Filesystem`,
-          details: `Verified ${verifiedArtworkCount} folders on share disk; created artwork via fallback for ${fallbackCreatedCount} folders.`,
-          status: 'success',
-        },
-        {
-          id: `log-${Date.now()}`,
-          timestamp: new Date().toLocaleTimeString(),
-          type: 'connected',
-          title: `Samba Sync Complete: ${discoveredRelativePaths.length} Media Files Discovered`,
-          details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} and populated All Media, TV Series, Movies, and Music Albums!${
-            detectedBranchCount > 0
-              ? ` Multi-Version Detector linked ${detectedBranchCount} branches across ${detectedFranchiseCount} franchises.`
-              : ''
-          }`,
-          status: 'success',
-        },
-        ...prev,
-      ]);
+      if (discoveredRelativePaths.length === 0) {
+        setIsConnected(false);
+        logger.warn(
+          `Samba Sync completed with 0 items: target path "${rootPath}" is empty or not mounted. ` +
+          `Verify that share //${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'} is mounted in macOS Finder (Cmd+K -> smb://${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'}) or Windows Explorer.`,
+          'Sync',
+          {
+            rootPath,
+            server: sambaConfig.server,
+            share: sambaConfig.share,
+            hint: 'Open Samba Mount Hub to mount or verify the network share path.',
+          }
+        );
+        setSyncLogs((prev) => [
+          {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'warning',
+            title: `Samba Sync: 0 Items Discovered on Share`,
+            details: `Target "${rootPath}" is empty or unmounted. Verify network share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'} is mounted in Finder.`,
+            status: 'warning',
+          },
+          ...prev,
+        ]);
+        setSyncProgress({
+          isActive: true,
+          phase: 'completed',
+          currentStep: 100,
+          totalSteps: 100,
+          currentPath: `Sync Complete: 0 files discovered`,
+          processedCount: 0,
+          totalCount: 0,
+          phaseDescription: `0 files discovered at "${rootPath}". Check Finder mount (Cmd+K) or Mount Hub.`,
+        });
+        setTimeout(() => {
+          setSyncProgress((prev) => (prev.phase === 'completed' ? { ...prev, isActive: false, phase: 'idle' } : prev));
+        }, 6000);
+        showToast(`Samba sync found 0 items at "${rootPath}". Is the share mounted in Finder?`);
+      } else {
+        setIsConnected(true);
+        logger.resolveIncident();
+        logger.success(
+          `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) across share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'}.`,
+          'Sync',
+          {
+            totalFiles: discoveredRelativePaths.length,
+            mediaExtracted: discoveredMedia.length,
+            multiVersionBranches: detectedBranchCount,
+          }
+        );
+        setSyncLogs((prev) => [
+          {
+            id: `log-art-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'samba_pushed',
+            title: `Artwork Verification on Samba Filesystem`,
+            details: `Verified ${verifiedArtworkCount} folders on share disk; created artwork via fallback for ${fallbackCreatedCount} folders.`,
+            status: 'success',
+          },
+          {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'connected',
+            title: `Samba Sync Complete: ${discoveredRelativePaths.length} Media Files Discovered`,
+            details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} and populated All Media, TV Series, Movies, and Music Albums!${
+              detectedBranchCount > 0
+                ? ` Multi-Version Detector linked ${detectedBranchCount} branches across ${detectedFranchiseCount} franchises.`
+                : ''
+            }`,
+            status: 'success',
+          },
+          ...prev,
+        ]);
 
-      const confidentCount = classifications.filter((c) => c.isConfident).length;
-      sendDesktopNotification('Samba Background Sync Complete', {
-        body: `Indexed ${discoveredRelativePaths.length} items (${discoveredMedia.length} media files, ${confidentCount} confident folders).`,
-      });
+        const confidentCount = classifications.filter((c) => c.isConfident).length;
+        sendDesktopNotification('Samba Background Sync Complete', {
+          body: `Indexed ${discoveredRelativePaths.length} items (${discoveredMedia.length} media files, ${confidentCount} confident folders).`,
+        });
 
-      // Mark progress as complete
-      setSyncProgress({
-        isActive: true,
-        phase: 'completed',
-        currentStep: 100,
-        totalSteps: 100,
-        currentPath: `Sync Complete: ${discoveredRelativePaths.length} files scanned`,
-        processedCount: discoveredRelativePaths.length,
-        totalCount: discoveredRelativePaths.length,
-        phaseDescription: `Successfully synchronized ${discoveredRelativePaths.length} media files with zero UI latency.`,
-      });
+        // Mark progress as complete
+        setSyncProgress({
+          isActive: true,
+          phase: 'completed',
+          currentStep: 100,
+          totalSteps: 100,
+          currentPath: `Sync Complete: ${discoveredRelativePaths.length} files scanned`,
+          processedCount: discoveredRelativePaths.length,
+          totalCount: discoveredRelativePaths.length,
+          phaseDescription: `Successfully synchronized ${discoveredRelativePaths.length} media files with zero UI latency.`,
+        });
 
-      // Auto-hide progress indicator after 4.5 seconds
-      setTimeout(() => {
-        setSyncProgress((prev) => (prev.phase === 'completed' ? { ...prev, isActive: false, phase: 'idle' } : prev));
-      }, 4500);
-      showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
+        // Auto-hide progress indicator after 4.5 seconds
+        setTimeout(() => {
+          setSyncProgress((prev) => (prev.phase === 'completed' ? { ...prev, isActive: false, phase: 'idle' } : prev));
+        }, 4500);
+        showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
+      }
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
       const errMsg = err?.message || String(err);

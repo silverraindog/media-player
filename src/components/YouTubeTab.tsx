@@ -19,15 +19,22 @@ import {
   Calendar,
   Tv,
   AlertCircle,
+  AlertTriangle,
   Key,
   ShieldCheck,
   User as UserIcon,
   BarChart3,
   Terminal,
+  Laptop,
+  Globe,
+  Copy,
+  Check,
+  Sparkles,
 } from 'lucide-react';
 import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, GoogleAuthProvider, User } from '../lib/firebase';
 import { fetchSubscriptions, fetchChannelUploads, YouTubeSubscription, YouTubeVideo } from '../services/youtubeService';
 import { logger } from '../utils/loggerService';
+import { openExternalUrl } from '../utils/tauriBridge';
 
 interface SyncLog {
   timestamp: string;
@@ -59,6 +66,21 @@ export const YouTubeTab: React.FC = () => {
   const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
 
+  // Desktop WebView / iframe Sandbox & Popup Blocker Detection
+  const isTauriEnv = typeof window !== 'undefined' && (
+    Boolean((window as any).__TAURI_IPC__) ||
+    Boolean((window as any).__TAURI__) ||
+    window.location.protocol === 'tauri:' ||
+    window.location.origin.includes('tauri.localhost') ||
+    window.location.origin.includes('tauri://')
+  );
+  const isIframeEnv = typeof window !== 'undefined' && window.self !== window.top;
+
+  const [popupBlocked, setPopupBlocked] = useState(isTauriEnv);
+
+  const GOOGLE_CLIENT_ID = '152448014679-5ppmkrq192enef9tivfum5pg90a3olaf.apps.googleusercontent.com';
+  const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
+
   const addLog = (message: string, type: SyncLog['type'] = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     setSyncLogs((prev) => [{ timestamp, message, type }, ...prev].slice(0, 50));
@@ -84,20 +106,75 @@ export const YouTubeTab: React.FC = () => {
     return () => clearInterval(intervalId);
   }, [accessToken]);
 
-  const handleFirebaseGoogleSignIn = async () => {
+  const openGoogleOAuthInBrowser = () => {
     setErrorMsg(null);
-    setIsLoading(true);
+    const scope = encodeURIComponent(YOUTUBE_SCOPE);
+    const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=https://developers.google.com/oauthplayground&response_type=token&scope=${scope}&prompt=consent`;
+    openExternalUrl(oauthUrl);
+    addLog('Opening Google Authorization in system browser...', 'info');
+    logger.info('Opening Google OAuth in default system browser to bypass webview popup restrictions.', 'Auth');
+    setPopupBlocked(true);
+  };
 
-    const isIframe = typeof window !== 'undefined' && window.self !== window.top;
-
-    if (isIframe) {
-      addLog('Inside preview iframe sandbox. Directly launching Google Identity OAuth client...', 'info');
-      logger.info('Preview iframe detected. Launching Google Identity OAuth Client...', 'Auth');
-      setIsLoading(false);
-      handleGoogleIdentityLogin();
+  const handleGoogleIdentityDirect = () => {
+    setErrorMsg(null);
+    if (!(window as any).google?.accounts?.oauth2) {
+      openGoogleOAuthInBrowser();
       return;
     }
 
+    try {
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: YOUTUBE_SCOPE,
+        callback: (response: any) => {
+          if (response && response.access_token) {
+            setAccessToken(response.access_token);
+            localStorage.setItem('youtube_access_token', response.access_token);
+            setErrorMsg(null);
+            setPopupBlocked(false);
+            fetchYouTubeData(response.access_token);
+            addLog('Successfully authenticated with Google Identity OAuth!', 'info');
+          } else if (response && response.error) {
+            console.warn('GIS error response:', response);
+            setErrorMsg(`Google OAuth error: ${response.error_description || response.error}`);
+            setPopupBlocked(true);
+          }
+        },
+        error_callback: (err: any) => {
+          console.warn('Google Identity error callback:', err);
+          setPopupBlocked(true);
+          setErrorMsg('Popup was blocked by your browser or desktop environment. Please use the External Browser button or paste a token.');
+        },
+      });
+      client.requestAccessToken({ prompt: 'select_account' });
+    } catch (e: any) {
+      console.error('OAuth token client error:', e);
+      setPopupBlocked(true);
+      setErrorMsg(`Popup failed (${e?.message || e}). Click below to authorize in your browser or paste a token.`);
+    }
+  };
+
+  const handleFirebaseGoogleSignIn = async () => {
+    setErrorMsg(null);
+
+    // If running in Tauri desktop app, embedded webview popups are blocked by security sandbox
+    if (isTauriEnv) {
+      addLog('Desktop environment detected (tauri://localhost). Webview popup blocked by sandbox. Launching browser authorization...', 'info');
+      logger.info('Tauri desktop environment detected. Launching Google OAuth in system browser.', 'Auth');
+      setPopupBlocked(true);
+      openGoogleOAuthInBrowser();
+      return;
+    }
+
+    // If running inside preview iframe sandbox:
+    if (isIframeEnv) {
+      addLog('Inside preview iframe sandbox. Launching Google Identity OAuth client...', 'info');
+      handleGoogleIdentityDirect();
+      return;
+    }
+
+    setIsLoading(true);
     try {
       console.log('[YouTubeTab] Launching Firebase Popup Sign-in...');
       const result = await signInWithPopup(auth, googleProvider);
@@ -108,20 +185,26 @@ export const YouTubeTab: React.FC = () => {
         setAccessToken(token);
         localStorage.setItem('youtube_access_token', token);
         fetchYouTubeData(token);
+        addLog('Successfully signed in with Firebase Google Auth!', 'info');
       } else {
-        handleGoogleIdentityLogin();
+        handleGoogleIdentityDirect();
       }
     } catch (e: any) {
       console.warn('[YouTubeTab] Firebase Auth popup result:', e);
-      const isCancelled = e?.code === 'auth/cancelled-popup-request' || e?.isIframePreview;
+      const isCancelled =
+        e?.code === 'auth/cancelled-popup-request' ||
+        e?.code === 'auth/popup-blocked' ||
+        e?.code === 'auth/popup-closed-by-user' ||
+        e?.isIframePreview;
 
       if (isCancelled) {
         logger.info(
-          'Preview iframe constraint detected (auth/cancelled-popup-request). Automatically switching to Google Identity OAuth client.',
+          'Popup request cancelled due to sandbox constraints or popup blocker (auth/cancelled-popup-request).',
           'Auth'
         );
-        setErrorMsg(null); // Clear error alert
-        handleGoogleIdentityLogin();
+        addLog('Popup blocked by browser or sandbox. Activated direct authorization fallback.', 'warning');
+        setPopupBlocked(true);
+        setErrorMsg('Sign-in popup was blocked by your browser or desktop environment.');
       } else {
         logger.error(`Firebase Auth error: ${e?.message || e}`, 'Auth', { error: e });
         setErrorMsg(`Firebase Authentication failed: ${e?.message || e}`);
@@ -131,41 +214,24 @@ export const YouTubeTab: React.FC = () => {
     }
   };
 
-  const handleGoogleIdentityLogin = () => {
-    if (!(window as any).google?.accounts?.oauth2) {
-      setErrorMsg('Google Identity Services script not loaded. Please paste an OAuth Access Token manually below.');
-      return;
-    }
-
-    try {
-      const client = (window as any).google.accounts.oauth2.initTokenClient({
-        client_id: '152448014679-5ppmkrq192enef9tivfum5pg90a3olaf.apps.googleusercontent.com',
-        scope: 'https://www.googleapis.com/auth/youtube.readonly',
-        callback: (response: any) => {
-          if (response && response.access_token) {
-            setAccessToken(response.access_token);
-            localStorage.setItem('youtube_access_token', response.access_token);
-            setErrorMsg(null);
-            fetchYouTubeData(response.access_token);
-          } else {
-            setErrorMsg('Failed to acquire Google OAuth access token.');
-          }
-        },
-      });
-      client.requestAccessToken();
-    } catch (e: any) {
-      console.error('OAuth token client error:', e);
-      setErrorMsg(`OAuth initialization failed: ${e?.message || e}`);
-    }
-  };
-
   const handleSaveManualToken = () => {
-    if (!manualToken.trim()) return;
-    const token = manualToken.trim();
+    let token = manualToken.trim();
+    if (!token) return;
+
+    // Automatically parse access_token if user pasted the full redirect URL or query string
+    if (token.includes('access_token=')) {
+      const match = token.match(/access_token=([^&]+)/);
+      if (match && match[1]) {
+        token = decodeURIComponent(match[1]);
+      }
+    }
+
     setAccessToken(token);
     localStorage.setItem('youtube_access_token', token);
     setManualToken('');
     setErrorMsg(null);
+    setPopupBlocked(false);
+    addLog('Access token set. Fetching YouTube subscriptions...', 'info');
     fetchYouTubeData(token);
   };
 
@@ -286,12 +352,24 @@ export const YouTubeTab: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <button
-                onClick={handleFirebaseGoogleSignIn}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer active:scale-95"
-              >
-                <LogIn className="w-4 h-4" /> Sign In with Google
-              </button>
+              <div className="flex items-center gap-2">
+                {isTauriEnv ? (
+                  <button
+                    onClick={openGoogleOAuthInBrowser}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer active:scale-95"
+                    title="Open Google authorization in your default desktop browser"
+                  >
+                    <ExternalLink className="w-4 h-4" /> Authorize in Browser
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleFirebaseGoogleSignIn}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer active:scale-95"
+                  >
+                    <LogIn className="w-4 h-4" /> Sign In with Google
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -327,52 +405,117 @@ export const YouTubeTab: React.FC = () => {
             <ShieldCheck className="w-8 h-8" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-base font-bold text-white">Secure Firebase & YouTube Login</h3>
+            <div className="flex items-center justify-center gap-2">
+              <h3 className="text-base font-bold text-white">Google & YouTube Authorization</h3>
+              {isTauriEnv && (
+                <span className="px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800/60 text-[10px] font-mono flex items-center gap-1">
+                  <Laptop className="w-3 h-3" /> Desktop Tauri
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-400">
-              Authenticate securely via Firebase to manage your active session and load your private channel subscriptions.
+              Authenticate via Google OAuth to load your subscribed YouTube channels and track video releases.
             </p>
           </div>
 
-          <div className="pt-2 flex flex-col gap-3">
-            <button
-              onClick={handleFirebaseGoogleSignIn}
-              className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer flex items-center justify-center gap-2"
-            >
-              <LogIn className="w-4 h-4" /> Sign In with Google & Firebase Auth
-            </button>
+          {/* Desktop Sandbox / Popup Blocked Fallback Card */}
+          {(popupBlocked || isTauriEnv) && (
+            <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-600/40 text-left space-y-3 animate-in fade-in duration-200">
+              <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Desktop Sandbox / Browser Popup Restrained</span>
+              </div>
+              <p className="text-[11px] text-amber-200/90 leading-relaxed font-mono">
+                Embedded webview popups are blocked by security policy (<code className="text-amber-300">tauri://localhost</code>). Authorize directly in your default browser or paste an OAuth access token below.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={openGoogleOAuthInBrowser}
+                  className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-red-950/40 transition cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Authorize in Default Browser</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGoogleIdentityDirect}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Try 1-Click Popup</span>
+                </button>
+              </div>
+            </div>
+          )}
 
-            <div className="relative flex py-2 items-center">
+          <div className="pt-1 flex flex-col gap-3">
+            {!isTauriEnv && (
+              <button
+                onClick={handleFirebaseGoogleSignIn}
+                disabled={isLoading}
+                className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-500 disabled:bg-red-900/50 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer flex items-center justify-center gap-2"
+              >
+                <LogIn className="w-4 h-4" /> {isLoading ? 'Opening Sign In...' : 'Sign In with Google'}
+              </button>
+            )}
+
+            <div className="relative flex py-1 items-center">
               <div className="flex-grow border-t border-slate-800"></div>
-              <span className="flex-shrink mx-4 text-[10px] text-slate-500 uppercase tracking-widest">or paste access token</span>
+              <span className="flex-shrink mx-4 text-[10px] text-slate-500 uppercase tracking-widest">
+                or connect with access token
+              </span>
               <div className="flex-grow border-t border-slate-800"></div>
             </div>
 
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                <input
-                  type="password"
-                  value={manualToken}
-                  onChange={(e) => setManualToken(e.target.value)}
-                  placeholder="Paste OAuth access token..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500 transition"
-                />
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input
+                    type="password"
+                    value={manualToken}
+                    onChange={(e) => setManualToken(e.target.value)}
+                    placeholder="Paste access token (ya29...) or redirect URL..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500 transition font-mono"
+                  />
+                </div>
+                <button
+                  onClick={handleSaveManualToken}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition cursor-pointer"
+                >
+                  Connect
+                </button>
               </div>
-              <button
-                onClick={handleSaveManualToken}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition cursor-pointer"
-              >
-                Connect
-              </button>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+                <span>Auto-detects token from redirect URL</span>
+                <button
+                  type="button"
+                  onClick={openGoogleOAuthInBrowser}
+                  className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 cursor-pointer"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>Get token via Google OAuth</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {errorMsg && (
-        <div className="bg-rose-950/40 border border-rose-500/30 rounded-xl p-4 flex items-center gap-3 text-rose-300 text-xs">
-          <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
-          <span>{errorMsg}</span>
+        <div className="bg-rose-950/40 border border-rose-500/30 rounded-xl p-4 flex items-center justify-between gap-3 text-rose-300 text-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+            <span>{errorMsg}</span>
+          </div>
+          <button
+            onClick={() => setErrorMsg(null)}
+            className="text-slate-400 hover:text-white text-xs p-1"
+          >
+            ✕
+          </button>
         </div>
       )}
 

@@ -19,6 +19,15 @@ import {
 } from 'lucide-react';
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory } from '../types';
 import { logger, LOG_LEVEL_RANKS } from '../utils/loggerService';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from 'recharts';
 
 export const ConsoleTab: React.FC = () => {
   const [logs, setLogs] = useState<ConsoleLogEntry[]>([]);
@@ -76,6 +85,49 @@ export const ConsoleTab: React.FC = () => {
   const warnCount = logs.filter((l) => l.level === 'warn').length;
   const successCount = logs.filter((l) => l.level === 'success').length;
   const infoCount = logs.filter((l) => l.level === 'info' || l.level === 'debug').length;
+
+  // Compute chart data for the last hour (6 buckets of 10 minutes)
+  const chartData = React.useMemo(() => {
+    const now = Date.now();
+    const oneHourAgo = now - 3600000;
+    const bucketSizeMs = 600000; // 10 minutes
+    const bucketsCount = 6;
+
+    const buckets: Array<{ timeLabel: string; success: number; failed: number; timestamp: number }> = [];
+
+    for (let i = bucketsCount - 1; i >= 0; i--) {
+      const bucketEndTime = now - i * bucketSizeMs;
+      const bucketStartTime = bucketEndTime - bucketSizeMs;
+      const d = new Date(bucketStartTime);
+      const timeLabel = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+      buckets.push({
+        timeLabel,
+        success: 0,
+        failed: 0,
+        timestamp: bucketStartTime,
+      });
+    }
+
+    logs.forEach((log) => {
+      const logTime = new Date(log.timestamp).getTime();
+      if (logTime >= oneHourAgo) {
+        const bucketIndex = buckets.findIndex((b, idx) => {
+          const nextTime = idx < buckets.length - 1 ? buckets[idx + 1].timestamp : now + 1;
+          return logTime >= b.timestamp && logTime < nextTime;
+        });
+        if (bucketIndex !== -1) {
+          if (log.level === 'success') {
+            buckets[bucketIndex].success += 1;
+          } else if (log.level === 'error') {
+            buckets[bucketIndex].failed += 1;
+          }
+        }
+      }
+    });
+
+    return buckets;
+  }, [logs]);
 
   const handleCopyLogs = () => {
     const text = filteredLogs
@@ -197,6 +249,65 @@ export const ConsoleTab: React.FC = () => {
             <span className="text-rose-400">Errors:</span>
             <span className="text-rose-200 font-bold tabular-nums">{errorCount}</span>
           </div>
+        </div>
+      </div>
+
+      {/* Real-Time Sync Activity Dashboard (Recharts AreaChart) */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Sync Activity & Operation Telemetry (Last Hour)</h3>
+              <p className="text-xs text-slate-400">
+                Real-time comparison of successful vs. failed operations across 10-minute intervals.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 text-xs font-mono">
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block" />
+              <span className="text-slate-300">Success Operations</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-rose-500 inline-block" />
+              <span className="text-slate-300">Failed / Errors</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="h-56 w-full pt-2">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="colorSuccess" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0.05} />
+                </linearGradient>
+                <linearGradient id="colorFailed" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.8} />
+                  <stop offset="95%" stopColor="#f43f5e" stopOpacity={0.05} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="timeLabel" stroke="#64748b" fontSize={11} tickLine={false} />
+              <YAxis stroke="#64748b" fontSize={11} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: '#0f172a',
+                  borderColor: '#334155',
+                  borderRadius: '0.75rem',
+                  color: '#f8fafc',
+                  fontSize: '12px',
+                  fontFamily: 'monospace',
+                }}
+              />
+              <Area type="monotone" dataKey="success" name="Successful Ops" stroke="#10b981" fillOpacity={1} fill="url(#colorSuccess)" strokeWidth={2} />
+              <Area type="monotone" dataKey="failed" name="Failed Ops" stroke="#f43f5e" fillOpacity={1} fill="url(#colorFailed)" strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
       </div>
 

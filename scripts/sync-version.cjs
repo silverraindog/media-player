@@ -11,6 +11,7 @@ const tauriConfPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
 const tauriCargoPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
 const rootCargoPath = path.join(rootDir, 'Cargo.toml');
 const versionTsPath = path.join(rootDir, 'src', 'version.ts');
+const packageLockPath = path.join(rootDir, 'package-lock.json');
 
 if (!targetVersion) {
   try {
@@ -37,6 +38,21 @@ if (fs.existsSync(packageJsonPath)) {
   pkg.version = targetVersion;
   fs.writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2) + '\n');
   console.log(`  ✓ Updated package.json -> version "${targetVersion}"`);
+}
+
+// 1.1 Update package-lock.json
+if (fs.existsSync(packageLockPath)) {
+  try {
+    const lock = JSON.parse(fs.readFileSync(packageLockPath, 'utf8'));
+    lock.version = targetVersion;
+    if (lock.packages && lock.packages['']) {
+      lock.packages[''].version = targetVersion;
+    }
+    fs.writeFileSync(packageLockPath, JSON.stringify(lock, null, 2) + '\n');
+    console.log(`  ✓ Updated package-lock.json -> version "${targetVersion}"`);
+  } catch (err) {
+    console.warn(`  ⚠ Could not update package-lock.json: ${err.message}`);
+  }
 }
 
 // 2. Update src-tauri/tauri.conf.json

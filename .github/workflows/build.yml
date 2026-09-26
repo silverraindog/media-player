@@ -32,6 +32,14 @@ jobs:
         with:
           node-version: 24
 
+      - name: Determine Version
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          node scripts/sync-version.cjs "$VERSION"
+
       - name: Install System Dependencies (Linux Only)
         if: matrix.platform == 'linux'
         run: |
@@ -59,7 +67,7 @@ jobs:
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SambaVault-${{ matrix.platform }}
+          name: SambaVault-v${{ steps.ver.outputs.version }}-${{ matrix.platform }}
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/msi/*.msi

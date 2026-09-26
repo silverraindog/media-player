@@ -124,6 +124,18 @@ jobs:
         run: |
           node scripts/sync-version.cjs "${{ needs.determine-version.outputs.release_version }}"
 
+      - name: Generate Release Notes
+        id: notes
+        shell: bash
+        run: |
+          NOTES=$(node scripts/get-release-notes.cjs "${{ needs.determine-version.outputs.release_version }}")
+          # Handle multi-line output for GITHUB_OUTPUT
+          {
+            echo "release_notes<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Install System Dependencies (Linux Only)
         if: matrix.platform == 'linux'
         run: |
@@ -149,6 +161,6 @@ jobs:
           projectPath: "./"
           tagName: ${{ needs.determine-version.outputs.release_tag }}
           releaseName: 'SambaVault ${{ needs.determine-version.outputs.release_tag }}'
-          releaseBody: 'Automated cross-platform desktop release for version ${{ needs.determine-version.outputs.release_tag }} (macOS .dmg, Windows .msi, Linux .deb/.AppImage).'
+          releaseBody: ${{ steps.notes.outputs.release_notes }}
           releaseDraft: false
           prerelease: false

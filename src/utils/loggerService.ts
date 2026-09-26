@@ -1,12 +1,22 @@
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory } from '../types';
 
-type LogListener = (logs: ConsoleLogEntry[]) => void;
+export const LOG_LEVEL_RANKS: Record<ConsoleLogLevel, number> = {
+  error: 40,
+  warn: 30,
+  success: 25,
+  info: 20,
+  debug: 10,
+};
+
+type LogListener = (logs: ConsoleLogEntry[], minLevel: ConsoleLogLevel, debugEnabled: boolean) => void;
 
 class LoggerService {
   private logs: ConsoleLogEntry[] = [];
   private listeners: Set<LogListener> = new Set();
   private maxLogs = 1000;
   private storageKey = 'samba_vault_console_logs';
+  private debugEnabled: boolean = true;
+  private minLevel: ConsoleLogLevel = 'info';
 
   constructor() {
     this.loadFromStorage();
@@ -24,6 +34,14 @@ class LoggerService {
           this.logs = parsed;
         }
       }
+      const savedDebug = localStorage.getItem('samba_vault_debug_enabled');
+      if (savedDebug !== null) {
+        this.debugEnabled = JSON.parse(savedDebug);
+      }
+      const savedMinLevel = localStorage.getItem('samba_vault_min_level');
+      if (savedMinLevel) {
+        this.minLevel = savedMinLevel as ConsoleLogLevel;
+      }
     } catch (e) {
       this.logs = [];
     }
@@ -32,6 +50,8 @@ class LoggerService {
   private persistToStorage() {
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(this.logs.slice(-300)));
+      localStorage.setItem('samba_vault_debug_enabled', JSON.stringify(this.debugEnabled));
+      localStorage.setItem('samba_vault_min_level', this.minLevel);
     } catch (e) {
       // Ignore storage quota
     }
@@ -41,7 +61,7 @@ class LoggerService {
     const copy = [...this.logs];
     this.listeners.forEach((listener) => {
       try {
-        listener(copy);
+        listener(copy, this.minLevel, this.debugEnabled);
       } catch (err) {
         console.error('Logger listener error:', err);
       }
@@ -50,7 +70,7 @@ class LoggerService {
 
   public subscribe(listener: LogListener): () => void {
     this.listeners.add(listener);
-    listener([...this.logs]);
+    listener([...this.logs], this.minLevel, this.debugEnabled);
     return () => {
       this.listeners.delete(listener);
     };
@@ -58,6 +78,28 @@ class LoggerService {
 
   public getLogs(): ConsoleLogEntry[] {
     return [...this.logs];
+  }
+
+  public getDebugEnabled(): boolean {
+    return this.debugEnabled;
+  }
+
+  public setDebugEnabled(enabled: boolean) {
+    this.debugEnabled = enabled;
+    this.persistToStorage();
+    this.notify();
+    this.info(`Debug logging ${enabled ? 'ENABLED' : 'DISABLED'}`, 'System', { debugEnabled: enabled });
+  }
+
+  public getMinLevel(): ConsoleLogLevel {
+    return this.minLevel;
+  }
+
+  public setMinLevel(level: ConsoleLogLevel) {
+    this.minLevel = level;
+    this.persistToStorage();
+    this.notify();
+    this.info(`Minimum log level set to ${level.toUpperCase()}`, 'System', { minLevel: level });
   }
 
   public clearLogs() {
@@ -72,7 +114,19 @@ class LoggerService {
     category: ConsoleLogCategory,
     message: string,
     details?: any
-  ): ConsoleLogEntry {
+  ): ConsoleLogEntry | null {
+    // If level is debug and debug mode is disabled, drop it
+    if (level === 'debug' && !this.debugEnabled) {
+      return null;
+    }
+
+    // Hierarchical check against min level
+    const rank = LOG_LEVEL_RANKS[level] || 20;
+    const minRank = LOG_LEVEL_RANKS[this.minLevel] || 20;
+    if (rank < minRank) {
+      return null;
+    }
+
     const entry: ConsoleLogEntry = {
       id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       timestamp: new Date().toISOString(),
@@ -94,6 +148,7 @@ class LoggerService {
     const prefix = `[SambaVault][${category}][${level.toUpperCase()}]`;
     if (level === 'error') console.error(prefix, message, details || '');
     else if (level === 'warn') console.warn(prefix, message, details || '');
+    else if (level === 'debug') console.debug(prefix, message, details || '');
     else console.log(prefix, message, details || '');
 
     return entry;

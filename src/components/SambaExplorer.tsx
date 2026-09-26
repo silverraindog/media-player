@@ -41,6 +41,8 @@ import {
   ShieldCheck,
   PieChart,
   Compass,
+  Code,
+  Wand2,
 } from 'lucide-react';
 import {
   SambaConfig,
@@ -74,6 +76,10 @@ import {
   applyResolvedSeriesToVaultAndDisk,
   FALLBACK_PROVIDERS_CHAIN,
 } from '../utils/deepRefreshService';
+import { JsonPathInspectorModal } from './JsonPathInspectorModal';
+import { PathIntegrityDiagnosticModal } from './PathIntegrityDiagnosticModal';
+import { pathDebugLogger } from '../utils/debugPathLogger';
+import { logger } from '../utils/loggerService';
 
 // Subtitle scanning configuration & helpers
 export const SUBTITLE_EXTENSIONS = ['srt', 'sub', 'vtt', 'ass', 'ssa'];
@@ -366,12 +372,47 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onUpdateDepthLimit,
 }) => {
   const [currentDepthLimit, setCurrentDepthLimit] = useState<number>(depthLimit || sambaConfig.depthLimit || 30);
+  const [isPathInspectorOpen, setIsPathInspectorOpen] = useState(false);
+  const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
 
   useEffect(() => {
     if (depthLimit !== undefined && depthLimit !== currentDepthLimit) {
       setCurrentDepthLimit(depthLimit);
     }
   }, [depthLimit]);
+
+  useEffect(() => {
+    const logNodesRecursive = (nodes: SambaShareNode[]) => {
+      nodes.forEach((node) => {
+        const dirtyCheck = checkPathDirtyState(node.path);
+        const resolved = `//${sambaConfig.server}/${sambaConfig.share}/${node.path}`;
+        pathDebugLogger.log({
+          eventType: 'scan_node',
+          rawPath: node.path,
+          resolvedPath: resolved,
+          sanitizedPath: sanitizeSambaPath(node.path),
+          isDirty: dirtyCheck.isDirty,
+          dirtyReason: dirtyCheck.reason,
+          nodeName: node.name,
+          nodeType: node.type,
+          details: { id: node.id, size: node.size, hasNfo: node.hasNfo, matchedMedia: node.matchedMedia },
+        });
+        logger.debug(`Path scan traversal [${node.type}]: ${node.name} -> raw="${node.path}" resolved="${resolved}"`, 'Scanner', {
+          rawPath: node.path,
+          resolvedPath: resolved,
+          sanitizedPath: sanitizeSambaPath(node.path),
+          isDirty: dirtyCheck.isDirty,
+          dirtyReason: dirtyCheck.reason,
+        });
+        if (node.children) {
+          logNodesRecursive(node.children);
+        }
+      });
+    };
+    if (sambaTree && sambaTree.length > 0) {
+      logNodesRecursive(sambaTree);
+    }
+  }, [sambaTree, sambaConfig]);
 
   const [selectedNode, setSelectedNode] = useState<SambaShareNode | null>(null);
 
@@ -1709,6 +1750,23 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               </span>
             )}
 
+            {/* Quick Sanitize Button for Directory Nodes */}
+            {isFolder && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCleanNodePath(node.id);
+                  logger.info(`Quick Sanitize executed for directory node: ${node.name} (${node.path})`, 'Scanner');
+                }}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-emerald-950 text-slate-300 hover:text-emerald-200 border border-slate-700 hover:border-emerald-500/50 text-[10px] font-semibold flex items-center gap-1 transition shadow-xs cursor-pointer shrink-0"
+                title="Quick Sanitize: Immediately run sanitizeSambaPath on this directory and update database path"
+              >
+                <Wand2 className="w-3 h-3 text-emerald-400" />
+                <span>Quick Sanitize</span>
+              </button>
+            )}
+
             {/* Path Sanitized / Dirty Status Badge & Fix Icon */}
             {(() => {
               const dirtyInfo = checkPathDirtyState(node.path);
@@ -1915,6 +1973,28 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             >
               <Layers className="w-3.5 h-3.5 text-indigo-400" />
               <span>Batch Renamer</span>
+            </button>
+
+            {/* JSON Path & Scan Inspector Button */}
+            <button
+              id="samba-json-inspector-btn"
+              onClick={() => setIsPathInspectorOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-200 border border-cyan-500/40 text-xs font-semibold shadow transition cursor-pointer"
+              title="Open JSON Path & Scan Inspector: View raw paths, resolved URLs, and sanitization status in real time"
+            >
+              <Code className="w-3.5 h-3.5 text-cyan-400" />
+              <span>JSON Path Inspector</span>
+            </button>
+
+            {/* Path Integrity Diagnostic Button */}
+            <button
+              id="samba-integrity-diagnostic-btn"
+              onClick={() => setIsIntegrityModalOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-200 border border-emerald-500/40 text-xs font-semibold shadow transition cursor-pointer"
+              title="Run Path Integrity Diagnostic: Cross-reference vault paths against filesystem and detect unreachable paths or mismatches"
+            >
+              <Compass className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Path Integrity Diagnostic</span>
             </button>
 
             {/* Preview Mode Toggle Button */}
@@ -3011,6 +3091,21 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           stats={statsData}
         />
       )}
+
+      {/* JSON Path & Scan Inspector Modal */}
+      <JsonPathInspectorModal
+        isOpen={isPathInspectorOpen}
+        onClose={() => setIsPathInspectorOpen(false)}
+      />
+
+      {/* Path Integrity Diagnostic Modal */}
+      <PathIntegrityDiagnosticModal
+        isOpen={isIntegrityModalOpen}
+        onClose={() => setIsIntegrityModalOpen(false)}
+        sambaTree={sambaTree}
+        sambaConfig={sambaConfig}
+        setSambaTree={setSambaTree}
+      />
     </div>
   );
 };

@@ -18,7 +18,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory } from '../types';
-import { logger } from '../utils/loggerService';
+import { logger, LOG_LEVEL_RANKS } from '../utils/loggerService';
 
 export const ConsoleTab: React.FC = () => {
   const [logs, setLogs] = useState<ConsoleLogEntry[]>([]);
@@ -29,14 +29,16 @@ export const ConsoleTab: React.FC = () => {
   const [isPaused, setIsPaused] = useState(false);
   const [copied, setCopied] = useState(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [debugEnabled, setDebugEnabled] = useState(logger.getDebugEnabled());
 
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const unsubscribe = logger.subscribe((newLogs) => {
+    const unsubscribe = logger.subscribe((newLogs, minLvl, debugFlag) => {
       if (!isPaused) {
         setLogs(newLogs);
       }
+      setDebugEnabled(debugFlag);
     });
     return () => unsubscribe();
   }, [isPaused]);
@@ -47,9 +49,15 @@ export const ConsoleTab: React.FC = () => {
     }
   }, [logs, autoScroll]);
 
-  // Filter logs
+  // Filter logs using hierarchical rank
   const filteredLogs = logs.filter((log) => {
-    if (selectedLevel !== 'all' && log.level !== selectedLevel) return false;
+    if (selectedLevel !== 'all') {
+      const logRank = LOG_LEVEL_RANKS[log.level] || 20;
+      const selectedRank = LOG_LEVEL_RANKS[selectedLevel as ConsoleLogLevel] || 20;
+      if (log.level !== selectedLevel && logRank < selectedRank) {
+        return false;
+      }
+    }
     if (selectedCategory !== 'all' && log.category !== selectedCategory) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -241,6 +249,24 @@ export const ConsoleTab: React.FC = () => {
             >
               {isPaused ? <Play className="w-3.5 h-3.5 text-amber-400" /> : <Pause className="w-3.5 h-3.5 text-slate-400" />}
               <span>{isPaused ? 'Resume Feed' : 'Pause Feed'}</span>
+            </button>
+
+            {/* Debug Mode Toggle */}
+            <button
+              onClick={() => {
+                const next = !debugEnabled;
+                logger.setDebugEnabled(next);
+                setDebugEnabled(next);
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer border ${
+                debugEnabled
+                  ? 'bg-purple-950 text-purple-200 border-purple-600/60 shadow-xs'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+              }`}
+              title="Toggle Debug Mode: When ON, verbose path scanning logs and debug telemetry are active and visible"
+            >
+              <Bug className={`w-3.5 h-3.5 ${debugEnabled ? 'text-purple-400' : 'text-slate-500'}`} />
+              <span>Debug Logs: {debugEnabled ? 'ON' : 'OFF'}</span>
             </button>
 
             {/* Copy Logs */}

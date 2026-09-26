@@ -441,6 +441,37 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       setSelectedNode(updatedSelected);
     }
   };
+
+  const handleGlobalSanitize = () => {
+    const sanitizeNodesRecursive = (nodes: SambaShareNode[]): SambaShareNode[] => {
+      return nodes.map((node) => {
+        let cleanedPath = (node.path || '')
+          .replace(/\\/g, '/')
+          .replace(/\/+/g, '/')
+          .replace(/^\/+/, '')
+          .replace(/^Volumes\/[^\/]+\//, '');
+        const newPath = cleanPathValue(cleanedPath);
+        const newName = node.type === 'file' ? sanitizeFilename(node.name) : sanitizeSambaPath(node.name);
+        const updatedNode: SambaShareNode = {
+          ...node,
+          name: newName,
+          path: newPath,
+          children: node.children ? sanitizeNodesRecursive(node.children) : undefined,
+        };
+        return updatedNode;
+      });
+    };
+
+    setSambaTree((prev) => sanitizeNodesRecursive(prev));
+    if (selectedNode) {
+      const updatedSelected = sanitizeNodesRecursive([selectedNode])[0];
+      setSelectedNode(updatedSelected);
+    }
+
+    logger.success('Global Path Sanitizer successfully bulk-scanned and repaired formatting errors across entire Samba tree.', 'Scanner');
+    setCopyToast('Global Path Sanitizer: All paths successfully bulk-sanitized & repaired!');
+    setTimeout(() => setCopyToast(null), 3500);
+  };
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({
     'root-movies': true,
     'root-shows': true,
@@ -1721,6 +1752,18 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               </span>
             )}
 
+            {/* Small status chip for file nodes displaying raw path upon hover */}
+            {!isFolder && (
+              <span
+                id={`raw-path-chip-${node.id}`}
+                className="px-1.5 py-0.5 rounded bg-slate-900/90 text-cyan-300 text-[9px] font-mono border border-cyan-500/30 flex items-center gap-1 shrink-0 shadow-xs cursor-help"
+                title={`Unresolved Raw Scan Path: ${node.path}`}
+              >
+                <Code className="w-2.5 h-2.5 text-cyan-400 shrink-0" />
+                <span>Raw Path</span>
+              </span>
+            )}
+
             {/* Subtitles Found Badge with Language Flags and Labels */}
             {subtitleInfo?.hasSubtitles && (
               <span
@@ -2000,6 +2043,17 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             >
               <Compass className="w-3.5 h-3.5 text-emerald-400" />
               <span>Path Integrity Diagnostic</span>
+            </button>
+
+            {/* Global Path Sanitizer Button */}
+            <button
+              id="samba-global-sanitizer-btn"
+              onClick={handleGlobalSanitize}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-950/70 hover:bg-teal-900/90 text-teal-200 border border-teal-500/50 text-xs font-semibold shadow transition cursor-pointer"
+              title="Global Path Sanitizer: Bulk scan and automatically repair common path formatting errors like double-slashes and incorrect volume prefixes across the entire Samba tree"
+            >
+              <Wand2 className="w-3.5 h-3.5 text-teal-400" />
+              <span>Global Path Sanitizer</span>
             </button>
 
             {/* Preview Mode Toggle Button */}

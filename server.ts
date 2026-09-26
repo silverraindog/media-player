@@ -2116,7 +2116,19 @@ function sanitizeSambaPath(rawPath: string): string {
   return segments.map(sanitizeSambaSegment).filter(Boolean).join('/');
 }
 
-function resolveSambaFullPath(rawPath: string): string {
+function resolveSambaFullPath(rawPath: string, customMountPath?: string): string {
+  if (customMountPath && customMountPath.trim() !== '') {
+    const trimmedMount = customMountPath.trim();
+    if (fs.existsSync(trimmedMount)) {
+      console.log(`[PathResolver] Using custom mount path: ${trimmedMount}`);
+      if (!rawPath) return trimmedMount;
+      const cleanSub = rawPath.replace(/\\/g, '/').replace(/^[\/\\]+/, '');
+      const candidate = path.join(trimmedMount, cleanSub);
+      if (fs.existsSync(candidate)) return candidate;
+      return trimmedMount;
+    }
+  }
+
   if (!rawPath) return SAMBA_SHARE_ROOT;
   let cleanPath = rawPath.replace(/\\/g, '/');
 
@@ -2556,9 +2568,10 @@ async function walkDirectoryRecursiveAsync(
 app.all('/api/samba/scan-volume', async (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
+    const customMountPath = (req.body?.mountPath || req.query?.mountPath) as string | undefined;
     const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
     const maxDepth = Number(req.body?.max_depth || req.body?.maxDepth || req.query?.max_depth || req.query?.maxDepth) || 30;
-    const targetRoot = customSharePath ? resolveSambaFullPath(customSharePath) : SAMBA_SHARE_ROOT;
+    const targetRoot = resolveSambaFullPath(customSharePath || '', customMountPath);
 
     // Ensure root exists
     if (!fs.existsSync(targetRoot)) {

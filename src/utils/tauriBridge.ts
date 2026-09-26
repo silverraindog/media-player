@@ -733,6 +733,7 @@ export const scanSambaVolume = async (
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sharePath: customPath || '',
+        mountPath: customPath || '',
         max_depth: effectiveMaxDepth,
         maxDepth: effectiveMaxDepth,
       }),

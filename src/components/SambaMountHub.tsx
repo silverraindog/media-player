@@ -150,6 +150,27 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
             </div>
           </div>
 
+          {/* Or Add Custom Volume Path / Local Mount Path */}
+          <div className="pt-2">
+            <label className="block text-xs font-medium text-slate-400 mb-1.5 flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-blue-300">
+                <FolderOpen className="w-4 h-4 text-blue-400" />
+                Or Add Custom Volume Path / Local Mount Path (Optional)
+              </span>
+              <span className="text-[10px] text-slate-500 font-mono">e.g. /Volumes/Media or /mnt/media</span>
+            </label>
+            <input
+              type="text"
+              placeholder="/Volumes/Media or /path/to/share"
+              value={sambaConfig.mountPath || ''}
+              onChange={(e) => setSambaConfig((prev) => ({ ...prev, mountPath: e.target.value }))}
+              className="w-full bg-slate-950 border border-blue-500/40 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
+            />
+            <p className="text-[11px] text-slate-400 mt-1">
+              If specified and not empty, the scanner will directly read from this local volume path, bypassing network URI translation.
+            </p>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">

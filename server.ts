@@ -2439,54 +2439,81 @@ app.post(['/api/samba/rename-item', '/api/samba/quick-rename'], async (req: Requ
   }
 });
 
-// Recursive Directory Walker Helper
-function walkDirectoryRecursive(
+// Async Concurrent Directory Walker Helper (Folder-specific async runner akin to tokio async tasks)
+async function walkDirectoryRecursiveAsync(
   dir: string,
   baseDir: string,
-  results: any[] = [],
-  errors: string[] = [],
   currentDepth: number = 0,
   maxDepth: number = 30
-): { items: any[]; errors: string[] } {
+): Promise<{ items: any[]; errors: string[] }> {
+  const results: any[] = [];
+  const errors: string[] = [];
+
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    
+    // Spawn async tasks for subdirectories concurrently using Promise.all (tokio-style task concurrency)
+    const subTasks: Promise<void>[] = [];
+
     for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
       const fullPath = path.join(dir, entry.name);
       const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+
       if (entry.isDirectory()) {
-        if (entry.name.startsWith('.')) continue;
         results.push({
           name: entry.name,
           rel_path: relPath,
           is_dir: true,
           size_str: '0 MB',
         });
+        console.log(`[SambaOSWalk][Directory] Found folder at path: "${fullPath}" (rel: "${relPath}")`);
+
         if (currentDepth < maxDepth) {
-          walkDirectoryRecursive(fullPath, baseDir, results, errors, currentDepth + 1, maxDepth);
+          subTasks.push(
+            walkDirectoryRecursiveAsync(fullPath, baseDir, currentDepth + 1, maxDepth)
+              .then((subResult) => {
+                results.push(...subResult.items);
+                errors.push(...subResult.errors);
+              })
+              .catch((err) => {
+                errors.push(`Error walking subdirectory ${fullPath}: ${err.message}`);
+              })
+          );
         }
       } else if (entry.isFile()) {
-        if (entry.name.startsWith('.')) continue;
         let sizeStr = '0 MB';
         try {
-          const stat = fs.statSync(fullPath);
+          const stat = await fs.promises.stat(fullPath);
           sizeStr = `${Math.round(stat.size / (1024 * 1024))} MB`;
         } catch (_) {}
+
         results.push({
           name: entry.name,
           rel_path: relPath,
           is_dir: false,
           size_str: sizeStr,
         });
+
+        // Print the path that it finds each file in, on the console as requested
+        console.log(`[SambaOSWalk][FoundFile] File: "${entry.name}" | Absolute Path: "${fullPath}" | Relative Path: "${relPath}" | Size: ${sizeStr}`);
       }
     }
+
+    if (subTasks.length > 0) {
+      await Promise.all(subTasks);
+    }
   } catch (err: any) {
-    errors.push(`Error reading ${dir}: ${err.message}`);
+    const errMsg = `Error reading directory ${dir}: ${err.message}`;
+    errors.push(errMsg);
+    console.error(`[SambaOSWalk][Error] ${errMsg}`);
   }
+
   return { items: results, errors };
 }
 
-// Recursive Scan Volume Endpoint
-app.all('/api/samba/scan-volume', (req: Request, res: Response) => {
+// Recursive Scan Volume Endpoint (Async Concurrent)
+app.all('/api/samba/scan-volume', async (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
     const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
@@ -2498,12 +2525,14 @@ app.all('/api/samba/scan-volume', (req: Request, res: Response) => {
       fs.mkdirSync(targetRoot, { recursive: true });
     }
 
-    const { items, errors } = walkDirectoryRecursive(targetRoot, targetRoot, [], [], 0, maxDepth);
+    const { items, errors } = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth);
     const durationMs = Date.now() - startTime;
+
+    console.log(`[SambaOSWalk] Completed concurrent scan of ${targetRoot}: found ${items.length} items (${items.filter(i => !i.is_dir).length} files) in ${durationMs}ms`);
 
     return res.json({
       success: true,
-      scanMode: 'recursive',
+      scanMode: 'recursive_async_concurrent',
       maxDepth,
       items,
       errors,
@@ -2521,7 +2550,7 @@ app.all('/api/samba/scan-volume', (req: Request, res: Response) => {
 });
 
 // Endpoint to generate large realistic Samba share structure with thousands of files
-app.post('/api/samba/generate-large-library', (req: Request, res: Response) => {
+app.post('/api/samba/generate-large-library', async (req: Request, res: Response) => {
   try {
     const allSampleFiles = getComprehensiveSampleFilePaths();
     let createdCount = 0;
@@ -2537,7 +2566,7 @@ app.post('/api/samba/generate-large-library', (req: Request, res: Response) => {
       }
     });
 
-    const { items } = walkDirectoryRecursive(SAMBA_SHARE_ROOT, SAMBA_SHARE_ROOT);
+    const { items } = await walkDirectoryRecursiveAsync(SAMBA_SHARE_ROOT, SAMBA_SHARE_ROOT);
 
     return res.json({
       success: true,

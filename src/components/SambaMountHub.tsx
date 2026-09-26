@@ -166,8 +166,8 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
               onChange={(e) => setSambaConfig((prev) => ({ ...prev, mountPath: e.target.value }))}
               className="w-full bg-slate-950 border border-blue-500/40 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
             />
-            <p className="text-[11px] text-slate-400 mt-1">
-              If specified and not empty, the scanner will directly read from this local volume path, bypassing network URI translation.
+            <p className="text-[11px] text-slate-300 mt-1">
+              If specified and not empty, <strong className="text-white">Server IP & Hostname can be left blank</strong>. The scanner will directly read from this local volume path with zero network overhead.
             </p>
           </div>
 

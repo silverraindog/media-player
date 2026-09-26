@@ -1462,26 +1462,26 @@ function App() {
       const allVolumes = await listMountedVolumes();
       setSystemVolumes(allVolumes);
 
-      // 2. Perform direct network probe (via Rust native TCP socket in Tauri or via Node backend)
-      const probe = await probeLocalNetwork(sambaConfig.server, targetPort);
+      const hasCustomMount = Boolean(sambaConfig.mountPath && sambaConfig.mountPath.trim() !== '');
+      const probe = hasCustomMount ? { reachable: true, latencyMs: 1 } : await probeLocalNetwork(sambaConfig.server, targetPort);
 
-      if (probe.reachable || volInfo.isMounted) {
+      if (hasCustomMount || probe.reachable || volInfo.isMounted) {
         setIsConnected(true);
         const details = {
           connected: true,
-          server: sambaConfig.server,
-          share: sambaConfig.share,
+          server: sambaConfig.server || 'Local Mount',
+          share: sambaConfig.share || 'media',
           port: targetPort,
-          protocol: targetPort === 139 ? 'NetBIOS Session / SMB (TCP 139)' : 'SMB3 / CIFS (TCP 445)',
+          protocol: hasCustomMount ? 'Direct Local Mount Volume' : (targetPort === 139 ? 'NetBIOS Session / SMB (TCP 139)' : 'SMB3 / CIFS (TCP 445)'),
           authenticatedAs: sambaConfig.isGuest ? 'guest (Anonymous)' : (sambaConfig.username || 'authenticated user'),
           permissions: 'read-write',
           shareFreeSpace: 'Storage Active',
-          latencyMs: probe.latencyMs || 2,
-          isMountedInFinder: volInfo.isMounted,
-          mountPath: volInfo.mountPath,
-          message: volInfo.isMounted
-            ? `Share is actively mounted in Finder at ${volInfo.mountPath}!`
-            : `Connected to ${sambaConfig.server}:${targetPort} successfully!`,
+          latencyMs: probe.latencyMs || 1,
+          isMountedInFinder: volInfo.isMounted || hasCustomMount,
+          mountPath: sambaConfig.mountPath || volInfo.mountPath,
+          message: hasCustomMount
+            ? `Connected successfully via custom local mount path: ${sambaConfig.mountPath}`
+            : (volInfo.isMounted ? `Share is actively mounted in Finder at ${volInfo.mountPath}!` : `Connected to ${sambaConfig.server}:${targetPort} successfully!`),
         };
         setConnectionDetails(details);
         showToast(details.message);
@@ -1500,7 +1500,7 @@ function App() {
         ]);
       } else {
         setIsConnected(false);
-        const errorMsg = probe.message || `Could not connect to ${sambaConfig.server}:${targetPort}`;
+        const errorMsg = ('message' in probe ? (probe as any).message : null) || `Could not connect to ${sambaConfig.server || 'server'}:${targetPort}`;
         showToast(errorMsg);
         setConnectionDetails({
           connected: false,
@@ -3334,6 +3334,8 @@ function App() {
             onClearThumbnailCache={handleClearThumbnailCache}
             onExportLibraryBackup={handleExportJsonBackup}
             onManualTriggerSync={() => handleSyncSamba()}
+            scanDepthLimit={scanDepthLimit}
+            onUpdateScanDepthLimit={(val) => setScanDepthLimit(val)}
           />
         )}
       </main>

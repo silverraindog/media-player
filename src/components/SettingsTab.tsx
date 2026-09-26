@@ -39,6 +39,8 @@ interface SettingsTabProps {
   onClearThumbnailCache: () => void;
   onExportLibraryBackup: () => void;
   onManualTriggerSync?: () => Promise<void>;
+  scanDepthLimit?: number;
+  onUpdateScanDepthLimit?: (depth: number) => void;
 }
 
 export const SettingsTab: React.FC<SettingsTabProps> = ({
@@ -48,6 +50,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   onClearThumbnailCache,
   onExportLibraryBackup,
   onManualTriggerSync,
+  scanDepthLimit = 30,
+  onUpdateScanDepthLimit,
 }) => {
   const [scheduleConfig, setScheduleConfig] = useState<SyncScheduleConfig>(() => syncScheduler.getConfig());
   const [customCronInput, setCustomCronInput] = useState(scheduleConfig.cronExpression);
@@ -635,6 +639,52 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
             </label>
           </div>
+        </div>
+      </div>
+
+      {/* SECTION: SCAN DEPTH & RECURSION LIMIT */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+        <div className="flex items-center space-x-3 border-b border-slate-800 pb-4">
+          <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
+            <Sliders className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-white">Scan Depth & Recursion Limit</h3>
+            <p className="text-xs text-slate-400">
+              Control the maximum recursive depth when traversing Samba network shares or mount volume folders.
+            </p>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-200">Maximum Recursion Depth:</span>
+            <span className="text-xs font-mono font-bold text-blue-400 px-2 py-0.5 rounded bg-blue-950 border border-blue-800/40">
+              {scanDepthLimit} Levels
+            </span>
+          </div>
+          <input
+            type="range"
+            min="5"
+            max="50"
+            step="1"
+            value={scanDepthLimit}
+            onChange={(e) => {
+              const val = parseInt(e.target.value, 10);
+              if (onUpdateScanDepthLimit) {
+                onUpdateScanDepthLimit(val);
+              }
+            }}
+            className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+          />
+          <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+            <span>Shallow (5)</span>
+            <span>Standard (30)</span>
+            <span>Deep (50)</span>
+          </div>
+          <p className="text-[11px] text-slate-400">
+            Higher depth limits allow deep subfolders (e.g. multi-season TV series and nested franchise structures) to be fully traversed during volume scans.
+          </p>
         </div>
       </div>
 

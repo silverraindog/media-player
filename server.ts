@@ -2117,16 +2117,44 @@ function sanitizeSambaPath(rawPath: string): string {
 }
 
 function resolveSambaFullPath(rawPath: string, customMountPath?: string): string {
-  if (customMountPath && customMountPath.trim() !== '') {
-    const trimmedMount = customMountPath.trim();
-    if (fs.existsSync(trimmedMount)) {
-      console.log(`[PathResolver] Using custom mount path: ${trimmedMount}`);
-      if (!rawPath) return trimmedMount;
-      const cleanSub = rawPath.replace(/\\/g, '/').replace(/^[\/\\]+/, '');
-      const candidate = path.join(trimmedMount, cleanSub);
-      if (fs.existsSync(candidate)) return candidate;
-      return trimmedMount;
+  let targetMount = customMountPath ? customMountPath.trim() : '';
+
+  // If customMountPath is a network URI like //192.168.1.25/media or smb://...
+  if (targetMount.startsWith('//') || targetMount.startsWith('smb://')) {
+    const parts = targetMount.replace(/^smb:\/\//, '').replace(/^\/\//, '').split('/').filter(Boolean);
+    // parts[0] is IP/host (e.g. 192.168.1.25), parts[1] is share (e.g. media)
+    if (parts.length >= 2) {
+      const shareName = parts[1];
+      const volCandidate = path.join('/Volumes', shareName);
+      if (fs.existsSync(volCandidate)) {
+        console.log(`[PathResolver] Mapped network URI ${targetMount} to local mount volume: ${volCandidate}`);
+        targetMount = volCandidate;
+      } else {
+        // Try case-insensitive volume search in /Volumes
+        try {
+          if (fs.existsSync('/Volumes')) {
+            const vols = fs.readdirSync('/Volumes');
+            const matchVol = vols.find(v => v.toLowerCase() === shareName.toLowerCase());
+            if (matchVol) {
+              const matchedPath = path.join('/Volumes', matchVol);
+              if (fs.existsSync(matchedPath)) {
+                console.log(`[PathResolver] Mapped network URI ${targetMount} to volume ${matchVol}: ${matchedPath}`);
+                targetMount = matchedPath;
+              }
+            }
+          }
+        } catch (_) {}
+      }
     }
+  }
+
+  if (targetMount !== '' && fs.existsSync(targetMount)) {
+    console.log(`[PathResolver] Using resolved mount path: ${targetMount}`);
+    if (!rawPath) return targetMount;
+    const cleanSub = rawPath.replace(/\\/g, '/').replace(/^[\/\\]+/, '');
+    const candidate = path.join(targetMount, cleanSub);
+    if (fs.existsSync(candidate)) return candidate;
+    return targetMount;
   }
 
   if (!rawPath) return SAMBA_SHARE_ROOT;

@@ -36,6 +36,7 @@ interface HeaderProps {
   isQuickSyncing?: boolean;
   watchlistCount?: number;
   onOpenApiDebugger?: () => void;
+  serverVersionInfo?: any;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -49,6 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
   isQuickSyncing = false,
   watchlistCount = 0,
   onOpenApiDebugger,
+  serverVersionInfo,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 shadow-md">
@@ -67,11 +69,20 @@ export const Header: React.FC<HeaderProps> = ({
                 </span>
                 <button
                   onClick={() => setActiveTab('settings')}
-                  title={`Release Tag: ${APP_RELEASE_TAG} (Next push: ${getNextReleaseTag(APP_RELEASE_TAG)}) - Click to view release info`}
-                  className="text-[11px] font-mono font-medium px-2 py-0.5 rounded-md bg-emerald-950/60 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-900/60 hover:border-emerald-400 transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
+                  title={serverVersionInfo ? `Server Version: ${serverVersionInfo.releaseTag}\nCommit: ${serverVersionInfo.commit?.substring(0, 7)}\nBuild Date: ${new Date(serverVersionInfo.buildDate).toLocaleString()}` : `Release Tag: ${APP_RELEASE_TAG} (Next push: ${getNextReleaseTag(APP_RELEASE_TAG)}) - Click to view release info`}
+                  className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded-md transition-colors flex items-center gap-1 shadow-xs cursor-pointer ${
+                    serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG
+                      ? 'bg-amber-950/60 text-amber-400 border border-amber-500/30 hover:bg-amber-900/60'
+                      : 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-900/60 hover:border-emerald-400'
+                  }`}
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                    serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG ? 'bg-amber-400' : 'bg-emerald-400'
+                  }`}></span>
                   <span>v{APP_RELEASE_TAG}</span>
+                  {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG && (
+                    <span className="ml-1 text-[9px] opacity-75">New: v{serverVersionInfo.releaseTag}</span>
+                  )}
                 </button>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">

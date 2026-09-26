@@ -5,8 +5,8 @@
  * Release tags follow semver format: 0.0.1, 0.0.2, etc.
  */
 
-export const APP_VERSION = '0.0.1';
-export const APP_RELEASE_TAG = '0.0.1';
+export const APP_VERSION = '0.0.2';
+export const APP_RELEASE_TAG = '0.0.2';
 export const APP_NAME = 'SambaVault';
 
 export interface ReleaseIncrement {

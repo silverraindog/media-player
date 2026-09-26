@@ -5,6 +5,8 @@ const rootDir = path.resolve(__dirname, '..');
 
 // Retrieve target version from argument or fallback to package.json
 let targetVersion = process.argv[2];
+const commitSha = process.argv[3] || 'local-dev';
+const buildDate = process.argv[4] || new Date().toISOString();
 
 const packageJsonPath = path.join(rootDir, 'package.json');
 const tauriConfPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
@@ -12,6 +14,8 @@ const tauriCargoPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
 const rootCargoPath = path.join(rootDir, 'Cargo.toml');
 const versionTsPath = path.join(rootDir, 'src', 'version.ts');
 const packageLockPath = path.join(rootDir, 'package-lock.json');
+const publicDir = path.join(rootDir, 'public');
+const versionJsonPath = path.join(publicDir, 'version.json');
 
 if (!targetVersion) {
   try {
@@ -31,6 +35,22 @@ if (!/^\d+\.\d+\.\d+.*$/.test(targetVersion)) {
 }
 
 console.log(`\n📦 Synchronizing project release version to: ${targetVersion}`);
+console.log(`  Commit SHA: ${commitSha}`);
+console.log(`  Build Date: ${buildDate}`);
+
+// 0. Generate public/version.json
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
+}
+
+const versionData = {
+  version: targetVersion,
+  commit: commitSha,
+  buildDate: buildDate,
+};
+
+fs.writeFileSync(versionJsonPath, JSON.stringify(versionData, null, 2) + '\n');
+console.log(`  ✓ Generated public/version.json`);
 
 // 1. Update package.json
 if (fs.existsSync(packageJsonPath)) {

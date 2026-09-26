@@ -36,9 +36,15 @@ jobs:
         id: ver
         shell: bash
         run: |
+          echo "🔍 Extracting version from package.json..."
           VERSION=$(node -p "require('./package.json').version")
+          echo "✅ Version detected: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          node scripts/sync-version.cjs "$VERSION"
+          
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "🔄 Synchronizing all config files to $VERSION (Commit: ${{ github.sha }}, Date: $BUILD_DATE)..."
+          node scripts/sync-version.cjs "$VERSION" "${{ github.sha }}" "$BUILD_DATE"
+          echo "✨ Synchronization complete."
 
       - name: Install System Dependencies (Linux Only)
         if: matrix.platform == 'linux'

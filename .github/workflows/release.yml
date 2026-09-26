@@ -31,6 +31,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Calculate Next Version Tag
         id: calc_ver
         shell: bash
@@ -64,10 +69,12 @@ jobs:
           git fetch --tags --force origin 2>/dev/null || true
           
           # Find latest semver tag (either 0.0.1 or v0.0.1)
-          LATEST_TAG=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          # We use || true to prevent grep from failing the script if no tags match
+          LATEST_TAG=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || echo "")
           
           if [[ -z "$LATEST_TAG" ]]; then
-            PKG_VER=$(node -p "try { require('./package.json').version } catch(e){'0.0.1'}")
+            echo "No existing semver tags found. Checking package.json..."
+            PKG_VER=$(node -p "try { require('./package.json').version } catch(e){'0.0.1'}" || echo "0.0.1")
             if [[ "$PKG_VER" == "0.0.0" || -z "$PKG_VER" ]]; then
               NEXT_VERSION="0.0.1"
             else
@@ -122,19 +129,20 @@ jobs:
       - name: Sync App Configuration to Release Version
         shell: bash
         run: |
-          node scripts/sync-version.cjs "${{ needs.determine-version.outputs.release_version }}"
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          node scripts/sync-version.cjs "${{ needs.determine-version.outputs.release_version }}" "${{ github.sha }}" "$BUILD_DATE"
 
       - name: Generate Release Notes
         id: notes
         shell: bash
         run: |
-          NOTES=$(node scripts/get-release-notes.cjs "${{ needs.determine-version.outputs.release_version }}")
-          # Handle multi-line output for GITHUB_OUTPUT
-          {
-            echo "release_notes<<EOF"
-            echo "$NOTES"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          # Use a temporary file to avoid issues with special characters in bash variables
+          node scripts/get-release-notes.cjs "${{ needs.determine-version.outputs.release_version }}" > release_notes.md
+          
+          # Set the output using the new environment file method for multi-line strings
+          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+          cat release_notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Install System Dependencies (Linux Only)
         if: matrix.platform == 'linux'

@@ -42,6 +42,7 @@ import {
   getVaultStateFromDisk,
   saveVaultStateToDisk,
 } from './src/server/database';
+import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 
 dotenv.config();
 
@@ -623,6 +624,31 @@ app.get('/api/health', (req: Request, res: Response) => {
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
     hasOmdbKey: Boolean(OMDB_API_KEY),
     timestamp: new Date().toISOString(),
+  });
+});
+
+// System Version & Build Info
+app.get('/api/system/version', (req: Request, res: Response) => {
+  const versionPath = path.join(__dirname, 'public', 'version.json');
+  let buildInfo = { version: APP_RELEASE_TAG, commit: 'unknown', buildDate: new Date().toISOString() };
+
+  if (fs.existsSync(versionPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(versionPath, 'utf8'));
+      buildInfo = { ...buildInfo, ...data };
+    } catch (e) {
+      console.warn('Could not parse version.json:', e);
+    }
+  }
+
+  res.json({
+    success: true,
+    data: {
+      ...buildInfo,
+      appVersion: APP_VERSION,
+      releaseTag: APP_RELEASE_TAG,
+      environment: process.env.NODE_ENV || 'development'
+    }
   });
 });
 

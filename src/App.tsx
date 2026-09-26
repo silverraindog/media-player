@@ -998,6 +998,37 @@ function App() {
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [selectedMediaType, setSelectedMediaType] = useState<'all' | MediaType>('all');
+  const [serverVersionInfo, setServerVersionInfo] = useState<any>(null);
+
+  // Check for new version on mount
+  useEffect(() => {
+    const checkVersion = async () => {
+      try {
+        // 1. Fetch build-time metadata from public/version.json
+        const buildRes = await fetch('/version.json');
+        if (buildRes.ok) {
+          const buildInfo = await buildRes.json();
+          console.log('[VersionCheck] Local Runtime:', APP_RELEASE_TAG, 'Build Metadata:', buildInfo.version);
+          
+          if (buildInfo.version !== APP_RELEASE_TAG) {
+            showToast(`🚀 New Version Available: v${buildInfo.version} (Current: v${APP_RELEASE_TAG})`);
+          }
+        }
+
+        // 2. Fetch server-side version for UI display
+        const serverRes = await fetch('/api/system/version');
+        if (serverRes.ok) {
+          const data = await serverRes.json();
+          if (data.success) {
+            setServerVersionInfo(data.data);
+          }
+        }
+      } catch (err) {
+        console.warn('[VersionCheck] Failed to verify build version:', err);
+      }
+    };
+    checkVersion();
+  }, []);
   const [isAllTreeExpanded, setIsAllTreeExpanded] = useState(true);
 
   // Folder Classification and Regex Rule Engine State
@@ -3201,6 +3232,7 @@ function App() {
         onQuickSync={handleQuickSyncSamba}
         isQuickSyncing={isQuickSyncing}
         onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+        serverVersionInfo={serverVersionInfo}
       />
 
       {/* Real-time Samba Sync & Batch Processing Progress Bar */}
@@ -3429,6 +3461,7 @@ function App() {
             onManualTriggerSync={() => handleSyncSamba()}
             scanDepthLimit={scanDepthLimit}
             onUpdateScanDepthLimit={(val) => setScanDepthLimit(val)}
+            serverVersionInfo={serverVersionInfo}
           />
         )}
       </main>
@@ -3519,8 +3552,18 @@ function App() {
               <span className="font-mono text-slate-600">Kodi • Jellyfin • Plex • Emby NFO Ready</span>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] uppercase tracking-widest text-slate-700 font-bold">Build Release</span>
-                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono font-bold">
+                <span 
+                  className={`px-2 py-0.5 rounded border font-mono font-bold transition-colors ${
+                    serverVersionInfo?.releaseTag !== APP_RELEASE_TAG 
+                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' 
+                      : 'bg-slate-900 text-slate-400 border-slate-800'
+                  }`}
+                  title={serverVersionInfo ? `Server Version: ${serverVersionInfo.releaseTag}\nCommit: ${serverVersionInfo.commit?.substring(0, 7)}\nBuild Date: ${new Date(serverVersionInfo.buildDate).toLocaleString()}` : 'Loading server info...'}
+                >
                   v{APP_RELEASE_TAG}
+                  {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG && (
+                    <span className="ml-1 text-[9px] opacity-75">→ v{serverVersionInfo.releaseTag}</span>
+                  )}
                 </span>
               </div>
             </div>

@@ -642,19 +642,36 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                 width: `${Math.max(4, percent)}%`,
               }}
               transition={{
-                type: 'spring',
-                stiffness: 120,
-                damping: 20,
-                mass: 0.6,
-                restDelta: 0.001,
+                type: 'tween',
+                ease: 'easeInOut',
+                duration: 0.5,
               }}
             >
-              {/* Shimmer / light pulse effect on active track */}
-              {progress.isActive && progress.phase !== 'completed' && (
+              {/* Standard active track light pulse */}
+              {progress.isActive && progress.phase !== 'completed' && progress.phase !== 'enriching' && (
                 <motion.div
-                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent w-full"
+                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent w-full"
                   animate={{ x: ['-100%', '200%'] }}
-                  transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                  transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                />
+              )}
+
+              {/* Specialized high-intensity 'shimmer' overlay for Batch Metadata Enrichment phase */}
+              {progress.phase === 'enriching' && (
+                <motion.div
+                  className="absolute inset-0 w-full h-full"
+                  style={{
+                    background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)',
+                    backgroundSize: '200% 100%',
+                  }}
+                  animate={{
+                    backgroundPosition: ['200% 0%', '-200% 0%'],
+                  }}
+                  transition={{
+                    duration: 1.2,
+                    repeat: Infinity,
+                    ease: 'linear',
+                  }}
                 />
               )}
             </motion.div>

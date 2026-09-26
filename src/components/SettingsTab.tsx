@@ -52,6 +52,7 @@ interface SettingsTabProps {
   onManualTriggerSync?: () => Promise<void>;
   scanDepthLimit?: number;
   onUpdateScanDepthLimit?: (depth: number) => void;
+  serverVersionInfo?: any;
 }
 
 export const SettingsTab: React.FC<SettingsTabProps> = ({
@@ -63,6 +64,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   onManualTriggerSync,
   scanDepthLimit = 30,
   onUpdateScanDepthLimit,
+  serverVersionInfo,
 }) => {
   const [scheduleConfig, setScheduleConfig] = useState<SyncScheduleConfig>(() => syncScheduler.getConfig());
   const [customCronInput, setCustomCronInput] = useState(scheduleConfig.cronExpression);
@@ -807,9 +809,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 rounded-xl bg-slate-950/80 border border-emerald-500/30 shadow-md shadow-emerald-950/20">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-medium">Current Active Release</span>
+              <span className="text-xs text-slate-400 font-medium">Current Client Version</span>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">
-                Build #1 Active
+                Runtime Active
               </span>
             </div>
             <div className="flex items-center gap-2 mt-2">
@@ -818,39 +820,52 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
             <p className="text-[11px] text-slate-400 mt-1.5 flex items-center gap-1">
               <Check className="w-3.5 h-3.5 text-emerald-400" />
-              Synced in package.json & tauri.conf.json
+              Build-time constant state
             </p>
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-950/80 border border-cyan-500/30 shadow-md shadow-cyan-950/20">
+          <div className="p-4 rounded-xl bg-slate-950/80 border border-indigo-500/30 shadow-md shadow-indigo-950/20">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-medium">Next Push Increment</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 font-semibold">
-                Build #2 Staged
-              </span>
+              <span className="text-xs text-slate-400 font-medium">Server Synchronicity</span>
+              {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-800 font-semibold flex items-center gap-1">
+                  <Activity className="w-3 h-3" /> Update Available
+                </span>
+              ) : (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800 font-semibold">
+                  Synced
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2 mt-2">
-              <span className="text-2xl font-bold font-mono text-cyan-400">{getNextReleaseTag(APP_RELEASE_TAG)}</span>
-              <span className="text-xs text-slate-500 font-mono">tag: v{getNextReleaseTag(APP_RELEASE_TAG)}</span>
+              <span className="text-2xl font-bold font-mono text-indigo-400">v{serverVersionInfo?.releaseTag || '...'}</span>
+              <span className="text-[10px] text-slate-500 font-mono">env: {serverVersionInfo?.environment || 'unknown'}</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1.5 flex items-center gap-1">
-              <ArrowRight className="w-3.5 h-3.5 text-cyan-400" />
-              Auto-incremented on next main branch push
-            </p>
+            <div className="mt-2 space-y-1">
+              <p className="text-[10px] text-slate-400 flex items-center gap-1.5">
+                <Terminal className="w-3 h-3 text-indigo-500" />
+                Commit: <span className="font-mono text-slate-300">{serverVersionInfo?.commit?.substring(0, 8) || 'unknown'}</span>
+              </p>
+              <p className="text-[10px] text-slate-400 flex items-center gap-1.5">
+                <Calendar className="w-3 h-3 text-indigo-500" />
+                Built: <span className="text-slate-300">{serverVersionInfo?.buildDate ? new Date(serverVersionInfo.buildDate).toLocaleString() : 'unknown'}</span>
+              </p>
+            </div>
           </div>
 
           <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-medium">Desktop Target Bundles</span>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800 font-semibold">
-                Multi-Arch
+              <span className="text-xs text-slate-400 font-medium">Next Planned Push</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 font-semibold">
+                Build #2 Staged
               </span>
             </div>
-            <div className="mt-2 text-sm font-semibold text-white">
-              macOS • Windows • Linux
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-2xl font-bold font-mono text-cyan-400">{getNextReleaseTag(APP_RELEASE_TAG)}</span>
+              <ArrowRight className="w-4 h-4 text-slate-600" />
             </div>
             <p className="text-[11px] text-slate-400 mt-1.5">
-              Automated outputs: .dmg, .msi, .deb, and .AppImage
+              Auto-incremented on next main branch push
             </p>
           </div>
         </div>

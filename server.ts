@@ -2120,22 +2120,62 @@ function resolveSambaFullPath(rawPath: string): string {
   if (!rawPath) return SAMBA_SHARE_ROOT;
   let cleanPath = rawPath.replace(/\\/g, '/');
 
-  // Strip leading slash
+  // 1. If absolute path and exists on disk, use directly
+  if (path.isAbsolute(cleanPath) && fs.existsSync(cleanPath)) {
+    console.log(`[PathResolver] Resolved absolute path on host: ${cleanPath}`);
+    return cleanPath;
+  }
+
+  // 2. Check direct /Volumes path existence
+  const absVolumesPath = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+  if (absVolumesPath.startsWith('/Volumes/') && fs.existsSync(absVolumesPath)) {
+    console.log(`[PathResolver] Resolved /Volumes path on host: ${absVolumesPath}`);
+    return absVolumesPath;
+  }
+
+  // 3. Scan mounted volumes in /Volumes for matching share or subpaths
+  try {
+    if (fs.existsSync('/Volumes')) {
+      const volumes = fs.readdirSync('/Volumes');
+      for (const vol of volumes) {
+        const volPath = path.join('/Volumes', vol);
+        if (fs.existsSync(volPath)) {
+          const directMatch = path.join(volPath, cleanPath);
+          if (fs.existsSync(directMatch)) {
+            console.log(`[PathResolver] Resolved under volume ${vol}: ${directMatch}`);
+            return directMatch;
+          }
+          // Strip leading Volumes/[vol]/ if present
+          const stripped = cleanPath.replace(new RegExp(`^/?(Volumes/${vol}/)?`), '');
+          const subMatch = path.join(volPath, stripped);
+          if (fs.existsSync(subMatch)) {
+            console.log(`[PathResolver] Resolved under volume ${vol} (stripped): ${subMatch}`);
+            return subMatch;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[PathResolver] Error scanning /Volumes:', e);
+  }
+
+  // Fallback to SAMBA_SHARE_ROOT
   if (cleanPath.startsWith('/')) {
     cleanPath = cleanPath.slice(1);
   }
-
-  // If the path starts with Volumes/
   if (cleanPath.startsWith('Volumes/')) {
     const parts = cleanPath.split('/').filter(Boolean);
-    // Volumes/media/Movies -> Parts are ["Volumes", "media", "Movies"] -> Parts.slice(2) is ["Movies"]
     cleanPath = parts.slice(2).join('/');
   }
 
   const sanitized = sanitizeSambaPath(cleanPath);
-  // Prevent directory traversal attacks
   const safeRelPath = path.normalize(sanitized).replace(/^(\.\.[\/\\])+/, '');
-  return path.join(SAMBA_SHARE_ROOT, safeRelPath);
+  const localDefault = path.join(SAMBA_SHARE_ROOT, safeRelPath);
+  if (fs.existsSync(localDefault)) {
+    return localDefault;
+  }
+
+  return SAMBA_SHARE_ROOT;
 }
 
 /**

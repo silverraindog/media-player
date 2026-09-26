@@ -190,6 +190,37 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
     return () => clearInterval(interval);
   }, [progress.processedCount, progress.currentStep, progress.isActive, progress.phase]);
 
+  // Dynamic processing speed tracking (items per second)
+  const scanStartTimeRef = useRef<number | null>(null);
+  const scanStartProcessedRef = useRef<number>(0);
+  const [itemsPerSec, setItemsPerSec] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!progress.isActive || progress.phase === 'completed' || progress.phase === 'idle') {
+      scanStartTimeRef.current = null;
+      setItemsPerSec(null);
+      return;
+    }
+
+    if (scanStartTimeRef.current === null) {
+      scanStartTimeRef.current = Date.now();
+      scanStartProcessedRef.current = progress.processedCount;
+    }
+
+    const elapsedMs = Date.now() - scanStartTimeRef.current;
+    const deltaItems = progress.processedCount - scanStartProcessedRef.current;
+
+    if (elapsedMs > 500 && deltaItems > 0) {
+      const speed = (deltaItems / elapsedMs) * 1000;
+      setItemsPerSec(Math.round(speed * 10) / 10);
+
+      const remainingItems = progress.totalCount - progress.processedCount;
+      if (remainingItems > 0 && speed > 0 && internalEtaSeconds === null) {
+        setInternalEtaSeconds(Math.max(1, Math.round(remainingItems / speed)));
+      }
+    }
+  }, [progress.processedCount, progress.totalCount, progress.isActive, progress.phase]);
+
   // Monitor batch progress and calculate rolling average time per batch
   useEffect(() => {
     if (!progress.isActive || progress.phase === 'completed' || progress.phase === 'idle') {
@@ -285,14 +316,22 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: -16 }}
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-        className={`bg-slate-900/95 border-b border-indigo-500/30 px-4 py-3 shadow-2xl backdrop-blur-md relative overflow-hidden ${className}`}
+        className={`bg-slate-900/95 border-b px-4 py-3 shadow-2xl backdrop-blur-md relative overflow-hidden transition-all duration-500 ${
+          progress.phase === 'scanning'
+            ? 'border-blue-500/60 shadow-[0_0_20px_rgba(59,130,246,0.25)] ring-1 ring-blue-500/40'
+            : 'border-indigo-500/30'
+        } ${className}`}
       >
         {/* Subtle background glow effect during active sync */}
         {progress.isActive && progress.phase !== 'completed' && (
           <motion.div
-            className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500 to-transparent"
-            animate={{ opacity: [0.3, 1, 0.3] }}
-            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+            className={`absolute top-0 left-0 right-0 h-[1.5px] bg-gradient-to-r ${
+              progress.phase === 'scanning'
+                ? 'from-blue-600 via-cyan-300 to-blue-600 animate-pulse'
+                : 'from-transparent via-indigo-500 to-transparent'
+            }`}
+            animate={{ opacity: progress.phase === 'scanning' ? [0.4, 1, 0.4] : [0.3, 1, 0.3] }}
+            transition={{ duration: progress.phase === 'scanning' ? 1.2 : 2, repeat: Infinity, ease: 'easeInOut' }}
           />
         )}
 
@@ -305,9 +344,18 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                 initial={{ scale: 0.8, rotate: -10, opacity: 0 }}
                 animate={{ scale: 1, rotate: 0, opacity: 1 }}
                 transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-                className={`p-1.5 rounded-lg ${currentPhaseInfo.badgeBg} border ${currentPhaseInfo.border} flex items-center justify-center shrink-0 shadow-sm`}
+                className={`p-1.5 rounded-lg ${currentPhaseInfo.badgeBg} border ${currentPhaseInfo.border} flex items-center justify-center shrink-0 shadow-sm ${
+                  progress.phase === 'scanning' ? 'ring-2 ring-blue-500/50 animate-pulse' : ''
+                }`}
               >
-                {progress.phase === 'enriching' ? (
+                {progress.phase === 'scanning' ? (
+                  <motion.div
+                    animate={{ scale: [1, 1.2, 1], opacity: [0.8, 1, 0.8] }}
+                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                  >
+                    {currentPhaseInfo.icon}
+                  </motion.div>
+                ) : progress.phase === 'enriching' ? (
                   <motion.div
                     animate={{ rotate: 360 }}
                     transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }}
@@ -328,9 +376,12 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: 8 }}
                       transition={{ duration: 0.2 }}
-                      className={`font-semibold tracking-wide uppercase text-[11px] ${currentPhaseInfo.color}`}
+                      className={`font-semibold tracking-wide uppercase text-[11px] flex items-center gap-1.5 ${currentPhaseInfo.color}`}
                     >
                       {currentPhaseInfo.label}
+                      {progress.phase === 'scanning' && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping inline-block" />
+                      )}
                     </motion.span>
                   </AnimatePresence>
 
@@ -345,25 +396,31 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                     </motion.span>
                   )}
 
-                  {/* Dynamic ETA badge based on average batch processing time */}
+                  {/* Dynamic ETA badge based on processing speed & average batch time */}
                   {effectiveEta !== null && effectiveEta > 0 && progress.phase !== 'completed' && progress.phase !== 'idle' && (
                     <motion.span
                       initial={{ opacity: 0, scale: 0.85 }}
                       animate={{ opacity: 1, scale: 1 }}
-                      className="px-2 py-0.5 rounded-full bg-cyan-950/90 border border-cyan-500/60 text-cyan-300 text-[10px] font-mono flex items-center gap-1.5 shadow-sm"
+                      className="px-2.5 py-0.5 rounded-full bg-cyan-950/90 border border-cyan-500/60 text-cyan-300 text-[10px] font-mono flex items-center gap-1.5 shadow-sm"
                       title={
-                        effectiveAvgMs
+                        itemsPerSec
+                          ? `Processing speed: ~${itemsPerSec} items/sec. Estimated time remaining: ~${formatEta(effectiveEta)}`
+                          : effectiveAvgMs
                           ? `Estimated time remaining based on ~${(effectiveAvgMs / 1000).toFixed(1)}s/batch average`
-                          : 'Estimated time remaining based on previous batches'
+                          : 'Estimated time remaining'
                       }
                     >
                       <Clock className="w-2.5 h-2.5 text-cyan-400 animate-pulse" />
                       <span>ETA: ~{formatEta(effectiveEta)}</span>
-                      {effectiveAvgMs && (
+                      {itemsPerSec ? (
+                        <span className="text-cyan-400 font-semibold text-[9px] hidden lg:inline">
+                          ({itemsPerSec} items/s)
+                        </span>
+                      ) : effectiveAvgMs ? (
                         <span className="text-cyan-500/80 text-[9px] hidden lg:inline">
                           ({(effectiveAvgMs / 1000).toFixed(1)}s/batch)
                         </span>
-                      )}
+                      ) : null}
                     </motion.span>
                   )}
 

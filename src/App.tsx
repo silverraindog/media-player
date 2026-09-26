@@ -1355,7 +1355,19 @@ function App() {
             let newItemsAdded = false;
 
             data.items.forEach((sqliteItem: any) => {
-              if (sqliteItem.title && !map.has(sqliteItem.title.toLowerCase())) {
+              const key = sqliteItem.title?.toLowerCase();
+              if (!key) return;
+
+              const cleanFolder = sqliteItem.clean_folder_path || sqliteItem.folder_path;
+
+              if (map.has(key)) {
+                const existing = map.get(key)!;
+                if (cleanFolder && cleanFolder !== existing.recommendedFolderStructure) {
+                  existing.recommendedFolderStructure = cleanFolder;
+                  existing.folderPath = cleanFolder;
+                  newItemsAdded = true;
+                }
+              } else {
                 const converted: MediaMetadata = {
                   id: sqliteItem.id || `sqlite-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                   type: sqliteItem.type || 'series',
@@ -1363,14 +1375,15 @@ function App() {
                   year: sqliteItem.year || 2020,
                   overview: sqliteItem.synopsis || '',
                   rating: sqliteItem.rating || 8.0,
-                  posterUrl: sqliteItem.poster_url || 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=500&auto=format&fit=crop&q=60',
+                  posterUrl: sqliteItem.poster_url || 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?w=500&auto=format&fit=crop&q=80',
                   fanartUrl: sqliteItem.fanart_url,
                   genres: sqliteItem.genre ? sqliteItem.genre.split(',').map((g: string) => g.trim()) : ['Drama'],
-                  recommendedFolderStructure: sqliteItem.clean_folder_path || `Series/${sqliteItem.title}`,
+                  recommendedFolderStructure: cleanFolder || `series/${sqliteItem.title}`,
+                  folderPath: cleanFolder,
                   recommendedFilenames: [],
                   source: 'sqlite-vault',
                 };
-                map.set(sqliteItem.title.toLowerCase(), converted);
+                map.set(key, converted);
                 newItemsAdded = true;
               }
             });
@@ -1855,11 +1868,11 @@ function App() {
         folderNode.hasPoster = true;
         folderNode.mediaType = targetType !== 'ignore' ? targetType : 'movie';
 
-        const matchedCurated = CURATED_MEDIA_DATABASE.find(
-          (m) =>
-            m.title.toLowerCase() === segment.toLowerCase() ||
-            segment.toLowerCase().includes(m.title.toLowerCase())
-        );
+        const matchedCurated = CURATED_MEDIA_DATABASE.find((m) => {
+          const tLower = m.title.toLowerCase();
+          const segLower = segment.toLowerCase();
+          return segLower === tLower || (tLower.length >= 4 && segLower.includes(tLower));
+        });
         if (matchedCurated) {
           folderNode.matchedMedia = matchedCurated;
         }
@@ -2565,11 +2578,11 @@ function App() {
           folderNode.hasPoster = true;
           folderNode.mediaType = isShow ? 'series' : isMusic ? 'album' : 'movie';
 
-          const matchedCurated = CURATED_MEDIA_DATABASE.find(
-            (m) =>
-              m.title.toLowerCase() === segment.toLowerCase() ||
-              segment.toLowerCase().includes(m.title.toLowerCase())
-          );
+          const matchedCurated = CURATED_MEDIA_DATABASE.find((m) => {
+            const tLower = m.title.toLowerCase();
+            const segLower = segment.toLowerCase();
+            return segLower === tLower || (tLower.length >= 4 && segLower.includes(tLower));
+          });
           if (matchedCurated) {
             folderNode.matchedMedia = matchedCurated;
           }
@@ -2621,11 +2634,9 @@ function App() {
         const map = new Map<string, MediaMetadata>();
         // Retain curated & existing items
         prev.forEach((m) => map.set(m.title.toLowerCase(), m));
-        // Add all newly discovered items across all folders
+        // Add all newly discovered items across all folders (overwriting stale placeholders with real scanned paths)
         discoveredMedia.forEach((m) => {
-          if (!map.has(m.title.toLowerCase())) {
-            map.set(m.title.toLowerCase(), m);
-          }
+          map.set(m.title.toLowerCase(), m);
         });
         const combined = Array.from(map.values());
 

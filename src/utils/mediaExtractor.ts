@@ -382,12 +382,14 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     }
   }
 
-  // Check if curated database has a match
-  const curatedMatch = CURATED_MEDIA_DATABASE.find(
-    (m) =>
-      m.title.toLowerCase() === title.toLowerCase() ||
-      fullPath.toLowerCase().includes(m.title.toLowerCase())
-  );
+  // Check if curated database has an exact or robust match
+  const curatedMatch = CURATED_MEDIA_DATABASE.find((m) => {
+    const titleLower = m.title.toLowerCase();
+    const cleanTitleLower = title.toLowerCase();
+    if (cleanTitleLower === titleLower) return true;
+    if (titleLower.length >= 4 && cleanTitleLower.includes(titleLower)) return true;
+    return false;
+  });
 
   if (curatedMatch) {
     return {

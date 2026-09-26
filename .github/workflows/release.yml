@@ -1,12 +1,99 @@
 name: Release Desktop App
+
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+      - '[0-9]+.[0-9]+.[0-9]+*'
+      - '*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Specific version tag to release (e.g. 0.0.1, 0.0.2). If omitted, auto-increments the latest tag.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
 
 jobs:
+  determine-version:
+    name: Determine Release Version Tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.calc_ver.outputs.version }}
+      release_tag: ${{ steps.calc_ver.outputs.tag }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Next Version Tag
+        id: calc_ver
+        shell: bash
+        run: |
+          # 1. Direct tag push (e.g., git push origin 0.0.1 or v0.0.1)
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            RAW_TAG="${{ github.ref_name }}"
+            CLEAN_VERSION="${RAW_TAG#v}"
+            echo "version=${CLEAN_VERSION}" >> $GITHUB_OUTPUT
+            echo "tag=${RAW_TAG}" >> $GITHUB_OUTPUT
+            echo "Triggered by git tag: ${RAW_TAG} (version: ${CLEAN_VERSION})"
+            exit 0
+          fi
+
+          # 2. Manual workflow dispatch with custom version input
+          EXPLICIT_VERSION="${{ github.event.inputs.version }}"
+          if [[ -n "${EXPLICIT_VERSION}" ]]; then
+            CLEAN_VERSION="${EXPLICIT_VERSION#v}"
+            echo "version=${CLEAN_VERSION}" >> $GITHUB_OUTPUT
+            echo "tag=${EXPLICIT_VERSION}" >> $GITHUB_OUTPUT
+            echo "Using manual input version: ${EXPLICIT_VERSION}"
+            
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "${EXPLICIT_VERSION}" || true
+            git push origin "${EXPLICIT_VERSION}" || true
+            exit 0
+          fi
+
+          # 3. Push to main: automatically increment version tag (e.g., 0.0.1 -> 0.0.2 -> etc)
+          git fetch --tags --force origin 2>/dev/null || true
+          
+          # Find latest semver tag (either 0.0.1 or v0.0.1)
+          LATEST_TAG=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          
+          if [[ -z "$LATEST_TAG" ]]; then
+            PKG_VER=$(node -p "try { require('./package.json').version } catch(e){'0.0.1'}")
+            if [[ "$PKG_VER" == "0.0.0" || -z "$PKG_VER" ]]; then
+              NEXT_VERSION="0.0.1"
+            else
+              NEXT_VERSION="$PKG_VER"
+            fi
+          else
+            CLEAN_LATEST="${LATEST_TAG#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CLEAN_LATEST"
+            PATCH=$((PATCH + 1))
+            NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+
+          NEXT_TAG="${NEXT_VERSION}"
+          echo "Automated sequential version: ${NEXT_VERSION} (Tag: ${NEXT_TAG})"
+          echo "version=${NEXT_VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${NEXT_TAG}" >> $GITHUB_OUTPUT
+
+          # Create git tag on GitHub so commit is officially tagged
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${NEXT_TAG}" || true
+          git push origin "${NEXT_TAG}" || echo "Tag push skipped or already exists on origin"
+
   release-desktop:
     name: Release (${{ matrix.platform }})
+    needs: determine-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -32,6 +119,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: Sync App Configuration to Release Version
+        shell: bash
+        run: |
+          node scripts/sync-version.cjs "${{ needs.determine-version.outputs.release_version }}"
+
       - name: Install System Dependencies (Linux Only)
         if: matrix.platform == 'linux'
         run: |
@@ -55,8 +147,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: "./"
-          tagName: ${{ github.ref_name }}
-          releaseName: 'SambaVault ${{ github.ref_name }}'
-          releaseBody: 'Automated cross-platform desktop release for macOS, Windows, and Linux.'
+          tagName: ${{ needs.determine-version.outputs.release_tag }}
+          releaseName: 'SambaVault ${{ needs.determine-version.outputs.release_tag }}'
+          releaseBody: 'Automated cross-platform desktop release for version ${{ needs.determine-version.outputs.release_tag }} (macOS .dmg, Windows .msi, Linux .deb/.AppImage).'
           releaseDraft: false
           prerelease: false

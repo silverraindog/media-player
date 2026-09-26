@@ -23,6 +23,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { SambaConfig, AppTab } from '../types';
+import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag } from '../version';
 
 interface HeaderProps {
   activeTab: AppTab;
@@ -64,6 +65,14 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-medium">
                   Media & Metadata
                 </span>
+                <button
+                  onClick={() => setActiveTab('settings')}
+                  title={`Release Tag: ${APP_RELEASE_TAG} (Next push: ${getNextReleaseTag(APP_RELEASE_TAG)}) - Click to view release info`}
+                  className="text-[11px] font-mono font-medium px-2 py-0.5 rounded-md bg-emerald-950/60 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-900/60 hover:border-emerald-400 transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>v{APP_RELEASE_TAG}</span>
+                </button>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
                 Series, Movies & Music for macOS • Linux • Windows

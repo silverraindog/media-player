@@ -19,8 +19,19 @@ import {
   Play,
   Bell,
   RefreshCw,
+  Tag,
+  GitBranch,
+  Copy,
+  History,
+  Milestone,
+  ShieldCheck,
+  ArrowRight,
+  ExternalLink,
+  Activity,
+  Terminal,
 } from 'lucide-react';
 import { SyncScheduleConfig, ClassifierSettings, SambaConfig } from '../types';
+import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag, BUILD_INCREMENTS, ReleaseIncrement } from '../version';
 import {
   syncScheduler,
   DEFAULT_SYNC_SCHEDULE_CONFIG,
@@ -58,6 +69,13 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [isSyncRunning, setIsSyncRunning] = useState(false);
   const [mountMappingsCount, setMountMappingsCount] = useState<number>(0);
   const [clearedMappingsToast, setClearedMappingsToast] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+
+  const handleCopyCommand = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedCommand(id);
+    setTimeout(() => setCopiedCommand(null), 2500);
+  };
 
   // Schedule Visual Mode: 'daily_time' | 'interval' | 'advanced_cron'
   const [scheduleUiTab, setScheduleUiTab] = useState<'daily_time' | 'interval' | 'advanced_cron'>(() => {
@@ -200,7 +218,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             <div className="flex items-center space-x-2">
               <h2 className="text-xl font-bold text-white tracking-tight">SambaVault Settings & Schedule</h2>
               <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
-                v2.4 Config
+                v{APP_VERSION} Config
               </span>
             </div>
             <p className="text-xs text-slate-400">
@@ -760,6 +778,231 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           </div>
         </div>
       </div>
+
+      {/* SECTION 5: RELEASE VERSION TRACKER & BUILD INCREMENTS */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+              <Milestone className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-white">Release Version Tracker</h3>
+                <span className="text-[11px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold">
+                  v{APP_RELEASE_TAG} (Active)
+                </span>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-medium">
+                  Next Push: v{getNextReleaseTag(APP_RELEASE_TAG)}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Every build increment is tracked sequentially. Pushing to <code className="text-emerald-300 font-mono">main</code> triggers GitHub Actions <code className="text-emerald-300 font-mono">release.yml</code> to auto-bump patch tags and compile cross-platform desktop installers.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Release Status Overview Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-xl bg-slate-950/80 border border-emerald-500/30 shadow-md shadow-emerald-950/20">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-medium">Current Active Release</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">
+                Build #1 Active
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-2xl font-bold font-mono text-emerald-400">{APP_RELEASE_TAG}</span>
+              <span className="text-xs text-slate-500 font-mono">tag: v{APP_RELEASE_TAG}</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1.5 flex items-center gap-1">
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+              Synced in package.json & tauri.conf.json
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-950/80 border border-cyan-500/30 shadow-md shadow-cyan-950/20">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-medium">Next Push Increment</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 font-semibold">
+                Build #2 Staged
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-2xl font-bold font-mono text-cyan-400">{getNextReleaseTag(APP_RELEASE_TAG)}</span>
+              <span className="text-xs text-slate-500 font-mono">tag: v{getNextReleaseTag(APP_RELEASE_TAG)}</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1.5 flex items-center gap-1">
+              <ArrowRight className="w-3.5 h-3.5 text-cyan-400" />
+              Auto-incremented on next main branch push
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-medium">Desktop Target Bundles</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-800 font-semibold">
+                Multi-Arch
+              </span>
+            </div>
+            <div className="mt-2 text-sm font-semibold text-white">
+              macOS • Windows • Linux
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1.5">
+              Automated outputs: .dmg, .msi, .deb, and .AppImage
+            </p>
+          </div>
+        </div>
+
+        {/* BUILD INCREMENTS TIMELINE (Every increment visible to the user) */}
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+              <History className="w-4 h-4 text-emerald-400" />
+              Sequential Build Increments Timeline
+            </span>
+            <span className="text-[11px] text-slate-400 font-mono">
+              Semver Sequence: 0.0.0 → 0.0.1 → 0.0.2 → 0.0.3
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {BUILD_INCREMENTS.map((build: ReleaseIncrement) => {
+              const isCurrent = build.version === APP_RELEASE_TAG;
+              const isNext = build.version === getNextReleaseTag(APP_RELEASE_TAG);
+              return (
+                <div
+                  key={build.version}
+                  className={`p-4 rounded-xl border transition-all ${
+                    isCurrent
+                      ? 'bg-emerald-950/20 border-emerald-500/40 shadow-md shadow-emerald-950/20'
+                      : isNext
+                      ? 'bg-cyan-950/20 border-cyan-500/40 shadow-md shadow-cyan-950/20'
+                      : 'bg-slate-950/70 border-slate-800'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3 mb-3">
+                    <div className="flex items-center space-x-3">
+                      <div
+                        className={`w-9 h-9 rounded-lg font-mono text-sm font-bold flex items-center justify-center flex-shrink-0 ${
+                          isCurrent
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
+                            : isNext
+                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}
+                      >
+                        v{build.version}
+                      </div>
+
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-sm font-bold text-white">{build.title}</h4>
+                          {isCurrent && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                              Active Build
+                            </span>
+                          )}
+                          {isNext && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold">
+                              Next Push Target
+                            </span>
+                          )}
+                          {build.status === 'queued' && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-semibold">
+                              Planned Increment
+                            </span>
+                          )}
+                          {build.status === 'baseline' && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-semibold">
+                              Bootstrap Baseline
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                          Build #{build.buildNumber} • {build.releaseDate} • Tag: <code className="text-slate-200">{build.tag}</code>
+                        </p>
+                      </div>
+                    </div>
+
+                    {build.gitCommand && (
+                      <button
+                        onClick={() => handleCopyCommand(build.gitCommand!, `build-${build.version}`)}
+                        className="self-end sm:self-center px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs rounded-lg transition-colors flex items-center gap-1.5 font-mono cursor-pointer flex-shrink-0"
+                      >
+                        {copiedCommand === `build-${build.version}` ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                        <span>{copiedCommand === `build-${build.version}` ? 'Copied' : `tag ${build.tag}`}</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Highlights Bullet List */}
+                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-slate-300">
+                    {build.highlights.map((highlight, hIdx) => (
+                      <li key={hIdx} className="flex items-start gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-600 mt-1.5 flex-shrink-0" />
+                        <span className="leading-snug">{highlight}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Git & NPM Quick Commands */}
+        <div className="space-y-3 pt-2">
+          <span className="text-xs font-bold text-slate-200 block uppercase tracking-wider">
+            Release Pipeline Commands & Push Shortcuts
+          </span>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Auto-bump patch via npm */}
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                  <GitBranch className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Bump Patch Version ({APP_RELEASE_TAG} → {getNextReleaseTag(APP_RELEASE_TAG)})</span>
+                </div>
+                <code className="text-[11px] font-mono text-indigo-300 block mt-1">npm run bump:patch</code>
+              </div>
+              <button
+                onClick={() => handleCopyCommand('npm run bump:patch', 'npm-patch')}
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+              >
+                {copiedCommand === 'npm-patch' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedCommand === 'npm-patch' ? 'Copied!' : 'Copy'}</span>
+              </button>
+            </div>
+
+            {/* Manual Tag Push */}
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Push Specific Tag to GitHub</span>
+                </div>
+                <code className="text-[11px] font-mono text-emerald-300 block mt-1">git tag {getNextReleaseTag(APP_RELEASE_TAG)} && git push origin {getNextReleaseTag(APP_RELEASE_TAG)}</code>
+              </div>
+              <button
+                onClick={() => handleCopyCommand(`git tag ${getNextReleaseTag(APP_RELEASE_TAG)} && git push origin ${getNextReleaseTag(APP_RELEASE_TAG)}`, 'git-tag')}
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+              >
+                {copiedCommand === 'git-tag' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedCommand === 'git-tag' ? 'Copied!' : 'Copy'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
+

@@ -32,6 +32,7 @@ import {
   Youtube,
 } from 'lucide-react';
 import { SambaConfig, MediaType, AppTab } from '../types';
+import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag } from '../version';
 import { Bookmark, BarChart3, History } from 'lucide-react';
 
 interface MenuBarProps {
@@ -732,7 +733,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                   >
                     <span className="flex items-center gap-2">
                       <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>About SambaVault (v2.4)</span>
+                      <span>About SambaVault (v{APP_VERSION})</span>
                     </span>
                   </button>
                 </div>
@@ -1008,7 +1009,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               </div>
               <div>
                 <h3 className="text-base font-bold text-white">SambaVault Media Manager</h3>
-                <p className="text-xs text-indigo-300">Version 2.4 (Desktop & Web)</p>
+                <p className="text-xs text-indigo-300">Version {APP_VERSION} • Release Tag: {APP_RELEASE_TAG}</p>
               </div>
             </div>
 

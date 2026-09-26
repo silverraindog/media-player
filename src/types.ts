@@ -100,6 +100,18 @@ export interface MediaVersionBranch {
   media?: MediaMetadata;
 }
 
+export interface CustomMountPath {
+  id: string;
+  path: string;
+  alias?: string;
+  enabled: boolean;
+  priority?: number; // 1 = highest priority
+  addedAt: string;
+  lastVerified?: string;
+  status?: 'valid' | 'invalid' | 'unverified';
+  itemCount?: number;
+}
+
 export interface SambaConfig {
   server: string; // IP or hostname e.g. 192.168.1.150 or nas.local
   share: string; // share name e.g. "media" or "downloads"
@@ -111,6 +123,7 @@ export interface SambaConfig {
   targetPlatform: 'macos' | 'linux' | 'windows' | 'all';
   baseMountPath: string; // /Volumes/media (macOS), /mnt/media (Linux), Z: (Windows)
   mountPath?: string;
+  customMountPaths?: (CustomMountPath | string)[];
   depthLimit?: number; // User-configurable recursion depth limit (e.g. 30)
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "sambavault-tauri"
-version = "1.0.0"
+version = "0.0.1"
 description = "SambaVault high-performance media scanner in Rust"
 authors = ["SambaVault Team"]
 edition = "2021"

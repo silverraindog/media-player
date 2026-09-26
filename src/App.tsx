@@ -28,6 +28,8 @@ import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar
 import { logger } from './utils/loggerService';
 import { syncScheduler } from './utils/syncScheduler';
 import { Bug } from 'lucide-react';
+import { APP_VERSION, APP_RELEASE_TAG, BUILD_INCREMENTS, ReleaseIncrement } from './version';
+import { getPrioritizedScanPaths } from './utils/customMountUtils';
 import {
   MediaMetadata,
   MediaType,
@@ -291,6 +293,8 @@ const INITIAL_SAMBA_CONFIG: SambaConfig = {
   isGuest: true,
   targetPlatform: 'all',
   baseMountPath: '',
+  mountPath: '',
+  customMountPaths: [],
 };
 
 const INITIAL_SAMBA_TREE: SambaShareNode[] = [
@@ -1447,7 +1451,10 @@ function App() {
       const allVolumes = await listMountedVolumes();
       setSystemVolumes(allVolumes);
 
-      const hasCustomMount = Boolean(sambaConfig.mountPath && sambaConfig.mountPath.trim() !== '');
+      const { primaryPath, allCandidates } = getPrioritizedScanPaths(sambaConfig);
+      const hasCustomMount = Boolean(sambaConfig.mountPath && sambaConfig.mountPath.trim() !== '') || 
+                           (sambaConfig.customMountPaths && sambaConfig.customMountPaths.length > 0);
+      
       const probe = hasCustomMount ? { reachable: true, latencyMs: 1 } : await probeLocalNetwork(sambaConfig.server, targetPort);
 
       if (hasCustomMount || probe.reachable || volInfo.isMounted) {
@@ -1979,7 +1986,8 @@ function App() {
     );
     setIsSyncingShare(true);
     const shareName = sambaConfig.share || 'media';
-    const rootPath = customScanPath || sambaConfig.mountPath || `/Volumes/${shareName}`;
+    const { primaryPath } = getPrioritizedScanPaths(sambaConfig, customScanPath);
+    const rootPath = primaryPath;
     setActiveScanPath(rootPath);
     setSyncCurrentPath(effectiveSafeScan ? '[Safe Scan] Initializing shallow scan...' : 'Initializing Samba directory traversal in chunks of 50...');
     showToast(effectiveSafeScan ? 'Safe Scan: Shallow Samba traversal (no API stalls)...' : `Recursively scanning Samba share (depth limit: ${effectiveDepthLimit})...`);
@@ -3499,10 +3507,24 @@ function App() {
       </button>
 
       {/* Clean Minimalist Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>Samba Media Vault • Cross-Platform Metadata Scraper for macOS, Linux, and Windows</span>
-          <span className="font-mono text-slate-600">Kodi • Jellyfin • Plex • Emby NFO Ready</span>
+      <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-col items-center sm:items-start gap-1">
+            <span className="font-semibold text-slate-300">Samba Media Vault • Cross-Platform Metadata Scraper</span>
+            <span className="text-slate-500">Universal support for macOS, Linux, and Windows network shares</span>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <div className="flex flex-col items-center sm:items-end gap-1">
+              <span className="font-mono text-slate-600">Kodi • Jellyfin • Plex • Emby NFO Ready</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-widest text-slate-700 font-bold">Build Release</span>
+                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono font-bold">
+                  v{APP_RELEASE_TAG}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </footer>
     </div>

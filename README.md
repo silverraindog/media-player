@@ -52,14 +52,36 @@ npm start
 
 ---
 
-## 🤖 GitHub Actions CI/CD (Tauri Desktop Bundling)
+## 🤖 GitHub Actions CI/CD & Automated Release Tags
 
-This repository includes a pre-configured GitHub Actions workflow in `.github/workflows/release.yml` that automatically builds native desktop installers for **macOS** and **Windows** using Tauri and Rust.
+This repository includes an automated GitHub Actions release workflow in `.github/workflows/release.yml` with cross-platform desktop bundling for **macOS** (`.dmg`), **Windows** (`.msi`), and **Linux** (`.deb`, `.AppImage`).
 
-To build installers:
-1. Push your code to GitHub (`main` or `master` branch).
-2. Navigate to the **Actions** tab in your GitHub repository.
-3. Once the workflow completes, download your `.dmg` (macOS) or `.msi/.exe` (Windows) installer binaries from the workflow artifacts.
+### Release Versioning (`0.0.1` → next push `0.0.2`):
+- **Automated Push Tagging**: Whenever you push code to `main`, GitHub Actions automatically:
+  1. Inspects the latest release tag in the repository.
+  2. Bumps the patch version: `0.0.1` on first release, then next push `0.0.2`, `0.0.3`, etc.
+  3. Tags the commit on GitHub and creates the GitHub Release with the version tag (`0.0.1`, `0.0.2`).
+  4. Automatically synchronizes `package.json` and `src-tauri/tauri.conf.json`.
+  5. Compiles and uploads native desktop bundles for macOS, Windows, and Linux to the release assets.
+
+- **Manual Tag Release**: You can also push custom release tags directly:
+  ```bash
+  git tag 0.0.1
+  git push origin 0.0.1
+  ```
+  Or using `v` prefix:
+  ```bash
+  git tag v0.0.2
+  git push origin v0.0.2
+  ```
+
+- **Local Version Bump Helpers**:
+  ```bash
+  npm run bump:patch    # Increments patch (e.g. 0.0.1 -> 0.0.2) across all files
+  npm run bump:minor    # Increments minor (e.g. 0.0.2 -> 0.1.0)
+  npm run bump:major    # Increments major (e.g. 0.1.0 -> 1.0.0)
+  npm run version:sync 0.0.3  # Syncs all files to explicit version
+  ```
 
 ---
 

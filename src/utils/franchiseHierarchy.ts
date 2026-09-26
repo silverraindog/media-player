@@ -172,14 +172,17 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
         if (child.type === 'folder') {
           const childLower = child.name.toLowerCase();
 
-          // Check if this child folder is another series (e.g. 'Caprica' or 'Battlestar Galactica (1978)')
-          if (
-            !isSeasonDirectory(child.name) &&
-            !childLower.includes('extras') &&
-            !childLower.includes('specials') &&
-            !childLower.includes('season') &&
-            !/^\d+$/.test(child.name)
-          ) {
+          // Check if this child folder is another series or release folder (e.g. 'Caprica', 'Battlestar Galactica (2003)...')
+          const isPureSeason = isSeasonDirectory(child.name);
+          const isExtras =
+            childLower.includes('extras') ||
+            childLower.includes('specials') ||
+            childLower.includes('bonus') ||
+            childLower.includes('behind the') ||
+            childLower.includes('making of') ||
+            /^\d+$/.test(child.name);
+
+          if (!isPureSeason && !isExtras) {
             directSeriesNodes.push(consolidateSeriesSeasonsAndExtras(child, franchiseFolder.path));
             continue;
           }

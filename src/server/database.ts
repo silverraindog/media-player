@@ -309,7 +309,7 @@ function seedInitialSqliteData(db: Database) {
       'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
       JSON.stringify(['Crime', 'Drama', 'Thriller']),
-      'series/Breaking Bad (2008)/Season 01/'
+      'series/Breaking Bad (2008)/'
     ]
   );
 
@@ -327,7 +327,7 @@ function seedInitialSqliteData(db: Database) {
       'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=800&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=1600&auto=format&fit=crop&q=80',
       JSON.stringify(['Drama', 'Mystery', 'Sci-Fi', 'Thriller']),
-      'series/Severance (2022)/Season 01/'
+      'series/Severance (2022)/'
     ]
   );
 
@@ -381,7 +381,7 @@ function seedInitialSqliteData(db: Database) {
       'https://images.unsplash.com/photo-1522778119026-d647f0596c20?w=800&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=1600&auto=format&fit=crop&q=80',
       JSON.stringify(['Comedy', 'Drama', 'Sport']),
-      'series/Ted Lasso (2020)/Season 01/'
+      'series/Ted Lasso (2020)/'
     ]
   );
 
@@ -417,7 +417,7 @@ function seedInitialSqliteData(db: Database) {
       'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=800&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=1600&auto=format&fit=crop&q=80',
       JSON.stringify(['Drama']),
-      'series/Succession (2018)/Season 01/'
+      'series/Succession (2018)/'
     ]
   );
 
@@ -435,7 +435,7 @@ function seedInitialSqliteData(db: Database) {
       'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
       JSON.stringify(['Animation', 'Action', 'Sci-Fi']),
-      'Anime/Cyberpunk Edgerunners (2022)/Season 01/'
+      'Anime/Cyberpunk Edgerunners (2022)/'
     ]
   );
 
@@ -471,7 +471,7 @@ function seedInitialSqliteData(db: Database) {
       'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=800&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1600&auto=format&fit=crop&q=80',
       JSON.stringify(['Documentary']),
-      'Documentaries/Planet Earth III (2023)/Season 01/'
+      'Documentaries/Planet Earth III (2023)/'
     ]
   );
 
@@ -657,7 +657,7 @@ function seedExtraCuratedIfMissing(db: Database) {
       poster_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
       fanart_url: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=1600&auto=format&fit=crop&q=80',
       genres: JSON.stringify(['Drama', 'Fantasy', 'Horror', 'Sci-Fi']),
-      recommended_folder: 'series/Stranger Things (2016)/Season 01/',
+      recommended_folder: 'series/Stranger Things (2016)/',
       file_size_bytes: 38600000000 // 38.6 GB
     },
     {

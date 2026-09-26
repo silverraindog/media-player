@@ -191,7 +191,7 @@ export async function queryFallbackProvidersSequentially(
           studio,
           country: data.network?.country?.name || 'United States',
           language: data.language || 'English',
-          recommendedFolderStructure: `series/${showTitle} (${premieredYear})/Season 01/`,
+          recommendedFolderStructure: `series/${showTitle} (${premieredYear})/`,
           recommendedFilenames: [
             `${showTitle} - S01E01.mkv`,
             'tvshow.nfo',
@@ -256,7 +256,7 @@ export async function queryFallbackProvidersSequentially(
           studio: item.artistName || 'Television Production',
           country: 'United States',
           language: 'English',
-          recommendedFolderStructure: `series/${cleanTitle} (${relYear})/Season 01/`,
+          recommendedFolderStructure: `series/${cleanTitle} (${relYear})/`,
           recommendedFilenames: ['tvshow.nfo', 'poster.jpg', 'fanart.jpg'],
           posterUrl: highRes || 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800&auto=format&fit=crop&q=80',
           fanartUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',

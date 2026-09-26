@@ -314,7 +314,7 @@ class GlobalSearchIndexerService {
                 rating: show.rating?.average || 8.2,
                 posterUrl: show.image?.original || show.image?.medium || 'https://images.unsplash.com/photo-1522869635100-9f4c5e86aa37?w=800&auto=format&fit=crop&q=80',
                 fanartUrl: show.image?.original || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1600&auto=format&fit=crop&q=80',
-                recommendedFolderStructure: `series/${show.name} (${year || 2024})/Season 01/`,
+                recommendedFolderStructure: `series/${show.name} (${year || 2024})/`,
                 recommendedFilenames: [`${show.name} - S01E01.mkv`, 'tvshow.nfo', 'poster.jpg'],
                 source: 'tvmaze-direct',
               };

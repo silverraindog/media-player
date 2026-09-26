@@ -482,11 +482,19 @@ async fn open_in_vlc(
     file_path: Option<String>,
     filePath: Option<String>,
 ) -> Result<String, String> {
-    let target = file_path.or(filePath).unwrap_or_default();
+    let raw = file_path.or(filePath).unwrap_or_default();
+    let mut target = raw.trim().to_string();
+    if target.starts_with("file://") {
+        target = target.trim_start_matches("file://").to_string();
+    }
+    // Sanitize URL-encoded %20 to regular space
+    target = target.replace("%20", " ");
+
     #[cfg(target_os = "macos")]
     let res = Command::new("/Applications/VLC.app/Contents/MacOS/VLC")
         .arg(&target)
         .spawn()
+        .or_else(|_| Command::new("open").args(["-a", "VLC", &target]).spawn())
         .or_else(|_| Command::new("vlc").arg(&target).spawn());
 
     #[cfg(target_os = "windows")]
@@ -506,7 +514,14 @@ async fn open_in_iina(
     file_path: Option<String>,
     filePath: Option<String>,
 ) -> Result<String, String> {
-    let target = file_path.or(filePath).unwrap_or_default();
+    let raw = file_path.or(filePath).unwrap_or_default();
+    let mut target = raw.trim().to_string();
+    if target.starts_with("file://") {
+        target = target.trim_start_matches("file://").to_string();
+    }
+    // Sanitize URL-encoded %20 to regular space
+    target = target.replace("%20", " ");
+
     #[cfg(target_os = "macos")]
     let res = Command::new("open").args(["-a", "IINA", &target]).spawn();
 

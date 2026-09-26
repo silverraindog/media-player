@@ -778,10 +778,15 @@ export const scanSambaVolume = async (
 };
 
 export const openInSystemPlayer = async (filePath: string): Promise<{ success: boolean; message: string }> => {
+  let cleanPath = (filePath || '').trim().replace(/^file:\/\//i, '');
+  try {
+    cleanPath = decodeURIComponent(cleanPath);
+  } catch {}
+
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
-      const res = await invoke<string>('open_in_system_player', { filePath });
+      const res = await invoke<string>('open_in_system_player', { filePath: cleanPath });
       return { success: true, message: res || 'Launched system media player' };
     } catch (e: any) {
       console.warn('open_in_system_player error:', e);
@@ -792,10 +797,15 @@ export const openInSystemPlayer = async (filePath: string): Promise<{ success: b
 };
 
 export const openInVlc = async (filePath: string): Promise<{ success: boolean; message: string }> => {
+  let cleanPath = (filePath || '').trim().replace(/^file:\/\//i, '');
+  try {
+    cleanPath = decodeURIComponent(cleanPath);
+  } catch {}
+
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
-      const res = await invoke<string>('open_in_vlc', { filePath });
+      const res = await invoke<string>('open_in_vlc', { filePath: cleanPath });
       return { success: true, message: res || 'Launched VLC' };
     } catch (e: any) {
       console.warn('open_in_vlc error:', e);
@@ -804,7 +814,15 @@ export const openInVlc = async (filePath: string): Promise<{ success: boolean; m
   }
   // Browser fallback - open vlc:// protocol URL
   try {
-    window.open(`vlc://${filePath}`, '_blank');
+    // If the path is already an http/https stream URL or smb URL, open directly
+    // Avoid double encoding or dispatching invalid file:/// with %20
+    const target = cleanPath.startsWith('http://') || cleanPath.startsWith('https://')
+      ? cleanPath
+      : cleanPath.startsWith('smb://')
+      ? cleanPath
+      : `${cleanPath}`;
+
+    window.open(`vlc://${target}`, '_blank');
     return { success: true, message: 'Dispatched VLC URI protocol' };
   } catch (err: any) {
     return { success: false, message: err?.message || 'Failed to dispatch VLC URI' };
@@ -812,10 +830,15 @@ export const openInVlc = async (filePath: string): Promise<{ success: boolean; m
 };
 
 export const openInIina = async (filePath: string): Promise<{ success: boolean; message: string }> => {
+  let cleanPath = (filePath || '').trim().replace(/^file:\/\//i, '');
+  try {
+    cleanPath = decodeURIComponent(cleanPath);
+  } catch {}
+
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
-      const res = await invoke<string>('open_in_iina', { filePath });
+      const res = await invoke<string>('open_in_iina', { filePath: cleanPath });
       return { success: true, message: res || 'Launched IINA' };
     } catch (e: any) {
       console.warn('open_in_iina error:', e);
@@ -824,7 +847,7 @@ export const openInIina = async (filePath: string): Promise<{ success: boolean; 
   }
   // Browser fallback - open iina:// protocol URL
   try {
-    window.open(`iina://weblink?url=${encodeURIComponent(filePath)}`, '_blank');
+    window.open(`iina://weblink?url=${encodeURIComponent(cleanPath)}`, '_blank');
     return { success: true, message: 'Dispatched IINA URI protocol' };
   } catch (err: any) {
     return { success: false, message: err?.message || 'Failed to dispatch IINA URI' };

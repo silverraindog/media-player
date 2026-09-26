@@ -331,14 +331,19 @@ export function extractEpisodeInfoFromFilename(filename: string): {
 
 // Convert a Samba node or file path into a full MediaMetadata record
 export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = ''): MediaMetadata | null {
+  const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+
   if (node.matchedMedia) {
     return {
       ...node.matchedMedia,
+      folderPath: fullPath,
+      path: fullPath,
+      recommendedFolderStructure: fullPath,
+      matchedFilename: node.type === 'file' ? node.name : node.matchedMedia.matchedFilename,
       playbackUrl: node.matchedMedia.playbackUrl || (node.matchedMedia.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie),
     };
   }
 
-  const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
   const mediaType = node.mediaType || detectMediaType(fullPath);
   const parsedFile = parseTitleAndYear(node.name);
   const epInfo = extractEpisodeInfoFromFilename(node.name);
@@ -347,7 +352,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   // Derive candidate title & series hierarchy
   let title = parsedFile.title;
   let year = parsedFile.year;
-  let season = epInfo.season ?? seasonFromFolder ?? parsedFile.season ?? 1;
+  let season = epInfo.season ?? seasonFromFolder ?? parsedFile.season ?? (fullPath.toLowerCase().includes('season 00') || fullPath.toLowerCase().includes('s00') ? 0 : 1);
   let episode = epInfo.episode ?? parsedFile.episode ?? 1;
   let episodeTitle = epInfo.episodeTitle;
 
@@ -395,6 +400,8 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     return {
       ...curatedMatch,
       id: `imported-${curatedMatch.id}-${node.id || Math.random().toString(36).substring(2, 7)}`,
+      folderPath: fullPath,
+      path: fullPath,
       recommendedFolderStructure: fullPath,
       matchedFilename: node.name,
       playbackUrl: curatedMatch.playbackUrl || (curatedMatch.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.scifi),
@@ -413,28 +420,64 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     defaultPlayback = SAMPLE_AUDIO_STREAM;
   }
 
-  const seasonsData =
-    mediaType === 'series'
-      ? [
-          {
-            seasonNumber: season ?? 1,
-            name: (season === 0 || fullPath.toLowerCase().includes('extras') || fullPath.toLowerCase().includes('specials')) ? 'Specials & Extras' : `Season ${season ?? 1}`,
-            episodeCount: 1,
-            episodes: [
-              {
-                episodeNumber: episode || 1,
-                seasonNumber: season ?? 1,
-                title: episodeTitle || (season === 0 ? `Extra: ${node.name.replace(/\.[^/.]+$/, '')}` : `${title} S${String(season ?? 1).padStart(2, '0')}E${String(episode || 1).padStart(2, '0')}`),
-                plot: season === 0
-                  ? `Special feature and bonus material for ${title} (${node.name}).`
-                  : `Synopsis for ${title} Season ${season ?? 1} Episode ${episode || 1}. Tagged from Samba network share (${node.name}).`,
-                rating: 8.5,
-                playbackUrl: SAMPLE_VIDEO_STREAMS.series,
-              },
-            ],
-          },
-        ]
-      : undefined;
+  // Extract episodes if this is a folder containing media files
+  const childMediaFiles = node.children ? node.children.filter((c) => c.type === 'file' && isMediaFile(c.name)) : [];
+  let seasonsData = undefined;
+
+  if (mediaType === 'series') {
+    if (childMediaFiles.length > 0) {
+      const seasonMap = new Map<number, EpisodeMetadata[]>();
+      childMediaFiles.forEach((file) => {
+        const fileEpInfo = extractEpisodeInfoFromFilename(file.name);
+        const fileSeason = fileEpInfo.season ?? seasonFromFolder ?? (file.path && extractSeasonNumberFromPath(file.path)) ?? season;
+        const fileEpNum = fileEpInfo.episode || 1;
+        const epTitle = fileEpInfo.episodeTitle || `${title} S${String(fileSeason).padStart(2, '0')}E${String(fileEpNum).padStart(2, '0')}`;
+        
+        if (!seasonMap.has(fileSeason)) {
+          seasonMap.set(fileSeason, []);
+        }
+        seasonMap.get(fileSeason)!.push({
+          episodeNumber: fileEpNum,
+          seasonNumber: fileSeason,
+          title: epTitle,
+          plot: `File on disk: ${file.name}`,
+          rating: 8.5,
+          playbackUrl: SAMPLE_VIDEO_STREAMS.series,
+          filePath: file.path || `${fullPath}/${file.name}`,
+          filename: file.name,
+        });
+      });
+
+      seasonsData = Array.from(seasonMap.entries()).map(([sNum, eps]) => ({
+        seasonNumber: sNum,
+        name: sNum === 0 ? 'Specials & Extras' : `Season ${sNum}`,
+        episodeCount: eps.length,
+        episodes: eps.sort((a, b) => a.episodeNumber - b.episodeNumber),
+      }));
+    } else {
+      seasonsData = [
+        {
+          seasonNumber: season ?? 1,
+          name: (season === 0 || fullPath.toLowerCase().includes('extras') || fullPath.toLowerCase().includes('specials')) ? 'Specials & Extras' : `Season ${season ?? 1}`,
+          episodeCount: 1,
+          episodes: [
+            {
+              episodeNumber: episode || 1,
+              seasonNumber: season ?? 1,
+              title: episodeTitle || (season === 0 ? `Extra: ${node.name.replace(/\.[^/.]+$/, '')}` : `${title} S${String(season ?? 1).padStart(2, '0')}E${String(episode || 1).padStart(2, '0')}`),
+              plot: season === 0
+                ? `Special feature and bonus material for ${title} (${node.name}).`
+                : `Synopsis for ${title} Season ${season ?? 1} Episode ${episode || 1}. Tagged from Samba network share (${node.name}).`,
+              rating: 8.5,
+              playbackUrl: SAMPLE_VIDEO_STREAMS.series,
+              filePath: fullPath,
+              filename: node.name,
+            },
+          ],
+        },
+      ];
+    }
+  }
 
   const tracksData =
     mediaType === 'album'
@@ -491,6 +534,16 @@ export function extractAllMediaFromSambaTree(
     }
 
     const existing = mediaMap.get(key)!;
+    // Always preserve real file system paths over generic defaults
+    if (item.folderPath) {
+      existing.folderPath = item.folderPath;
+      existing.path = item.folderPath;
+      existing.recommendedFolderStructure = item.folderPath;
+    }
+    if (item.matchedFilename) {
+      existing.matchedFilename = item.matchedFilename;
+    }
+
     if (item.type === 'series' && item.seasons && item.seasons.length > 0) {
       const existingSeasons = existing.seasons || [];
       for (const newSeason of item.seasons) {
@@ -498,11 +551,16 @@ export function extractAllMediaFromSambaTree(
         if (matchedSeason) {
           if (newSeason.episodes && newSeason.episodes.length > 0) {
             for (const newEp of newSeason.episodes) {
-              const alreadyExists = matchedSeason.episodes.some(
-                (e) => (e.episodeNumber === newEp.episodeNumber && e.title === newEp.title) ||
+              const existingEp = matchedSeason.episodes.find(
+                (e) => (e.episodeNumber === newEp.episodeNumber) ||
                        (e.title && newEp.title && e.title.toLowerCase() === newEp.title.toLowerCase())
               );
-              if (!alreadyExists) {
+              if (existingEp) {
+                // Update with real disk file path and filename!
+                if (newEp.filePath) existingEp.filePath = newEp.filePath;
+                if (newEp.filename) existingEp.filename = newEp.filename;
+                if (newEp.playbackUrl && !existingEp.playbackUrl) existingEp.playbackUrl = newEp.playbackUrl;
+              } else {
                 let finalEp = { ...newEp };
                 if (matchedSeason.episodes.some((e) => e.episodeNumber === finalEp.episodeNumber)) {
                   const maxEp = Math.max(...matchedSeason.episodes.map((e) => e.episodeNumber), 0);
@@ -530,6 +588,9 @@ export function extractAllMediaFromSambaTree(
       if (node.matchedMedia) {
         mergeOrAdd({
           ...node.matchedMedia,
+          folderPath: fullPath,
+          path: fullPath,
+          recommendedFolderStructure: fullPath,
           playbackUrl: node.matchedMedia.playbackUrl || (node.matchedMedia.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie),
         });
       } else if (node.type === 'folder') {
@@ -635,6 +696,9 @@ export async function extractAllMediaFromSambaTreeAsync(
     if (node.matchedMedia) {
       mergeOrAdd({
         ...node.matchedMedia,
+        folderPath: fullPath,
+        path: fullPath,
+        recommendedFolderStructure: fullPath,
         playbackUrl:
           node.matchedMedia.playbackUrl ||
           (node.matchedMedia.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie),
@@ -872,7 +936,7 @@ export async function fetchSecondaryMetadata(
             seasons: seasons.length > 0 ? seasons : undefined,
             cast: cast.length > 0 ? cast : undefined,
             source: 'secondary-tvmaze-fallback',
-            recommendedFolderStructure: `series/${showTitle} (${premieredYear})/Season 01/`,
+            recommendedFolderStructure: `series/${showTitle} (${premieredYear})/`,
             recommendedFilenames: [
               `${showTitle} - S01E01 [1080p].mkv`,
               'tvshow.nfo',

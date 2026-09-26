@@ -2160,17 +2160,17 @@ function App() {
           console.log('[SambaSync] User force skipped scan step. Continuing media copy and catalog import.');
           showToast('Force skipped directory scan. Continuing media copy...');
         } else {
-          console.log('[SambaSync] Scanning methods returned empty. Generating comprehensive catalog preview media.');
+          console.log('[SambaSync] Scanning methods returned empty. No hallucinated sample media generated; indexing actual filesystem paths only.');
+          showToast('Samba directory scan returned 0 files on disk.');
         }
         setSyncProgress(p => ({
           ...p,
           phaseDescription: raceScanOutcome.forceSkipped
             ? 'Scan force-skipped. Continuing media import and catalog construction...'
-            : 'Samba scan completed. Processing catalog media...',
+            : 'Samba scan completed. 0 files found on disk.',
           currentStep: 10,
         }));
-        // Generates thousands of realistic files across all media types in preview mode
-        rawDiscoveredPaths = generateLargeSambaCatalogPaths();
+        rawDiscoveredPaths = [];
       }
 
       // =========================================================================

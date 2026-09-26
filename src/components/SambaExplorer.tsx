@@ -381,11 +381,16 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     }
   }, [depthLimit]);
 
+  const getMountPath = (pathStr: string) => {
+    const share = sambaConfig.share || 'media';
+    return `/Volumes/${share}/${(pathStr || '').replace(/^\/+/, '')}`;
+  };
+
   useEffect(() => {
     const logNodesRecursive = (nodes: SambaShareNode[]) => {
       nodes.forEach((node) => {
         const dirtyCheck = checkPathDirtyState(node.path);
-        const resolved = `//${sambaConfig.server}/${sambaConfig.share}/${node.path}`;
+        const resolved = getMountPath(node.path);
         pathDebugLogger.log({
           eventType: 'scan_node',
           rawPath: node.path,
@@ -657,7 +662,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
   // Copy path to clipboard
   const handleCopyPath = (node: SambaShareNode) => {
-    const fullSmbPath = `//${sambaConfig.server}/${sambaConfig.share}/${node.path}`;
+    const fullSmbPath = getMountPath(node.path);
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(fullSmbPath);
       setCopyToast(`Copied Samba path: ${node.name}`);
@@ -2464,7 +2469,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                         )}
                       </div>
                       <div className="text-slate-400 font-mono text-[11px] break-all">
-                        Path: <span className="text-indigo-300">//{sambaConfig.server}/{sambaConfig.share}/{selectedNode.path}</span>
+                        Path: <span className="text-indigo-300">{getMountPath(selectedNode.path)}</span>
                       </div>
                       <div className="flex items-center gap-3 pt-1 text-[11px] text-slate-400">
                         <span>Type: <strong className="text-white uppercase">{selectedNode.type}</strong></span>
@@ -2496,15 +2501,15 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                           </div>
 
                           <div className="space-y-1.5 font-mono text-[11px]">
-                            <div className="text-slate-400">Resolved Full Path:</div>
+                            <div className="text-slate-400">Resolved Full Mount Path:</div>
                             <div className="bg-slate-900 p-2 rounded border border-slate-800 text-indigo-200 break-all select-all flex items-start justify-between gap-2">
-                              <span>//{sambaConfig.server}/{sambaConfig.share}/{selectedNode.path}</span>
+                              <span>{getMountPath(selectedNode.path)}</span>
                               <button
                                 onClick={() => {
-                                  navigator.clipboard.writeText(`//${sambaConfig.server}/${sambaConfig.share}/${selectedNode.path}`);
+                                  navigator.clipboard.writeText(getMountPath(selectedNode.path));
                                 }}
                                 className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition shrink-0"
-                                title="Copy resolved path"
+                                title="Copy resolved mount path"
                               >
                                 <Copy className="w-3 h-3" />
                               </button>
@@ -2975,7 +2980,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 Current Location
               </div>
               <div className="text-indigo-300 break-all text-[11px]">
-                //{sambaConfig.server}/{sambaConfig.share}/{renamingNode.path}
+                {getMountPath(renamingNode.path)}
               </div>
             </div>
 

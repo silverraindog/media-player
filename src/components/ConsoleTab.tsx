@@ -10,14 +10,21 @@ import {
   CheckCircle2,
   AlertTriangle,
   AlertCircle,
+  AlertOctagon,
   Info,
   Bug,
   Filter,
   ArrowDown,
   Sparkles,
   Zap,
+  RotateCw,
+  RefreshCw,
+  X,
+  ChevronDown,
+  ChevronUp,
+  Flame,
 } from 'lucide-react';
-import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory } from '../types';
+import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident } from '../types';
 import { logger, LOG_LEVEL_RANKS } from '../utils/loggerService';
 import {
   ResponsiveContainer,
@@ -29,7 +36,15 @@ import {
   CartesianGrid,
 } from 'recharts';
 
-export const ConsoleTab: React.FC = () => {
+interface ConsoleTabProps {
+  onRetryFailedFiles?: (failedPaths: string[]) => Promise<void>;
+  onTriggerSync?: () => Promise<void>;
+}
+
+export const ConsoleTab: React.FC<ConsoleTabProps> = ({
+  onRetryFailedFiles,
+  onTriggerSync,
+}) => {
   const [logs, setLogs] = useState<ConsoleLogEntry[]>([]);
   const [selectedLevel, setSelectedLevel] = useState<ConsoleLogLevel | 'all'>('all');
   const [selectedCategory, setSelectedCategory] = useState<ConsoleLogCategory | 'all'>('all');
@@ -39,6 +54,12 @@ export const ConsoleTab: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [debugEnabled, setDebugEnabled] = useState(logger.getDebugEnabled());
+
+  // Real-Time Sync Incident Notification System
+  const [activeIncident, setActiveIncident] = useState<SyncIncident | null>(() => logger.getActiveIncident());
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [showFailedPaths, setShowFailedPaths] = useState(false);
+  const [retryNotice, setRetryNotice] = useState<string | null>(null);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +72,13 @@ export const ConsoleTab: React.FC = () => {
     });
     return () => unsubscribe();
   }, [isPaused]);
+
+  useEffect(() => {
+    const unsubIncident = logger.subscribeIncident((inc) => {
+      setActiveIncident(inc);
+    });
+    return () => unsubIncident();
+  }, []);
 
   useEffect(() => {
     if (autoScroll && logsEndRef.current) {
@@ -170,6 +198,71 @@ export const ConsoleTab: React.FC = () => {
     logger.log(lvl, cat, messages[lvl], { simulatedAt: new Date().toISOString(), memoryUsageBytes: 1048576 * Math.random() });
   };
 
+  const handleRetryFailedFiles = async () => {
+    if (!activeIncident || isRetrying) return;
+    setIsRetrying(true);
+    setRetryNotice(null);
+
+    const targetPaths =
+      activeIncident.failedPaths && activeIncident.failedPaths.length > 0
+        ? activeIncident.failedPaths
+        : [];
+
+    logger.info(
+      `Retrying ${targetPaths.length > 0 ? targetPaths.length + ' failed files' : 'Samba scan'} for incident "${activeIncident.title}"...`,
+      'Sync',
+      { failedPaths: targetPaths }
+    );
+
+    try {
+      logger.updateIncidentRetryCount(activeIncident.id);
+
+      if (onRetryFailedFiles) {
+        await onRetryFailedFiles(targetPaths);
+      } else if (onTriggerSync) {
+        await onTriggerSync();
+      } else {
+        // Direct fallback: trigger sync-scan probe
+        const res = await fetch('/api/samba/sync-scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: targetPaths.length > 0 ? targetPaths : ['/Volumes/media'],
+            shareName: 'media',
+          }),
+        }).catch(() => null);
+
+        if (!res || !res.ok) {
+          throw new Error('Samba server did not acknowledge retry command.');
+        }
+      }
+
+      logger.resolveIncident(activeIncident.id);
+      setRetryNotice('All failed operations retried and resolved successfully!');
+      setTimeout(() => setRetryNotice(null), 4000);
+    } catch (err: any) {
+      console.error('Retry failed:', err);
+      logger.error(`Retry attempt failed: ${err?.message || err}`, 'Sync', { error: String(err) });
+      setRetryNotice(`Retry attempt failed: ${err?.message || 'Check network connection'}`);
+      setTimeout(() => setRetryNotice(null), 5000);
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
+  const handleSimulateIncident = () => {
+    logger.recordIncident({
+      title: 'Critical Samba Network / Scan Failure',
+      errorMessage: 'Network timeout (ETIMEDOUT): Connection dropped to smb://192.168.1.25/media during directory traversal.',
+      failedPaths: [
+        'Movies/Sci-Fi/Dune Part Two (2024)/Dune.Part.Two.2024.2160p.mkv',
+        'TV Shows/Battlestar Galactica (2004)/Season 01/S01E01 - 33.mkv',
+        'TV Shows/Severance (2022)/Season 01/S01E01 - Good News About Hell.mkv',
+      ],
+      category: 'Network',
+    });
+  };
+
   const getLevelBadge = (level: ConsoleLogLevel) => {
     switch (level) {
       case 'error':
@@ -251,6 +344,125 @@ export const ConsoleTab: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Real-Time Sync Incident Notification Alert Banner */}
+      {activeIncident && (
+        <div
+          id="sync-incident-alert-banner"
+          className="relative overflow-hidden rounded-2xl border-2 border-rose-500/80 bg-gradient-to-r from-rose-950/95 via-slate-950/95 to-rose-950/90 p-5 shadow-2xl shadow-rose-950/70 space-y-4 animate-in fade-in slide-in-from-top-3 duration-300"
+        >
+          {/* Subtle animated red background glow */}
+          <div className="absolute -top-12 -right-12 w-48 h-48 bg-rose-500/20 rounded-full blur-3xl pointer-events-none animate-pulse" />
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 relative z-10 border-b border-rose-800/40 pb-3">
+            <div className="flex items-center space-x-3">
+              <div className="relative p-2.5 rounded-xl bg-rose-600/20 border border-rose-500/40 text-rose-400 shrink-0">
+                <AlertOctagon className="w-6 h-6 text-rose-400 animate-pulse" />
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2 py-0.5 rounded-md bg-rose-600 text-white text-[10px] font-black uppercase tracking-wider shadow">
+                    SYNC INCIDENT ACTIVE
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-rose-950 text-rose-300 border border-rose-800/60 text-[10px] font-mono">
+                    {activeIncident.category.toUpperCase()}
+                  </span>
+                  {activeIncident.retryCount && activeIncident.retryCount > 0 ? (
+                    <span className="px-2 py-0.5 rounded-md bg-amber-950 text-amber-300 border border-amber-800/60 text-[10px] font-mono">
+                      Retry #{activeIncident.retryCount}
+                    </span>
+                  ) : null}
+                  <span className="text-xs text-slate-400 font-mono">
+                    {new Date(activeIncident.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-white mt-1">
+                  {activeIncident.title}
+                </h3>
+              </div>
+            </div>
+
+            <button
+              onClick={() => logger.dismissIncident()}
+              className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer self-end sm:self-auto"
+              title="Dismiss Incident Alert"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="relative z-10 space-y-3">
+            <p className="text-xs font-mono text-rose-200 bg-slate-950/80 border border-rose-900/50 p-3 rounded-xl leading-relaxed">
+              {activeIncident.errorMessage}
+            </p>
+
+            {/* Failed Paths Collapsible Section */}
+            {activeIncident.failedPaths && activeIncident.failedPaths.length > 0 && (
+              <div className="space-y-2">
+                <button
+                  onClick={() => setShowFailedPaths(!showFailedPaths)}
+                  className="flex items-center gap-2 text-xs font-semibold text-rose-300 hover:text-rose-200 transition cursor-pointer"
+                >
+                  {showFailedPaths ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  <span>Failed files / paths ({activeIncident.failedPaths.length})</span>
+                </button>
+
+                {showFailedPaths && (
+                  <div className="max-h-40 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px]">
+                    {activeIncident.failedPaths.map((p, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-2 text-slate-300 bg-rose-950/20 px-2 py-1 rounded border border-rose-900/30 truncate"
+                      >
+                        <span className="text-rose-500 font-bold shrink-0">✕</span>
+                        <span className="truncate">{p}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <div className="flex items-center gap-3">
+                <button
+                  id="retry-failed-files-btn"
+                  onClick={handleRetryFailedFiles}
+                  disabled={isRetrying}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:bg-rose-900/50 text-white text-xs font-bold shadow-lg shadow-rose-950/50 transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <RotateCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin' : ''}`} />
+                  <span>{isRetrying ? 'Retrying Failed Files...' : 'Retry failed files'}</span>
+                </button>
+
+                <button
+                  onClick={() => logger.dismissIncident()}
+                  disabled={isRetrying}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+
+              {retryNotice && (
+                <span className="text-xs font-mono text-cyan-300 animate-pulse">
+                  {retryNotice}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success Notification after Incident Resolution */}
+      {retryNotice && !activeIncident && (
+        <div className="p-3.5 rounded-xl bg-emerald-950/90 border border-emerald-500/50 text-emerald-200 text-xs font-semibold flex items-center gap-2 shadow-lg animate-in fade-in duration-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          <span>{retryNotice}</span>
+        </div>
+      )}
 
       {/* Real-Time Sync Activity Dashboard (Recharts AreaChart) */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
@@ -405,6 +617,17 @@ export const ConsoleTab: React.FC = () => {
             >
               <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
               <span>Simulate Log</span>
+            </button>
+
+            {/* Simulate Sync Incident */}
+            <button
+              id="simulate-sync-incident-btn"
+              onClick={handleSimulateIncident}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/30 text-rose-200 border border-rose-500/50 hover:bg-rose-600/50 transition cursor-pointer"
+              title="Simulate Critical Samba Network Sync Incident to test real-time alert banner & retry system"
+            >
+              <Flame className="w-3.5 h-3.5 text-rose-400" />
+              <span>Simulate Incident</span>
             </button>
 
             {/* Clear Logs */}

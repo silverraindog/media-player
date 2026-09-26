@@ -817,21 +817,6 @@ const INITIAL_SAMBA_TREE: SambaShareNode[] = [
           },
         ],
       },
-      {
-        id: 'folder-comics',
-        name: 'Comics & Graphic Novels',
-        path: 'Books/Comics & Graphic Novels',
-        type: 'folder',
-        children: [
-          {
-            id: 'file-watchmen-cbz',
-            name: 'Watchmen (1986).cbz',
-            path: 'Books/Comics & Graphic Novels/Watchmen (1986).cbz',
-            type: 'file',
-            size: '280 MB',
-          },
-        ],
-      },
     ],
   },
 ];
@@ -1778,7 +1763,7 @@ function App() {
       if (scanResult.success && scanResult.items.length > 0) {
         discoveredPaths = scanResult.items.map((it) => it.rel_path);
       } else {
-        discoveredPaths = generateLargeSambaCatalogPaths();
+        discoveredPaths = [];
       }
       setLastDiscoveredPaths(discoveredPaths);
     }
@@ -2066,10 +2051,10 @@ function App() {
     });
 
     forceSkipRequestedRef.current = false;
+    let rawDiscoveredPaths: string[] = [];
 
     try {
       console.log(`[SambaSync] Attempting native performFastScan for: ${rootPath} (safeScan: ${effectiveSafeScan}, maxDepth: ${effectiveDepthLimit})`);
-      let rawDiscoveredPaths: string[] = [];
 
       // Setup skip callback so if the user clicks 'Force Skip' during scanning, it advances immediately
       let forceSkippedScan = false;
@@ -2789,6 +2774,7 @@ function App() {
 
       // 6. Update sync logs and connection status
       setIsConnected(true);
+      logger.resolveIncident();
       logger.success(
         `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) across share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'}.`,
         'Sync',
@@ -2846,8 +2832,18 @@ function App() {
       showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
-      logger.error(`Samba sync failed: ${err?.message || err}`, 'Sync', { error: String(err) });
-      showToast(`Scan error: ${err?.message || 'Failed to scan share'}`);
+      const errMsg = err?.message || String(err);
+      logger.error(`Samba sync failed: ${errMsg}`, 'Sync', {
+        error: errMsg,
+        failedPaths: rawDiscoveredPaths.length > 0 ? rawDiscoveredPaths.slice(-15) : [rootPath],
+      });
+      logger.recordIncident({
+        title: 'Critical Samba Network / Scan Failure',
+        errorMessage: errMsg,
+        failedPaths: rawDiscoveredPaths.length > 0 ? rawDiscoveredPaths.slice(-15) : [rootPath],
+        category: errMsg.toLowerCase().includes('timeout') ? 'Timeout' : 'Network',
+      });
+      showToast(`Scan error: ${errMsg}`);
     } finally {
       setIsSyncingShare(false);
     }
@@ -3324,7 +3320,18 @@ function App() {
           />
         )}
 
-        {activeTab === 'console' && <ConsoleTab />}
+        {activeTab === 'console' && (
+          <ConsoleTab
+            onRetryFailedFiles={async (failedPaths) => {
+              if (failedPaths && failedPaths.length === 1 && failedPaths[0].startsWith('/Volumes')) {
+                await handleSyncSamba(failedPaths[0]);
+              } else {
+                await handleSyncSamba();
+              }
+            }}
+            onTriggerSync={() => handleSyncSamba()}
+          />
+        )}
 
         {activeTab === 'settings' && (
           <SettingsTab

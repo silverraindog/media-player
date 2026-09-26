@@ -517,6 +517,7 @@ export type ConsoleLogCategory =
   | 'Scanner'
   | 'Scheduler'
   | 'Auth'
+  | 'Network'
   | 'System';
 
 export interface ConsoleLogEntry {
@@ -537,6 +538,17 @@ export interface SyncScheduleConfig {
   lastRunSummary?: string;
   nextRunAt?: string;
   showToastOnRun?: boolean;
+}
+
+export interface SyncIncident {
+  id: string;
+  timestamp: string; // ISO string
+  title: string;
+  errorMessage: string;
+  failedPaths?: string[];
+  category: 'Network' | 'Timeout' | 'Auth' | 'Filesystem' | 'Connection';
+  retryCount?: number;
+  resolved?: boolean;
 }
 
 

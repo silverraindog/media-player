@@ -43,6 +43,7 @@ import {
   Compass,
   Code,
   Wand2,
+  History,
 } from 'lucide-react';
 import {
   SambaConfig,
@@ -78,6 +79,8 @@ import {
 } from '../utils/deepRefreshService';
 import { JsonPathInspectorModal } from './JsonPathInspectorModal';
 import { PathIntegrityDiagnosticModal } from './PathIntegrityDiagnosticModal';
+import { SanitizationHistoryPanel } from './SanitizationHistoryPanel';
+import { sanitizationTracker } from '../utils/sanitizationTracker';
 import { pathDebugLogger } from '../utils/debugPathLogger';
 import { logger } from '../utils/loggerService';
 
@@ -374,6 +377,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [currentDepthLimit, setCurrentDepthLimit] = useState<number>(depthLimit || sambaConfig.depthLimit || 30);
   const [isPathInspectorOpen, setIsPathInspectorOpen] = useState(false);
   const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
+  const [isSanitizationHistoryOpen, setIsSanitizationHistoryOpen] = useState(false);
 
   useEffect(() => {
     if (depthLimit !== undefined && depthLimit !== currentDepthLimit) {
@@ -391,6 +395,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       nodes.forEach((node) => {
         const dirtyCheck = checkPathDirtyState(node.path);
         const resolved = getMountPath(node.path);
+        // Track transformation in SanitizationTracker
+        sanitizationTracker.recordTransform(node.path, {
+          nodeName: node.name,
+          nodeType: node.type,
+          source: 'Folder Traversal',
+        });
         pathDebugLogger.log({
           eventType: 'scan_node',
           rawPath: node.path,
@@ -424,6 +434,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const handleCleanNodePath = (targetNodeId: string) => {
     const updateNodes = (nodes: SambaShareNode[]): SambaShareNode[] => {
       return nodes.map((node) => {
+        // Log manual transformation
+        sanitizationTracker.recordTransform(node.path, {
+          nodeName: node.name,
+          nodeType: node.type,
+          source: 'Manual Fix',
+        });
         const newPath = cleanPathValue(node.path);
         const newName = node.type === 'file' ? sanitizeFilename(node.name) : sanitizeSambaPath(node.name);
         const updatedNode: SambaShareNode = {
@@ -445,6 +461,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const handleGlobalSanitize = () => {
     const sanitizeNodesRecursive = (nodes: SambaShareNode[]): SambaShareNode[] => {
       return nodes.map((node) => {
+        // Log global transformation
+        sanitizationTracker.recordTransform(node.path, {
+          nodeName: node.name,
+          nodeType: node.type,
+          source: 'Global Sanitizer',
+        });
         let cleanedPath = (node.path || '')
           .replace(/\\/g, '/')
           .replace(/\/+/g, '/')
@@ -900,7 +922,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       setupListener();
       return () => {
         if (unlisten) {
-          unlisten.then((fn: any) => fn());
+          if (typeof unlisten === 'function') unlisten();
+          else if (typeof unlisten.then === 'function') unlisten.then((fn: any) => fn());
         }
       };
     }
@@ -1821,8 +1844,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               return dirtyInfo.isDirty ? (
                 <span
                   id={`path-dirty-badge-${node.id}`}
-                  className="px-1.5 py-0.5 rounded bg-amber-950/90 text-amber-300 text-[9px] font-bold border border-amber-600/50 flex items-center gap-1 shadow-xs shrink-0"
-                  title={`Dirty Path: ${dirtyInfo.reason}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsSanitizationHistoryOpen(true);
+                  }}
+                  className="px-1.5 py-0.5 rounded bg-amber-950/90 text-amber-300 text-[9px] font-bold border border-amber-600/50 flex items-center gap-1 shadow-xs shrink-0 cursor-pointer hover:bg-amber-900/90 transition"
+                  title={`Dirty Path: ${dirtyInfo.reason} (Click to open Sanitization History)`}
                 >
                   <AlertTriangle className="w-2.5 h-2.5 text-amber-400 shrink-0" />
                   <span>Dirty</span>
@@ -1841,8 +1868,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               ) : (
                 <span
                   id={`path-sanitized-badge-${node.id}`}
-                  className="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 text-[9px] font-semibold border border-emerald-800/40 flex items-center gap-1 shrink-0"
-                  title="Path is Sanitized & Clean"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsSanitizationHistoryOpen(true);
+                  }}
+                  className="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 text-[9px] font-semibold border border-emerald-800/40 flex items-center gap-1 shrink-0 cursor-pointer hover:bg-emerald-900/60 transition"
+                  title="Path is Sanitized & Clean (Click to open Sanitization History)"
                 >
                   <ShieldCheck className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
                   <span>Sanitized</span>
@@ -2054,6 +2085,17 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             >
               <Wand2 className="w-3.5 h-3.5 text-teal-400" />
               <span>Global Path Sanitizer</span>
+            </button>
+
+            {/* Sanitization History Button */}
+            <button
+              id="samba-sanitization-history-btn"
+              onClick={() => setIsSanitizationHistoryOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-950/70 hover:bg-teal-900/90 text-teal-200 border border-teal-500/50 text-xs font-semibold shadow transition cursor-pointer"
+              title="Open Sanitization History Panel: Track transformation logs performed by sanitizeSambaPath on folder paths and verify if corrected from dirty states"
+            >
+              <History className="w-3.5 h-3.5 text-teal-400" />
+              <span>Sanitization History</span>
             </button>
 
             {/* Preview Mode Toggle Button */}
@@ -2278,17 +2320,17 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             </div>
             <div className="text-right">
               <span className="font-mono text-[11px] text-emerald-400 block">
-                {scanProgress ? `${scanProgress.percentage.toFixed(1)}% Complete` : 'Calculating...'}
+                {scanProgress ? `${(scanProgress.percentage ?? 0).toFixed(1)}% Complete` : 'Calculating...'}
               </span>
               <span className="text-[9px] text-slate-500 font-mono">
-                {scanProgress ? `${scanProgress.count} items indexed` : 'Initializing scanner...'}
+                {scanProgress ? `${scanProgress.count ?? 0} items indexed` : 'Initializing scanner...'}
               </span>
             </div>
           </div>
           <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-indigo-500/20 relative">
             <div 
               className="bg-gradient-to-r from-indigo-500 via-emerald-500 to-indigo-500 h-full transition-all duration-300 rounded-full"
-              style={{ width: `${scanProgress ? scanProgress.percentage : (isSyncing ? 100 : 0)}%` }}
+              style={{ width: `${scanProgress ? (scanProgress.percentage ?? 0) : (isSyncing ? 100 : 0)}%` }}
             ></div>
             {isSyncing && !scanProgress && (
               <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />
@@ -3164,6 +3206,13 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         sambaTree={sambaTree}
         sambaConfig={sambaConfig}
         setSambaTree={setSambaTree}
+      />
+
+      {/* Sanitization History Panel */}
+      <SanitizationHistoryPanel
+        isOpen={isSanitizationHistoryOpen}
+        onClose={() => setIsSanitizationHistoryOpen(false)}
+        sambaTree={sambaTree}
       />
     </div>
   );

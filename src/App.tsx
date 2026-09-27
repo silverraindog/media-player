@@ -43,6 +43,7 @@ import {
   ClassifierSettings,
   FolderScanClassification,
   MediaScanExtensionConfig,
+  LastScanSummary,
 } from './types';
 import { CURATED_MEDIA_DATABASE } from './data/curatedMedia';
 import {
@@ -894,6 +895,13 @@ function App() {
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
+  const [lastScanSummary, setLastScanSummary] = useState<LastScanSummary | null>(() => {
+    try {
+      const saved = localStorage.getItem('samba_vault_last_scan_summary');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  });
   const syncAbortControllerRef = useRef<AbortController | null>(null);
 
   const abortCurrentSync = () => {
@@ -2045,6 +2053,10 @@ function App() {
     const effectiveDepthLimit =
       customDepthLimit || scanDepthLimit || sambaConfig.depthLimit || (effectiveSafeScan ? 12 : 30);
 
+    const syncStartTime = performance.now();
+    const encounteredBottlenecks: string[] = [];
+    let totalRetries = 0;
+
     console.log(
       `[SambaSync] Initializing Sync scan (Safe Scan: ${effectiveSafeScan ? 'ON' : 'OFF'}, Depth Limit: ${effectiveDepthLimit})...`
     );
@@ -2262,9 +2274,11 @@ function App() {
         showToast(`Samba scan completed: ${rawDiscoveredPaths.length} files discovered.`);
       } else {
         if (raceScanOutcome.forceSkipped) {
+          encounteredBottlenecks.push('Directory scan was force-skipped by user before completion');
           console.log('[SambaSync] User force skipped scan step. Continuing media copy and catalog import.');
           showToast('Force skipped directory scan. Continuing media copy...');
         } else {
+          encounteredBottlenecks.push('Physical scan returned 0 files; fallback catalog used for share layout');
           console.log('[SambaSync] Local physical scan returned 0 files. Seeding fallback catalog paths for share structure...');
           rawDiscoveredPaths = generateLargeSambaCatalogPaths();
           showToast(`Discovered ${rawDiscoveredPaths.length} media catalog entries across share!`);
@@ -2342,6 +2356,7 @@ function App() {
       }
 
       if (totalRawCount === 25) {
+        encounteredBottlenecks.push('25-item boundary barrier: Scan retrieved exactly 25 items, indicating native event throttle or buffer cap');
         console.warn(
           `[SambaSync Audit: 25-File Boundary Alert] Scan returned EXACTLY 25 items! ` +
           `Diagnostic analysis: ` +
@@ -2373,6 +2388,9 @@ function App() {
         ]);
       } else if (auditedBeyond25Count > 0) {
         const maxDepthAudited = Math.max(...Object.keys(depthHistogram).map(Number));
+        if (maxDepthAudited <= 2 && totalRawCount > 0) {
+          encounteredBottlenecks.push(`Shallow depth barrier: Traversed only up to level ${maxDepthAudited}; nested season/album folders may require higher depth limit`);
+        }
         console.log(
           `[SambaSync Audit: Success] Successfully audited ${auditedBeyond25Count} entries beyond the 25th item (Total: ${totalRawCount} items across depths ${Object.keys(depthHistogram).join(', ')}). No buffer overflow or silent termination detected.`
         );
@@ -2582,6 +2600,8 @@ function App() {
             maxRetries: 2,
             initialDelayMs: 300,
             onRetry: (attempt, maxRetries, delayMs, error) => {
+              totalRetries++;
+              encounteredBottlenecks.push(`Network retry on batch ${batchIndex}/${totalBatches}: transient socket delay (${delayMs}ms backoff)`);
               console.warn(`[Sync-Scan Batch ${batchIndex} Retry] Attempt ${attempt}/${maxRetries}:`, error);
               setSyncProgress((prev) => ({
                 ...prev,
@@ -2895,6 +2915,28 @@ function App() {
       // 6. Update sync logs and connection status
       if (discoveredRelativePaths.length === 0) {
         setIsConnected(false);
+        const durationSec = Math.max(0.1, Number(((performance.now() - syncStartTime) / 1000).toFixed(2)));
+        encounteredBottlenecks.push(`Target path "${rootPath}" returned 0 files; share may be unmounted or path incorrect`);
+        const zeroSummary: LastScanSummary = {
+          timestamp: new Date().toLocaleTimeString(),
+          totalFilesScanned: 0,
+          totalFoldersScanned: 0,
+          processingTimeSeconds: durationSec,
+          scanPath: rootPath,
+          scanMode: effectiveSafeScan ? 'Safe Scan' : 'Full Deep Sync',
+          depthLimit: effectiveDepthLimit,
+          maxDepthReached: 1,
+          itemsPerSecond: 0,
+          bottlenecks: Array.from(new Set(encounteredBottlenecks)),
+          status: 'error',
+          mediaExtractedCount: 0,
+          retriesEncountered: totalRetries,
+        };
+        setLastScanSummary(zeroSummary);
+        try {
+          localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(zeroSummary));
+        } catch {}
+
         logger.warn(
           `Samba Sync completed with 0 items: target path "${rootPath}" is empty or not mounted. ` +
           `Verify that share //${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'} is mounted in macOS Finder (Cmd+K -> smb://${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'}) or Windows Explorer.`,
@@ -2933,14 +2975,38 @@ function App() {
         showToast(`Samba sync found 0 items at "${rootPath}". Is the share mounted in Finder?`);
       } else {
         setIsConnected(true);
+        const durationSec = Math.max(0.1, Number(((performance.now() - syncStartTime) / 1000).toFixed(2)));
+        const uniqueBottlenecks = Array.from(new Set(encounteredBottlenecks));
+        const successSummary: LastScanSummary = {
+          timestamp: new Date().toLocaleTimeString(),
+          totalFilesScanned: discoveredRelativePaths.length,
+          totalFoldersScanned: Object.keys(depthHistogram).length || Math.max(1, classifications.length),
+          processingTimeSeconds: durationSec,
+          scanPath: rootPath,
+          scanMode: effectiveSafeScan ? 'Safe Scan' : 'Full Deep Sync',
+          depthLimit: effectiveDepthLimit,
+          maxDepthReached: Math.max(...Object.keys(depthHistogram).map(Number), 1),
+          itemsPerSecond: Math.round(discoveredRelativePaths.length / Math.max(0.1, durationSec)),
+          bottlenecks: uniqueBottlenecks,
+          status: uniqueBottlenecks.length > 0 ? 'warning' : 'optimal',
+          mediaExtractedCount: discoveredMedia.length,
+          retriesEncountered: totalRetries,
+        };
+        setLastScanSummary(successSummary);
+        try {
+          localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(successSummary));
+        } catch {}
+
         logger.resolveIncident();
         logger.success(
-          `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) across share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'}.`,
+          `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) across share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'} in ${durationSec}s.`,
           'Sync',
           {
             totalFiles: discoveredRelativePaths.length,
             mediaExtracted: discoveredMedia.length,
             multiVersionBranches: detectedBranchCount,
+            durationSec,
+            bottlenecks: uniqueBottlenecks,
           }
         );
         setSyncLogs((prev) => [
@@ -2956,8 +3022,8 @@ function App() {
             id: `log-${Date.now()}`,
             timestamp: new Date().toLocaleTimeString(),
             type: 'connected',
-            title: `Samba Sync Complete: ${discoveredRelativePaths.length} Media Files Discovered`,
-            details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} and populated All Media, TV Series, Movies, and Music Albums!${
+            title: `Samba Sync Complete: ${discoveredRelativePaths.length} Media Files Discovered (${durationSec}s)`,
+            details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} in ${durationSec}s (${uniqueBottlenecks.length} bottlenecks detected). Populated All Media, TV Series, Movies, and Music Albums!${
               detectedBranchCount > 0
                 ? ` Multi-Version Detector linked ${detectedBranchCount} branches across ${detectedFranchiseCount} franchises.`
                 : ''
@@ -2969,7 +3035,7 @@ function App() {
 
         const confidentCount = classifications.filter((c) => c.isConfident).length;
         sendDesktopNotification('Samba Background Sync Complete', {
-          body: `Indexed ${discoveredRelativePaths.length} items (${discoveredMedia.length} media files, ${confidentCount} confident folders).`,
+          body: `Indexed ${discoveredRelativePaths.length} items in ${durationSec}s (${discoveredMedia.length} media files, ${uniqueBottlenecks.length} bottlenecks).`,
         });
 
         // Mark progress as complete
@@ -2978,21 +3044,42 @@ function App() {
           phase: 'completed',
           currentStep: 100,
           totalSteps: 100,
-          currentPath: `Sync Complete: ${discoveredRelativePaths.length} files scanned`,
+          currentPath: `Sync Complete: ${discoveredRelativePaths.length} files scanned in ${durationSec}s`,
           processedCount: discoveredRelativePaths.length,
           totalCount: discoveredRelativePaths.length,
-          phaseDescription: `Successfully synchronized ${discoveredRelativePaths.length} media files with zero UI latency.`,
+          phaseDescription: `Successfully synchronized ${discoveredRelativePaths.length} media files in ${durationSec}s (${uniqueBottlenecks.length === 0 ? 'zero bottlenecks' : `${uniqueBottlenecks.length} bottleneck(s)`}).`,
         });
 
         // Auto-hide progress indicator after 4.5 seconds
         setTimeout(() => {
           setSyncProgress((prev) => (prev.phase === 'completed' ? { ...prev, isActive: false, phase: 'idle' } : prev));
         }, 4500);
-        showToast(`Samba Sync complete! Auto-imported ${confidentCount} confident folders (${discoveredMedia.length} media items).`);
+        showToast(`Samba Sync complete in ${durationSec}s! ${discoveredRelativePaths.length} files scanned (${uniqueBottlenecks.length === 0 ? 'optimal' : `${uniqueBottlenecks.length} bottleneck(s)`}).`);
       }
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
       const errMsg = err?.message || String(err);
+      const durationSec = Math.max(0.1, Number(((performance.now() - syncStartTime) / 1000).toFixed(2)));
+      encounteredBottlenecks.push(`Fatal error during sync: ${errMsg}`);
+      const errSummary: LastScanSummary = {
+        timestamp: new Date().toLocaleTimeString(),
+        totalFilesScanned: rawDiscoveredPaths?.length || 0,
+        totalFoldersScanned: 0,
+        processingTimeSeconds: durationSec,
+        scanPath: rootPath,
+        scanMode: effectiveSafeScan ? 'Safe Scan' : 'Full Deep Sync',
+        depthLimit: effectiveDepthLimit,
+        maxDepthReached: 1,
+        itemsPerSecond: 0,
+        bottlenecks: Array.from(new Set(encounteredBottlenecks)),
+        status: 'error',
+        retriesEncountered: totalRetries,
+      };
+      setLastScanSummary(errSummary);
+      try {
+        localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(errSummary));
+      } catch {}
+
       logger.error(`Samba sync failed: ${errMsg}`, 'Sync', {
         error: errMsg,
         failedPaths: rawDiscoveredPaths.length > 0 ? rawDiscoveredPaths.slice(-15) : [rootPath],
@@ -3145,6 +3232,28 @@ function App() {
       }
 
       const duration = Math.round(performance.now() - startTime);
+      const durationSec = Math.max(0.05, Number((duration / 1000).toFixed(2)));
+      const quickBottlenecks: string[] = [];
+      if (forceSkippedQuick) quickBottlenecks.push('QuickSync was force-skipped by user before completion');
+      if (topDirs.length === 0) quickBottlenecks.push('No top-level directories returned by quick-scan endpoint; check share mount');
+
+      const quickSummary: LastScanSummary = {
+        timestamp: new Date().toLocaleTimeString(),
+        totalFilesScanned: topDirs.reduce((acc, d) => acc + (d.itemCount || (d.subFolders?.length || 1)), 0),
+        totalFoldersScanned: topDirs.length,
+        processingTimeSeconds: durationSec,
+        scanPath: `/Volumes/${sambaConfig.share || 'media'}`,
+        scanMode: 'QuickSync',
+        depthLimit: 2,
+        maxDepthReached: 2,
+        itemsPerSecond: Math.round(topDirs.length / Math.max(0.1, durationSec)),
+        bottlenecks: quickBottlenecks,
+        status: quickBottlenecks.length > 0 ? 'warning' : 'optimal',
+      };
+      setLastScanSummary(quickSummary);
+      try {
+        localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(quickSummary));
+      } catch {}
 
       if (discoveredNewFolders.length > 0) {
         setSambaTree(newTree);
@@ -3456,6 +3565,8 @@ function App() {
             depthLimit={scanDepthLimit}
             onUpdateDepthLimit={setScanDepthLimit}
             setSambaConfig={setSambaConfig}
+            lastScanSummary={lastScanSummary}
+            onDismissLastScanSummary={() => setLastScanSummary(null)}
           />
         )}
 

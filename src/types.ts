@@ -566,5 +566,21 @@ export interface SyncIncident {
   resolved?: boolean;
 }
 
+export interface LastScanSummary {
+  timestamp: string;
+  totalFilesScanned: number;
+  totalFoldersScanned?: number;
+  processingTimeSeconds: number;
+  scanPath: string;
+  scanMode: 'Safe Scan' | 'Full Deep Sync' | 'QuickSync' | 'Folder Sync';
+  depthLimit: number;
+  maxDepthReached?: number;
+  itemsPerSecond?: number;
+  bottlenecks: string[];
+  status: 'optimal' | 'warning' | 'throttled' | 'error';
+  mediaExtractedCount?: number;
+  retriesEncountered?: number;
+}
+
 
 

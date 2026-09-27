@@ -575,9 +575,43 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                         </span>
                       </div>
                     ) : (
-                      <p className="text-[11px] text-slate-500 italic">
-                        Verify drive is mounted in Finder or register in Custom Mount Paths below.
-                      </p>
+                      <div className="space-y-1.5 text-[11px] text-slate-400">
+                        <p className="text-amber-300 font-semibold flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-amber-400 flex-shrink-0" />
+                          <span>Path not mounted at local mount target</span>
+                        </p>
+                        <div className="p-2 bg-slate-900 rounded border border-slate-800 space-y-1 font-mono text-[10px]">
+                          <div className="flex items-center justify-between text-slate-300">
+                            <span>macOS Finder (Cmd+K):</span>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard?.writeText(`smb://${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'}`);
+                                setCopiedKey('smb_mac');
+                                setTimeout(() => setCopiedKey(null), 2000);
+                              }}
+                              className="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer font-sans"
+                            >
+                              {copiedKey === 'smb_mac' ? '✓ Copied' : 'Copy'}
+                            </button>
+                          </div>
+                          <code className="text-emerald-300 block truncate">smb://{sambaConfig.server || '192.168.1.25'}/{sambaConfig.share || 'media'}</code>
+
+                          <div className="flex items-center justify-between text-slate-300 pt-1">
+                            <span>Windows Explorer:</span>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard?.writeText(`\\\\${sambaConfig.server || '192.168.1.25'}\\${sambaConfig.share || 'media'}`);
+                                setCopiedKey('smb_win');
+                                setTimeout(() => setCopiedKey(null), 2000);
+                              }}
+                              className="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer font-sans"
+                            >
+                              {copiedKey === 'smb_win' ? '✓ Copied' : 'Copy'}
+                            </button>
+                          </div>
+                          <code className="text-blue-300 block truncate">\\\\{sambaConfig.server || '192.168.1.25'}\\{sambaConfig.share || 'media'}</code>
+                        </div>
+                      </div>
                     )}
                   </div>
                 ))}

@@ -2176,16 +2176,57 @@ function resolveSambaFullPath(rawPath: string, customMountPath?: string): string
     }
   }
 
+  const cleanSub = (rawPath || '').replace(/\\/g, '/').replace(/^[\/\\]+/, '');
+
   if (targetMount !== '' && fs.existsSync(targetMount)) {
-    console.log(`[PathResolver] Using resolved mount path: ${targetMount}`);
-    if (!rawPath) return targetMount;
-    const cleanSub = rawPath.replace(/\\/g, '/').replace(/^[\/\\]+/, '');
-    if (cleanSub === targetMount || targetMount.endsWith(`/${cleanSub}`) || cleanSub.startsWith(targetMount)) {
-      return targetMount;
+    console.log(`[PathResolver] Using active mount path: ${targetMount} for subpath: "${cleanSub}"`);
+    if (!cleanSub) return targetMount;
+
+    // Check 1: If cleanSub is already identical to targetMount
+    if (cleanSub === targetMount) return targetMount;
+
+    // Check 2: Direct join check (e.g. targetMount=/Volumes/media/Series, cleanSub=Breaking Bad (2008))
+    const directCandidate = path.join(targetMount, cleanSub);
+    if (fs.existsSync(directCandidate)) {
+      console.log(`[PathResolver] Direct subpath found: ${directCandidate}`);
+      return directCandidate;
     }
-    const candidate = path.join(targetMount, cleanSub);
-    if (fs.existsSync(candidate)) return candidate;
-    return targetMount;
+
+    // Check 3: Overlapping segment check (e.g. targetMount=/Volumes/media/Series, cleanSub=Series/Breaking Bad (2008))
+    const mountParts = targetMount.split(/[\/\\]/).filter(Boolean);
+    const subParts = cleanSub.split(/[\/\\]/).filter(Boolean);
+
+    if (mountParts.length > 0 && subParts.length > 0) {
+      const lastMountPart = mountParts[mountParts.length - 1].toLowerCase();
+      const firstSubPart = subParts[0].toLowerCase();
+
+      if (lastMountPart === firstSubPart) {
+        const strippedSub = subParts.slice(1).join('/');
+        const overlappedCandidate = path.join(targetMount, strippedSub);
+        if (fs.existsSync(overlappedCandidate)) {
+          console.log(`[PathResolver] Stripped overlapping segment '${subParts[0]}', resolved to: ${overlappedCandidate}`);
+          return overlappedCandidate;
+        }
+      }
+    }
+
+    // Check 4: Check parent of targetMount (e.g. targetMount=/Volumes/media/Series, cleanSub=Movies/Interstellar)
+    const parentMount = path.dirname(targetMount);
+    if (fs.existsSync(parentMount)) {
+      const parentCandidate = path.join(parentMount, cleanSub);
+      if (fs.existsSync(parentCandidate)) {
+        console.log(`[PathResolver] Resolved under parent volume: ${parentCandidate}`);
+        return parentCandidate;
+      }
+    }
+
+    // If overlap was detected but disk item wasn't created yet, return the deduplicated candidate path
+    if (mountParts.length > 0 && subParts.length > 0 && mountParts[mountParts.length - 1].toLowerCase() === subParts[0].toLowerCase()) {
+      const subFolder = subParts.slice(1).join('/');
+      return path.join(targetMount, subFolder);
+    }
+
+    return directCandidate;
   }
 
   if (!rawPath) return SAMBA_SHARE_ROOT;

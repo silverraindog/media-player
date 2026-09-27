@@ -87,6 +87,18 @@ export const YouTubeTab: React.FC = () => {
     setSyncLogs((prev) => [{ timestamp, message, type }, ...prev].slice(0, 50));
   };
 
+  const getSanitizedRedirectUri = (): string => {
+    if (typeof window === 'undefined') return 'http://localhost:3000';
+    const origin = window.location.origin || '';
+    if (origin.startsWith('tauri://') || origin.includes('tauri.localhost') || origin.includes('localhost:1420')) {
+      return 'http://localhost:3000';
+    }
+    if (origin.startsWith('http://') || origin.startsWith('https://')) {
+      return `${origin}${window.location.pathname.replace(/\/+$/, '')}`;
+    }
+    return 'http://localhost:3000';
+  };
+
   // Check location hash/query on mount for OAuth access token callback or errors
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -110,10 +122,10 @@ export const YouTubeTab: React.FC = () => {
       const matchErr = hash.match(/error=([^&]+)/) || urlStr.match(/error=([^&]+)/);
       if (matchErr && matchErr[1]) {
         const errCode = decodeURIComponent(matchErr[1]);
-        if (errCode === 'redirect_uri_mismatch') {
-          const currentUri = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}` : 'http://localhost:3000';
-          setErrorMsg(`Error 400: redirect_uri_mismatch. Ensure '${currentUri}' is added to Google Cloud Console Authorized Redirect URIs for Client ID '${GOOGLE_CLIENT_ID}'.`);
-          addLog(`OAuth redirect_uri_mismatch error detected for URI: ${currentUri}`, 'error');
+        if (errCode === 'redirect_uri_mismatch' || errCode === 'invalid_request') {
+          const currentUri = getSanitizedRedirectUri();
+          setErrorMsg(`Error 400 (${errCode}): Google Cloud OAuth requires 'http://localhost:3000' or '${currentUri}' in Authorized Redirect URIs for Client ID '${GOOGLE_CLIENT_ID}'.`);
+          addLog(`OAuth error (${errCode}) detected for URI: ${currentUri}`, 'error');
         } else {
           setErrorMsg(`Google OAuth error: ${errCode}`);
           addLog(`Google OAuth error callback: ${errCode}`, 'error');
@@ -145,12 +157,10 @@ export const YouTubeTab: React.FC = () => {
   const openGoogleOAuthInBrowser = () => {
     setErrorMsg(null);
     const scope = encodeURIComponent(YOUTUBE_SCOPE);
-    const rawRedirectUri = typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}`
-      : 'http://localhost:3000';
+    const rawRedirectUri = getSanitizedRedirectUri();
     const redirectUri = encodeURIComponent(rawRedirectUri);
     
-    // Construct standard client-side OAuth Implicit flow URL without redirect_uri_mismatch
+    // Construct standard client-side OAuth Implicit flow URL with valid HTTP/HTTPS redirect_uri
     const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}&prompt=consent`;
     openExternalUrl(oauthUrl);
     addLog(`Opening Google Authorization in system browser with redirect_uri: ${rawRedirectUri}`, 'info');
@@ -160,7 +170,7 @@ export const YouTubeTab: React.FC = () => {
 
   const handleGoogleIdentityDirect = () => {
     setErrorMsg(null);
-    if (!(window as any).google?.accounts?.oauth2) {
+    if (isTauriEnv || !(window as any).google?.accounts?.oauth2) {
       openGoogleOAuthInBrowser();
       return;
     }

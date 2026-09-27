@@ -18,3 +18,18 @@ body {
   flex-direction: column;
   background-color: #020617 !important;
 }
+
+@keyframes breadcrumbSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.animate-breadcrumb-slide {
+  animation: breadcrumbSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

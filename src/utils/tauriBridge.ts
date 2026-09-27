@@ -454,6 +454,83 @@ export function logDirectoryTraversalDiagnostics(
   return report;
 }
 
+/**
+ * Ensures that recursively discovered file paths correctly preserve the full hierarchy
+ * relative to the root mount point (e.g. 'Series/Breaking Bad (2008)/Season 01/S01E01.mkv').
+ */
+export function normalizePathRelativeToShareRoot(itemRelPath: string, scanRootPath: string): string {
+  if (!itemRelPath) return '';
+  let cleanItem = itemRelPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  let cleanRoot = (scanRootPath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+
+  // 1. Strip absolute system mount prefixes from itemRelPath if present
+  cleanItem = cleanItem.replace(/^(Volumes|mnt)\/[^\/]+\//i, '');
+  cleanItem = cleanItem.replace(/^[a-zA-Z]:\/([^\/]+\/)?/i, '');
+  cleanItem = cleanItem.replace(/^(\/\/|smb:\/\/)[^\/]+\/[^\/]+\//i, '');
+
+  // 2. Extract subfolder path if scanRootPath extends beyond the share root
+  let subfolderPrefix = '';
+
+  if (cleanRoot.includes('/Volumes/')) {
+    const parts = cleanRoot.split('/Volumes/')[1].split('/').filter(Boolean);
+    // parts[0] is share name (e.g. "media"), parts[1..N] are subfolder paths (e.g. "Series")
+    if (parts.length > 1) {
+      subfolderPrefix = parts.slice(1).join('/');
+    }
+  } else if (cleanRoot.includes('/mnt/')) {
+    const parts = cleanRoot.split('/mnt/')[1].split('/').filter(Boolean);
+    if (parts.length > 1) {
+      subfolderPrefix = parts.slice(1).join('/');
+    }
+  } else if (cleanRoot.startsWith('//') || cleanRoot.startsWith('smb://')) {
+    const cleanUri = cleanRoot.replace(/^(smb:)?\/\//, '');
+    const parts = cleanUri.split('/').filter(Boolean);
+    // parts[0] is host, parts[1] is share name, parts[2..N] are subfolders
+    if (parts.length > 2) {
+      subfolderPrefix = parts.slice(2).join('/');
+    }
+  } else if (/^[a-zA-Z]:\//.test(cleanRoot)) {
+    // Windows drive letter like C:/media/Series or C:/Series
+    const cleanDrive = cleanRoot.replace(/^[a-zA-Z]:\//, '');
+    const parts = cleanDrive.split('/').filter(Boolean);
+    if (parts.length > 1) {
+      subfolderPrefix = parts.slice(1).join('/');
+    } else if (parts.length === 1) {
+      const topDir = parts[0].toLowerCase();
+      if (['series', 'movies', 'tv shows', 'music', 'anime', 'documentaries', 'audio books', 'books', 'franchises'].includes(topDir)) {
+        subfolderPrefix = parts[0];
+      }
+    }
+  } else {
+    // Relative path cleanRoot like "Series" or "Series/Breaking Bad (2008)"
+    const parts = cleanRoot.split('/').filter(Boolean);
+    if (parts.length > 0) {
+      const topDir = parts[0].toLowerCase();
+      if (['series', 'movies', 'tv shows', 'music', 'anime', 'documentaries', 'audio books', 'books', 'franchises'].includes(topDir)) {
+        subfolderPrefix = parts.join('/');
+      }
+    }
+  }
+
+  // 3. Prepend subfolderPrefix if cleanItem doesn't already include it
+  if (subfolderPrefix) {
+    const cleanPrefix = subfolderPrefix.replace(/^\/+|\/+$/g, '');
+    if (cleanPrefix) {
+      const itemLower = cleanItem.toLowerCase();
+      const prefixLower = cleanPrefix.toLowerCase();
+
+      if (itemLower === prefixLower) {
+        cleanItem = cleanPrefix;
+      } else if (!itemLower.startsWith(prefixLower + '/')) {
+        // Prepend prefix to preserve full hierarchy relative to share root
+        cleanItem = `${cleanPrefix}/${cleanItem}`;
+      }
+    }
+  }
+
+  return cleanItem.replace(/\/+/g, '/').replace(/^\/+/, '');
+}
+
 export const performFastScan = async (
   rootPath: string,
   onProgress?: (scannedCount: number, currentFile: string) => void,
@@ -533,7 +610,7 @@ export const performFastScan = async (
       const durationMs = Math.round(performance.now() - startTime);
       const items = (result || []).map((it: any) => ({
         name: it.name,
-        rel_path: it.rel_path,
+        rel_path: normalizePathRelativeToShareRoot(it.rel_path, rootPath),
         is_dir: it.is_dir,
         size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
       }));
@@ -587,7 +664,7 @@ export const performFastScan = async (
           if (altResult && altResult.length > 0) {
             const altItems = altResult.map((it: any) => ({
               name: it.name,
-              rel_path: it.rel_path,
+              rel_path: normalizePathRelativeToShareRoot(it.rel_path, `/Volumes/${matchVol}`),
               is_dir: it.is_dir,
               size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
             }));
@@ -628,9 +705,13 @@ export const performFastScan = async (
       const data = await response.json();
       if (data.success && data.items) {
         const durationMs = Math.round(performance.now() - startTime);
+        const normalizedItems = (data.items || []).map((it: any) => ({
+          ...it,
+          rel_path: normalizePathRelativeToShareRoot(it.rel_path, rootPath),
+        }));
 
         if (onProgress) {
-          data.items.forEach((item: any, idx: number) => {
+          normalizedItems.forEach((item: any, idx: number) => {
             if (!item.is_dir) {
               const clean = (item.rel_path || '').replace(/^[/\\]+/g, '').replace(/\\/g, '/');
               const parts = clean.split('/').filter(Boolean);
@@ -642,17 +723,17 @@ export const performFastScan = async (
         }
 
         console.log(
-          `[recursive_limit] performFastScan (Browser Fallback) completed in ${durationMs}ms: retrieved ${data.items.length} items with max_depth=${effectiveMaxDepth}. ` +
-            (data.items.length === 25
+          `[recursive_limit] performFastScan (Browser Fallback) completed in ${durationMs}ms: retrieved ${normalizedItems.length} items with max_depth=${effectiveMaxDepth}. ` +
+            (normalizedItems.length === 25
               ? '⚠️ RESULT CONTAINS EXACTLY 25 ITEMS.'
-              : `✅ Successfully retrieved ${data.items.length} items.`)
+              : `✅ Successfully retrieved ${normalizedItems.length} items.`)
         );
 
         // Deep-dive recursive depth and barrier analysis for browser fallback
         const diagnostics = logDirectoryTraversalDiagnostics(
           'performFastScan:BrowserFallback',
           rootPath,
-          data.items,
+          normalizedItems,
           durationMs,
           { safeScan, timeoutMs }
         );
@@ -660,8 +741,8 @@ export const performFastScan = async (
         return {
           success: true,
           mountPath: rootPath,
-          items: data.items,
-          totalScanned: data.totalScanned || data.items.length,
+          items: normalizedItems,
+          totalScanned: data.totalScanned || normalizedItems.length,
           diagnostics,
         };
       }
@@ -717,7 +798,7 @@ export const scanSambaVolume = async (
 
       const items = (result?.items || []).map((it: any) => ({
         name: it.name,
-        rel_path: it.rel_path,
+        rel_path: normalizePathRelativeToShareRoot(it.rel_path, mountLocation),
         is_dir: Boolean(it.is_dir),
         size_str: it.size_str || `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
       }));

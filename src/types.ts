@@ -113,6 +113,8 @@ export interface CustomMountPath {
 }
 
 export interface SambaConfig {
+  enabled?: boolean; // When true: Network Samba (SMB) mode. When false: Direct Host Path mode.
+  hostPath?: string; // Host directory path e.g. /Volumes/media, /mnt/media, D:\media
   server: string; // IP or hostname e.g. 192.168.1.150 or nas.local
   share: string; // share name e.g. "media" or "downloads"
   port: number; // 445 or 139

@@ -47,6 +47,7 @@ import {
   FolderInput,
   Wand2,
   History,
+  Wifi,
 } from 'lucide-react';
 import {
   SambaConfig,
@@ -395,11 +396,13 @@ export const getBreadcrumbSegments = (
   sambaConfig: SambaConfig,
   sambaTree: SambaShareNode[]
 ): BreadcrumbSegment[] => {
+  const isSambaOff = sambaConfig.enabled === false;
   const shareName = sambaConfig.share || 'media';
   const server = sambaConfig.server || '192.168.1.25';
+  const hostPath = sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media';
 
   const rootSegment: BreadcrumbSegment = {
-    label: `//${server}/${shareName}`,
+    label: isSambaOff ? hostPath : `//${server}/${shareName}`,
     path: '',
     isRoot: true,
     isFolder: true,
@@ -446,6 +449,7 @@ export const getBreadcrumbSegments = (
 
 interface SambaExplorerProps {
   sambaConfig: SambaConfig;
+  setSambaConfig?: React.Dispatch<React.SetStateAction<SambaConfig>>;
   sambaTree: SambaShareNode[];
   setSambaTree: React.Dispatch<React.SetStateAction<SambaShareNode[]>>;
   syncLogs: SyncLog[];
@@ -493,6 +497,7 @@ export const cleanPathValue = (rawPath: string): string => {
 
 export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   sambaConfig,
+  setSambaConfig,
   sambaTree,
   setSambaTree,
   syncLogs,
@@ -3010,15 +3015,58 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <div className="flex items-center gap-2">
                 <Zap className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0 animate-pulse" />
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
-                  Samba Network Share Responsiveness & Traversal Performance
+                  {sambaConfig.enabled === false ? 'Local Host Storage Traversal Performance' : 'Samba Network Share Responsiveness & Traversal Performance'}
                 </h4>
               </div>
 
-              <div className="flex items-center gap-2 text-xs font-mono">
+              <div className="flex items-center gap-2.5 text-xs font-mono flex-wrap">
+                {/* Samba ON / OFF Toggle Switch */}
+                {setSambaConfig && (
+                  <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-700/80 text-[11px]">
+                    <span className="text-slate-400 px-1.5 flex items-center gap-1 font-medium">
+                      <Wifi className={`w-3 h-3 ${sambaConfig.enabled !== false ? 'text-cyan-400' : 'text-slate-500'}`} />
+                      Samba:
+                    </span>
+                    <button
+                      type="button"
+                      id="samba-explorer-toggle-on"
+                      onClick={() => setSambaConfig((prev) => ({ ...prev, enabled: true }))}
+                      className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
+                        sambaConfig.enabled !== false
+                          ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-xs'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      title="Samba ON: Network SMB protocol (TCP 445 / 139) to remote NAS or Samba server"
+                    >
+                      ON
+                    </button>
+                    <button
+                      type="button"
+                      id="samba-explorer-toggle-off"
+                      onClick={() => setSambaConfig((prev) => ({
+                        ...prev,
+                        enabled: false,
+                        hostPath: prev.hostPath || prev.mountPath || '/Volumes/media',
+                        mountPath: prev.hostPath || prev.mountPath || '/Volumes/media'
+                      }))}
+                      className={`px-2 py-0.5 rounded font-bold transition-all cursor-pointer ${
+                        sambaConfig.enabled === false
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      title="Samba OFF: Direct Local Host Path storage mode (/Volumes/media) without network SMB overhead"
+                    >
+                      OFF
+                    </button>
+                  </div>
+                )}
+
                 <span className="text-slate-400 text-[11px]">Responsiveness:</span>
                 <span
                   className={`px-2.5 py-0.5 rounded-full font-bold text-[10px] border flex items-center gap-1 shadow-xs ${
-                    performanceMetrics.lastScanDurationMs < 300 || performanceMetrics.responsivenessRating.includes('Optimal')
+                    sambaConfig.enabled === false
+                      ? 'bg-amber-950 text-amber-300 border-amber-500/50'
+                      : performanceMetrics.lastScanDurationMs < 300 || performanceMetrics.responsivenessRating.includes('Optimal')
                       ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50 shadow-emerald-950/40'
                       : performanceMetrics.lastScanDurationMs < 1000
                       ? 'bg-cyan-950 text-cyan-300 border-cyan-500/50'
@@ -3027,22 +3075,89 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                       : 'bg-rose-950 text-rose-300 border-rose-500/50'
                   }`}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full ${performanceMetrics.lastScanDurationMs < 1000 ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-                  <span>{performanceMetrics.responsivenessRating}</span>
+                  <span className={`w-1.5 h-1.5 rounded-full ${sambaConfig.enabled === false ? 'bg-amber-400' : performanceMetrics.lastScanDurationMs < 1000 ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                  <span>{sambaConfig.enabled === false ? 'Host Path Direct' : performanceMetrics.responsivenessRating}</span>
                 </span>
 
-                <button
-                  type="button"
-                  onClick={handleProbeNetworkLatency}
-                  disabled={isProbingLatency}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono border border-slate-700 transition cursor-pointer flex items-center gap-1"
-                  title="Probe network socket ping latency (TCP 445)"
-                >
-                  <RotateCw className={`w-3 h-3 text-cyan-400 ${isProbingLatency ? 'animate-spin' : ''}`} />
-                  <span>Probe Latency</span>
-                </button>
+                {sambaConfig.enabled !== false && (
+                  <button
+                    type="button"
+                    onClick={handleProbeNetworkLatency}
+                    disabled={isProbingLatency}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono border border-slate-700 transition cursor-pointer flex items-center gap-1"
+                    title="Probe network socket ping latency (TCP 445)"
+                  >
+                    <RotateCw className={`w-3 h-3 text-cyan-400 ${isProbingLatency ? 'animate-spin' : ''}`} />
+                    <span>Probe Latency</span>
+                  </button>
+                )}
               </div>
             </div>
+
+            {/* If Samba is OFF, show Host Path Config bar directly inside performance banner */}
+            {sambaConfig.enabled === false && (
+              <div className="p-3 bg-amber-950/30 border border-amber-500/30 rounded-xl space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="flex items-center gap-1.5 text-amber-300 font-bold text-[11px]">
+                    <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Samba OFF: Configured Local Host Path (/Volumes/media):</span>
+                  </span>
+                  <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <span>Quick:</span>
+                    {['/Volumes/media', '/mnt/media', '/media'].map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => {
+                          if (setSambaConfig) {
+                            setSambaConfig((prev) => ({ ...prev, hostPath: p, mountPath: p }));
+                          }
+                        }}
+                        className={`px-1.5 py-0.2 rounded border transition cursor-pointer ${
+                          (sambaConfig.hostPath || sambaConfig.mountPath) === p
+                            ? 'bg-amber-500/40 text-amber-200 border-amber-500/60 font-bold'
+                            : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    id="samba-explorer-host-path-input"
+                    value={sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media'}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (setSambaConfig) {
+                        setSambaConfig((prev) => ({
+                          ...prev,
+                          hostPath: val,
+                          mountPath: val,
+                        }));
+                      }
+                    }}
+                    placeholder="/Volumes/media"
+                    className="flex-1 bg-slate-950 border border-amber-500/40 focus:border-amber-400 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCopyToast(`Host Path updated: ${sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media'}`);
+                      setTimeout(() => setCopyToast(null), 3000);
+                      if (onRefreshSamba) onRefreshSamba();
+                    }}
+                    className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition cursor-pointer flex items-center gap-1 shrink-0"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Set & Verify</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
               {/* Scan Duration */}
@@ -3057,7 +3172,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                     : `${(performanceMetrics.lastScanDurationMs / 1000).toFixed(2)} s`}
                 </div>
                 <div className="text-[9px] text-slate-500 truncate" title={performanceMetrics.scanMode}>
-                  {performanceMetrics.scanMode || 'Recursive Traversal'}
+                  {sambaConfig.enabled === false ? 'Direct Host Path Traversal' : (performanceMetrics.scanMode || 'Recursive Traversal')}
                 </div>
               </div>
 
@@ -3081,13 +3196,13 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <div className="p-2.5 bg-slate-950 rounded-xl border border-slate-800/80 space-y-1">
                 <div className="text-[10px] text-slate-500 uppercase font-bold flex items-center gap-1">
                   <Compass className="w-3 h-3 text-cyan-400 shrink-0" />
-                  <span>SMB Ping Latency</span>
+                  <span>{sambaConfig.enabled === false ? 'Storage Access' : 'SMB Ping Latency'}</span>
                 </div>
                 <div className="text-sm font-bold text-cyan-300">
-                  {networkLatencyMs > 0 ? `${networkLatencyMs} ms` : '14 ms'}
+                  {sambaConfig.enabled === false ? 'Direct FS' : (networkLatencyMs > 0 ? `${networkLatencyMs} ms` : '14 ms')}
                 </div>
                 <div className="text-[9px] text-slate-500 truncate">
-                  {sambaConfig.server || '192.168.1.25'}:445
+                  {sambaConfig.enabled === false ? (sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media') : (sambaConfig.server || '192.168.1.25') + ':445'}
                 </div>
               </div>
 
@@ -3137,7 +3252,9 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800 gap-2 flex-wrap">
                   <div className="flex items-center gap-2">
                     <FolderTree className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <h3 className="text-sm font-bold text-white">Samba Directory Tree</h3>
+                    <h3 className="text-sm font-bold text-white">
+                      {sambaConfig.enabled === false ? 'Host Path Directory Tree' : 'Samba Directory Tree'}
+                    </h3>
                     {totalSubtitlesFoundCount > 0 && (
                       <span
                         className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-teal-950/70 border border-teal-500/30 text-[10px] text-teal-300 font-mono shadow-xs"
@@ -3163,7 +3280,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                       <span>Preview Mode: {isPreviewMode ? 'ON' : 'OFF'}</span>
                     </button>
                     <span className="text-xs text-slate-500 font-mono hidden sm:inline">
-                      SMB 3.1.1
+                      {sambaConfig.enabled === false ? 'HOST DIRECT' : 'SMB 3.1.1'}
                     </span>
                   </div>
                 </div>

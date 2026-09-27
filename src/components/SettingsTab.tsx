@@ -29,6 +29,8 @@ import {
   ExternalLink,
   Activity,
   Terminal,
+  Wifi,
+  FolderOpen,
 } from 'lucide-react';
 import { SyncScheduleConfig, ClassifierSettings, SambaConfig } from '../types';
 import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag, BUILD_INCREMENTS, ReleaseIncrement } from '../version';
@@ -47,6 +49,7 @@ interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
   onUpdateClassifierSettings: (settings: ClassifierSettings) => void;
   sambaConfig: SambaConfig;
+  onUpdateSambaConfig?: (config: SambaConfig | ((prev: SambaConfig) => SambaConfig)) => void;
   onClearThumbnailCache: () => void;
   onExportLibraryBackup: () => void;
   onManualTriggerSync?: () => Promise<void>;
@@ -59,6 +62,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   classifierSettings,
   onUpdateClassifierSettings,
   sambaConfig,
+  onUpdateSambaConfig,
   onClearThumbnailCache,
   onExportLibraryBackup,
   onManualTriggerSync,
@@ -708,7 +712,150 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </div>
       </div>
 
-      {/* SECTION 3: STORAGE, BACKUP & SYSTEM DIAGNOSTICS */}
+      {/* SECTION 3: SAMBA PROTOCOL & DIRECT HOST PATH CONFIGURATION */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-4 flex-wrap gap-2">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
+              <HardDrive className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white">Samba & Storage Mode Toggle</h3>
+              <p className="text-xs text-slate-400">
+                Toggle between Network Samba (SMB protocol over TCP 445/139) and Direct Host Path storage mode.
+              </p>
+            </div>
+          </div>
+
+          {/* Toggle Switch */}
+          {onUpdateSambaConfig && (
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-700/80 shadow-inner">
+              <span className="text-slate-400 px-2 flex items-center gap-1.5 text-xs font-mono font-medium">
+                <Wifi className={`w-3.5 h-3.5 ${sambaConfig.enabled !== false ? 'text-cyan-400' : 'text-slate-500'}`} />
+                <span>Samba:</span>
+              </span>
+              <button
+                type="button"
+                id="settings-samba-toggle-on"
+                onClick={() => onUpdateSambaConfig((prev) => ({ ...prev, enabled: true }))}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  sambaConfig.enabled !== false
+                    ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Enable Network Samba SMB Protocol"
+              >
+                ON (SMB)
+              </button>
+              <button
+                type="button"
+                id="settings-samba-toggle-off"
+                onClick={() => onUpdateSambaConfig((prev) => ({
+                  ...prev,
+                  enabled: false,
+                  hostPath: prev.hostPath || prev.mountPath || '/Volumes/media',
+                  mountPath: prev.hostPath || prev.mountPath || '/Volumes/media'
+                }))}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  sambaConfig.enabled === false
+                    ? 'bg-amber-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Disable Samba: Use Direct Local Host Path"
+              >
+                OFF (Host Path)
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Dynamic Mode Details & Host Path Input */}
+        {sambaConfig.enabled === false ? (
+          <div className="p-4 rounded-xl bg-amber-950/30 border border-amber-500/40 space-y-3 font-mono">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                <FolderOpen className="w-4 h-4 text-amber-400" />
+                <span>Direct Host Path Storage Mode Active (/Volumes/media)</span>
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-amber-900/80 text-amber-200 border border-amber-500/40 font-bold">
+                SAMBA OFF
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+              Network SMB connections are disabled. The application reads and indexes media directly from the local host filesystem path below.
+            </p>
+
+            <div className="space-y-2 pt-1">
+              <label className="block text-xs font-medium text-slate-300">
+                Host Path Directory:
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  id="settings-host-path-input"
+                  value={sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media'}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (onUpdateSambaConfig) {
+                      onUpdateSambaConfig((prev) => ({
+                        ...prev,
+                        hostPath: val,
+                        mountPath: val,
+                      }));
+                    }
+                  }}
+                  placeholder="/Volumes/media"
+                  className="flex-1 bg-slate-950 border border-amber-500/50 focus:border-amber-400 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 font-mono"
+                />
+              </div>
+
+              {/* Quick Presets */}
+              <div className="flex items-center gap-2 pt-1 flex-wrap">
+                <span className="text-[10px] text-slate-400">Presets:</span>
+                {[
+                  { label: 'macOS (/Volumes/media)', path: '/Volumes/media' },
+                  { label: 'Linux (/mnt/media)', path: '/mnt/media' },
+                  { label: 'Root (/media)', path: '/media' },
+                  { label: 'Windows (D:\\media)', path: 'D:\\media' },
+                ].map((preset) => (
+                  <button
+                    key={preset.path}
+                    type="button"
+                    onClick={() => {
+                      if (onUpdateSambaConfig) {
+                        onUpdateSambaConfig((prev) => ({
+                          ...prev,
+                          hostPath: preset.path,
+                          mountPath: preset.path,
+                        }));
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono border transition cursor-pointer ${
+                      (sambaConfig.hostPath || sambaConfig.mountPath) === preset.path
+                        ? 'bg-amber-500/40 text-amber-200 border-amber-500/60 font-bold'
+                        : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 text-indigo-300 font-medium">
+              <Wifi className="w-4 h-4 text-cyan-400" />
+              <span>Network Samba SMB protocol is enabled (TCP 445 / 139)</span>
+            </div>
+            <span className="text-slate-400 font-mono text-[11px]">
+              {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'No server IP configured'}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* SECTION 4: STORAGE, BACKUP & SYSTEM DIAGNOSTICS */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
         <div className="flex items-center space-x-3 border-b border-slate-800 pb-4">
           <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">

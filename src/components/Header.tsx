@@ -144,34 +144,82 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             </div>
 
-            {/* Samba Status Badge */}
+            {/* Samba Protocol Mode Toggle Switch (ON / OFF) */}
+            <div className="flex items-center bg-slate-800/80 p-1 rounded-lg border border-slate-700/60 text-xs">
+              <span className="text-slate-400 px-1.5 flex items-center gap-1 text-[11px] font-medium font-mono">
+                <Wifi className={`w-3.5 h-3.5 ${sambaConfig.enabled !== false ? 'text-cyan-400' : 'text-slate-500'}`} />
+                Samba:
+              </span>
               <button
-                id="header-samba-status-btn"
+                id="header-samba-toggle-on"
+                onClick={() => setSambaConfig((prev) => ({ ...prev, enabled: true }))}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                  sambaConfig.enabled !== false
+                    ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Samba ON: Network SMB protocol (TCP 445 / 139) to remote NAS or Samba server"
+              >
+                ON
+              </button>
+              <button
+                id="header-samba-toggle-off"
+                onClick={() => setSambaConfig((prev) => ({
+                  ...prev,
+                  enabled: false,
+                  hostPath: prev.hostPath || prev.mountPath || '/Volumes/media'
+                }))}
+                className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                  sambaConfig.enabled === false
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Samba OFF: Direct Local Host Path storage mode (/Volumes/media) without network SMB overhead"
+              >
+                OFF
+              </button>
+            </div>
+
+            {/* Samba / Host Path Status Badge */}
+            <button
+              id="header-samba-status-btn"
               onClick={onOpenQuickMount}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg border text-xs transition-all cursor-pointer ${
-                isConnected
+                sambaConfig.enabled === false
+                  ? 'bg-amber-950/40 hover:bg-amber-950/60 border-amber-500/50 text-amber-200 shadow-xs'
+                  : isConnected
                   ? 'bg-slate-800 hover:bg-slate-750 border-emerald-500/30 text-slate-300 hover:border-emerald-500/50'
                   : 'bg-amber-950/40 hover:bg-amber-950/60 border-amber-500/40 text-amber-200 hover:border-amber-500/60'
               }`}
-              title={isConnected ? 'Samba share active & verified' : 'Samba share unverified / pending connection. Click to configure.'}
+              title={
+                sambaConfig.enabled === false
+                  ? `Direct Host Path Mode: ${sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media'} (Samba disabled)`
+                  : isConnected
+                  ? 'Samba share active & verified'
+                  : 'Samba share unverified / pending connection. Click to configure.'
+              }
             >
               <span className="relative flex h-2 w-2">
-                {isConnected && (
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                {(isConnected || sambaConfig.enabled === false) && (
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${sambaConfig.enabled === false ? 'bg-amber-400' : 'bg-emerald-400'} opacity-75`}></span>
                 )}
                 <span
                   className={`relative inline-flex rounded-full h-2 w-2 ${
-                    isConnected ? 'bg-emerald-500' : 'bg-amber-500'
+                    sambaConfig.enabled === false ? 'bg-amber-500' : isConnected ? 'bg-emerald-500' : 'bg-rose-500'
                   }`}
                 ></span>
               </span>
-              <span className="font-mono">
-                {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'Configure Samba Share'}
+              <span className="font-mono truncate max-w-[200px]">
+                {sambaConfig.enabled === false
+                  ? `Host: ${sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media'}`
+                  : sambaConfig.server
+                  ? `//${sambaConfig.server}/${sambaConfig.share}`
+                  : 'Configure Samba Share'}
               </span>
               <span className={`text-[10px] font-semibold uppercase tracking-wider ${
-                isConnected ? 'text-emerald-400' : 'text-amber-400'
+                sambaConfig.enabled === false ? 'text-amber-400' : isConnected ? 'text-emerald-400' : 'text-rose-400'
               }`}>
-                {isConnected ? 'SMB3' : 'OFFLINE'}
+                {sambaConfig.enabled === false ? 'HOST' : isConnected ? 'SMB3' : 'OFFLINE'}
               </span>
             </button>
           </div>

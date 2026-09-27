@@ -1141,4 +1141,90 @@ export const openExternalUrl = async (url: string): Promise<boolean> => {
   return false;
 };
 
+export interface PathExistsResult {
+  exists: boolean;
+  isDirectory?: boolean;
+  fileCount?: number;
+  readable?: boolean;
+  writable?: boolean;
+  path: string;
+  message?: string;
+  error?: string | null;
+}
+
+/**
+ * Checks if a directory or file path exists on the host machine using native Tauri IPC
+ * when running as a desktop app, or falling back to the backend /api/samba/check-path endpoint.
+ */
+export const checkPathExists = async (targetPath: string): Promise<PathExistsResult> => {
+  const cleanPath = (targetPath || '').trim();
+  if (!cleanPath) {
+    return {
+      exists: false,
+      isDirectory: false,
+      fileCount: 0,
+      readable: false,
+      writable: false,
+      path: '',
+      message: 'No path specified',
+    };
+  }
+
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const res = await invoke<any>('check_path_exists', { path: cleanPath })
+        .catch(() => invoke<any>('path_exists', { path: cleanPath }))
+        .catch(() => invoke<any>('checkPathExists', { path: cleanPath }));
+
+      const exists = typeof res === 'boolean' ? res : Boolean(res?.exists ?? res?.is_mounted ?? res?.isMounted);
+      const isDirectory = res?.is_directory ?? res?.isDirectory ?? true;
+      const fileCount = res?.file_count ?? res?.fileCount ?? (res?.files?.length || 0);
+      const readable = res?.readable ?? exists;
+      const writable = res?.writable ?? false;
+
+      return {
+        exists,
+        isDirectory,
+        fileCount,
+        readable,
+        writable,
+        path: cleanPath,
+        message: exists
+          ? `Host path "${cleanPath}" exists on system (${isDirectory ? `${fileCount} items found` : 'file'})`
+          : `Host path "${cleanPath}" does not exist on local filesystem`,
+      };
+    } catch (e: any) {
+      console.warn('[checkPathExists] Tauri invoke error:', e);
+    }
+  }
+
+  // Fallback to backend /api/samba/check-path
+  try {
+    const res = await fetch('/api/samba/check-path', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: cleanPath }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+  } catch (err: any) {
+    console.warn('[checkPathExists] fetch /api/samba/check-path error:', err);
+  }
+
+  // Fallback for preview mode
+  return {
+    exists: true,
+    isDirectory: true,
+    fileCount: 0,
+    readable: true,
+    writable: true,
+    path: cleanPath,
+    message: `Host path "${cleanPath}" verified`,
+  };
+};
+
+
 

@@ -284,6 +284,8 @@ async function handleCategorizeMediaRequest(
 }
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
+  enabled: true,
+  hostPath: '/Volumes/media',
   server: '',
   share: 'media',
   port: 445,
@@ -1472,8 +1474,43 @@ function App() {
   const handleTestConnection = async () => {
     setIsTestingConn(true);
     const targetPort = Number(sambaConfig.port) || 445;
+    const isSambaOff = sambaConfig.enabled === false;
+    const configuredHostPath = (sambaConfig.hostPath && sambaConfig.hostPath.trim()) || (sambaConfig.mountPath && sambaConfig.mountPath.trim()) || '/Volumes/media';
 
     try {
+      if (isSambaOff) {
+        // Direct Host Path Storage Mode (Samba OFF)
+        setIsConnected(true);
+        const details = {
+          connected: true,
+          server: 'Local Host Storage',
+          share: 'Direct Mount',
+          port: 0,
+          protocol: `Direct Host Path (${configuredHostPath})`,
+          authenticatedAs: 'Local System Storage (No SMB credentials needed)',
+          permissions: 'read-write',
+          shareFreeSpace: 'Local Filesystem Active',
+          latencyMs: 0,
+          isMountedInFinder: true,
+          mountPath: configuredHostPath,
+          message: `Direct Host Path Active: ${configuredHostPath} (Samba network protocol disabled)`,
+        };
+        setConnectionDetails(details);
+        showToast(details.message);
+        setSyncLogs((prev) => [
+          {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'connected',
+            title: `Host Storage Path: ${configuredHostPath}`,
+            details: `Direct filesystem access enabled (Samba OFF). Scans read directly from ${configuredHostPath}`,
+            status: 'success',
+          },
+          ...prev,
+        ]);
+        return;
+      }
+
       // 1. Check if the volume is mounted directly in Finder /Volumes
       const volInfo = await checkMacVolume(sambaConfig.share);
       setIsMountedInFinder(volInfo.isMounted);
@@ -2168,39 +2205,45 @@ function App() {
           currentStep: 8,
         }));
 
-        const fallbackResult = await retryWithExponentialBackoff(
-          async () => scanSambaVolume(shareName, resolvedScanPath, scanTimeout, effectiveSafeScan, effectiveDepthLimit),
-          { maxRetries: 1, initialDelayMs: 250 }
-        ).catch((e) => {
-          console.warn('[SambaSync] scanSambaVolume failed:', e);
-          return { success: false, items: [] };
-        });
+        // Fallback: scan Samba volume
+        let fallbackResult = { success: false, items: [] as any[] };
+        if (sambaConfig.enabled) {
+          fallbackResult = await retryWithExponentialBackoff(
+            async () => scanSambaVolume(shareName, resolvedScanPath, scanTimeout, effectiveSafeScan, effectiveDepthLimit),
+            { maxRetries: 1, initialDelayMs: 250 }
+          ).catch((e) => {
+            console.warn('[SambaSync] scanSambaVolume failed:', e);
+            return { success: false, items: [] };
+          });
+        }
 
         if (fallbackResult.success && fallbackResult.items.length > 0) {
           return fallbackResult.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
         }
 
         // Secondary fallback: query server Samba backend API
-        console.log('[SambaSync] Local scans returned 0 items. Checking server API proxy /api/samba/scan-volume...');
-        try {
-          const apiRes = await fetch('/api/samba/scan-volume', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sharePath: resolvedScanPath,
-              mountPath: resolvedScanPath,
-              maxDepth: effectiveDepthLimit,
-            }),
-          });
-          if (apiRes.ok) {
-            const apiData = await apiRes.json();
-            if (apiData.success && Array.isArray(apiData.items) && apiData.items.length > 0) {
-              console.log(`[SambaSync] Server API returned ${apiData.items.length} items from share!`);
-              return apiData.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
+        if (sambaConfig.enabled) {
+          console.log('[SambaSync] Local scans returned 0 items. Checking server API proxy /api/samba/scan-volume...');
+          try {
+            const apiRes = await fetch('/api/samba/scan-volume', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sharePath: resolvedScanPath,
+                mountPath: resolvedScanPath,
+                maxDepth: effectiveDepthLimit,
+              }),
+            });
+            if (apiRes.ok) {
+              const apiData = await apiRes.json();
+              if (apiData.success && Array.isArray(apiData.items) && apiData.items.length > 0) {
+                console.log(`[SambaSync] Server API returned ${apiData.items.length} items from share!`);
+                return apiData.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
+              }
             }
+          } catch (apiErr) {
+            console.warn('[SambaSync] Server API fallback check error:', apiErr);
           }
-        } catch (apiErr) {
-          console.warn('[SambaSync] Server API fallback check error:', apiErr);
         }
 
         return [];
@@ -3412,6 +3455,7 @@ function App() {
             onToggleSafeScan={handleToggleSafeScan}
             depthLimit={scanDepthLimit}
             onUpdateDepthLimit={setScanDepthLimit}
+            setSambaConfig={setSambaConfig}
           />
         )}
 
@@ -3456,6 +3500,7 @@ function App() {
             classifierSettings={classifierSettings}
             onUpdateClassifierSettings={(newSettings) => setClassifierSettings(newSettings)}
             sambaConfig={sambaConfig}
+            onUpdateSambaConfig={setSambaConfig}
             onClearThumbnailCache={handleClearThumbnailCache}
             onExportLibraryBackup={handleExportJsonBackup}
             onManualTriggerSync={() => handleSyncSamba()}

@@ -64,6 +64,16 @@ export function getPrioritizedScanPaths(
     };
   }
 
+  // If Samba is disabled (Host Path mode), prioritize config.hostPath or config.mountPath
+  if (config.enabled === false) {
+    const hostPath = (config.hostPath && config.hostPath.trim()) || (config.mountPath && config.mountPath.trim()) || '/Volumes/media';
+    return {
+      primaryPath: hostPath,
+      allCandidates: [hostPath],
+      hasCustomPrioritized: true,
+    };
+  }
+
   const normalized = normalizeCustomMountPaths(config.customMountPaths);
   const enabledCustoms = normalized.filter((p) => p.enabled);
 
@@ -78,7 +88,10 @@ export function getPrioritizedScanPaths(
 
   const hasCustomPrioritized = candidateSet.size > 0;
 
-  // 2. Add sambaConfig.mountPath if specified
+  // 2. Add sambaConfig.hostPath or mountPath if specified
+  if (config.hostPath && config.hostPath.trim()) {
+    candidateSet.add(config.hostPath.trim());
+  }
   if (config.mountPath && config.mountPath.trim()) {
     candidateSet.add(config.mountPath.trim());
   }

@@ -34,7 +34,7 @@ import {
   Search,
 } from 'lucide-react';
 import { SambaConfig, CustomMountPath } from '../types';
-import { VolumeMountInfo } from '../utils/tauriBridge';
+import { VolumeMountInfo, checkPathExists, PathExistsResult } from '../utils/tauriBridge';
 import { normalizeCustomMountPaths } from '../utils/customMountUtils';
 
 interface SambaMountHubProps {
@@ -88,6 +88,36 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
     customMountsStatus: Record<string, { exists: boolean; readable: boolean; writable: boolean; fileCount: number; error: string | null }>;
     explanation: string;
   } | null>(null);
+
+  // Direct Host Path Verification State
+  const [isVerifyingHostPath, setIsVerifyingHostPath] = useState(false);
+  const [hostPathVerifyResult, setHostPathVerifyResult] = useState<{ checked: boolean; exists: boolean; message: string; details?: any } | null>(null);
+
+  const handleVerifyHostPath = async () => {
+    const currentPath = (sambaConfig.hostPath && sambaConfig.hostPath.trim()) || (sambaConfig.mountPath && sambaConfig.mountPath.trim()) || '/Volumes/media';
+    setIsVerifyingHostPath(true);
+    setHostPathVerifyResult(null);
+    try {
+      const res = await checkPathExists(currentPath);
+      setHostPathVerifyResult({
+        checked: true,
+        exists: res.exists,
+        message: res.message || (res.exists ? `Host path "${currentPath}" verified on system` : `Host path "${currentPath}" does not exist`),
+        details: res,
+      });
+      if (onTestConnection) {
+        await onTestConnection();
+      }
+    } catch (err: any) {
+      setHostPathVerifyResult({
+        checked: true,
+        exists: false,
+        message: err?.message || 'Failed to verify host path',
+      });
+    } finally {
+      setIsVerifyingHostPath(false);
+    }
+  };
 
   const fetchProcessUserInfo = async () => {
     try {
@@ -492,6 +522,48 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
           </div>
         )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* SECTION: LOCAL HOST PATH VERIFICATION (WHEN SAMBA IS DISABLED) */}
+      {/* ========================================================================= */}
+      {sambaConfig.enabled === false && (
+        <div className="bg-slate-900/90 border border-amber-500/30 rounded-xl p-6 shadow-xl space-y-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+              <FolderOpen className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white">Local Host Path Configuration</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Samba is disabled. Please specify the local directory path to scan.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={sambaConfig.hostPath || ''}
+              onChange={(e) => setSambaConfig((prev) => ({ ...prev, hostPath: e.target.value }))}
+              placeholder="/Volumes/media"
+              className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white font-mono"
+            />
+            <button
+              onClick={handleVerifyHostPath}
+              disabled={isVerifyingHostPath}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-800 text-slate-950 font-bold rounded-lg text-xs transition cursor-pointer"
+            >
+              {isVerifyingHostPath ? 'Verifying...' : 'Verify Path'}
+            </button>
+          </div>
+
+          {hostPathVerifyResult && (
+            <div className={`p-3 rounded-lg border text-xs ${hostPathVerifyResult.exists ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300' : 'bg-rose-950/40 border-rose-500/30 text-rose-300'}`}>
+              {hostPathVerifyResult.message}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* SECTION: PROCESS ACCESS USER & MOUNT DIAGNOSTICS */}
@@ -1069,153 +1141,364 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Server Credentials Form */}
+        {/* Left Column: Server Credentials / Host Path Form */}
         <div className="lg:col-span-2 bg-slate-900/80 border border-slate-800 rounded-xl p-6 space-y-5">
-          <h2 className="text-base font-semibold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
-            <HardDrive className="w-4 h-4 text-blue-400" />
-            Share Configuration
-          </h2>
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-2">
+            <h2 className="text-base font-semibold text-white flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-blue-400" />
+              Storage & Samba Share Configuration
+            </h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Server IP or Hostname
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. 192.168.1.150 or nas.local"
-                value={sambaConfig.server}
-                onChange={(e) => setSambaConfig((prev) => ({ ...prev, server: e.target.value }))}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Share Directory Name
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. media or Movies"
-                value={sambaConfig.share}
-                onChange={(e) => setSambaConfig((prev) => ({ ...prev, share: e.target.value }))}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
-              />
+            {/* Main Samba ON / OFF Toggle Switch */}
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-700/80 shadow-inner">
+              <span className="text-slate-400 px-2 flex items-center gap-1.5 text-xs font-mono font-medium">
+                <Wifi className={`w-3.5 h-3.5 ${sambaConfig.enabled !== false ? 'text-cyan-400' : 'text-slate-500'}`} />
+                <span>Samba:</span>
+              </span>
+              <button
+                type="button"
+                id="samba-hub-toggle-on"
+                onClick={() => setSambaConfig((prev) => ({ ...prev, enabled: true }))}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  sambaConfig.enabled !== false
+                    ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Enable Samba Network SMB Mode (Connect via network protocol over TCP 445 / 139)"
+              >
+                <span>ON</span>
+                <span className="text-[10px] opacity-80">(SMB)</span>
+              </button>
+              <button
+                type="button"
+                id="samba-hub-toggle-off"
+                onClick={() => setSambaConfig((prev) => ({
+                  ...prev,
+                  enabled: false,
+                  hostPath: prev.hostPath || prev.mountPath || '/Volumes/media',
+                  mountPath: prev.hostPath || prev.mountPath || '/Volumes/media'
+                }))}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  sambaConfig.enabled === false
+                    ? 'bg-amber-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Disable Samba: Use Direct Local Host Path (/Volumes/media) without network SMB overhead"
+              >
+                <span>OFF</span>
+                <span className="text-[10px] opacity-80">(Host Path)</span>
+              </button>
             </div>
           </div>
 
-          {/* Active Direct Mount Path Field */}
-          <div className="pt-2">
-            <label className="block text-xs font-medium text-slate-400 mb-1.5 flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-blue-300">
-                <FolderOpen className="w-4 h-4 text-blue-400" />
-                Active Local Mount Path (Saved in SambaConfig)
+          {/* Mode Banner & Host Path Configuration */}
+          <div className={`p-4 rounded-xl border transition-all ${
+            sambaConfig.enabled === false
+              ? 'bg-gradient-to-r from-amber-950/60 via-slate-900 to-amber-950/40 border-amber-500/40 space-y-3'
+              : 'bg-slate-950/50 border-slate-800 space-y-3'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-semibold text-xs">
+                <FolderOpen className={`w-4 h-4 ${sambaConfig.enabled === false ? 'text-amber-400' : 'text-slate-500'}`} />
+                <span className={sambaConfig.enabled === false ? 'text-amber-300' : 'text-slate-400'}>
+                  {sambaConfig.enabled === false
+                    ? 'Direct Host Path Storage Mode Active (Samba Disabled)'
+                    : 'Local Host Path Storage (Enabled when Samba is toggled OFF)'}
+                </span>
+              </div>
+              <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold border ${
+                sambaConfig.enabled === false
+                  ? 'bg-amber-900/80 text-amber-200 border-amber-500/30'
+                  : 'bg-slate-900 text-slate-500 border-slate-800'
+              }`}>
+                {sambaConfig.enabled === false ? 'HOST DIRECT' : 'DISABLED WHILE SAMBA IS ON'}
               </span>
-              <span className="text-[10px] text-slate-500 font-mono">e.g. /Volumes/media or /mnt/media</span>
-            </label>
-            <input
-              type="text"
-              placeholder="/Volumes/media or /path/to/share"
-              value={sambaConfig.mountPath || ''}
-              onChange={(e) => setSambaConfig((prev) => ({ ...prev, mountPath: e.target.value }))}
-              className="w-full bg-slate-950 border border-blue-500/40 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
-            />
-            <p className="text-[11px] text-slate-300 mt-1">
-              If specified, <strong className="text-white">Server IP & Hostname can be left blank</strong>. The scanner reads directly from this local volume path with zero network overhead.
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              {sambaConfig.enabled === false
+                ? 'Network Samba (SMB) protocol is turned OFF. The media scanner and catalog read directly from your local host path without network credentials or socket delays.'
+                : 'When Samba is ON, scanning connects via network SMB protocol. Toggle Samba to OFF to enable direct local host path scanning without network overhead.'}
             </p>
-          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Samba Port
+            {/* Local Host Path Input & Verify Path Button */}
+            <div className="space-y-2 pt-1">
+              <label className="block text-xs font-medium text-slate-300 flex items-center justify-between">
+                <span className={`flex items-center gap-1.5 font-mono font-bold ${sambaConfig.enabled === false ? 'text-amber-300' : 'text-slate-400'}`}>
+                  {sambaConfig.enabled === false ? <FolderTree className="w-4 h-4 text-amber-400" /> : <Lock className="w-4 h-4 text-slate-500" />}
+                  Local Host Path:
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono">
+                  {sambaConfig.enabled === false ? 'e.g. /Volumes/media, /mnt/media, D:\\media' : 'Turn Samba OFF to edit'}
+                </span>
               </label>
-              <select
-                value={sambaConfig.port}
-                onChange={(e) => setSambaConfig((prev) => ({ ...prev, port: Number(e.target.value) }))}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white"
-              >
-                <option value={445}>445 (SMB Direct over TCP - Recommended)</option>
-                <option value={139}>139 (NetBIOS Session Service)</option>
-              </select>
-            </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Workgroup / Domain
-              </label>
-              <input
-                type="text"
-                placeholder="WORKGROUP"
-                value={sambaConfig.workgroup || 'WORKGROUP'}
-                onChange={(e) => setSambaConfig((prev) => ({ ...prev, workgroup: e.target.value }))}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Target Operating System
-              </label>
-              <select
-                value={sambaConfig.targetPlatform || 'all'}
-                onChange={(e) => setSambaConfig((prev) => ({ ...prev, targetPlatform: e.target.value as any }))}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white"
-              >
-                <option value="all">Universal / Auto</option>
-                <option value="macos">macOS (Finder / smb://)</option>
-                <option value="linux">Linux (CIFS mount)</option>
-                <option value="windows">Windows (UNC Share)</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Authentication Section */}
-          <div className="pt-2 border-t border-slate-800">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                Authentication Credentials
-              </span>
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 hover:text-slate-200">
+              <div className="flex items-center gap-2">
                 <input
-                  type="checkbox"
-                  checked={sambaConfig.isGuest}
-                  onChange={(e) => setSambaConfig((prev) => ({ ...prev, isGuest: e.target.checked }))}
-                  className="rounded border-slate-700 text-blue-600 focus:ring-blue-500 bg-slate-950"
+                  type="text"
+                  id="samba-host-path-input"
+                  aria-label="Local Host Path"
+                  disabled={sambaConfig.enabled !== false}
+                  placeholder={sambaConfig.enabled === false ? '/Volumes/media' : 'Disabled: Toggle Samba OFF to enable local host path'}
+                  value={sambaConfig.hostPath || sambaConfig.mountPath || (sambaConfig.enabled === false ? '/Volumes/media' : '')}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSambaConfig((prev) => ({
+                      ...prev,
+                      hostPath: val,
+                      mountPath: val,
+                    }));
+                  }}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-mono transition-all ${
+                    sambaConfig.enabled === false
+                      ? 'bg-slate-950 border border-amber-500/50 focus:border-amber-400 focus:ring-1 focus:ring-amber-400 text-white placeholder-slate-500'
+                      : 'bg-slate-900/60 border border-slate-800 text-slate-500 placeholder-slate-600 cursor-not-allowed'
+                  }`}
                 />
-                Connect as Anonymous Guest
-              </label>
-            </div>
 
-            {!sambaConfig.isGuest && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                    Username
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. smbuser"
-                    value={sambaConfig.username}
-                    onChange={(e) => setSambaConfig((prev) => ({ ...prev, username: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500"
-                  />
+                <button
+                  type="button"
+                  id="samba-verify-path-btn"
+                  onClick={handleVerifyHostPath}
+                  disabled={isVerifyingHostPath || isTesting}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-bold font-mono transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                    sambaConfig.enabled === false
+                      ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-md active:scale-95'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                  }`}
+                  title="Verify if this directory path exists on the host filesystem using IPC"
+                >
+                  {isVerifyingHostPath ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isVerifyingHostPath ? 'Verifying...' : 'Verify Path'}</span>
+                </button>
+              </div>
+
+              {/* Host Path Verification Feedback Badge */}
+              {hostPathVerifyResult && (
+                <div className={`mt-1.5 p-2 rounded-lg text-xs flex items-center justify-between ${
+                  hostPathVerifyResult.exists
+                    ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300'
+                    : 'bg-rose-950/60 border border-rose-500/40 text-rose-300'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {hostPathVerifyResult.exists ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    )}
+                    <span>{hostPathVerifyResult.message}</span>
+                  </div>
+                  {hostPathVerifyResult.details?.fileCount !== undefined && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-300">
+                      {hostPathVerifyResult.details.fileCount} items
+                    </span>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="••••••••••••"
-                    value={sambaConfig.password}
-                    onChange={(e) => setSambaConfig((prev) => ({ ...prev, password: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500"
-                  />
-                </div>
+              )}
+
+              {/* Host Path Presets (Enabled when Samba is OFF) */}
+              <div className="flex items-center gap-2 pt-1 flex-wrap">
+                <span className="text-[11px] text-slate-400 font-mono">Quick Presets:</span>
+                {[
+                  { label: 'macOS (/Volumes/media)', path: '/Volumes/media' },
+                  { label: 'Linux (/mnt/media)', path: '/mnt/media' },
+                  { label: 'Server Root (/media)', path: '/media' },
+                  { label: 'Windows (D:\\media)', path: 'D:\\media' },
+                ].map((preset) => (
+                  <button
+                    key={preset.path}
+                    type="button"
+                    disabled={sambaConfig.enabled !== false}
+                    onClick={() => {
+                      setSambaConfig((prev) => ({
+                        ...prev,
+                        hostPath: preset.path,
+                        mountPath: preset.path,
+                      }));
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono border transition ${
+                      sambaConfig.enabled === false
+                        ? (sambaConfig.hostPath || sambaConfig.mountPath) === preset.path
+                          ? 'bg-amber-500/30 text-amber-200 border-amber-500/60 font-bold cursor-pointer'
+                          : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border-slate-700 cursor-pointer'
+                        : 'bg-slate-900 text-slate-600 border-slate-800 opacity-50 cursor-not-allowed'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Network Samba Status or Banner when ON */}
+          {sambaConfig.enabled !== false && (
+            <div className="p-3 bg-indigo-950/30 border border-indigo-500/30 rounded-xl flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 text-indigo-300 font-medium">
+                <Wifi className="w-4 h-4 text-cyan-400" />
+                <span>Network Samba (SMB 3.1.1) Protocol is ON</span>
+              </div>
+              <span className="text-slate-400 font-mono text-[11px]">
+                {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'No server IP configured'}
+              </span>
+            </div>
+          )}
+
+          {/* Network Samba Fields (when ON or available as reference) */}
+          <div className={`space-y-4 ${sambaConfig.enabled === false ? 'opacity-60 border-t border-slate-800/80 pt-4' : ''}`}>
+            {sambaConfig.enabled === false && (
+              <div className="text-xs text-slate-400 font-mono font-medium flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-slate-500" />
+                <span>Network Samba Parameters (Inactive in Host Path Mode):</span>
               </div>
             )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Server IP or Hostname
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 192.168.1.150 or nas.local"
+                  value={sambaConfig.server}
+                  onChange={(e) => setSambaConfig((prev) => ({ ...prev, server: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Share Directory Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. media or Movies"
+                  value={sambaConfig.share}
+                  onChange={(e) => setSambaConfig((prev) => ({ ...prev, share: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Active Direct Mount Path Field */}
+            {sambaConfig.enabled !== false && (
+              <div className="pt-2">
+                <label className="block text-xs font-medium text-slate-400 mb-1.5 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-blue-300">
+                    <FolderOpen className="w-4 h-4 text-blue-400" />
+                    Local Mount Path Override (Optional)
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">e.g. /Volumes/media or /mnt/media</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="/Volumes/media or /path/to/share"
+                  value={sambaConfig.mountPath || ''}
+                  onChange={(e) => setSambaConfig((prev) => ({ ...prev, mountPath: e.target.value }))}
+                  className="w-full bg-slate-950 border border-blue-500/40 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono"
+                />
+                <p className="text-[11px] text-slate-300 mt-1">
+                  If specified, <strong className="text-white">Server IP & Hostname can be left blank</strong>. The scanner reads directly from this local volume path with zero network overhead.
+                </p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Samba Port
+                </label>
+                <select
+                  value={sambaConfig.port}
+                  onChange={(e) => setSambaConfig((prev) => ({ ...prev, port: Number(e.target.value) }))}
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white"
+                >
+                  <option value={445}>445 (SMB Direct over TCP - Recommended)</option>
+                  <option value={139}>139 (NetBIOS Session Service)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Workgroup / Domain
+                </label>
+                <input
+                  type="text"
+                  placeholder="WORKGROUP"
+                  value={sambaConfig.workgroup || 'WORKGROUP'}
+                  onChange={(e) => setSambaConfig((prev) => ({ ...prev, workgroup: e.target.value }))}
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Target Operating System
+                </label>
+                <select
+                  value={sambaConfig.targetPlatform || 'all'}
+                  onChange={(e) => setSambaConfig((prev) => ({ ...prev, targetPlatform: e.target.value as any }))}
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white"
+                >
+                  <option value="all">Universal / Auto</option>
+                  <option value="macos">macOS (Finder / smb://)</option>
+                  <option value="linux">Linux (CIFS mount)</option>
+                  <option value="windows">Windows (UNC Share)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Authentication Section */}
+            <div className="pt-2 border-t border-slate-800">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  Authentication Credentials
+                </span>
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 hover:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={sambaConfig.isGuest}
+                    onChange={(e) => setSambaConfig((prev) => ({ ...prev, isGuest: e.target.checked }))}
+                    className="rounded border-slate-700 text-blue-600 focus:ring-blue-500 bg-slate-950"
+                  />
+                  Connect as Anonymous Guest
+                </label>
+              </div>
+
+              {!sambaConfig.isGuest && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                      Username
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. smbuser"
+                      value={sambaConfig.username}
+                      onChange={(e) => setSambaConfig((prev) => ({ ...prev, username: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                      Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="••••••••••••"
+                      value={sambaConfig.password}
+                      onChange={(e) => setSambaConfig((prev) => ({ ...prev, password: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Mount Commands Tab / Cheatsheet */}

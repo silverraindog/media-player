@@ -1790,6 +1790,64 @@ app.post('/api/samba/test-connection', async (req: Request, res: Response) => {
   }
 });
 
+// Check if a path exists on the host machine filesystem (Direct Host Path & Volume Verification)
+app.post('/api/samba/check-path', async (req: Request, res: Response) => {
+  const { path: checkPath } = req.body;
+  if (!checkPath || typeof checkPath !== 'string') {
+    return res.status(400).json({ exists: false, error: 'Path is required' });
+  }
+
+  const clean = checkPath.trim();
+  try {
+    const exists = fs.existsSync(clean);
+    let isDirectory = false;
+    let fileCount = 0;
+    let readable = false;
+    let writable = false;
+
+    if (exists) {
+      try {
+        const stat = fs.statSync(clean);
+        isDirectory = stat.isDirectory();
+        if (isDirectory) {
+          const files = fs.readdirSync(clean);
+          fileCount = files.length;
+          readable = true;
+        } else {
+          readable = true;
+        }
+      } catch (err: any) {
+        console.warn(`[check-path] stat error on ${clean}:`, err?.message);
+      }
+
+      try {
+        fs.accessSync(clean, fs.constants.W_OK);
+        writable = true;
+      } catch (_) {}
+    }
+
+    return res.json({
+      exists,
+      isDirectory,
+      fileCount,
+      readable,
+      writable,
+      path: clean,
+      message: exists
+        ? `Host path exists: ${clean} (${isDirectory ? `${fileCount} items found` : 'file'})`
+        : `Host path does not exist on local filesystem: ${clean}`,
+    });
+  } catch (e: any) {
+    return res.json({
+      exists: false,
+      isDirectory: false,
+      path: clean,
+      error: e.message,
+      message: `Error verifying host path: ${e.message}`,
+    });
+  }
+});
+
 // Probe Samba Stream endpoint (attempts to read first 1MB / test byte range read)
 app.post('/api/samba/probe-stream', async (req: Request, res: Response) => {
   try {

@@ -819,29 +819,39 @@ export const SyncProgressBar: React.FC<SyncProgressBarProps> = ({
                 <motion.div
                   key={sparkKey}
                   initial={{ opacity: 0, scale: 0.2 }}
-                  animate={{ opacity: [0, 1, 0.8, 0], scale: [0.2, 1.6, 2.4] }}
+                  animate={{ opacity: [0, 1, 0.8, 0], scale: [0.2, 1.8, 2.6] }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.9, ease: 'easeOut' }}
+                  transition={{ duration: 1.0, ease: 'easeOut' }}
                   style={{ left: `${Math.min(98, Math.max(4, percent))}%` }}
                   className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none z-30 flex items-center justify-center"
                 >
                   {/* Outer radial glow wave */}
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-r from-amber-300 via-emerald-400 to-cyan-300 opacity-90 blur-md animate-ping" />
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-r from-amber-300 via-emerald-400 to-cyan-300 opacity-90 blur-md animate-ping" />
                   {/* Concentric bright flare ring */}
-                  <div className="absolute w-6 h-6 rounded-full border-2 border-white bg-amber-400/50 shadow-[0_0_18px_rgba(251,191,36,0.95)]" />
+                  <div className="absolute w-8 h-8 rounded-full border-2 border-white bg-amber-400/60 shadow-[0_0_24px_rgba(251,191,36,0.95)]" />
                   {/* Center star spark icon */}
-                  <Sparkles className="absolute w-5 h-5 text-amber-200 animate-spin fill-amber-300" />
+                  <Sparkles className="absolute w-6 h-6 text-amber-200 animate-spin fill-amber-300" />
                   {/* Cross flare beams */}
                   <motion.div
-                    className="absolute w-14 h-1 bg-gradient-to-r from-transparent via-white to-transparent rounded-full shadow-sm"
-                    animate={{ rotate: [0, 180], scaleX: [0.2, 1.8, 0] }}
-                    transition={{ duration: 0.7, ease: 'easeOut' }}
+                    className="absolute w-16 h-1 bg-gradient-to-r from-transparent via-white to-transparent rounded-full shadow-sm"
+                    animate={{ rotate: [0, 180], scaleX: [0.2, 2.0, 0] }}
+                    transition={{ duration: 0.8, ease: 'easeOut' }}
                   />
                   <motion.div
-                    className="absolute h-14 w-1 bg-gradient-to-b from-transparent via-white to-transparent rounded-full shadow-sm"
-                    animate={{ rotate: [0, 180], scaleY: [0.2, 1.8, 0] }}
-                    transition={{ duration: 0.7, ease: 'easeOut' }}
+                    className="absolute h-16 w-1 bg-gradient-to-b from-transparent via-white to-transparent rounded-full shadow-sm"
+                    animate={{ rotate: [0, 180], scaleY: [0.2, 2.0, 0] }}
+                    transition={{ duration: 0.8, ease: 'easeOut' }}
                   />
+                  {/* Sparkle Text Badge Floating Up */}
+                  <motion.div
+                    initial={{ y: 0, opacity: 1, scale: 0.8 }}
+                    animate={{ y: -24, opacity: 0, scale: 1.1 }}
+                    transition={{ duration: 1.0, ease: 'easeOut' }}
+                    className="absolute -top-7 px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-400/60 text-[10px] font-bold font-mono whitespace-nowrap shadow-lg flex items-center gap-1"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-300 fill-amber-300" />
+                    <span>Batch Spark!</span>
+                  </motion.div>
                 </motion.div>
               )}
             </AnimatePresence>

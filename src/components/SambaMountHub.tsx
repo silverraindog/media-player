@@ -78,6 +78,57 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
   const [permissionLogs, setPermissionLogs] = useState<string[]>([]);
   const [permissionResult, setPermissionResult] = useState<{ success: boolean; message: string; fixedDirs?: number; fixedFiles?: number } | null>(null);
 
+  // Process Access User & Mount Diagnostics State
+  const [processUserInfo, setProcessUserInfo] = useState<{
+    processUser: string;
+    uid: number;
+    gid: number;
+    platform: string;
+    envUser: string;
+    customMountsStatus: Record<string, { exists: boolean; readable: boolean; writable: boolean; fileCount: number; error: string | null }>;
+    explanation: string;
+  } | null>(null);
+
+  const fetchProcessUserInfo = async () => {
+    try {
+      const res = await fetch('/api/samba/user-info');
+      const data = await res.json();
+      if (data.success) {
+        setProcessUserInfo(data);
+      }
+    } catch (_) {}
+  };
+
+  React.useEffect(() => {
+    fetchProcessUserInfo();
+  }, []);
+
+  // WhoAmI Diagnostic Tool State
+  const [isWhoAmIModalOpen, setIsWhoAmIModalOpen] = useState(false);
+  const [isQueryingWhoAmI, setIsQueryingWhoAmI] = useState(false);
+  const [whoAmIData, setWhoAmIData] = useState<any | null>(null);
+
+  const handleRunWhoAmI = async () => {
+    setIsQueryingWhoAmI(true);
+    try {
+      const activeTarget = sambaConfig.mountPath || permissionPath || `/Volumes/${sambaConfig.share || 'media'}`;
+      const res = await fetch('/api/samba/whoami', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mountPath: activeTarget, sharePath: sambaConfig.share }),
+      });
+      const data = await res.json();
+      setWhoAmIData(data);
+    } catch (err: any) {
+      setWhoAmIData({
+        success: false,
+        error: err?.message || 'Failed to query connection user identity',
+      });
+    } finally {
+      setIsQueryingWhoAmI(false);
+    }
+  };
+
   // Network Diagnostics State
   const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [diagnosticsHost, setDiagnosticsHost] = useState(sambaConfig.server || '192.168.1.100');
@@ -115,6 +166,67 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
       }
     } catch (err: any) {
       setPermissionLogs((prev) => [...prev, `[ERROR] Failed to execute permission fixer: ${err?.message}`]);
+      setPermissionResult({ success: false, message: err?.message || 'Network error' });
+    } finally {
+      setIsFixingPermissions(false);
+    }
+  };
+
+  const handleFixAllPermissions = async () => {
+    setIsFixingPermissions(true);
+    setPermissionResult(null);
+    setPermissionLogs([`[BULK INIT] Gathering all detected target paths for bulk permission correction sequence...`]);
+
+    const targetSet = new Set<string>();
+    if (permissionPath) targetSet.add(permissionPath.trim());
+    if (sambaConfig.mountPath) targetSet.add(sambaConfig.mountPath.trim());
+    if (sambaConfig.baseMountPath) targetSet.add(sambaConfig.baseMountPath.trim());
+
+    if (Array.isArray(sambaConfig.customMountPaths)) {
+      sambaConfig.customMountPaths.forEach((cp: any) => {
+        const pathVal = typeof cp === 'string' ? cp : cp?.path;
+        if (pathVal) targetSet.add(pathVal.trim());
+      });
+    }
+
+    targetSet.add(`/Volumes/${sambaConfig.share || 'media'}`);
+    targetSet.add(`/mnt/${sambaConfig.share || 'media'}`);
+
+    const targetPaths = Array.from(targetSet).filter(Boolean);
+
+    setPermissionLogs((prev) => [
+      ...prev,
+      `[TARGET LIST] Discovered ${targetPaths.length} target SMB directories to scan and unlock:`,
+      ...targetPaths.map((p) => `  • ${p}`),
+      `[EXEC] Executing bulk POSIX chmod 775 & chown sequence across all detected read-only errors...`,
+    ]);
+
+    try {
+      const res = await fetch('/api/samba/fix-permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetPaths, mode: '775' }),
+      });
+      const data = await res.json();
+
+      if (data.logs) {
+        setPermissionLogs((prev) => [...prev, ...data.logs]);
+      }
+      if (data.success) {
+        setPermissionResult({
+          success: true,
+          message: data.message,
+          fixedDirs: data.fixedDirs,
+          fixedFiles: data.fixedFiles,
+        });
+      } else {
+        setPermissionResult({
+          success: false,
+          message: data.message || 'Bulk permission correction failed',
+        });
+      }
+    } catch (err: any) {
+      setPermissionLogs((prev) => [...prev, `[ERROR] Bulk permission sequence failed: ${err?.message}`]);
       setPermissionResult({ success: false, message: err?.message || 'Network error' });
     } finally {
       setIsFixingPermissions(false);
@@ -315,7 +427,30 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => {
+                setIsWhoAmIModalOpen(true);
+                handleRunWhoAmI();
+              }}
+              disabled={isQueryingWhoAmI}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 text-slate-950 font-bold rounded-lg text-sm transition-all shadow-md active:scale-95 cursor-pointer border border-emerald-500/50"
+              title="Query active mount to display system user and SMB connection credentials for troubleshooting /Volumes permission issues"
+            >
+              <Terminal className={`w-4 h-4 text-slate-950 ${isQueryingWhoAmI ? 'animate-spin' : ''}`} />
+              <span>{isQueryingWhoAmI ? 'Querying WhoAmI...' : 'WhoAmI Diagnostic'}</span>
+            </button>
+
+            <button
+              onClick={handleFixAllPermissions}
+              disabled={isFixingPermissions}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-900 text-slate-950 font-bold rounded-lg text-sm transition-all shadow-md active:scale-95 cursor-pointer border border-amber-500/50"
+              title="Trigger a bulk permission-correction command sequence for all currently detected read-only errors and custom mount paths"
+            >
+              <ShieldAlert className={`w-4 h-4 text-slate-950 ${isFixingPermissions ? 'animate-spin' : ''}`} />
+              <span>{isFixingPermissions ? 'Fixing All Permissions...' : 'Fix All Permissions'}</span>
+            </button>
+
             <button
               onClick={() => {
                 setIsDiagnosticsModalOpen(true);
@@ -357,6 +492,100 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
           </div>
         )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* SECTION: PROCESS ACCESS USER & MOUNT DIAGNOSTICS */}
+      {/* ========================================================================= */}
+      {processUserInfo && (
+        <div className="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-6 shadow-xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                <Laptop className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-white">Access User & Mount System Diagnostics</h2>
+                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    User: {processUserInfo.processUser}
+                  </span>
+                  {processUserInfo.uid !== -1 && (
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                      UID: {processUserInfo.uid} / GID: {processUserInfo.gid}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Answers what user account the app uses to read/write local mounts and SMB network drives.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={fetchProcessUserInfo}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer self-start sm:self-center"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Refresh Access Check</span>
+            </button>
+          </div>
+
+          <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2 text-xs text-slate-300">
+            <p className="leading-relaxed">
+              <strong className="text-indigo-300 font-semibold">Local Mounts Access Context:</strong> Local folder operations under <code className="bg-slate-900 px-1 py-0.5 rounded font-mono text-indigo-200">/Volumes</code> (such as <code className="bg-slate-900 px-1 py-0.5 rounded font-mono text-indigo-200">/Volumes/media/Series</code> or custom paths) are executed directly as host POSIX user <code className="bg-slate-900 px-1 py-0.5 rounded font-mono text-emerald-300">{processUserInfo.processUser}</code> (UID {processUserInfo.uid !== -1 ? processUserInfo.uid : 'N/A'}).
+            </p>
+            <p className="leading-relaxed text-slate-400">
+              <strong className="text-blue-300 font-semibold">Network SMB Access Context:</strong> Direct TCP SMB socket connections (ports 445/139) authenticate using your configured Samba credentials (<code className="bg-slate-900 px-1 py-0.5 rounded font-mono text-blue-300">{sambaConfig.isGuest ? 'guest / anonymous' : (sambaConfig.username || 'authenticated user')}</code>).
+            </p>
+          </div>
+
+          {/* Mount Access Status Breakdown */}
+          {processUserInfo.customMountsStatus && Object.keys(processUserInfo.customMountsStatus).length > 0 && (
+            <div className="space-y-2">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                Target Directory Access Probe
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {Object.entries(processUserInfo.customMountsStatus).map(([mPath, status]) => (
+                  <div key={mPath} className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs text-white truncate max-w-[220px]" title={mPath}>
+                        {mPath}
+                      </span>
+                      {status.exists ? (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                          FOUND ON DISK
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+                          NOT MOUNTED / MISSING
+                        </span>
+                      )}
+                    </div>
+
+                    {status.exists ? (
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${status.readable ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-red-950 text-red-300 border border-red-800'}`}>
+                          {status.readable ? '✓ Readable' : '✕ Permission Denied'}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] ${status.writable ? 'bg-blue-950 text-blue-300 border border-blue-800' : 'bg-amber-950 text-amber-300 border border-amber-800'}`}>
+                          {status.writable ? '✓ Writable' : 'Read-Only'}
+                        </span>
+                        <span className="text-slate-400 ml-auto font-mono text-[10px]">
+                          {status.fileCount} items
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 italic">
+                        Verify drive is mounted in Finder or register in Custom Mount Paths below.
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* SECTION: PERSISTENT CUSTOM MOUNT PATHS (FALLBACK & SCAN PRIORITIZATION) */}
@@ -715,15 +944,30 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                 className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-lg pl-9 pr-3 py-2 text-xs text-white font-mono placeholder-slate-500"
               />
             </div>
-            <button
-              type="button"
-              onClick={handleFixPermissions}
-              disabled={isFixingPermissions || !permissionPath.trim()}
-              className="px-5 py-2 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 disabled:bg-amber-900 text-slate-950 font-bold text-xs rounded-lg transition shadow-md flex items-center justify-center gap-2 shrink-0 cursor-pointer"
-            >
-              <Zap className={`w-4 h-4 text-slate-950 ${isFixingPermissions ? 'animate-spin' : ''}`} />
-              <span>{isFixingPermissions ? 'Applying POSIX Fix...' : 'Fix Permissions (chmod 775)'}</span>
-            </button>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleFixPermissions}
+                disabled={isFixingPermissions || !permissionPath.trim()}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-800 disabled:opacity-50 text-amber-300 font-semibold text-xs rounded-lg transition border border-amber-500/30 flex items-center justify-center gap-1.5 cursor-pointer"
+                title="Execute chmod 775 on target directory"
+              >
+                <Zap className={`w-3.5 h-3.5 text-amber-400 ${isFixingPermissions ? 'animate-spin' : ''}`} />
+                <span>Fix Target</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFixAllPermissions}
+                disabled={isFixingPermissions}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 disabled:bg-amber-900 text-slate-950 font-bold text-xs rounded-lg transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                title="Bulk sweep all registered and detected Samba shares to fix read-only permission errors"
+              >
+                <ShieldAlert className={`w-4 h-4 text-slate-950 ${isFixingPermissions ? 'animate-spin' : ''}`} />
+                <span>{isFixingPermissions ? 'Fixing All Permissions...' : 'Fix All Permissions'}</span>
+              </button>
+            </div>
           </div>
 
           {/* Quick Preset Buttons */}
@@ -1310,6 +1554,233 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                 className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition cursor-pointer"
               >
                 Close Diagnostics
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* WHOAMI DIAGNOSTIC MODAL DIALOG */}
+      {/* ========================================================================= */}
+      {isWhoAmIModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col my-8 max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                  <Terminal className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">WhoAmI Active Connection Diagnostic</h3>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold">
+                      SMB & POSIX PROBE
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Queries active mount to display which system user is being used for SMB connections and local <code className="text-emerald-300 font-mono">/Volumes</code> path access.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsWhoAmIModalOpen(false)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto space-y-6 flex-1 text-xs">
+              {/* Query Action Controls */}
+              <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <span className="font-bold text-white block">Active Mount Target Path:</span>
+                  <code className="text-emerald-300 font-mono text-[11px]">
+                    {sambaConfig.mountPath || permissionPath || `/Volumes/${sambaConfig.share || 'media'}`}
+                  </code>
+                </div>
+                <button
+                  onClick={handleRunWhoAmI}
+                  disabled={isQueryingWhoAmI}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 text-slate-950 font-bold rounded-lg flex items-center gap-2 transition cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isQueryingWhoAmI ? 'animate-spin' : ''}`} />
+                  <span>{isQueryingWhoAmI ? 'Probing Target...' : 'Re-run WhoAmI Check'}</span>
+                </button>
+              </div>
+
+              {whoAmIData?.success ? (
+                <div className="space-y-5">
+                  {/* Summary Banner */}
+                  <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-200 leading-relaxed font-mono">
+                    <p className="font-bold text-emerald-300 mb-1">✓ Connection Identity & Path Summary:</p>
+                    <p>{whoAmIData.summary}</p>
+                  </div>
+
+                  {/* System User & Connection Credentials Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* System User Box */}
+                    <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+                      <span className="font-bold text-indigo-300 text-[11px] uppercase tracking-wider block flex items-center gap-1.5">
+                        <Laptop className="w-3.5 h-3.5 text-indigo-400" /> POSIX Process System User
+                      </span>
+                      <div className="space-y-1 font-mono text-slate-300">
+                        <div className="flex justify-between border-b border-slate-800/80 pb-1">
+                          <span className="text-slate-400">Username:</span>
+                          <span className="font-bold text-white">{whoAmIData.systemUser?.username}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-800/80 pb-1">
+                          <span className="text-slate-400">UID / GID:</span>
+                          <span className="text-emerald-300">{whoAmIData.systemUser?.uid} / {whoAmIData.systemUser?.gid}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-800/80 pb-1">
+                          <span className="text-slate-400">Platform:</span>
+                          <span className="text-slate-200">{whoAmIData.systemUser?.platform} ({whoAmIData.systemUser?.hostname})</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Home Dir:</span>
+                          <span className="text-slate-400 truncate max-w-[160px]" title={whoAmIData.systemUser?.homeDir}>{whoAmIData.systemUser?.homeDir}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* SMB Connection Box */}
+                    <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+                      <span className="font-bold text-cyan-300 text-[11px] uppercase tracking-wider block flex items-center gap-1.5">
+                        <Server className="w-3.5 h-3.5 text-cyan-400" /> Active SMB Connection Context
+                      </span>
+                      <div className="space-y-1 font-mono text-slate-300">
+                        <div className="flex justify-between border-b border-slate-800/80 pb-1">
+                          <span className="text-slate-400">Protocol:</span>
+                          <span className="font-bold text-cyan-300">{whoAmIData.smbConnectionContext?.protocol}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-800/80 pb-1">
+                          <span className="text-slate-400">Authenticated As:</span>
+                          <span className="font-bold text-emerald-300">{whoAmIData.smbConnectionContext?.authenticatedAs}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-800/80 pb-1">
+                          <span className="text-slate-400">Share Name:</span>
+                          <span className="text-slate-200">{sambaConfig.share || 'media'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Resolved Path:</span>
+                          <span className="text-slate-300 truncate max-w-[160px]" title={whoAmIData.smbConnectionContext?.resolvedMountPath}>
+                            {whoAmIData.smbConnectionContext?.resolvedMountPath}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Target Path Audit Matrix */}
+                  {whoAmIData.pathAudits && whoAmIData.pathAudits.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>/Volumes Directory Access Audit Matrix</span>
+                      </h4>
+                      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950 font-mono text-[11px]">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-900 border-b border-slate-800 text-[10px] text-slate-400 uppercase">
+                              <th className="p-2.5">Directory Path</th>
+                              <th className="p-2.5">Status</th>
+                              <th className="p-2.5">Mode</th>
+                              <th className="p-2.5">Read</th>
+                              <th className="p-2.5">Write</th>
+                              <th className="p-2.5">Exec</th>
+                              <th className="p-2.5 text-right">Items</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/60">
+                            {whoAmIData.pathAudits.map((audit: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-slate-900/50">
+                                <td className="p-2.5 font-bold text-slate-200 truncate max-w-[200px]" title={audit.path}>
+                                  {audit.path}
+                                </td>
+                                <td className="p-2.5">
+                                  {audit.exists ? (
+                                    <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold">
+                                      EXISTS
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400">
+                                      MISSING
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-2.5 text-amber-300">{audit.modeHex || '-'}</td>
+                                <td className="p-2.5">
+                                  {audit.readable ? (
+                                    <span className="text-emerald-400 font-bold">✓ Yes</span>
+                                  ) : (
+                                    <span className="text-rose-400 font-bold">✕ No</span>
+                                  )}
+                                </td>
+                                <td className="p-2.5">
+                                  {audit.writable ? (
+                                    <span className="text-emerald-400 font-bold">✓ Yes</span>
+                                  ) : (
+                                    <span className="text-amber-400 font-bold">Read-Only</span>
+                                  )}
+                                </td>
+                                <td className="p-2.5">
+                                  {audit.executable ? (
+                                    <span className="text-emerald-400 font-bold">✓ Yes</span>
+                                  ) : (
+                                    <span className="text-slate-500">No</span>
+                                  )}
+                                </td>
+                                <td className="p-2.5 text-right font-bold text-slate-300">{audit.itemCount}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : isQueryingWhoAmI ? (
+                <div className="p-12 text-center bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+                  <RefreshCw className="w-8 h-8 text-emerald-400 mx-auto animate-spin" />
+                  <h4 className="text-sm font-bold text-white">Querying Mount Connection Identity...</h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Inspecting process POSIX credentials and performing read/write tests across target mount directories.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-12 text-center bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+                  <Terminal className="w-8 h-8 text-emerald-400 mx-auto" />
+                  <h4 className="text-sm font-bold text-white">WhoAmI Diagnostic Tool Ready</h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Click <strong>"Re-run WhoAmI Check"</strong> above to test access as system user <code className="text-emerald-300 font-mono font-bold">{processUserInfo?.processUser || 'angus'}</code> across your SMB mounts.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs">
+              <button
+                onClick={() => {
+                  setIsWhoAmIModalOpen(false);
+                  handleFixAllPermissions();
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <ShieldAlert className="w-4 h-4 text-slate-950" />
+                <span>Fix All Mount Permissions</span>
+              </button>
+
+              <button
+                onClick={() => setIsWhoAmIModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold transition cursor-pointer"
+              >
+                Close Diagnostic
               </button>
             </div>
           </div>

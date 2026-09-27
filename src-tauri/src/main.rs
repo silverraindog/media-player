@@ -88,15 +88,32 @@ async fn perform_fast_scan(
     let mut items = Vec::new();
     let mut scanned_count = 0;
 
+    let debug_enabled = std::env::var("RUST_LOG").map(|v| v == "debug" || v == "trace").unwrap_or(false)
+        || std::env::var("DEBUG_WALK").map(|v| v == "1" || v == "true").unwrap_or(false);
+
     let walker = WalkDir::new(path)
         .follow_links(false)
         .max_depth(depth_limit)
         .into_iter();
 
-    for entry in walker.filter_map(|e| e.ok()) {
+    for entry_res in walker {
         if scanned_count >= max_scan_items {
+            if debug_enabled {
+                eprintln!("[WalkDir Debug] Reached max scan limit of {} items. Stopping walk.", max_scan_items);
+            }
             break;
         }
+
+        let entry = match entry_res {
+            Ok(e) => e,
+            Err(err) => {
+                if debug_enabled {
+                    eprintln!("[WalkDir Error] Path: {:?} | Error: {:?}", err.path(), err);
+                }
+                continue;
+            }
+        };
+
         let entry_path = entry.path();
         if entry_path == path {
             continue;
@@ -104,7 +121,12 @@ async fn perform_fast_scan(
 
         let metadata = match entry.metadata() {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(err) => {
+                if debug_enabled {
+                    eprintln!("[WalkDir Metadata Error] Path: {:?} | Error: {:?}", entry_path, err);
+                }
+                continue;
+            }
         };
 
         let name = entry.file_name().to_string_lossy().to_string();
@@ -118,6 +140,10 @@ async fn perform_fast_scan(
 
         let is_dir = metadata.is_dir();
         let size = if is_dir { 0 } else { metadata.len() };
+
+        if debug_enabled && scanned_count % 100 == 0 {
+            eprintln!("[WalkDir Progress] Scanned item #{}: {}", scanned_count + 1, rel_path);
+        }
 
         scanned_count += 1;
 
@@ -381,6 +407,9 @@ async fn scan_samba_volume(
             .collect()
     });
 
+    let debug_enabled = std::env::var("RUST_LOG").map(|v| v == "debug" || v == "trace").unwrap_or(false)
+        || std::env::var("DEBUG_WALK").map(|v| v == "1" || v == "true").unwrap_or(false);
+
     let mut items = Vec::new();
     let mut scanned_count = 0;
 
@@ -388,10 +417,24 @@ async fn scan_samba_volume(
         .follow_links(false)
         .max_depth(depth_limit)
         .into_iter();
-    for entry in walker.filter_map(|e| e.ok()) {
+    for entry_res in walker {
         if scanned_count >= max_scan_items {
+            if debug_enabled {
+                eprintln!("[WalkDir Debug] Reached max scan limit of {} items. Stopping scan.", max_scan_items);
+            }
             break;
         }
+
+        let entry = match entry_res {
+            Ok(e) => e,
+            Err(err) => {
+                if debug_enabled {
+                    eprintln!("[WalkDir Error] Path: {:?} | Error: {:?}", err.path(), err);
+                }
+                continue;
+            }
+        };
+
         let entry_path = entry.path();
         if entry_path == path {
             continue;
@@ -399,7 +442,12 @@ async fn scan_samba_volume(
 
         let metadata = match entry.metadata() {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(err) => {
+                if debug_enabled {
+                    eprintln!("[WalkDir Metadata Error] Path: {:?} | Error: {:?}", entry_path, err);
+                }
+                continue;
+            }
         };
 
         let is_dir = metadata.is_dir();

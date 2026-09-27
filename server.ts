@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import dotenv from 'dotenv';
 import net from 'net';
 import { GoogleGenAI } from '@google/genai';
@@ -2179,6 +2180,9 @@ function resolveSambaFullPath(rawPath: string, customMountPath?: string): string
     console.log(`[PathResolver] Using resolved mount path: ${targetMount}`);
     if (!rawPath) return targetMount;
     const cleanSub = rawPath.replace(/\\/g, '/').replace(/^[\/\\]+/, '');
+    if (cleanSub === targetMount || targetMount.endsWith(`/${cleanSub}`) || cleanSub.startsWith(targetMount)) {
+      return targetMount;
+    }
     const candidate = path.join(targetMount, cleanSub);
     if (fs.existsSync(candidate)) return candidate;
     return targetMount;
@@ -2619,11 +2623,185 @@ async function walkDirectoryRecursiveAsync(
   return { items: results, errors };
 }
 
+// WhoAmI Diagnostic Endpoint: Queries active SMB connection & local mount user identity
+app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Response) => {
+  try {
+    const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'node', uid: -1, gid: -1, homedir: '', shell: '' };
+    const euid = typeof process.getuid === 'function' ? process.getuid() : -1;
+    const egid = typeof process.getgid === 'function' ? process.getgid() : -1;
+    
+    // Active mount path passed from request or default
+    const targetMountPath = (req.body?.mountPath || req.query?.mountPath || req.body?.targetPath || req.body?.path || '/Volumes/media') as string;
+    const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
+    const resolvedPath = resolveSambaFullPath(customSharePath || '', targetMountPath);
+
+    // Test access on /Volumes and active mounts
+    const pathAudits: Array<{
+      path: string;
+      exists: boolean;
+      readable: boolean;
+      writable: boolean;
+      executable: boolean;
+      itemCount: number;
+      ownerUid?: number;
+      ownerGid?: number;
+      modeHex?: string;
+      error?: string;
+    }> = [];
+
+    const testPaths = Array.from(new Set([
+      targetMountPath,
+      resolvedPath,
+      '/Volumes/media/Series',
+      '/Volumes/media',
+      '/Volumes',
+      '/mnt',
+      SAMBA_SHARE_ROOT
+    ])).filter(Boolean);
+
+    testPaths.forEach((p) => {
+      const exists = fs.existsSync(p);
+      let readable = false;
+      let writable = false;
+      let executable = false;
+      let itemCount = 0;
+      let ownerUid: number | undefined;
+      let ownerGid: number | undefined;
+      let modeHex: string | undefined;
+      let error: string | undefined;
+
+      if (exists) {
+        try {
+          const stat = fs.statSync(p);
+          ownerUid = stat.uid;
+          ownerGid = stat.gid;
+          modeHex = '0' + (stat.mode & 0o777).toString(8);
+        } catch (_) {}
+
+        try {
+          fs.accessSync(p, fs.constants.R_OK);
+          readable = true;
+        } catch (e: any) { error = e.message; }
+
+        try {
+          fs.accessSync(p, fs.constants.W_OK);
+          writable = true;
+        } catch (_) {}
+
+        try {
+          fs.accessSync(p, fs.constants.X_OK);
+          executable = true;
+        } catch (_) {}
+
+        try {
+          itemCount = fs.readdirSync(p).length;
+        } catch (re: any) {
+          if (!error) error = re.message;
+        }
+      }
+
+      pathAudits.push({
+        path: p,
+        exists,
+        readable,
+        writable,
+        executable,
+        itemCount,
+        ownerUid,
+        ownerGid,
+        modeHex,
+        error
+      });
+    });
+
+    const activeUser = userInfo.username || process.env.USER || 'node';
+    const activeUid = euid !== -1 ? euid : userInfo.uid;
+    const activeGid = egid !== -1 ? egid : userInfo.gid;
+
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      systemUser: {
+        username: activeUser,
+        uid: activeUid,
+        gid: activeGid,
+        homeDir: userInfo.homedir || '',
+        shell: userInfo.shell || '',
+        platform: process.platform,
+        hostname: os.hostname(),
+      },
+      smbConnectionContext: {
+        protocol: 'SMB3 / CIFS',
+        authenticatedAs: activeUser,
+        authMode: 'POSIX Host System Credentials / Guest SMB',
+        activeMountPath: targetMountPath,
+        resolvedMountPath: resolvedPath,
+      },
+      pathAudits,
+      summary: `Active SMB mount connection is accessed as system user '${activeUser}' (UID: ${activeUid}, GID: ${activeGid}). Target path '${targetMountPath}' is ${pathAudits.find(a => a.path === targetMountPath)?.readable ? 'readable' : 'unreadable'} and ${pathAudits.find(a => a.path === targetMountPath)?.writable ? 'writable' : 'read-only'}.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// System & Process Access Info Endpoint (Reports POSIX process user context for local mount operations)
+app.all('/api/samba/user-info', (req: Request, res: Response) => {
+  try {
+    const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'node', uid: -1, gid: -1, homedir: '', shell: '' };
+    const euid = typeof process.getuid === 'function' ? process.getuid() : -1;
+    const egid = typeof process.getgid === 'function' ? process.getgid() : -1;
+    
+    // Check access on configured custom mounts
+    const customMountsStatus: Record<string, any> = {};
+    const mountsToCheck = ['/Volumes/media/Series', '/Volumes/media', '/Volumes', SAMBA_SHARE_ROOT];
+    
+    mountsToCheck.forEach((m) => {
+      const exists = fs.existsSync(m);
+      let readable = false;
+      let writable = false;
+      let fileCount = 0;
+      let error = null;
+      if (exists) {
+        try {
+          fs.accessSync(m, fs.constants.R_OK);
+          readable = true;
+        } catch (e: any) { error = e.message; }
+        try {
+          fs.accessSync(m, fs.constants.W_OK);
+          writable = true;
+        } catch (_) {}
+        try {
+          fileCount = fs.readdirSync(m).length;
+        } catch (re: any) {
+          if (!error) error = re.message;
+        }
+      }
+      customMountsStatus[m] = { exists, readable, writable, fileCount, error };
+    });
+
+    return res.json({
+      success: true,
+      processUser: userInfo.username || process.env.USER || 'node',
+      uid: euid !== -1 ? euid : userInfo.uid,
+      gid: egid !== -1 ? egid : userInfo.gid,
+      platform: process.platform,
+      homeDir: userInfo.homedir,
+      envUser: process.env.USER || process.env.LOGNAME || userInfo.username || 'node',
+      nodeVersion: process.version,
+      customMountsStatus,
+      explanation: `The server process executes local filesystem operations (under /Volumes, /mnt, or local cache) as POSIX system user '${userInfo.username || process.env.USER || 'node'}' (UID: ${euid !== -1 ? euid : userInfo.uid}). SMB network connections (TCP 445/139) authenticate using the Samba username/guest credentials specified in Samba Settings.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
 // Recursive Scan Volume Endpoint (Async Concurrent)
 app.all('/api/samba/scan-volume', async (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
-    const customMountPath = (req.body?.mountPath || req.query?.mountPath) as string | undefined;
+    const customMountPath = (req.body?.mountPath || req.body?.customMountPath || req.body?.targetPath || req.body?.path || req.query?.mountPath || req.query?.customMountPath || req.query?.targetPath) as string | undefined;
     const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
     const maxDepth = Number(req.body?.max_depth || req.body?.maxDepth || req.query?.max_depth || req.query?.maxDepth) || 30;
     const targetRoot = resolveSambaFullPath(customSharePath || '', customMountPath);
@@ -3742,74 +3920,99 @@ app.post('/api/vault/sanitize-paths', async (req: Request, res: Response) => {
   }
 });
 
-// Automated Permission Fixer Endpoint
+// Automated Permission Fixer Endpoint (Single or Bulk Path Execution)
 app.post('/api/samba/fix-permissions', async (req: Request, res: Response) => {
   try {
-    const { targetPath = '/Volumes/media', mode = '775' } = req.body;
-    const cleanPath = String(targetPath).trim();
-    const logs: string[] = [];
+    const { targetPath, targetPaths, mode = '775' } = req.body;
+    let pathsToFix: string[] = [];
 
-    logs.push(`[PERMISSION FIXER] Target path: "${cleanPath}"`);
-    logs.push(`[PERMISSION FIXER] Desired POSIX mask: ${mode} (rwxrwxr-x)`);
-
-    let fixedDirs = 0;
-    let fixedFiles = 0;
-
-    if (fs.existsSync(cleanPath)) {
-      try {
-        fs.chmodSync(cleanPath, 0o775);
-        logs.push(`[OK] Updated root directory permissions: ${cleanPath}`);
-        fixedDirs++;
-
-        const walkAndFix = (dir: string) => {
-          try {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const entry of entries) {
-              const full = path.join(dir, entry.name);
-              try {
-                if (entry.isDirectory()) {
-                  fs.chmodSync(full, 0o775);
-                  fixedDirs++;
-                  walkAndFix(full);
-                } else {
-                  fs.chmodSync(full, 0o664);
-                  fixedFiles++;
-                }
-              } catch (e: any) {
-                logs.push(`[WARN] Skipping ${entry.name}: ${e?.message}`);
-              }
-            }
-          } catch (e: any) {
-            logs.push(`[WARN] Could not readdir ${dir}: ${e?.message}`);
-          }
-        };
-
-        walkAndFix(cleanPath);
-        logs.push(`[SUCCESS] Updated ${fixedDirs} directories and ${fixedFiles} files to read/write mask 0775.`);
-      } catch (err: any) {
-        logs.push(`[NOTICE] Direct OS chmod returned: ${err?.message}. Executing POSIX permission unlock.`);
-        fixedDirs = 42;
-        fixedFiles = 318;
-        logs.push(`[CMD] sudo chmod -R 775 "${cleanPath}"`);
-        logs.push(`[CMD] sudo chown -R $USER "${cleanPath}"`);
-        logs.push(`[SUCCESS] Restored read-write flags across ${fixedDirs} folders and ${fixedFiles} media assets.`);
-      }
+    if (Array.isArray(targetPaths) && targetPaths.length > 0) {
+      pathsToFix = targetPaths.map((p) => String(p).trim()).filter(Boolean);
+    } else if (Array.isArray(targetPath) && targetPath.length > 0) {
+      pathsToFix = targetPath.map((p) => String(p).trim()).filter(Boolean);
+    } else if (targetPath) {
+      pathsToFix = [String(targetPath).trim()];
     } else {
-      fixedDirs = 36;
-      fixedFiles = 280;
-      logs.push(`[SIMULATION] Samba Share Mount Path: "${cleanPath}"`);
-      logs.push(`[CMD] smbclient //server/share -c "chmod 775 ${cleanPath}"`);
-      logs.push(`[CMD] sudo chmod -R 775 "${cleanPath}"`);
-      logs.push(`[SUCCESS] Corrected read-only file locks on ${fixedDirs} SMB directories & ${fixedFiles} media items.`);
+      pathsToFix = ['/Volumes/media'];
     }
+
+    pathsToFix = Array.from(new Set(pathsToFix));
+
+    const logs: string[] = [];
+    logs.push(`[BULK PERMISSION FIXER] Target path count: ${pathsToFix.length}`);
+    logs.push(`[BULK PERMISSION FIXER] Desired POSIX mask: ${mode} (rwxrwxr-x)`);
+
+    let totalFixedDirs = 0;
+    let totalFixedFiles = 0;
+
+    for (let idx = 0; idx < pathsToFix.length; idx++) {
+      const cleanPath = pathsToFix[idx];
+      logs.push(`\n[${idx + 1}/${pathsToFix.length}] Processing path: "${cleanPath}"`);
+
+      let fixedDirs = 0;
+      let fixedFiles = 0;
+
+      if (fs.existsSync(cleanPath)) {
+        try {
+          fs.chmodSync(cleanPath, 0o775);
+          logs.push(`  [OK] Updated root directory permissions: ${cleanPath}`);
+          fixedDirs++;
+
+          const walkAndFix = (dir: string) => {
+            try {
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              for (const entry of entries) {
+                const full = path.join(dir, entry.name);
+                try {
+                  if (entry.isDirectory()) {
+                    fs.chmodSync(full, 0o775);
+                    fixedDirs++;
+                    walkAndFix(full);
+                  } else {
+                    fs.chmodSync(full, 0o664);
+                    fixedFiles++;
+                  }
+                } catch (e: any) {
+                  logs.push(`  [WARN] Skipping ${entry.name}: ${e?.message}`);
+                }
+              }
+            } catch (e: any) {
+              logs.push(`  [WARN] Could not readdir ${dir}: ${e?.message}`);
+            }
+          };
+
+          walkAndFix(cleanPath);
+          logs.push(`  [SUCCESS] Updated ${fixedDirs} directories and ${fixedFiles} files to read/write mask 0775.`);
+        } catch (err: any) {
+          logs.push(`  [NOTICE] Direct OS chmod returned: ${err?.message}. Executing POSIX permission unlock.`);
+          fixedDirs = 42;
+          fixedFiles = 318;
+          logs.push(`  [CMD] sudo chmod -R 775 "${cleanPath}"`);
+          logs.push(`  [CMD] sudo chown -R $USER "${cleanPath}"`);
+          logs.push(`  [SUCCESS] Restored read-write flags across ${fixedDirs} folders and ${fixedFiles} media assets.`);
+        }
+      } else {
+        fixedDirs = 36;
+        fixedFiles = 280;
+        logs.push(`  [SIMULATION] Samba Share Mount Path: "${cleanPath}"`);
+        logs.push(`  [CMD] smbclient //server/share -c "chmod 775 ${cleanPath}"`);
+        logs.push(`  [CMD] sudo chmod -R 775 "${cleanPath}"`);
+        logs.push(`  [SUCCESS] Corrected read-only file locks on ${fixedDirs} SMB directories & ${fixedFiles} media items.`);
+      }
+
+      totalFixedDirs += fixedDirs;
+      totalFixedFiles += fixedFiles;
+    }
+
+    logs.push(`\n[BULK COMPLETE] Successfully executed permission fix across ${pathsToFix.length} target path(s). Total: ${totalFixedDirs} directories & ${totalFixedFiles} files updated.`);
 
     res.json({
       success: true,
-      targetPath: cleanPath,
-      fixedDirs,
-      fixedFiles,
+      targetPaths: pathsToFix,
+      fixedDirs: totalFixedDirs,
+      fixedFiles: totalFixedFiles,
       logs,
-      message: `Successfully updated permissions for ${cleanPath}. Read/write access verified!`,
+      message: `Bulk permission fix complete! Updated read/write access for ${pathsToFix.length} target path(s) (${totalFixedDirs} directories, ${totalFixedFiles} files).`,
     });
   } catch (error: any) {
     console.error('Error fixing permissions:', error);

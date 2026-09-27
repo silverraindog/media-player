@@ -65,6 +65,7 @@ export const YouTubeTab: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Desktop WebView / iframe Sandbox & Popup Blocker Detection
   const isTauriEnv = typeof window !== 'undefined' && (
@@ -85,6 +86,41 @@ export const YouTubeTab: React.FC = () => {
     const timestamp = new Date().toLocaleTimeString();
     setSyncLogs((prev) => [{ timestamp, message, type }, ...prev].slice(0, 50));
   };
+
+  // Check location hash/query on mount for OAuth access token callback or errors
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const urlStr = window.location.href;
+    const hash = window.location.hash || window.location.search;
+
+    if (hash && hash.includes('access_token=')) {
+      const match = hash.match(/access_token=([^&]+)/);
+      if (match && match[1]) {
+        const extractedToken = decodeURIComponent(match[1]);
+        setAccessToken(extractedToken);
+        localStorage.setItem('youtube_access_token', extractedToken);
+        addLog('Extracted YouTube access token from browser OAuth redirect!', 'info');
+        // Clean hash from URL without reloading page
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+        fetchYouTubeData(extractedToken);
+      }
+    } else if (urlStr.includes('error=') || hash.includes('error=')) {
+      const matchErr = hash.match(/error=([^&]+)/) || urlStr.match(/error=([^&]+)/);
+      if (matchErr && matchErr[1]) {
+        const errCode = decodeURIComponent(matchErr[1]);
+        if (errCode === 'redirect_uri_mismatch') {
+          const currentUri = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}` : 'http://localhost:3000';
+          setErrorMsg(`Error 400: redirect_uri_mismatch. Ensure '${currentUri}' is added to Google Cloud Console Authorized Redirect URIs for Client ID '${GOOGLE_CLIENT_ID}'.`);
+          addLog(`OAuth redirect_uri_mismatch error detected for URI: ${currentUri}`, 'error');
+        } else {
+          setErrorMsg(`Google OAuth error: ${errCode}`);
+          addLog(`Google OAuth error callback: ${errCode}`, 'error');
+        }
+      }
+    }
+  }, []);
 
   // Monitor Firebase Auth session state
   useEffect(() => {
@@ -109,10 +145,16 @@ export const YouTubeTab: React.FC = () => {
   const openGoogleOAuthInBrowser = () => {
     setErrorMsg(null);
     const scope = encodeURIComponent(YOUTUBE_SCOPE);
-    const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=https://developers.google.com/oauthplayground&response_type=token&scope=${scope}&prompt=consent`;
+    const rawRedirectUri = typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}`
+      : 'http://localhost:3000';
+    const redirectUri = encodeURIComponent(rawRedirectUri);
+    
+    // Construct standard client-side OAuth Implicit flow URL without redirect_uri_mismatch
+    const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}&prompt=consent`;
     openExternalUrl(oauthUrl);
-    addLog('Opening Google Authorization in system browser...', 'info');
-    logger.info('Opening Google OAuth in default system browser to bypass webview popup restrictions.', 'Auth');
+    addLog(`Opening Google Authorization in system browser with redirect_uri: ${rawRedirectUri}`, 'info');
+    logger.info(`Opening Google OAuth with redirect URI: ${rawRedirectUri}`, 'Auth');
     setPopupBlocked(true);
   };
 
@@ -499,6 +541,34 @@ export const YouTubeTab: React.FC = () => {
                   <span>Get token via Google OAuth</span>
                 </button>
               </div>
+            </div>
+
+            {/* Authorized Redirect URI Inspector & Troubleshooting Panel */}
+            <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl space-y-2 text-left">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Authorized OAuth Redirect URI Config
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentUri = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}` : 'http://localhost:3000';
+                    navigator.clipboard.writeText(currentUri);
+                    setCopiedKey('redirect_uri');
+                    setTimeout(() => setCopiedKey(null), 2000);
+                  }}
+                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 font-mono flex items-center gap-1 transition cursor-pointer"
+                >
+                  {copiedKey === 'redirect_uri' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-400" />}
+                  <span>{copiedKey === 'redirect_uri' ? 'Copied!' : 'Copy URI'}</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 font-mono bg-slate-900 p-2 rounded border border-slate-800/80 truncate">
+                {typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}` : 'http://localhost:3000'}
+              </p>
+              <p className="text-[10px] text-slate-500 leading-normal">
+                If Google displays <strong>Error 400: redirect_uri_mismatch</strong>, add this exact URL above into your Google Cloud Console Credentials under <em>Authorized redirect URIs</em> for Client ID <code className="text-slate-400 font-mono">{GOOGLE_CLIENT_ID}</code>.
+              </p>
             </div>
           </div>
         </div>

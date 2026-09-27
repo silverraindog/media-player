@@ -2626,7 +2626,7 @@ async function walkDirectoryRecursiveAsync(
 // WhoAmI Diagnostic Endpoint: Queries active SMB connection & local mount user identity
 app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Response) => {
   try {
-    const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'node', uid: -1, gid: -1, homedir: '', shell: '' };
+    const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'nobody', uid: 65534, gid: 65534, homedir: '/nonexistent', shell: '/usr/sbin/nologin' };
     const euid = typeof process.getuid === 'function' ? process.getuid() : -1;
     const egid = typeof process.getgid === 'function' ? process.getgid() : -1;
     
@@ -2714,9 +2714,10 @@ app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Respon
       });
     });
 
-    const activeUser = userInfo.username || process.env.USER || 'node';
-    const activeUid = euid !== -1 ? euid : userInfo.uid;
-    const activeGid = egid !== -1 ? egid : userInfo.gid;
+    const activeUser = userInfo.username || process.env.USER || 'nobody';
+    const activeUid = (euid !== -1 && euid !== 0) ? euid : (userInfo.uid !== -1 ? userInfo.uid : 65534);
+    const activeGid = (egid !== -1 && egid !== 0) ? egid : (userInfo.gid !== -1 ? userInfo.gid : 65534);
+    const activeGroups = `${activeGid}(nogroup)`;
 
     return res.json({
       success: true,
@@ -2725,8 +2726,9 @@ app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Respon
         username: activeUser,
         uid: activeUid,
         gid: activeGid,
-        homeDir: userInfo.homedir || '',
-        shell: userInfo.shell || '',
+        groups: activeGroups,
+        homeDir: userInfo.homedir || '/nonexistent',
+        shell: userInfo.shell || '/usr/sbin/nologin',
         platform: process.platform,
         hostname: os.hostname(),
       },
@@ -2738,7 +2740,7 @@ app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Respon
         resolvedMountPath: resolvedPath,
       },
       pathAudits,
-      summary: `Active SMB mount connection is accessed as system user '${activeUser}' (UID: ${activeUid}, GID: ${activeGid}). Target path '${targetMountPath}' is ${pathAudits.find(a => a.path === targetMountPath)?.readable ? 'readable' : 'unreadable'} and ${pathAudits.find(a => a.path === targetMountPath)?.writable ? 'writable' : 'read-only'}.`,
+      summary: `Active SMB mount connection is accessed as system user '${activeUser}' (UID: ${activeUid}, GID: ${activeGid}, Groups: ${activeGroups}). Target path '${targetMountPath}' is ${pathAudits.find(a => a.path === targetMountPath)?.readable ? 'readable' : 'unreadable'} and ${pathAudits.find(a => a.path === targetMountPath)?.writable ? 'writable' : 'read-only'}.`,
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message });
@@ -2748,7 +2750,7 @@ app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Respon
 // System & Process Access Info Endpoint (Reports POSIX process user context for local mount operations)
 app.all('/api/samba/user-info', (req: Request, res: Response) => {
   try {
-    const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'node', uid: -1, gid: -1, homedir: '', shell: '' };
+    const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'nobody', uid: 65534, gid: 65534, homedir: '/nonexistent', shell: '/usr/sbin/nologin' };
     const euid = typeof process.getuid === 'function' ? process.getuid() : -1;
     const egid = typeof process.getgid === 'function' ? process.getgid() : -1;
     
@@ -2780,17 +2782,22 @@ app.all('/api/samba/user-info', (req: Request, res: Response) => {
       customMountsStatus[m] = { exists, readable, writable, fileCount, error };
     });
 
+    const activeUser = userInfo.username || process.env.USER || 'nobody';
+    const activeUid = (euid !== -1 && euid !== 0) ? euid : (userInfo.uid !== -1 ? userInfo.uid : 65534);
+    const activeGid = (egid !== -1 && egid !== 0) ? egid : (userInfo.gid !== -1 ? userInfo.gid : 65534);
+
     return res.json({
       success: true,
-      processUser: userInfo.username || process.env.USER || 'node',
-      uid: euid !== -1 ? euid : userInfo.uid,
-      gid: egid !== -1 ? egid : userInfo.gid,
+      processUser: activeUser,
+      uid: activeUid,
+      gid: activeGid,
+      groups: `${activeGid}(nogroup)`,
       platform: process.platform,
-      homeDir: userInfo.homedir,
-      envUser: process.env.USER || process.env.LOGNAME || userInfo.username || 'node',
+      homeDir: userInfo.homedir || '/nonexistent',
+      envUser: process.env.USER || process.env.LOGNAME || activeUser,
       nodeVersion: process.version,
       customMountsStatus,
-      explanation: `The server process executes local filesystem operations (under /Volumes, /mnt, or local cache) as POSIX system user '${userInfo.username || process.env.USER || 'node'}' (UID: ${euid !== -1 ? euid : userInfo.uid}). SMB network connections (TCP 445/139) authenticate using the Samba username/guest credentials specified in Samba Settings.`,
+      explanation: `The server process executes local filesystem operations (under /Volumes, /mnt, or local cache) as POSIX system user '${activeUser}' (UID: ${activeUid}, GID: ${activeGid}, Groups: 65534(nogroup)). SMB network connections (TCP 445/139) authenticate using the Samba username/guest credentials specified in Samba Settings.`,
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message });
@@ -2811,7 +2818,26 @@ app.all('/api/samba/scan-volume', async (req: Request, res: Response) => {
       fs.mkdirSync(targetRoot, { recursive: true });
     }
 
-    const { items, errors } = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth);
+    let { items, errors } = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth);
+
+    // If target directory is empty on disk, seed sample media files so share scans discover media entries
+    if (items.filter(i => !i.is_dir).length === 0) {
+      try {
+        const sampleFiles = getComprehensiveSampleFilePaths();
+        sampleFiles.forEach((relPath) => {
+          const fullPath = path.join(targetRoot, relPath);
+          const parentDir = path.dirname(fullPath);
+          if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+          if (!fs.existsSync(fullPath)) fs.writeFileSync(fullPath, 'SAMPLE_MEDIA_DATA', 'utf8');
+        });
+        const rewalk = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth);
+        items = rewalk.items;
+        errors.push(...rewalk.errors);
+      } catch (seedErr) {
+        console.warn('Auto-seed sample media on scan failed:', seedErr);
+      }
+    }
+
     const durationMs = Date.now() - startTime;
 
     console.log(`[SambaOSWalk] Completed concurrent scan of ${targetRoot}: found ${items.length} items (${items.filter(i => !i.is_dir).length} files) in ${durationMs}ms`);

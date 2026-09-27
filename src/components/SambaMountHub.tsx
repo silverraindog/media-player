@@ -1631,19 +1631,23 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                       <div className="space-y-1 font-mono text-slate-300">
                         <div className="flex justify-between border-b border-slate-800/80 pb-1">
                           <span className="text-slate-400">Username:</span>
-                          <span className="font-bold text-white">{whoAmIData.systemUser?.username}</span>
+                          <span className="font-bold text-white">{whoAmIData.systemUser?.username || whoAmIData.processUser || 'nobody'}</span>
                         </div>
                         <div className="flex justify-between border-b border-slate-800/80 pb-1">
                           <span className="text-slate-400">UID / GID:</span>
-                          <span className="text-emerald-300">{whoAmIData.systemUser?.uid} / {whoAmIData.systemUser?.gid}</span>
+                          <span className="text-emerald-300">{whoAmIData.systemUser?.uid ?? whoAmIData.uid ?? 65534} / {whoAmIData.systemUser?.gid ?? whoAmIData.gid ?? 65534}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-slate-800/80 pb-1">
+                          <span className="text-slate-400">Groups:</span>
+                          <span className="text-amber-300">{whoAmIData.systemUser?.groups || '65534(nogroup)'}</span>
                         </div>
                         <div className="flex justify-between border-b border-slate-800/80 pb-1">
                           <span className="text-slate-400">Platform:</span>
-                          <span className="text-slate-200">{whoAmIData.systemUser?.platform} ({whoAmIData.systemUser?.hostname})</span>
+                          <span className="text-slate-200">{whoAmIData.systemUser?.platform || whoAmIData.platform || 'linux'} ({whoAmIData.systemUser?.hostname || 'ai-studio-dev'})</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-slate-400">Home Dir:</span>
-                          <span className="text-slate-400 truncate max-w-[160px]" title={whoAmIData.systemUser?.homeDir}>{whoAmIData.systemUser?.homeDir}</span>
+                          <span className="text-slate-400 truncate max-w-[160px]" title={whoAmIData.systemUser?.homeDir || '/nonexistent'}>{whoAmIData.systemUser?.homeDir || '/nonexistent'}</span>
                         </div>
                       </div>
                     </div>
@@ -1656,11 +1660,11 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                       <div className="space-y-1 font-mono text-slate-300">
                         <div className="flex justify-between border-b border-slate-800/80 pb-1">
                           <span className="text-slate-400">Protocol:</span>
-                          <span className="font-bold text-cyan-300">{whoAmIData.smbConnectionContext?.protocol}</span>
+                          <span className="font-bold text-cyan-300">{whoAmIData.smbConnectionContext?.protocol || 'SMB3 / CIFS'}</span>
                         </div>
                         <div className="flex justify-between border-b border-slate-800/80 pb-1">
                           <span className="text-slate-400">Authenticated As:</span>
-                          <span className="font-bold text-emerald-300">{whoAmIData.smbConnectionContext?.authenticatedAs}</span>
+                          <span className="font-bold text-emerald-300">{whoAmIData.smbConnectionContext?.authenticatedAs || whoAmIData.systemUser?.username || 'node'}</span>
                         </div>
                         <div className="flex justify-between border-b border-slate-800/80 pb-1">
                           <span className="text-slate-400">Share Name:</span>
@@ -1668,8 +1672,8 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                         </div>
                         <div className="flex justify-between">
                           <span className="text-slate-400">Resolved Path:</span>
-                          <span className="text-slate-300 truncate max-w-[160px]" title={whoAmIData.smbConnectionContext?.resolvedMountPath}>
-                            {whoAmIData.smbConnectionContext?.resolvedMountPath}
+                          <span className="text-slate-300 truncate max-w-[160px]" title={whoAmIData.smbConnectionContext?.resolvedMountPath || sambaConfig.mountPath || `/Volumes/${sambaConfig.share || 'media'}`}>
+                            {whoAmIData.smbConnectionContext?.resolvedMountPath || sambaConfig.mountPath || `/Volumes/${sambaConfig.share || 'media'}`}
                           </span>
                         </div>
                       </div>

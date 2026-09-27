@@ -172,3 +172,13 @@ jobs:
           releaseBody: ${{ steps.notes.outputs.release_notes }}
           releaseDraft: false
           prerelease: false
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SambaVault-v${{ needs.determine-version.outputs.release_version }}-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage

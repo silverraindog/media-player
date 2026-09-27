@@ -41,6 +41,7 @@ import {
   getPersistentStorageInfo,
   getVaultStateFromDisk,
   saveVaultStateToDisk,
+  globalSanitizeVaultPaths,
 } from './src/server/database';
 import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 
@@ -3727,6 +3728,17 @@ app.get('/api/db/stats/distribution', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Error getting media distribution stats from SQLite:', error);
     res.status(500).json({ error: 'Failed to get distribution stats', message: error?.message });
+  }
+});
+
+// Global Path Sanitizer endpoint: bulk sweep of SQLite database and vault state for %20 and double slashes
+app.post('/api/vault/sanitize-paths', async (req: Request, res: Response) => {
+  try {
+    const result = await globalSanitizeVaultPaths();
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error in global path sanitization:', error);
+    res.status(500).json({ error: 'Failed to sanitize paths', message: error?.message });
   }
 });
 

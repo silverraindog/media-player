@@ -725,6 +725,33 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   };
 
   const [isGeneratingLibrary, setIsGeneratingLibrary] = useState(false);
+  const [isSanitizingPaths, setIsSanitizingPaths] = useState(false);
+  const [sanitizeToast, setSanitizeToast] = useState<string | null>(null);
+
+  const handleGlobalSanitizePaths = async () => {
+    if (isSanitizingPaths) return;
+    setIsSanitizingPaths(true);
+    try {
+      const res = await fetch('/api/vault/sanitize-paths', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setSanitizeToast(`Global Path Sanitizer: Fixed ${data.fixedCount} paths successfully across SQLite and vault state!`);
+        setTimeout(() => setSanitizeToast(null), 6000);
+        if (onRefreshSamba) {
+          onRefreshSamba();
+        }
+      } else {
+        setSanitizeToast(`Sanitization failed: ${data.message || 'Unknown error'}`);
+        setTimeout(() => setSanitizeToast(null), 4000);
+      }
+    } catch (e: any) {
+      console.error('Error running global path sanitizer:', e);
+      setSanitizeToast(`Error: ${e?.message || 'Network error'}`);
+      setTimeout(() => setSanitizeToast(null), 4000);
+    } finally {
+      setIsSanitizingPaths(false);
+    }
+  };
 
   const handleGenerateLargeSampleLibrary = async () => {
     setIsGeneratingLibrary(true);
@@ -2208,6 +2235,18 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <span>{isVerifyingArtwork ? 'Verifying Files...' : 'Verify Share Artwork'}</span>
             </button>
 
+            {/* Global Path Sanitizer Button */}
+            <button
+              id="global-path-sanitizer-btn"
+              onClick={handleGlobalSanitizePaths}
+              disabled={isSanitizingPaths}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-950/70 hover:bg-amber-900/80 text-amber-200 text-xs font-semibold border border-amber-500/40 transition shadow cursor-pointer disabled:opacity-50"
+              title="Bulk sweep SQLite database and vault state to find and fix paths containing '%20' or double-slashes in one operation"
+            >
+              <Shield className={`w-3.5 h-3.5 text-amber-400 ${isSanitizingPaths ? 'animate-spin' : ''}`} />
+              <span>{isSanitizingPaths ? 'Sanitizing Paths...' : 'Global Path Sanitizer'}</span>
+            </button>
+
             <button
               id="samba-refresh-btn"
               onClick={onRefreshSamba}
@@ -2225,6 +2264,14 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           <div className="mt-3 py-2 px-3 rounded-xl bg-slate-950/80 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
             <span>{verifyStatusMessage}</span>
+          </div>
+        )}
+
+        {/* Global Path Sanitizer Toast Banner */}
+        {sanitizeToast && (
+          <div className="mt-3 py-2 px-3 rounded-xl bg-slate-950/80 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2">
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>{sanitizeToast}</span>
           </div>
         )}
 

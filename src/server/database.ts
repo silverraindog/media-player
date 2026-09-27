@@ -2090,3 +2090,190 @@ export function saveVaultStateToDisk(state: Partial<PersistentVaultState>): Pers
   return updated;
 }
 
+export async function globalSanitizeVaultPaths(): Promise<{
+  success: boolean;
+  fixedCount: number;
+  details: {
+    thumbnailCacheFixed: number;
+    mediaItemsFixed: number;
+    watchHistoryFixed: number;
+    watchlistFixed: number;
+    vaultStateTreeFixed: boolean;
+  };
+  message: string;
+}> {
+  const db = await getDatabase();
+  let fixedCount = 0;
+  let thumbnailCacheFixed = 0;
+  let mediaItemsFixed = 0;
+  let watchHistoryFixed = 0;
+  let watchlistFixed = 0;
+
+  const clean = (p: string | null | undefined): [string | null, boolean] => {
+    if (!p || typeof p !== 'string') return [p || null, false];
+    let s = p.replace(/%20/g, ' ');
+    s = s.replace(/([^:]\/)\/+/g, '$1');
+    const changed = s !== p;
+    return [s, changed];
+  };
+
+  // 1. thumbnail_metadata_cache
+  try {
+    const res = db.exec(`SELECT id, media_path, thumbnail_url, fanart_url FROM thumbnail_metadata_cache`);
+    if (res.length > 0 && res[0].values) {
+      for (const row of res[0].values) {
+        const id = row[0] as string;
+        const mediaPath = row[1] as string;
+        const thumbUrl = row[2] as string;
+        const fanartUrl = row[3] as string;
+
+        const [newPath, pChanged] = clean(mediaPath);
+        const [newThumb, tChanged] = clean(thumbUrl);
+        const [newFanart, fChanged] = clean(fanartUrl);
+
+        if (pChanged || tChanged || fChanged) {
+          db.run(
+            `UPDATE thumbnail_metadata_cache SET media_path = ?, thumbnail_url = ?, fanart_url = ? WHERE id = ?`,
+            [newPath, newThumb, newFanart, id]
+          );
+          thumbnailCacheFixed++;
+          fixedCount++;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error sanitizing thumbnail_metadata_cache:', e);
+  }
+
+  // 2. media_items
+  try {
+    const res = db.exec(`SELECT id, recommended_folder, poster_url, fanart_url FROM media_items`);
+    if (res.length > 0 && res[0].values) {
+      for (const row of res[0].values) {
+        const id = row[0] as string;
+        const recFolder = row[1] as string;
+        const poster = row[2] as string;
+        const fanart = row[3] as string;
+
+        const [newRec, rChanged] = clean(recFolder);
+        const [newPoster, pChanged] = clean(poster);
+        const [newFanart, fChanged] = clean(fanart);
+
+        if (rChanged || pChanged || fChanged) {
+          db.run(
+            `UPDATE media_items SET recommended_folder = ?, poster_url = ?, fanart_url = ? WHERE id = ?`,
+            [newRec, newPoster, newFanart, id]
+          );
+          mediaItemsFixed++;
+          fixedCount++;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error sanitizing media_items:', e);
+  }
+
+  // 3. watch_history_log
+  try {
+    const res = db.exec(`SELECT id, poster_url FROM watch_history_log`);
+    if (res.length > 0 && res[0].values) {
+      for (const row of res[0].values) {
+        const id = row[0] as string;
+        const poster = row[1] as string;
+        const [newPoster, changed] = clean(poster);
+        if (changed) {
+          db.run(`UPDATE watch_history_log SET poster_url = ? WHERE id = ?`, [newPoster, id]);
+          watchHistoryFixed++;
+          fixedCount++;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error sanitizing watch_history_log:', e);
+  }
+
+  // 4. user_watchlist
+  try {
+    const res = db.exec(`SELECT id, poster_url FROM user_watchlist`);
+    if (res.length > 0 && res[0].values) {
+      for (const row of res[0].values) {
+        const id = row[0] as string;
+        const poster = row[1] as string;
+        const [newPoster, changed] = clean(poster);
+        if (changed) {
+          db.run(`UPDATE user_watchlist SET poster_url = ? WHERE id = ?`, [newPoster, id]);
+          watchlistFixed++;
+          fixedCount++;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error sanitizing user_watchlist:', e);
+  }
+
+  persistDbToDisk();
+
+  // 5. vault_state.json (sambaTree)
+  let vaultStateTreeFixed = false;
+  try {
+    const vaultState = getVaultStateFromDisk();
+    if (vaultState && vaultState.sambaTree && Array.isArray(vaultState.sambaTree)) {
+      const sanitizeNode = (node: any): boolean => {
+        let nodeChanged = false;
+        if (node.path) {
+          const [newP, c] = clean(node.path);
+          if (c) { node.path = newP; nodeChanged = true; }
+        }
+        if (node.name) {
+          const [newN, c] = clean(node.name);
+          if (c) { node.name = newN; nodeChanged = true; }
+        }
+        if (node.url) {
+          const [newU, c] = clean(node.url);
+          if (c) { node.url = newU; nodeChanged = true; }
+        }
+        if (node.recommendedFolder) {
+          const [newR, c] = clean(node.recommendedFolder);
+          if (c) { node.recommendedFolder = newR; nodeChanged = true; }
+        }
+        if (node.children && Array.isArray(node.children)) {
+          for (const child of node.children) {
+            if (sanitizeNode(child)) {
+              nodeChanged = true;
+            }
+          }
+        }
+        return nodeChanged;
+      };
+
+      let treeChanged = false;
+      for (const topNode of vaultState.sambaTree) {
+        if (sanitizeNode(topNode)) {
+          treeChanged = true;
+        }
+      }
+
+      if (treeChanged) {
+        saveVaultStateToDisk(vaultState);
+        vaultStateTreeFixed = true;
+        fixedCount++;
+      }
+    }
+  } catch (e) {
+    console.error('Error sanitizing vault_state.json sambaTree:', e);
+  }
+
+  return {
+    success: true,
+    fixedCount,
+    details: {
+      thumbnailCacheFixed,
+      mediaItemsFixed,
+      watchHistoryFixed,
+      watchlistFixed,
+      vaultStateTreeFixed,
+    },
+    message: `Global Path Sanitizer successfully swept SQLite database and vault state, fixing ${fixedCount} path entries.`,
+  };
+}
+

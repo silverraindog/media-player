@@ -27,12 +27,12 @@ jobs:
       release_tag: ${{ steps.calc_ver.outputs.tag }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
 
@@ -115,14 +115,14 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Clean Lockfile for Fresh Cross-Platform Resolution
         shell: bash
         run: rm -f bun.lock bun.lockb yarn.lock pnpm-lock.yaml package-lock.json
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
 

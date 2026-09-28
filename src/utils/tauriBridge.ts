@@ -209,6 +209,7 @@ export interface ScanVolumeResult {
   items: ScannedShareItem[];
   totalScanned: number;
   error?: string | null;
+  errors?: string[];
   diagnostics?: ScanDepthDiagnosticReport;
 }
 
@@ -710,6 +711,14 @@ export const performFastScan = async (
           rel_path: normalizePathRelativeToShareRoot(it.rel_path, rootPath),
         }));
 
+        if (data.errors && data.errors.length > 0) {
+          console.group('⚠️ [performFastScan] Traversal Warnings & Permission Failures');
+          data.errors.forEach((errStr: string) => {
+            console.warn(`[Directory Skipped / Blocked] ${errStr}`);
+          });
+          console.groupEnd();
+        }
+
         if (onProgress) {
           normalizedItems.forEach((item: any, idx: number) => {
             if (!item.is_dir) {
@@ -723,7 +732,7 @@ export const performFastScan = async (
         }
 
         console.log(
-          `[recursive_limit] performFastScan (Browser Fallback) completed in ${durationMs}ms: retrieved ${normalizedItems.length} items with max_depth=${effectiveMaxDepth}. ` +
+          `[recursive_limit] performFastScan (Browser Fallback DFS) completed in ${durationMs}ms: retrieved ${normalizedItems.length} items with max_depth=${effectiveMaxDepth}. ` +
             (normalizedItems.length === 25
               ? '⚠️ RESULT CONTAINS EXACTLY 25 ITEMS.'
               : `✅ Successfully retrieved ${normalizedItems.length} items.`)
@@ -744,6 +753,7 @@ export const performFastScan = async (
           items: normalizedItems,
           totalScanned: data.totalScanned || normalizedItems.length,
           diagnostics,
+          errors: data.errors || [],
         };
       }
     }

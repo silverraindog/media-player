@@ -2203,11 +2203,26 @@ function App() {
           effectiveDepthLimit
         ).catch((e) => {
           console.warn('[SambaSync] performFastScan failed or timed out:', e);
-          return { success: false, items: [], error: String(e) };
+          return { success: false, items: [], error: String(e), errors: [] as string[] };
         });
 
         if (scanResult.success && scanResult.items.length > 0) {
+          if (scanResult.errors && scanResult.errors.length > 0) {
+            try {
+              localStorage.setItem('samba_vault_last_scan_errors', JSON.stringify(scanResult.errors));
+            } catch (_) {}
+          } else {
+            try {
+              localStorage.removeItem('samba_vault_last_scan_errors');
+            } catch (_) {}
+          }
           return scanResult.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
+        } else {
+          // If the scan failed or returned no items, save the failure details
+          const failErr = scanResult.error || 'Empty or unreadable share root.';
+          try {
+            localStorage.setItem('samba_vault_last_scan_errors', JSON.stringify([`Scan Failed: ${failErr}`]));
+          } catch (_) {}
         }
 
         console.log('[SambaSync] FastScan returned no items, falling back to volume scan...');
@@ -3595,6 +3610,7 @@ function App() {
 
         {activeTab === 'console' && (
           <ConsoleTab
+            sambaConfig={sambaConfig}
             onRetryFailedFiles={async (failedPaths) => {
               if (failedPaths && failedPaths.length === 1 && failedPaths[0].startsWith('/Volumes')) {
                 await handleSyncSamba(failedPaths[0]);

@@ -24,7 +24,7 @@ import {
   ChevronUp,
   Flame,
 } from 'lucide-react';
-import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident } from '../types';
+import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident, SambaConfig } from '../types';
 import { logger, LOG_LEVEL_RANKS } from '../utils/loggerService';
 import {
   ResponsiveContainer,
@@ -35,15 +35,18 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts';
+import { HardDrive, ShieldCheck, ShieldAlert, Check, PlayCircle, Eye, HelpCircle } from 'lucide-react';
 
 interface ConsoleTabProps {
   onRetryFailedFiles?: (failedPaths: string[]) => Promise<void>;
   onTriggerSync?: () => Promise<void>;
+  sambaConfig?: SambaConfig;
 }
 
 export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   onRetryFailedFiles,
   onTriggerSync,
+  sambaConfig,
 }) => {
   const [logs, setLogs] = useState<ConsoleLogEntry[]>([]);
   const [selectedLevel, setSelectedLevel] = useState<ConsoleLogLevel | 'all'>('all');
@@ -60,6 +63,128 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   const [isRetrying, setIsRetrying] = useState(false);
   const [showFailedPaths, setShowFailedPaths] = useState(false);
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
+
+  // Samba Traversability & Path Diagnostics States
+  const [isDiagnosticExpanded, setIsDiagnosticExpanded] = useState(true);
+  const [diagnosticPath, setDiagnosticPath] = useState(sambaConfig?.mountPath || '/Volumes/media');
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
+  const [whoamiData, setWhoamiData] = useState<any>(null);
+
+  // Permission Denied & Scan Errors Overlay State
+  const [lastScanErrors, setLastScanErrors] = useState<string[]>([]);
+  const [showOverlay, setShowOverlay] = useState(false);
+  const [isPrevalidating, setIsPrevalidating] = useState(false);
+  const [prevalidateResult, setPrevalidateResult] = useState<any>(null);
+
+  const loadLastScanErrors = () => {
+    try {
+      const stored = localStorage.getItem('samba_vault_last_scan_errors');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setLastScanErrors(parsed);
+          return;
+        }
+      }
+      setLastScanErrors([]);
+    } catch (_) {
+      setLastScanErrors([]);
+    }
+  };
+
+  useEffect(() => {
+    loadLastScanErrors();
+    const interval = setInterval(loadLastScanErrors, 2500); // Poll local errors to keep live
+    return () => clearInterval(interval);
+  }, []);
+
+  const handlePrevalidatePermissions = async () => {
+    setIsPrevalidating(true);
+    setPrevalidateResult(null);
+    try {
+      const mount = sambaConfig?.mountPath || '/Volumes/media';
+      const res = await fetch('/api/samba/diagnostic-walk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: mount }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPrevalidateResult({
+          success: true,
+          resolvedPath: data.resolvedPath,
+          visits: data.visits || [],
+        });
+      } else {
+        setPrevalidateResult({
+          success: false,
+          error: 'Could not access target path from host.',
+        });
+      }
+    } catch (e: any) {
+      setPrevalidateResult({
+        success: false,
+        error: e.message || 'Validation request failed.',
+      });
+    } finally {
+      setIsPrevalidating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (sambaConfig?.mountPath) {
+      setDiagnosticPath(sambaConfig.mountPath);
+    }
+  }, [sambaConfig]);
+
+  const fetchWhoamiDiagnostics = async () => {
+    try {
+      const res = await fetch('/api/samba/whoami', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mountPath: sambaConfig?.mountPath || '/Volumes/media' }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWhoamiData(data);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch whoami diagnostic context:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchWhoamiDiagnostics();
+  }, [sambaConfig]);
+
+  const handleRunDiagnosticWalk = async () => {
+    if (!diagnosticPath) return;
+    setDiagnosticLoading(true);
+    setDiagnosticError(null);
+    try {
+      const res = await fetch('/api/samba/diagnostic-walk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: diagnosticPath }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticResult(data);
+        if (data.visits && data.visits.length > 0) {
+          logger.info(`Diagnostic walk finished. Traversed ${data.visits.length} folder nodes on Host.`, 'Scanner', data);
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setDiagnosticError(errData.error || 'Failed to execute diagnostic walk on server.');
+      }
+    } catch (err: any) {
+      setDiagnosticError(err.message || 'Network error while attempting diagnostic.');
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  };
 
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -325,7 +450,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
         </div>
 
         {/* Live Counters */}
-        <div className="flex items-center space-x-3 text-xs font-mono">
+        <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
           <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center gap-2">
             <span className="text-slate-400">Total:</span>
             <span className="text-white font-bold tabular-nums">{totalCount}</span>
@@ -342,7 +467,198 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
             <span className="text-rose-400">Errors:</span>
             <span className="text-rose-200 font-bold tabular-nums">{errorCount}</span>
           </div>
+
+          {/* Active Permission Denied / Warnings Diagnostic Trigger Button */}
+          {lastScanErrors.length > 0 ? (
+            <button
+              onClick={() => setShowOverlay(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold transition flex items-center gap-2 cursor-pointer shadow-lg shadow-rose-950/40 relative overflow-hidden group"
+            >
+              <span className="absolute inset-0 bg-gradient-to-r from-rose-500/10 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000 ease-out" />
+              <ShieldAlert className="w-4 h-4 text-rose-400 animate-bounce shrink-0" />
+              <span>{lastScanErrors.length} Access Error(s)</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowOverlay(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 hover:bg-slate-900/60 text-slate-300 font-semibold transition flex items-center gap-2 cursor-pointer shadow"
+            >
+              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Permission Audit</span>
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* Samba Traversability & Path Diagnostics Panel */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-md space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+              <HardDrive className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Samba Path &amp; Traversability Diagnostics</h3>
+              <p className="text-xs text-slate-400">
+                Identify why the scanner isn't finding expected files or if permissions prevent folder traversal.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsDiagnosticExpanded(!isDiagnosticExpanded)}
+            className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 transition"
+          >
+            {isDiagnosticExpanded ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+
+        {isDiagnosticExpanded && (
+          <div className="space-y-4">
+            {/* Context Summary Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-slate-500 block">Samba Process Context</span>
+                <span className="font-mono text-slate-200 block font-semibold truncate">
+                  User: {whoamiData?.systemUser?.username || 'reading...'} (UID: {whoamiData?.systemUser?.uid ?? '...'})
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono block">
+                  Platform: {whoamiData?.systemUser?.platform || '...'} | Hostname: {whoamiData?.systemUser?.hostname || '...'}
+                </span>
+              </div>
+
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-slate-500 block">Configured Mount Path</span>
+                <span className="font-mono text-slate-200 block font-semibold truncate" title={sambaConfig?.mountPath}>
+                  {sambaConfig?.mountPath || '/Volumes/media'}
+                </span>
+                {whoamiData?.pathAudits && (
+                  <span className="text-[10px] font-mono block">
+                    {whoamiData.pathAudits.find((a: any) => a.path === sambaConfig?.mountPath)?.exists ? (
+                      <span className="text-emerald-400 flex items-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5" /> Exists &amp; {whoamiData.pathAudits.find((a: any) => a.path === sambaConfig?.mountPath)?.readable ? 'Readable' : 'Unreadable'}
+                      </span>
+                    ) : (
+                      <span className="text-rose-400 flex items-center gap-1">
+                        <ShieldAlert className="w-3.5 h-3.5" /> Path does not exist on Host
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-slate-500 block">Resolved Physical Path</span>
+                <span className="font-mono text-indigo-300 block font-semibold truncate" title={whoamiData?.smbConnectionContext?.resolvedMountPath}>
+                  {whoamiData?.smbConnectionContext?.resolvedMountPath || 'resolving...'}
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono block">
+                  {whoamiData?.smbConnectionContext?.resolvedMountPath === '/samba_share' || whoamiData?.smbConnectionContext?.resolvedMountPath?.endsWith('samba_share') ? (
+                    <span className="text-amber-400">⚠️ Fallback to local cache (Samba turned off)</span>
+                  ) : (
+                    <span className="text-emerald-400 font-semibold">✅ Pointing to active network mount</span>
+                  )}
+                </span>
+              </div>
+            </div>
+
+            {/* Path Probe Tool */}
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <div className="flex-1 space-y-1">
+                  <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block font-mono">
+                    Test Path for Depth-First Traversal Diagnostics
+                  </label>
+                  <input
+                    type="text"
+                    value={diagnosticPath}
+                    onChange={(e) => setDiagnosticPath(e.target.value)}
+                    placeholder="Enter directory path to scan, e.g. /Volumes/media"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 font-mono text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <button
+                  onClick={handleRunDiagnosticWalk}
+                  disabled={diagnosticLoading}
+                  className="px-4 py-2 self-end rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold shadow transition flex items-center gap-2 cursor-pointer h-9 mt-1 sm:mt-0"
+                >
+                  {diagnosticLoading ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <PlayCircle className="w-3.5 h-3.5" />
+                  )}
+                  <span>{diagnosticLoading ? 'Traversing...' : 'Run Depth-First Probe'}</span>
+                </button>
+              </div>
+
+              {diagnosticError && (
+                <div className="p-3 rounded-lg bg-rose-950/30 border border-rose-800/40 text-rose-300 text-xs font-mono">
+                  🛑 <strong>Error:</strong> {diagnosticError}
+                </div>
+              )}
+
+              {/* Diagnostic walk results */}
+              {diagnosticResult && (
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-2">
+                    <span className="text-slate-400 font-mono">
+                      Target: <strong className="text-white">{diagnosticResult.resolvedPath}</strong>
+                    </span>
+                    <span className="text-cyan-400 font-mono text-[11px]">
+                      {diagnosticResult.summary}
+                    </span>
+                  </div>
+
+                  <div className="max-h-60 overflow-y-auto space-y-1.5 custom-scrollbar">
+                    {diagnosticResult.visits && diagnosticResult.visits.map((v: any, idx: number) => {
+                      // Indent directory depth based on path segments relative to target root
+                      const relativeSub = v.dir.replace(diagnosticResult.resolvedPath, '');
+                      const depth = relativeSub.split(/[\/\\]/).filter(Boolean).length;
+                      const indent = '  '.repeat(depth);
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-2 rounded-lg text-xs font-mono border ${
+                            v.error
+                              ? 'bg-rose-950/20 border-rose-500/30 text-rose-300'
+                              : 'bg-slate-900/40 border-slate-800 text-slate-300'
+                          } flex flex-col space-y-1`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="truncate flex items-center gap-1.5">
+                              <span className="text-slate-500 shrink-0 select-none whitespace-pre">{indent}</span>
+                              <span className="text-slate-400 shrink-0 select-none">📂</span>
+                              <span className="truncate text-slate-200" title={v.dir}>{v.dir}</span>
+                            </span>
+                            <span className="text-[11px] shrink-0 space-x-2">
+                              <span className="text-slate-400">Files: <strong className="text-white">{v.fileCount}</strong></span>
+                              <span className="text-slate-400">Folders: <strong className="text-white">{v.directoryCount}</strong></span>
+                            </span>
+                          </div>
+
+                          {v.error ? (
+                            <div className="text-[10px] text-rose-400 font-bold bg-rose-950/50 p-1.5 rounded border border-rose-900/40 mt-1 flex items-center gap-1">
+                              <ShieldAlert className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                              <span>{v.error}</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-4 text-[10px] text-slate-500 mt-0.5">
+                              <span className="flex items-center gap-1">
+                                <ShieldCheck className="w-3 h-3 text-emerald-500" /> Accessible
+                              </span>
+                              <span>Readable: {v.readable ? 'Yes' : 'No'}</span>
+                              <span>Writable: {v.writable ? 'Yes' : 'No'}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Real-Time Sync Incident Notification Alert Banner */}
@@ -761,6 +1077,165 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
           <div ref={logsEndRef} />
         </div>
       </div>
+
+      {/* Diagnostic Permissions Audit Overlay Modal */}
+      {showOverlay && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative flex flex-col max-h-[85vh] overflow-hidden space-y-5 animate-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    Permissions &amp; Traversal Audit
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Live pre-validation checks and recent scanner folder access logs.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowOverlay(false);
+                  setPrevalidateResult(null);
+                }}
+                className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Resolved Mount Path Info */}
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block font-mono">
+                Current Resolved Target Path
+              </span>
+              <div className="flex items-center justify-between text-xs font-mono bg-slate-900/60 px-3 py-2 rounded-lg border border-slate-800">
+                <span className="text-cyan-300 select-all truncate font-semibold">
+                  {sambaConfig?.mountPath || '/Volumes/media'}
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 font-semibold uppercase shrink-0 ml-2">
+                  {sambaConfig?.enabled ? 'Samba Mount' : 'Local Path'}
+                </span>
+              </div>
+            </div>
+
+            {/* Active Permissions List / Errors from Last performFastScan */}
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1 custom-scrollbar">
+              <div className="space-y-2">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block font-mono">
+                  Scan Telemetry Warnings ({lastScanErrors.length})
+                </span>
+
+                {lastScanErrors.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="p-3 bg-rose-950/20 border border-rose-800/40 rounded-xl text-rose-300 text-xs leading-relaxed flex items-start gap-2.5">
+                      <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="block text-rose-200">Directory Reading Blocked!</strong>
+                        The scanner skipped directories due to lack of standard read permissions (`EACCES`). Ensure proper mount options are active.
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar">
+                      {lastScanErrors.map((err, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 bg-slate-950/80 border border-slate-850 rounded-xl text-xs font-mono text-rose-300 flex flex-col gap-1.5"
+                        >
+                          <div className="flex items-start gap-2 text-rose-200">
+                            <span className="text-rose-500 shrink-0 select-none">🛑</span>
+                            <span className="break-all">{err}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 pl-6">
+                            Action recommendation: Run `chmod -R +r` or check mount credentials on the target host.
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-5 bg-emerald-950/10 border border-emerald-800/20 rounded-xl text-xs text-slate-300 space-y-2 flex flex-col items-center text-center">
+                    <span className="text-3xl">🎉</span>
+                    <div>
+                      <strong className="block text-emerald-400 font-bold mb-1">No Read Failures Encountered</strong>
+                      The last directory walk completed cleanly without encountering standard read permission blocks or unreadable paths.
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Pre-validation live suite */}
+              <div className="space-y-2 border-t border-slate-800 pt-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block font-mono">
+                    FS.PROMISES.ACCESS PRE-VALIDATION TEST
+                  </span>
+                  <button
+                    onClick={handlePrevalidatePermissions}
+                    disabled={isPrevalidating}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-50 text-white text-[10px] font-bold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {isPrevalidating ? (
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Zap className="w-3 h-3" />
+                    )}
+                    <span>{isPrevalidating ? 'Verifying...' : 'Test Pre-validation Now'}</span>
+                  </button>
+                </div>
+
+                {prevalidateResult && (
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 text-xs font-mono">
+                    {prevalidateResult.success ? (
+                      <div className="space-y-2">
+                        <span className="text-emerald-400 flex items-center gap-1.5 text-[11px] font-bold">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                          Host filesystem verified readable at root.
+                        </span>
+                        <div className="max-h-32 overflow-y-auto space-y-1 text-[11px] custom-scrollbar">
+                          {prevalidateResult.visits.map((v: any, vIdx: number) => (
+                            <div key={vIdx} className="flex items-center justify-between gap-2 p-1 hover:bg-slate-900 rounded border border-transparent hover:border-slate-800">
+                              <span className="truncate text-slate-400 text-left shrink" title={v.dir}>{v.dir}</span>
+                              <span className={`shrink-0 text-right ${v.error ? "text-rose-400 font-bold" : "text-emerald-400 font-semibold"}`}>
+                                {v.error ? "Blocked 🔒" : "Accessible ✅"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-rose-400 flex items-center gap-1.5 text-[11px] font-bold">
+                        <AlertCircle className="w-4 h-4 text-rose-500" />
+                        <span>Pre-validation Failed: {prevalidateResult.error}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Actions Footer */}
+            <div className="border-t border-slate-800 pt-4 flex items-center justify-between shrink-0">
+              <span className="text-[10px] text-slate-500 font-mono">
+                SambaVault Security Auditing Engine v1.4
+              </span>
+              <button
+                onClick={() => {
+                  setShowOverlay(false);
+                  setPrevalidateResult(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 text-white text-xs font-bold transition cursor-pointer"
+              >
+                Dismiss Diagnostics
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

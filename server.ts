@@ -2659,18 +2659,56 @@ async function walkDirectoryRecursiveAsync(
   const results: any[] = [];
   const errors: string[] = [];
 
+  // Depth Limit Guard
+  if (currentDepth > maxDepth) {
+    const errMsg = `Depth limit of ${maxDepth} exceeded at: "${dir}"`;
+    console.warn(`[SambaOSWalk][DepthBarrier] ${errMsg}`);
+    return { items: [], errors: [errMsg] };
+  }
+
   try {
-    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    
-    // Spawn async tasks for subdirectories concurrently using Promise.all (tokio-style task concurrency)
-    const subTasks: Promise<void>[] = [];
+    // 1. Explicit read access check to handle permission-denied folders gracefully
+    try {
+      await fs.promises.access(dir, fs.constants.R_OK);
+    } catch (permErr: any) {
+      const errMsg = `Permission Denied (Read Blocked): Cannot read directory "${dir}". OS User: ${process.getuid ? `${process.getuid()}:${process.getgid()}` : 'N/A'}. Error: ${permErr.message}`;
+      console.warn(`[SambaOSWalk][PermissionDenied] ${errMsg}`);
+      return { items: [], errors: [errMsg] };
+    }
+
+    // 2. Perform readdir safely
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch (readErr: any) {
+      const errMsg = `Failed to list directory contents of "${dir}": ${readErr.message}`;
+      console.error(`[SambaOSWalk][ReadError] ${errMsg}`);
+      return { items: [], errors: [errMsg] };
+    }
+
+    // Spawn async tasks for subdirectories concurrently using Promise.allSettled (tokio-style task concurrency with resilience)
+    const subTasks: Promise<{ items: any[]; errors: string[] }>[] = [];
 
     for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
+      if (entry.name.startsWith('.')) continue; // Skip hidden entries (.DS_Store, ._ files)
       const fullPath = path.join(dir, entry.name);
       const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
 
-      if (entry.isDirectory()) {
+      let isDirectory = entry.isDirectory();
+      let isFile = entry.isFile();
+      let stat: fs.Stats | null = null;
+
+      // Wrap per-item stat in try-catch to ensure one broken symlink or special socket file doesn't block the rest of the directory
+      try {
+        stat = await fs.promises.stat(fullPath);
+        isDirectory = stat.isDirectory();
+        isFile = stat.isFile();
+      } catch (statErr: any) {
+        console.warn(`[SambaOSWalk][StatWarning] Could not stat item "${fullPath}": ${statErr.message}`);
+        // Fallback to entry types from readdir if stat fails
+      }
+
+      if (isDirectory) {
         results.push({
           name: entry.name,
           rel_path: relPath,
@@ -2682,21 +2720,13 @@ async function walkDirectoryRecursiveAsync(
         if (currentDepth < maxDepth) {
           subTasks.push(
             walkDirectoryRecursiveAsync(fullPath, baseDir, currentDepth + 1, maxDepth)
-              .then((subResult) => {
-                results.push(...subResult.items);
-                errors.push(...subResult.errors);
-              })
-              .catch((err) => {
-                errors.push(`Error walking subdirectory ${fullPath}: ${err.message}`);
-              })
           );
         }
-      } else if (entry.isFile()) {
+      } else if (isFile) {
         let sizeStr = '0 MB';
-        try {
-          const stat = await fs.promises.stat(fullPath);
+        if (stat) {
           sizeStr = `${Math.round(stat.size / (1024 * 1024))} MB`;
-        } catch (_) {}
+        }
 
         results.push({
           name: entry.name,
@@ -2711,10 +2741,20 @@ async function walkDirectoryRecursiveAsync(
     }
 
     if (subTasks.length > 0) {
-      await Promise.all(subTasks);
+      const taskResults = await Promise.allSettled(subTasks);
+      for (const tRes of taskResults) {
+        if (tRes.status === 'fulfilled') {
+          results.push(...tRes.value.items);
+          errors.push(...tRes.value.errors);
+        } else {
+          const errMsg = `Subdirectory walker task rejected: ${tRes.reason}`;
+          errors.push(errMsg);
+          console.error(`[SambaOSWalk][RejectedTask] ${errMsg}`);
+        }
+      }
     }
   } catch (err: any) {
-    const errMsg = `Error reading directory ${dir}: ${err.message}`;
+    const errMsg = `Unhandled error reading directory ${dir}: ${err.message}`;
     errors.push(errMsg);
     console.error(`[SambaOSWalk][Error] ${errMsg}`);
   }
@@ -2842,6 +2882,142 @@ app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Respon
       summary: `Active SMB mount connection is accessed as system user '${activeUser}' (UID: ${activeUid}, GID: ${activeGid}, Groups: ${activeGroups}). Target path '${targetMountPath}' is ${pathAudits.find(a => a.path === targetMountPath)?.readable ? 'readable' : 'unreadable'} and ${pathAudits.find(a => a.path === targetMountPath)?.writable ? 'writable' : 'read-only'}.`,
     });
   } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// Diagnostic Walk Endpoint: Safely traverses directories, auditing permissions and item counts per-directory, logging explicit EACCES warnings
+app.post('/api/samba/diagnostic-walk', async (req: Request, res: Response) => {
+  try {
+    const { path: rawPath } = req.body;
+    if (!rawPath || typeof rawPath !== 'string') {
+      return res.status(400).json({ success: false, error: 'Path parameter is required' });
+    }
+
+    const targetPath = rawPath.trim();
+    const resolvedPath = resolveSambaFullPath('', targetPath);
+    const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: 'unknown' };
+    const euid = typeof process.getuid === 'function' ? process.getuid() : -1;
+    const egid = typeof process.getgid === 'function' ? process.getgid() : -1;
+
+    const visits: Array<{
+      dir: string;
+      exists: boolean;
+      readable: boolean;
+      writable: boolean;
+      fileCount: number;
+      directoryCount: number;
+      error: string | null;
+    }> = [];
+
+    // Highly robust helper for diagnostic-specific walking
+    async function runDiagnosticWalk(dir: string, currentDepth: number = 0, maxDepth: number = 3): Promise<void> {
+      const exists = fs.existsSync(dir);
+      if (!exists) {
+        visits.push({
+          dir,
+          exists: false,
+          readable: false,
+          writable: false,
+          fileCount: 0,
+          directoryCount: 0,
+          error: 'Directory does not exist on disk',
+        });
+        return;
+      }
+
+      let readable = false;
+      let writable = false;
+      let fileCount = 0;
+      let directoryCount = 0;
+      let error: string | null = null;
+
+      try {
+        await fs.promises.access(dir, fs.constants.R_OK);
+        readable = true;
+      } catch (e: any) {
+        error = `Read Access Denied (EACCES/EPERM): ${e.message}`;
+      }
+
+      if (readable) {
+        try {
+          await fs.promises.access(dir, fs.constants.W_OK);
+          writable = true;
+        } catch (_) {}
+
+        try {
+          const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+          const subdirs: string[] = [];
+
+          for (const entry of entries) {
+            if (entry.name.startsWith('.')) continue;
+            if (entry.isDirectory()) {
+              directoryCount++;
+              subdirs.push(path.join(dir, entry.name));
+            } else if (entry.isFile()) {
+              fileCount++;
+            }
+          }
+
+          visits.push({
+            dir,
+            exists: true,
+            readable,
+            writable,
+            fileCount,
+            directoryCount,
+            error: null,
+          });
+
+          // Recurse up to maxDepth
+          if (currentDepth < maxDepth) {
+            for (const subdir of subdirs) {
+              await runDiagnosticWalk(subdir, currentDepth + 1, maxDepth);
+            }
+          }
+        } catch (re: any) {
+          error = `Readdir Error: ${re.message}`;
+          visits.push({
+            dir,
+            exists: true,
+            readable,
+            writable,
+            fileCount: 0,
+            directoryCount: 0,
+            error,
+          });
+        }
+      } else {
+        visits.push({
+          dir,
+          exists: true,
+          readable,
+          writable,
+          fileCount: 0,
+          directoryCount: 0,
+          error,
+        });
+      }
+    }
+
+    await runDiagnosticWalk(resolvedPath, 0, 3);
+
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      requestedPath: targetPath,
+      resolvedPath,
+      userInfo: {
+        username: userInfo.username || process.env.USER || 'nobody',
+        uid: euid,
+        gid: egid,
+        platform: process.platform,
+      },
+      visits,
+      summary: `Diagnostic walk completed on '${resolvedPath}'. Visited ${visits.length} directory node(s). ${visits.filter(v => v.error).length} folder error(s) detected.`,
+    });
+  } catch (err: any) {
+    console.error('Diagnostic walk failed:', err);
     return res.status(500).json({ success: false, error: err?.message });
   }
 });

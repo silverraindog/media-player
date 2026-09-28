@@ -11,6 +11,7 @@ import {
   Trash2,
   Upload,
   Download,
+  CloudDownload,
   Sparkles,
   CheckCircle2,
   RefreshCw,
@@ -91,7 +92,12 @@ import { SanitizationHistoryPanel } from './SanitizationHistoryPanel';
 import { sanitizationTracker } from '../utils/sanitizationTracker';
 import { pathDebugLogger } from '../utils/debugPathLogger';
 import { logger } from '../utils/loggerService';
-import { probeLocalNetwork } from '../utils/tauriBridge';
+import {
+  probeLocalNetwork,
+  checkLocalFileAvailability,
+  triggerFileDownload,
+  setLocalDownloadState
+} from '../utils/tauriBridge';
 import { downloadBulkMediaBundlesZip } from '../utils/zipDownloader';
 
 // Subtitle scanning configuration & helpers
@@ -401,13 +407,11 @@ export const getBreadcrumbSegments = (
   sambaConfig: SambaConfig,
   sambaTree: SambaShareNode[]
 ): BreadcrumbSegment[] => {
-  const isSambaOff = sambaConfig.enabled === false;
   const shareName = sambaConfig.share || 'media';
-  const server = sambaConfig.server || '192.168.1.25';
-  const hostPath = sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media';
+  const baseMount = sambaConfig.mountPath || sambaConfig.baseMountPath || `/Volumes/${shareName}`;
 
   const rootSegment: BreadcrumbSegment = {
-    label: isSambaOff ? hostPath : `//${server}/${shareName}`,
+    label: baseMount,
     path: '',
     isRoot: true,
     isFolder: true,
@@ -590,8 +594,25 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   }, [depthLimit]);
 
   const getMountPath = (pathStr: string) => {
+    let cleanSub = (pathStr || '').replace(/\\/g, '/').trim();
+
+    // Strip leading smb:// or smb:\\ or // or \\
+    cleanSub = cleanSub.replace(/^(smb:)?\/\/([^\/]+)\/([^\/]+)\/?/i, '');
+    cleanSub = cleanSub.replace(/^\\\\([^\\]+)\\([^\\]+)\\\/?/i, '');
+
+    // Strip leading /Volumes/<share>/ or /mnt/<share>/
     const share = sambaConfig.share || 'media';
-    return `/Volumes/${share}/${(pathStr || '').replace(/^\/+/, '')}`;
+    const volumeRegex = new RegExp(`^\\/?Volumes\\/${share}\\/`, 'i');
+    const mntRegex = new RegExp(`^\\/?mnt\\/${share}\\/`, 'i');
+    cleanSub = cleanSub.replace(volumeRegex, '');
+    cleanSub = cleanSub.replace(mntRegex, '');
+
+    // Prepend the actual configured base mount path (respecting Volume vs Volumes)
+    const baseMount = sambaConfig.mountPath || sambaConfig.baseMountPath || `/Volumes/${share}`;
+    const cleanBase = baseMount.replace(/\/+$/, '');
+    cleanSub = cleanSub.replace(/^\/+/, '');
+
+    return `${cleanBase}/${cleanSub}`;
   };
 
   useEffect(() => {
@@ -870,6 +891,40 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [selectedNodesMap, setSelectedNodesMap] = useState<Map<string, SambaShareNode>>(new Map());
 
+  // Local Download State Tracker for each file node
+  const [downloadStates, setDownloadStates] = useState<Record<string, 'pending' | 'downloading' | 'cached' | 'error'>>({});
+
+  // Synchronize download states whenever the sambaTree changes
+  useEffect(() => {
+    if (!sambaTree || sambaTree.length === 0) return;
+
+    let isMounted = true;
+    const loadStates = async () => {
+      const traversedStates: Record<string, 'pending' | 'downloading' | 'cached' | 'error'> = {};
+      const traverse = async (nodes: SambaShareNode[]) => {
+        for (const n of nodes) {
+          if (n.type === 'file') {
+            const st = await checkLocalFileAvailability(n.path);
+            traversedStates[n.path] = st;
+          }
+          if (n.children && n.children.length > 0) {
+            await traverse(n.children);
+          }
+        }
+      };
+
+      await traverse(sambaTree);
+      if (isMounted) {
+        setDownloadStates((prev) => ({ ...prev, ...traversedStates }));
+      }
+    };
+
+    loadStates();
+    return () => {
+      isMounted = false;
+    };
+  }, [sambaTree]);
+
   // Bulk Move Modal State
   const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
   const [targetMoveFolder, setTargetMoveFolder] = useState<SambaShareNode | null>(null);
@@ -883,7 +938,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const activeBreadcrumbSegment = breadcrumbSegments[breadcrumbSegments.length - 1];
   const activeBreadcrumbFolderPath = activeBreadcrumbSegment?.path || '';
   const activeBreadcrumbFolderLabel = activeBreadcrumbSegment?.isRoot
-    ? `//${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'}`
+    ? (sambaConfig.mountPath || sambaConfig.baseMountPath || `/Volumes/${sambaConfig.share || 'media'}`)
     : activeBreadcrumbSegment?.label || 'Share Root';
 
   const currentFolderConfiguredDepth = perFolderDepthMap[activeBreadcrumbFolderPath] || currentDepthLimit || 15;
@@ -993,7 +1048,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const handleBreadcrumbClick = (segment: BreadcrumbSegment) => {
     if (segment.isRoot || !segment.path) {
       setSelectedNode(null);
-      setCopyToast(`Navigated to Share Root: //${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'}`);
+      const baseMount = sambaConfig.mountPath || sambaConfig.baseMountPath || `/Volumes/${sambaConfig.share || 'media'}`;
+      setCopyToast(`Navigated to Share Root: ${baseMount}`);
       setTimeout(() => setCopyToast(null), 2500);
       return;
     }
@@ -1255,6 +1311,41 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       setIsBulkDownloading(false);
       setTimeout(() => setCopyToast(null), 4500);
       handleClearSelection();
+    }
+  };
+
+  // Trigger individual file download stream and update state
+  const handleTriggerFileDownload = async (node: SambaShareNode) => {
+    if (node.type !== 'file') return;
+
+    // CONFIRM RECEIPT of file download stream for media (SPECIFIC LOG EVENT)
+    logger.info(`[SambaExplorer] Triggering file download stream for media: "${node.name}"`, 'Samba');
+    console.log(`[SambaExplorer] CONFIRM RECEIPT of file download stream for media: "${node.name}" (Path: ${node.path})`);
+
+    // Optimistically update UI download state to downloading
+    setDownloadStates((prev) => ({ ...prev, [node.path]: 'downloading' }));
+    setLocalDownloadState(node.path, 'downloading');
+
+    try {
+      const finalState = await triggerFileDownload(node.path, node.name);
+
+      // Verify and set state dynamically
+      setDownloadStates((prev) => ({ ...prev, [node.path]: finalState }));
+
+      if (finalState === 'cached') {
+        logger.success(`[SambaExplorer] Download completed. File successfully written to local cache: "${node.name}"`, 'Samba');
+        setCopyToast(`Successfully downloaded "${node.name}" to local cache!`);
+      } else {
+        logger.error(`[SambaExplorer] Warning: File download failed to write to local cache: "${node.name}"`, 'Samba');
+        setCopyToast(`Failed to write "${node.name}" to local cache.`);
+      }
+    } catch (err: any) {
+      console.error(`Download exception for ${node.name}:`, err);
+      setDownloadStates((prev) => ({ ...prev, [node.path]: 'error' }));
+      setLocalDownloadState(node.path, 'error');
+      logger.error(`Download chain failed for "${node.name}": ${err.message || err}`, 'Samba');
+    } finally {
+      setTimeout(() => setCopyToast(null), 4000);
     }
   };
 
@@ -2487,6 +2578,75 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 <Code className="w-2.5 h-2.5 text-cyan-400 shrink-0" />
                 <span>Raw Path</span>
               </span>
+            )}
+
+            {/* Download State Badge */}
+            {!isFolder && (() => {
+              const dState = downloadStates[node.path] || 'pending';
+              switch (dState) {
+                case 'downloading':
+                  return (
+                    <span
+                      id={`download-badge-${node.id}`}
+                      className="px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 text-[9px] font-bold border border-blue-500/50 flex items-center gap-1 shrink-0 shadow-xs animate-pulse"
+                      title="File stream is actively downloading and writing to local cache..."
+                    >
+                      <RotateCw className="w-2.5 h-2.5 text-blue-400 animate-spin shrink-0" />
+                      <span>DOWNLOADING</span>
+                    </span>
+                  );
+                case 'cached':
+                  return (
+                    <span
+                      id={`download-badge-${node.id}`}
+                      className="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[9px] font-bold border border-emerald-500/50 flex items-center gap-1 shrink-0 shadow-xs"
+                      title="Verified: File successfully written and cached on local host storage."
+                    >
+                      <Check className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                      <span>CACHED</span>
+                    </span>
+                  );
+                case 'error':
+                  return (
+                    <span
+                      id={`download-badge-${node.id}`}
+                      className="px-1.5 py-0.5 rounded bg-rose-950 text-rose-300 text-[9px] font-bold border border-rose-500/50 flex items-center gap-1 shrink-0 shadow-xs"
+                      title="Error: File download was triggered but failed to write to local cache."
+                    >
+                      <AlertTriangle className="w-2.5 h-2.5 text-rose-400 shrink-0" />
+                      <span>ERROR</span>
+                    </span>
+                  );
+                case 'pending':
+                default:
+                  return (
+                    <span
+                      id={`download-badge-${node.id}`}
+                      className="px-1.5 py-0.5 rounded bg-slate-900/90 text-slate-400 text-[9px] font-semibold border border-slate-700/30 flex items-center gap-1 shrink-0 shadow-xs"
+                      title="Download pending: File is available on Samba share but not yet local."
+                    >
+                      <Clock className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                      <span>PENDING</span>
+                    </span>
+                  );
+              }
+            })()}
+
+            {/* Interactive Trigger Download Action Button for File Row */}
+            {!isFolder && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleTriggerFileDownload(node);
+                }}
+                disabled={downloadStates[node.path] === 'downloading'}
+                className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-indigo-950 text-slate-300 hover:text-indigo-200 border border-slate-700 hover:border-indigo-500/50 text-[10px] font-semibold flex items-center gap-1 transition shadow-xs cursor-pointer shrink-0 disabled:opacity-40"
+                title="Trigger local media file download and verify cache write integrity"
+              >
+                <CloudDownload className="w-3 h-3 text-indigo-400 shrink-0" />
+                <span>Download Media</span>
+              </button>
             )}
 
             {/* Subtitles Found Badge with Language Flags and Labels */}

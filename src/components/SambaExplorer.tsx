@@ -10,6 +10,7 @@ import {
   Plus,
   Trash2,
   Upload,
+  Download,
   Sparkles,
   CheckCircle2,
   RefreshCw,
@@ -91,6 +92,7 @@ import { sanitizationTracker } from '../utils/sanitizationTracker';
 import { pathDebugLogger } from '../utils/debugPathLogger';
 import { logger } from '../utils/loggerService';
 import { probeLocalNetwork } from '../utils/tauriBridge';
+import { downloadBulkMediaBundlesZip } from '../utils/zipDownloader';
 
 // Subtitle scanning configuration & helpers
 export const SUBTITLE_EXTENSIONS = ['srt', 'sub', 'vtt', 'ass', 'ssa'];
@@ -1168,6 +1170,92 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     setIsMoveModalOpen(false);
     setTargetMoveFolder(null);
     handleClearSelection();
+  };
+
+  // Bulk Metadata Enrichment Operation
+  const [isBulkEnriching, setIsBulkEnriching] = useState(false);
+
+  const handleBulkMetadataEnrichment = async () => {
+    if (selectedNodeIds.size === 0 || isBulkEnriching) return;
+    setIsBulkEnriching(true);
+    setCopyToast(`Bulk Enrich: Querying metadata for ${selectedNodeIds.size} item(s)...`);
+
+    const selectedNodes = Array.from(selectedNodesMap.values());
+    let enrichedCount = 0;
+
+    for (const node of selectedNodes) {
+      const isFolder = node.type === 'folder';
+      const cleanTitle = node.name.replace(/\s*\(\d{4}\).*$/, '').trim();
+      const yearMatch = node.name.match(/\((\d{4})\)/);
+      const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : undefined;
+
+      try {
+        const resolution = await queryFallbackProvidersSequentially(
+          cleanTitle,
+          detectedYear,
+          () => {} // silent step update during bulk operations
+        );
+
+        const resolvedMeta = resolution.metadata;
+        if (resolvedMeta) {
+          await applyResolvedSeriesToVaultAndDisk(node, resolvedMeta);
+
+          // Update individual tree node metadata in state
+          setSambaTree((prevTree) => {
+            const updateTree = (items: SambaShareNode[]): SambaShareNode[] => {
+              return items.map((item) => {
+                if (item.id === node.id || item.path === node.path) {
+                  return {
+                    ...item,
+                    metadataStatus: 'synced',
+                    hasNfo: true,
+                    hasPoster: Boolean(resolvedMeta.posterUrl),
+                    artworkStatus: 'synced',
+                    mediaType: isFolder ? 'series' : 'movie',
+                    matchedMedia: resolvedMeta,
+                  };
+                }
+                if (item.children) {
+                  return { ...item, children: updateTree(item.children) };
+                }
+                return item;
+              });
+            };
+            return updateTree(prevTree);
+          });
+          enrichedCount++;
+        }
+      } catch (err) {
+        console.warn(`Bulk enrichment failed for ${node.name}:`, err);
+      }
+    }
+
+    setIsBulkEnriching(false);
+    setCopyToast(`Bulk Enrichment Completed: Enriched ${enrichedCount} of ${selectedNodes.length} item(s)!`);
+    setTimeout(() => setCopyToast(null), 4500);
+    handleClearSelection();
+  };
+
+  // Bulk Download Artifacts Operation
+  const [isBulkDownloading, setIsBulkDownloading] = useState(false);
+
+  const handleBulkDownloadArtifacts = async () => {
+    if (selectedNodeIds.size === 0 || isBulkDownloading) return;
+    setIsBulkDownloading(true);
+    setCopyToast(`Packaging artifacts for ${selectedNodeIds.size} item(s)...`);
+
+    try {
+      const selectedNodes = Array.from(selectedNodesMap.values());
+      await downloadBulkMediaBundlesZip(selectedNodes);
+      setCopyToast(`Successfully downloaded ZIP package with artifacts for ${selectedNodes.length} item(s)!`);
+    } catch (err: any) {
+      console.error('Bulk artifact download failed:', err);
+      setCopyToast(`Failed to package bulk artifacts: ${err?.message || err}`);
+    } finally {
+      setIsBulkDownloading(false);
+      setTimeout(() => setCopyToast(null), 4500);
+      handleClearSelection();
+    }
   };
 
   // Compute sync health statistics
@@ -3503,6 +3591,26 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
                     <div className="flex items-center gap-2">
                       <button
+                        onClick={handleBulkMetadataEnrichment}
+                        disabled={isBulkEnriching}
+                        className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-sm disabled:opacity-50"
+                        title="Bulk sweep and enrich metadata for selected items from fallback scraper providers"
+                      >
+                        <Sparkles className={`w-3.5 h-3.5 text-teal-200 ${isBulkEnriching ? 'animate-pulse' : ''}`} />
+                        <span>Enrich Metadata</span>
+                      </button>
+
+                      <button
+                        onClick={handleBulkDownloadArtifacts}
+                        disabled={isBulkDownloading}
+                        className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-sm disabled:opacity-50"
+                        title="Bulk package and download XML NFOs, folders, cover artwork, and subtitle templates as a single ZIP archive"
+                      >
+                        <Download className="w-3.5 h-3.5 text-violet-200" />
+                        <span>Download Artifacts (ZIP)</span>
+                      </button>
+
+                      <button
                         onClick={handleBulkAddToLibrary}
                         className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-sm"
                         title="Add selected nodes to Media Library"
@@ -3851,6 +3959,17 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                                 <span>Re-cache Thumbnail</span>
                               </button>
                             )}
+
+                            {/* Individual Artifact Download Button */}
+                            <button
+                              id="samba-details-download-artifact-btn"
+                              onClick={() => downloadBulkMediaBundlesZip([selectedNode])}
+                              className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/50 text-xs font-medium transition cursor-pointer"
+                              title="Download NFO XML and cover artwork package for this single item as a ZIP archive"
+                            >
+                              <Download className="w-3.5 h-3.5 text-indigo-400" />
+                              <span>Download ZIP</span>
+                            </button>
 
                             {/* Quick Rename Button */}
                             <button

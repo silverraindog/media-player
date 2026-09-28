@@ -2141,6 +2141,11 @@ function App() {
     forceSkipRequestedRef.current = false;
     let rawDiscoveredPaths: string[] = [];
 
+    // Dispatch custom DOM event to signal start of Samba scan traversal for real-time visualization
+    try {
+      window.dispatchEvent(new CustomEvent('samba-scan-start', { detail: { rootPath } }));
+    } catch (_) {}
+
     try {
       console.log(`[SambaSync] Attempting native performFastScan for: ${rootPath} (safeScan: ${effectiveSafeScan}, maxDepth: ${effectiveDepthLimit})`);
 
@@ -2181,6 +2186,14 @@ function App() {
             const beyond25 = Math.max(0, count - 25);
 
             setSyncCurrentPath(`[Samba ${effectiveSafeScan ? 'SafeScan' : 'FastScan'}] Scanned ${count} files (${currentFile})`);
+
+            // Dispatch file discovery event in real-time for D3 layout visualization
+            try {
+              window.dispatchEvent(new CustomEvent('samba-file-discovered', {
+                detail: { path: currentFile, count }
+              }));
+            } catch (_) {}
+
             setSyncProgress((prev) => ({
               ...prev,
               currentPath: currentFile,
@@ -2216,6 +2229,13 @@ function App() {
               localStorage.removeItem('samba_vault_last_scan_errors');
             } catch (_) {}
           }
+          // Dispatch completion event with final items/errors list for complete visual tree mapping
+          try {
+            window.dispatchEvent(new CustomEvent('samba-scan-complete', {
+              detail: { items: scanResult.items, errors: scanResult.errors }
+            }));
+          } catch (_) {}
+
           return scanResult.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
         } else {
           // If the scan failed or returned no items, save the failure details

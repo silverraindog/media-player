@@ -25,6 +25,7 @@ import {
   Flame,
 } from 'lucide-react';
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident, SambaConfig } from '../types';
+import * as d3 from 'd3';
 import { logger, LOG_LEVEL_RANKS } from '../utils/loggerService';
 import {
   ResponsiveContainer,
@@ -36,6 +37,167 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { HardDrive, ShieldCheck, ShieldAlert, Check, PlayCircle, Eye, HelpCircle } from 'lucide-react';
+
+interface D3SambaTreeVisualizerProps {
+  data: any;
+  scannedCount: number;
+  isActive: boolean;
+}
+
+const D3SambaTreeVisualizer: React.FC<D3SambaTreeVisualizerProps> = ({ data, scannedCount, isActive }) => {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!svgRef.current || !containerRef.current) return;
+
+    // 1. Clear previous content
+    const svg = d3.select(svgRef.current);
+    svg.selectAll('*').remove();
+
+    // 2. Setup Dimensions
+    const containerWidth = containerRef.current.clientWidth || 600;
+    const containerHeight = 350;
+
+    // 3. Create root hierarchy
+    const root = d3.hierarchy(data);
+
+    // If no children, draw a nice empty state node
+    if (!root.children || root.children.length === 0) {
+      const g = svg.append('g').attr('transform', `translate(${containerWidth / 2}, ${containerHeight / 2})`);
+      g.append('circle')
+        .attr('r', 12)
+        .attr('fill', '#1e293b')
+        .attr('stroke', '#475569')
+        .attr('stroke-width', 2);
+      g.append('text')
+        .attr('dy', '25')
+        .attr('text-anchor', 'middle')
+        .attr('fill', '#64748b')
+        .attr('class', 'text-[11px] font-mono')
+        .text('No active scan. Run deep sync to see tree.');
+      return;
+    }
+
+    // 4. Compute Tree Layout
+    const treeLayout = d3.tree().nodeSize([28, 140]);
+    treeLayout(root as any);
+
+    // Find bounding box to center appropriately
+    let minX = Infinity;
+    let maxX = -Infinity;
+    root.each((d: any) => {
+      if (d.x < minX) minX = d.x;
+      if (d.x > maxX) maxX = d.x;
+    });
+
+    const mainGroup = svg.append('g');
+
+    // Setup zoom
+    const zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.15, 3])
+      .on('zoom', (event) => {
+        mainGroup.attr('transform', event.transform);
+      });
+
+    svg.call(zoomBehavior as any);
+
+    // Initial center transform
+    const initialScale = 0.85;
+    const initialX = 50;
+    const initialY = containerHeight / 2 - (minX + maxX) / 2 * initialScale;
+    
+    const initialTransform = d3.zoomIdentity
+      .translate(initialX, initialY)
+      .scale(initialScale);
+      
+    svg.call(zoomBehavior.transform as any, initialTransform);
+
+    // Draw Links
+    mainGroup.append('g')
+      .attr('fill', 'none')
+      .attr('stroke', '#1e293b')
+      .attr('stroke-width', 1.5)
+      .selectAll('path')
+      .data(root.links())
+      .enter()
+      .append('path')
+      .attr('d', d3.linkHorizontal()
+        .x((d: any) => d.y)
+        .y((d: any) => d.x) as any
+      );
+
+    // Draw Nodes
+    const nodeG = mainGroup.append('g')
+      .selectAll('g')
+      .data(root.descendants())
+      .enter()
+      .append('g')
+      .attr('transform', (d: any) => `translate(${d.y},${d.x})`);
+
+    // Draw Node Circles
+    nodeG.append('circle')
+      .attr('r', (d: any) => (d.depth === 0 ? 7 : 4))
+      .attr('fill', (d: any) => {
+        if (d.data.error) return '#ef4444'; // Red for error nodes
+        if (d.data.isDir) return '#10b981'; // Emerald for directories
+        return '#38bdf8'; // Sky Blue for files
+      })
+      .attr('stroke', (d: any) => {
+        if (d.data.error) return '#fca5a5';
+        if (d.data.isDir) return '#a7f3d0';
+        return '#bae6fd';
+      })
+      .attr('stroke-width', 1.2)
+      .style('cursor', 'pointer')
+      .append('title')
+      .text((d: any) => `${d.data.name}${d.data.error ? ` (${d.data.error})` : ''}`);
+
+    // Draw Node Labels
+    nodeG.append('text')
+      .attr('dy', '0.31em')
+      .attr('x', (d: any) => (d.children ? -8 : 8))
+      .attr('text-anchor', (d: any) => (d.children ? 'end' : 'start'))
+      .attr('fill', (d: any) => {
+        if (d.data.error) return '#fca5a5';
+        if (d.data.isDir) return '#cbd5e1';
+        return '#94a3b8';
+      })
+      .attr('class', 'text-[10px] font-mono pointer-events-none select-none')
+      .text((d: any) => {
+        const maxLen = 14;
+        const name = d.data.name;
+        if (name.length > maxLen) {
+          return name.substring(0, maxLen) + '...';
+        }
+        return name;
+      });
+
+  }, [data]);
+
+  return (
+    <div ref={containerRef} className="bg-slate-950 rounded-xl border border-slate-800/80 relative overflow-hidden h-[350px] flex flex-col justify-between">
+      {/* Visualizer Floating Stats Header */}
+      <div className="absolute top-3 left-3 z-10 bg-slate-900/90 border border-slate-800 rounded-lg px-3 py-1.5 flex items-center gap-3 backdrop-blur-md">
+        <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300">
+          <span className={`${isActive ? 'bg-emerald-500 animate-ping' : 'bg-slate-500'} w-2 h-2 rounded-full`}></span>
+          <span>Live Discovered: <strong className="text-white">{scannedCount}</strong></span>
+        </div>
+        {isActive && (
+          <span className="text-[10px] bg-cyan-950 border border-cyan-800 text-cyan-400 font-bold px-2 py-0.5 rounded font-mono uppercase animate-pulse">
+            Scanning...
+          </span>
+        )}
+      </div>
+
+      <div className="absolute top-3 right-3 z-10 text-[9px] text-slate-500 font-mono flex items-center gap-1 bg-slate-900/60 p-1 rounded">
+        <span>🖱️ Drag to Pan | Scroll to Zoom</span>
+      </div>
+
+      <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+    </div>
+  );
+};
 
 interface ConsoleTabProps {
   onRetryFailedFiles?: (failedPaths: string[]) => Promise<void>;
@@ -77,6 +239,126 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   const [showOverlay, setShowOverlay] = useState(false);
   const [isPrevalidating, setIsPrevalidating] = useState(false);
   const [prevalidateResult, setPrevalidateResult] = useState<any>(null);
+
+  // Diagnostic Tab Toggles
+  const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<'info' | 'tree'>('info');
+
+  // D3 Tree Visualizer States
+  interface TreeVisualNode {
+    name: string;
+    children?: TreeVisualNode[];
+    isDir?: boolean;
+    error?: string;
+  }
+
+  const [liveTreeRoot, setLiveTreeRoot] = useState<TreeVisualNode>({
+    name: 'media',
+    isDir: true,
+    children: [],
+  });
+  const [liveScannedCount, setLiveScannedCount] = useState(0);
+  const [liveScanActive, setLiveScanActive] = useState(false);
+
+  useEffect(() => {
+    if (sambaConfig?.mountPath) {
+      const parts = sambaConfig.mountPath.split('/').filter(Boolean);
+      setLiveTreeRoot({
+        name: parts[parts.length - 1] || 'media',
+        isDir: true,
+        children: [],
+      });
+    }
+  }, [sambaConfig]);
+
+  // Helper inside component to avoid closure capture issues
+  const localAddPathToTree = (root: TreeVisualNode, pathStr: string, isDir: boolean, error?: string) => {
+    const clean = pathStr.replace(/\\/g, '/').replace(/^\/+/g, '');
+    if (!clean) return;
+    const parts = clean.split('/').filter(Boolean);
+    let current = root;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+
+      if (!current.children) {
+        current.children = [];
+      }
+
+      let child = current.children.find((c: any) => c.name === part);
+      if (!child) {
+        child = {
+          name: part,
+          isDir: isLast ? isDir : true,
+        };
+        if (isLast && error) {
+          child.error = error;
+        }
+        current.children.push(child);
+      }
+      current = child;
+    }
+  };
+
+  useEffect(() => {
+    const handleStart = (e: any) => {
+      const rootPath = e.detail?.rootPath || '';
+      const parts = rootPath.split('/').filter(Boolean);
+      setLiveTreeRoot({
+        name: parts[parts.length - 1] || 'media',
+        isDir: true,
+        children: [],
+      });
+      setLiveScannedCount(0);
+      setLiveScanActive(true);
+    };
+
+    const handleDiscovered = (e: any) => {
+      const { path: pathStr, count } = e.detail || {};
+      if (pathStr) {
+        setLiveTreeRoot(prev => {
+          const next = { ...prev };
+          localAddPathToTree(next, pathStr, false);
+          return next;
+        });
+        setLiveScannedCount(count || 0);
+      }
+    };
+
+    const handleComplete = (e: any) => {
+      setLiveScanActive(false);
+      const { items, errors } = e.detail || {};
+      setLiveTreeRoot(prev => {
+        const next = { ...prev };
+        if (Array.isArray(items)) {
+          items.forEach((it: any) => {
+            localAddPathToTree(next, it.rel_path, it.is_dir);
+          });
+        }
+        if (Array.isArray(errors)) {
+          errors.forEach((errStr: string) => {
+            const match = errStr.match(/Cannot read directory "([^"]+)"/);
+            if (match && match[1]) {
+              const rootPrefix = sambaConfig?.mountPath || '';
+              const relPart = match[1].replace(rootPrefix, '');
+              localAddPathToTree(next, relPart, true, "Permission Denied");
+            }
+          });
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('samba-scan-start', handleStart);
+    window.addEventListener('samba-file-discovered', handleDiscovered);
+    window.addEventListener('samba-scan-complete', handleComplete);
+
+    return () => {
+      window.removeEventListener('samba-scan-start', handleStart);
+      window.removeEventListener('samba-file-discovered', handleDiscovered);
+      window.removeEventListener('samba-scan-complete', handleComplete);
+    };
+  }, [sambaConfig]);
 
   const loadLastScanErrors = () => {
     try {
@@ -514,8 +796,43 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
         {isDiagnosticExpanded && (
           <div className="space-y-4">
-            {/* Context Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            {/* Diagnostic Mode Tab Selector */}
+            <div className="flex border-b border-slate-800 pb-1.5 gap-4">
+              <button
+                onClick={() => setActiveDiagnosticTab('info')}
+                className={`text-xs font-bold font-mono pb-2 relative transition cursor-pointer ${
+                  activeDiagnosticTab === 'info'
+                    ? 'text-cyan-400'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <span>📋 Diagnostics &amp; Probe Tool</span>
+                {activeDiagnosticTab === 'info' && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-500" />
+                )}
+              </button>
+              <button
+                onClick={() => setActiveDiagnosticTab('tree')}
+                className={`text-xs font-bold font-mono pb-2 relative transition cursor-pointer flex items-center gap-1.5 ${
+                  activeDiagnosticTab === 'tree'
+                    ? 'text-cyan-400'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <span>🌳 Real-Time Tree Visualizer (D3)</span>
+                {liveScanActive && (
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping shrink-0" />
+                )}
+                {activeDiagnosticTab === 'tree' && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-500" />
+                )}
+              </button>
+            </div>
+
+            {activeDiagnosticTab === 'info' ? (
+              <>
+                {/* Context Summary Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
               <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 space-y-1">
                 <span className="text-slate-500 block">Samba Process Context</span>
                 <span className="font-mono text-slate-200 block font-semibold truncate">
@@ -657,6 +974,14 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                 </div>
               )}
             </div>
+            </>
+            ) : (
+              <D3SambaTreeVisualizer
+                data={liveTreeRoot}
+                scannedCount={liveScannedCount}
+                isActive={liveScanActive}
+              />
+            )}
           </div>
         )}
       </div>

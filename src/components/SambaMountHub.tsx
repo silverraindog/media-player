@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Server,
   HardDrive,
@@ -32,9 +32,10 @@ import {
   X,
   Maximize2,
   Search,
+  Network,
 } from 'lucide-react';
 import { SambaConfig, CustomMountPath } from '../types';
-import { VolumeMountInfo, checkPathExists, PathExistsResult } from '../utils/tauriBridge';
+import { VolumeMountInfo, checkPathExists, PathExistsResult, runSambaNetworkProbe } from '../utils/tauriBridge';
 import { normalizeCustomMountPaths } from '../utils/customMountUtils';
 
 interface SambaMountHubProps {
@@ -93,8 +94,17 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
   const [isVerifyingHostPath, setIsVerifyingHostPath] = useState(false);
   const [hostPathVerifyResult, setHostPathVerifyResult] = useState<{ checked: boolean; exists: boolean; message: string; details?: any } | null>(null);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (permissionPath.trim()) {
+        handleVerifyHostPath();
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [permissionPath]);
+
   const handleVerifyHostPath = async () => {
-    const currentPath = (sambaConfig.hostPath && sambaConfig.hostPath.trim()) || (sambaConfig.mountPath && sambaConfig.mountPath.trim()) || '/Volumes/media';
+    const currentPath = permissionPath.trim();
     setIsVerifyingHostPath(true);
     setHostPathVerifyResult(null);
     try {
@@ -108,11 +118,11 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
       if (onTestConnection) {
         await onTestConnection();
       }
-    } catch (err: any) {
+    } catch (e: any) {
       setHostPathVerifyResult({
         checked: true,
         exists: false,
-        message: err?.message || 'Failed to verify host path',
+        message: `Error verifying path: ${e?.message || String(e)}`,
       });
     } finally {
       setIsVerifyingHostPath(false);
@@ -164,6 +174,21 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
   const [diagnosticsHost, setDiagnosticsHost] = useState(sambaConfig.server || '192.168.1.100');
   const [isRunningDiagnostics, setIsRunningDiagnostics] = useState(false);
   const [diagnosticsData, setDiagnosticsData] = useState<any | null>(null);
+  const [networkProbeResult, setNetworkProbeResult] = useState<{ success: boolean; output: string } | null>(null);
+  const [isRunningNetworkProbe, setIsRunningNetworkProbe] = useState(false);
+
+  const handleRunNetworkProbe = async () => {
+    setIsRunningNetworkProbe(true);
+    setNetworkProbeResult(null);
+    try {
+      const res = await runSambaNetworkProbe(sambaConfig.server, sambaConfig.share);
+      setNetworkProbeResult(res);
+    } catch (err: any) {
+      setNetworkProbeResult({ success: false, output: err?.message || 'Network probe failed' });
+    } finally {
+      setIsRunningNetworkProbe(false);
+    }
+  };
 
   const handleFixPermissions = async () => {
     setIsFixingPermissions(true);
@@ -219,9 +244,7 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
       });
     }
 
-    targetSet.add(`/Volumes/${sambaConfig.share || 'media'}`);
-    targetSet.add(`/mnt/${sambaConfig.share || 'media'}`);
-
+    // Only include paths configured by the user or dynamically detected
     const targetPaths = Array.from(targetSet).filter(Boolean);
 
     setPermissionLogs((prev) => [
@@ -1049,6 +1072,21 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                 placeholder="e.g. /Volumes/media or /mnt/samba"
                 className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 rounded-lg pl-9 pr-3 py-2 text-xs text-white font-mono placeholder-slate-500"
               />
+              <div className="absolute right-3 top-2.5">
+                {isVerifyingHostPath ? (
+                  <RefreshCw className="w-4 h-4 text-slate-500 animate-spin" />
+                ) : hostPathVerifyResult ? (
+                  hostPathVerifyResult.exists ? (
+                    <span title="Path verified accessible">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                    </span>
+                  ) : (
+                    <span title={`Path broken: ${hostPathVerifyResult.message}`}>
+                      <XCircle className="w-4 h-4 text-rose-500" />
+                    </span>
+                  )
+                ) : null}
+              </div>
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -1073,8 +1111,27 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                 <ShieldAlert className={`w-4 h-4 text-slate-950 ${isFixingPermissions ? 'animate-spin' : ''}`} />
                 <span>{isFixingPermissions ? 'Fixing All Permissions...' : 'Fix All Permissions'}</span>
               </button>
+
+              <button
+                type="button"
+                onClick={handleRunNetworkProbe}
+                disabled={isRunningNetworkProbe}
+                className="px-4 py-2 bg-indigo-950 hover:bg-indigo-900 active:bg-indigo-950 disabled:opacity-50 text-indigo-300 font-semibold text-xs rounded-lg transition border border-indigo-500/30 flex items-center justify-center gap-1.5 cursor-pointer"
+                title="Run network probe diagnostics (nmblookup / smbclient)"
+              >
+                <Network className={`w-3.5 h-3.5 text-indigo-400 ${isRunningNetworkProbe ? 'animate-spin' : ''}`} />
+                <span>{isRunningNetworkProbe ? 'Probing...' : 'Network Probe'}</span>
+              </button>
             </div>
           </div>
+
+          {networkProbeResult && (
+            <div className={`mt-2 p-3 rounded-lg text-xs font-mono ${networkProbeResult.success ? 'bg-emerald-950/20 text-emerald-300 border border-emerald-800' : 'bg-rose-950/20 text-rose-300 border border-rose-800'}`}>
+              <strong>{networkProbeResult.success ? 'Probe Success:' : 'Probe Failed:'}</strong>
+              <pre className="whitespace-pre-wrap mt-1">{networkProbeResult.output}</pre>
+            </div>
+          )}
+
 
           {/* Quick Preset Buttons */}
           <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800/80">

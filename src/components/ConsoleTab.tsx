@@ -37,6 +37,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { HardDrive, ShieldCheck, ShieldAlert, Check, PlayCircle, Eye, HelpCircle } from 'lucide-react';
+import { resolveSambaPathToLocalMount } from '../utils/tauriBridge';
 
 interface D3SambaTreeVisualizerProps {
   data: any;
@@ -229,6 +230,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   // Samba Traversability & Path Diagnostics States
   const [isDiagnosticExpanded, setIsDiagnosticExpanded] = useState(true);
   const [diagnosticPath, setDiagnosticPath] = useState(sambaConfig?.mountPath || '/Volumes/media');
+  const [pathToResolve, setPathToResolve] = useState('//192.168.1.25/media/Series/Stranger Things (2016)');
   const [diagnosticLoading, setDiagnosticLoading] = useState(false);
   const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
@@ -502,7 +504,13 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
         return false;
       }
     }
-    if (selectedCategory !== 'all' && log.category !== selectedCategory) return false;
+    if (selectedCategory !== 'all') {
+      if ((selectedCategory as string) === 'Path Diagnostics') {
+        if (!log.message.includes('[performFastScan:PathDiagnostic]')) return false;
+      } else if (log.category !== selectedCategory) {
+        return false;
+      }
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchMsg = log.message.toLowerCase().includes(q);
@@ -974,6 +982,90 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Samba Path Resolver & Mapping Diagnostics */}
+            {(() => {
+              const details = resolveSambaPathToLocalMount(
+                pathToResolve,
+                sambaConfig?.mountPath || '',
+                sambaConfig?.share || 'media'
+              );
+              return (
+                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-indigo-400" />
+                      <label className="text-[11px] font-bold text-slate-200 uppercase tracking-wider block font-mono">
+                        Samba Path Resolver &amp; Mapping Diagnostics
+                      </label>
+                    </div>
+                    <p className="text-[10.5px] text-slate-400">
+                      Type any path (such as a UNC network pointer like <code className="text-indigo-400">//192.168.1.25/media/Series/...</code> or a relative path) to see how it aligns to your absolute local storage mountpoint. Helps debug missing files!
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={pathToResolve}
+                        onChange={(e) => setPathToResolve(e.target.value)}
+                        placeholder="e.g. //192.168.1.25/media/Series/Stranger Things (2016)"
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 font-mono text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPathToResolve('//192.168.1.25/media/Series/Stranger Things (2016)')}
+                        className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-medium border border-slate-800 transition shrink-0 cursor-pointer"
+                      >
+                        Reset Demo
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono pt-1">
+                    <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80 space-y-1">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">Input Samba Path</span>
+                      <div className="text-slate-300 break-all">{pathToResolve || '[Empty]'}</div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80 space-y-1">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">Configured Local Mount Root</span>
+                      <div className="text-emerald-400 break-all">{details.configuredMountPath}</div>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-indigo-950/20 border border-indigo-900/40 space-y-1.5 font-mono text-xs">
+                    <div className="flex items-center gap-1.5 text-indigo-300 font-bold uppercase text-[10px]">
+                      <Terminal className="w-3.5 h-3.5" />
+                      <span>Resolved Absolute Local Path</span>
+                    </div>
+                    <div className="text-indigo-200 select-all break-all bg-slate-950/80 p-2 rounded border border-indigo-950">
+                      {details.resolvedLocalPath}
+                    </div>
+                  </div>
+
+                  {details.hasMappingMismatch ? (
+                    <div className="p-3 rounded-lg bg-rose-950/30 border border-rose-800/40 space-y-1.5 font-mono text-xs animate-pulse">
+                      <div className="flex items-center gap-1.5 text-rose-300 font-bold uppercase text-[10px]">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                        <span>MAPPING MISMATCH DETECTED (MEMBER DISCONNECT CAUSE)</span>
+                      </div>
+                      <p className="text-rose-200 text-[11px] leading-relaxed">
+                        {details.mismatchReason}
+                      </p>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        💡 <strong>Resolution:</strong> Ensure your Samba Scanners and local media readers are configured to point to the mapped directory <code className="text-emerald-400">{details.configuredMountPath}</code> rather than raw network UNC pointers.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-900/30 flex items-start gap-2.5 font-mono text-xs text-emerald-200">
+                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold text-[10px] uppercase block tracking-wider text-emerald-300">Valid Path Alignment Match</span>
+                        <span className="text-[11px]">The input path matches the active local mount path alignment perfectly! No raw network protocol mismatch detected. Files placed here will resolve successfully.</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             </>
             ) : (
               <D3SambaTreeVisualizer
@@ -1307,10 +1399,10 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
           {/* Category Filters */}
           <div className="flex items-center gap-1 flex-wrap">
             <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider mr-1">Category:</span>
-            {(['all', 'Sync', 'Samba', 'Mount', 'Database', 'Scanner', 'Scheduler', 'Auth', 'System'] as const).map((cat) => (
+            {(['all', 'Sync', 'Samba', 'Mount', 'Database', 'Scanner', 'Scheduler', 'Auth', 'System', 'Path Diagnostics'] as const).map((cat) => (
               <button
                 key={cat}
-                onClick={() => setSelectedCategory(cat)}
+                onClick={() => setSelectedCategory(cat as any)}
                 className={`px-2.5 py-0.5 rounded-md text-[11px] font-mono transition cursor-pointer ${
                   selectedCategory === cat
                     ? 'bg-cyan-600 text-white font-bold shadow-xs'
@@ -1388,6 +1480,14 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                       </button>
                     )}
                   </div>
+
+                  {/* Path Diagnostic / Permission Failed Overlay */}
+                  {log.message.includes('[performFastScan:PathDiagnostic]') && (
+                    <div className="mt-1 p-2 rounded-lg bg-indigo-950/20 border border-indigo-900/30 font-mono text-[10px] text-indigo-300">
+                      <span className="font-bold uppercase text-[9px] block mb-0.5 text-indigo-400">Path Resolver Trace</span>
+                      {log.message}
+                    </div>
+                  )}
 
                   {/* Formatted JSON details expander */}
                   {isExpanded && log.details && (

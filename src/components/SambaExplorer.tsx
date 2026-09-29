@@ -51,6 +51,15 @@ import {
   History,
   Wifi,
   Activity,
+  ArrowUpDown,
+  ArrowDownAZ,
+  ArrowUpAZ,
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  SlidersHorizontal,
+  Calendar,
+  FileType,
+  File,
 } from 'lucide-react';
 import {
   SambaConfig,
@@ -377,6 +386,85 @@ export const filterTreeBySearchQuery = (
   }
 
   return { filteredNodes, matchCount: totalMatches, matchingIds };
+};
+
+export type SambaSortField = 'name' | 'size' | 'modified' | 'type';
+export type SambaSortOrder = 'asc' | 'desc';
+
+/**
+ * Parses human-readable file size strings (e.g. "1.4 GB", "500 MB", "24 KB", "1024 B") to bytes.
+ */
+export const parseFileSizeToBytes = (sizeStr?: string): number => {
+  if (!sizeStr) return 0;
+  const cleaned = sizeStr.trim().replace(/,/g, '');
+  const match = cleaned.match(/^([\d.]+)\s*([a-zA-Z]+)?$/);
+  if (!match) return 0;
+  const num = parseFloat(match[1]) || 0;
+  const unit = (match[2] || 'b').toLowerCase();
+  if (unit.startsWith('tb') || unit === 't') return num * 1024 * 1024 * 1024 * 1024;
+  if (unit.startsWith('gb') || unit === 'g') return num * 1024 * 1024 * 1024;
+  if (unit.startsWith('mb') || unit === 'm') return num * 1024 * 1024;
+  if (unit.startsWith('kb') || unit === 'k') return num * 1024;
+  return num;
+};
+
+/**
+ * Recursively sorts Samba directory tree nodes by Name, Size, Date Modified, or File Type.
+ */
+export const sortSambaNodes = (
+  nodes: SambaShareNode[],
+  field: SambaSortField,
+  order: SambaSortOrder,
+  foldersFirst: boolean = true
+): SambaShareNode[] => {
+  if (!nodes || nodes.length === 0) return [];
+
+  const getExtension = (node: SambaShareNode): string => {
+    if (node.type === 'folder') return '';
+    const parts = node.name.split('.');
+    return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
+  };
+
+  const sorted = [...nodes].sort((a, b) => {
+    // Keep folders first if requested
+    if (foldersFirst && a.type !== b.type) {
+      return a.type === 'folder' ? -1 : 1;
+    }
+
+    let comparison = 0;
+
+    if (field === 'name') {
+      comparison = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    } else if (field === 'size') {
+      const sizeA = parseFileSizeToBytes(a.size);
+      const sizeB = parseFileSizeToBytes(b.size);
+      comparison = sizeA - sizeB;
+      if (comparison === 0) {
+        comparison = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      }
+    } else if (field === 'modified') {
+      const timeA = a.modified ? new Date(a.modified).getTime() : 0;
+      const timeB = b.modified ? new Date(b.modified).getTime() : 0;
+      comparison = timeA - timeB;
+      if (comparison === 0) {
+        comparison = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      }
+    } else if (field === 'type') {
+      const extA = getExtension(a);
+      const extB = getExtension(b);
+      comparison = extA.localeCompare(extB, undefined, { sensitivity: 'base' });
+      if (comparison === 0) {
+        comparison = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      }
+    }
+
+    return order === 'asc' ? comparison : -comparison;
+  });
+
+  return sorted.map((node) => ({
+    ...node,
+    children: node.children ? sortSambaNodes(node.children, field, order, foldersFirst) : undefined,
+  }));
 };
 
 export interface BreadcrumbSegment {
@@ -827,10 +915,54 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   // Real-time Tree Search Query State
   const [treeSearchQuery, setTreeSearchQuery] = useState('');
 
+  // Sorting State for Large Media Directories
+  const [sortField, setSortField] = useState<SambaSortField>(() => {
+    try {
+      const saved = localStorage.getItem('samba_explorer_sort_field');
+      if (saved && ['name', 'size', 'modified', 'type'].includes(saved)) {
+        return saved as SambaSortField;
+      }
+    } catch {}
+    return 'name';
+  });
+
+  const [sortOrder, setSortOrder] = useState<SambaSortOrder>(() => {
+    try {
+      const saved = localStorage.getItem('samba_explorer_sort_order');
+      if (saved && ['asc', 'desc'].includes(saved)) {
+        return saved as SambaSortOrder;
+      }
+    } catch {}
+    return 'asc';
+  });
+
+  const [foldersFirst, setFoldersFirst] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('samba_explorer_folders_first');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    } catch {}
+    return true;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('samba_explorer_sort_field', sortField);
+      localStorage.setItem('samba_explorer_sort_order', sortOrder);
+      localStorage.setItem('samba_explorer_folders_first', String(foldersFirst));
+    } catch {}
+  }, [sortField, sortOrder, foldersFirst]);
+
   // Compute filtered tree and match telemetry based on real-time search query
-  const { filteredNodes: filteredSambaTree, matchCount: treeMatchCount, matchingIds: matchingNodeIds } = useMemo(() => {
+  const { filteredNodes: rawFilteredSambaTree, matchCount: treeMatchCount, matchingIds: matchingNodeIds } = useMemo(() => {
     return filterTreeBySearchQuery(normalizedSambaTree, treeSearchQuery);
   }, [normalizedSambaTree, treeSearchQuery]);
+
+  // Apply recursive sorting across all tree levels
+  const filteredSambaTree = useMemo(() => {
+    return sortSambaNodes(rawFilteredSambaTree, sortField, sortOrder, foldersFirst);
+  }, [rawFilteredSambaTree, sortField, sortOrder, foldersFirst]);
 
   // Auto-expand folder hierarchy when a search query is active so matching children are instantly visible
   useEffect(() => {
@@ -3800,39 +3932,128 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                   </div>
                 )}
 
-                {/* Real-time Search Input Field */}
-                <div className="mb-3 space-y-1.5">
-                  <div className="relative flex items-center">
-                    <Search className="w-4 h-4 text-indigo-400 absolute left-3 pointer-events-none" />
-                    <input
-                      id="samba-tree-search-input"
-                      type="text"
-                      value={treeSearchQuery}
-                      onChange={(e) => setTreeSearchQuery(e.target.value)}
-                      placeholder="Filter files or folders in tree (e.g. Breaking Bad, .mkv, Season)..."
-                      className="w-full bg-slate-950 border border-slate-700/80 focus:border-indigo-500 rounded-xl pl-9 pr-24 py-2 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500/50 shadow-inner"
-                    />
-                    {treeSearchQuery ? (
+                {/* Real-time Search & Multi-criteria Sorting Toolbar */}
+                <div className="mb-3 space-y-2">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    {/* Search input */}
+                    <div className="relative flex-1 flex items-center">
+                      <Search className="w-4 h-4 text-indigo-400 absolute left-3 pointer-events-none" />
+                      <input
+                        id="samba-tree-search-input"
+                        type="text"
+                        value={treeSearchQuery}
+                        onChange={(e) => setTreeSearchQuery(e.target.value)}
+                        placeholder="Filter files or folders in tree (e.g. Breaking Bad, .mkv, Season)..."
+                        className="w-full bg-slate-950 border border-slate-700/80 focus:border-indigo-500 rounded-xl pl-9 pr-20 py-2 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500/50 shadow-inner"
+                      />
+                      {treeSearchQuery ? (
+                        <button
+                          onClick={() => setTreeSearchQuery('')}
+                          className="absolute right-2 px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-mono flex items-center gap-1 transition cursor-pointer"
+                          title="Clear search filter"
+                        >
+                          <X className="w-3 h-3 text-slate-400" />
+                          <span>Clear</span>
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {/* Sorting Controls */}
+                    <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                      {/* Sort Dropdown Selector */}
+                      <div className="relative flex items-center bg-slate-950 border border-slate-700/80 rounded-xl px-2 py-1 shadow-inner focus-within:border-indigo-500">
+                        <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400 mr-1.5 shrink-0" />
+                        <label htmlFor="samba-sort-selector" className="text-[10px] text-slate-500 font-mono font-bold uppercase mr-1 hidden md:inline">
+                          Sort:
+                        </label>
+                        <select
+                          id="samba-sort-selector"
+                          value={`${sortField}:${sortOrder}`}
+                          onChange={(e) => {
+                            const [f, o] = e.target.value.split(':') as [SambaSortField, SambaSortOrder];
+                            setSortField(f);
+                            setSortOrder(o);
+                          }}
+                          className="bg-transparent text-xs text-indigo-200 font-medium focus:outline-none cursor-pointer pr-1"
+                          title="Sort files and folders by Name, Size, Date Modified, or File Type"
+                        >
+                          <option value="name:asc" className="bg-slate-900 text-white">Name (A → Z)</option>
+                          <option value="name:desc" className="bg-slate-900 text-white">Name (Z → A)</option>
+                          <option value="size:desc" className="bg-slate-900 text-white">Size (Largest First)</option>
+                          <option value="size:asc" className="bg-slate-900 text-white">Size (Smallest First)</option>
+                          <option value="modified:desc" className="bg-slate-900 text-white">Date Modified (Newest First)</option>
+                          <option value="modified:asc" className="bg-slate-900 text-white">Date Modified (Oldest First)</option>
+                          <option value="type:asc" className="bg-slate-900 text-white">File Type (A → Z)</option>
+                          <option value="type:desc" className="bg-slate-900 text-white">File Type (Z → A)</option>
+                        </select>
+                      </div>
+
+                      {/* Direction Quick Toggle */}
                       <button
-                        onClick={() => setTreeSearchQuery('')}
-                        className="absolute right-2 px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-mono flex items-center gap-1 transition cursor-pointer"
-                        title="Clear search filter"
+                        type="button"
+                        id="samba-sort-direction-toggle-btn"
+                        onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                        className={`p-2 rounded-xl border text-xs font-semibold transition cursor-pointer flex items-center justify-center ${
+                          sortOrder === 'asc'
+                            ? 'bg-slate-900 text-indigo-300 border-slate-700/80 hover:bg-slate-800'
+                            : 'bg-indigo-950 text-indigo-200 border-indigo-500/50 hover:bg-indigo-900/60 shadow-xs'
+                        }`}
+                        title={`Current order: ${sortOrder === 'asc' ? 'Ascending (A-Z, Smallest, Oldest)' : 'Descending (Z-A, Largest, Newest)'}. Click to reverse.`}
                       >
-                        <X className="w-3 h-3 text-slate-400" />
-                        <span>Clear</span>
+                        {sortField === 'name' || sortField === 'type' ? (
+                          sortOrder === 'asc' ? <ArrowUpAZ className="w-3.5 h-3.5 text-indigo-400" /> : <ArrowDownAZ className="w-3.5 h-3.5 text-cyan-400" />
+                        ) : sortField === 'size' ? (
+                          sortOrder === 'asc' ? <ArrowUpNarrowWide className="w-3.5 h-3.5 text-indigo-400" /> : <ArrowDownWideNarrow className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          sortOrder === 'asc' ? <ArrowUpDown className="w-3.5 h-3.5 text-indigo-400" /> : <ArrowUpDown className="w-3.5 h-3.5 text-amber-400" />
+                        )}
                       </button>
-                    ) : null}
+
+                      {/* Folders First Toggle */}
+                      <button
+                        type="button"
+                        id="samba-folders-first-toggle-btn"
+                        onClick={() => setFoldersFirst(!foldersFirst)}
+                        className={`px-2 py-1.5 rounded-xl border text-[11px] font-mono transition cursor-pointer flex items-center gap-1.5 ${
+                          foldersFirst
+                            ? 'bg-amber-950/40 text-amber-300 border-amber-500/40 hover:bg-amber-900/40 shadow-xs'
+                            : 'bg-slate-900 text-slate-400 border-slate-700/80 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                        title={foldersFirst ? 'Folders are kept at top of each directory. Click to sort inline with files.' : 'Folders are sorted inline with files. Click to keep folders at top.'}
+                      >
+                        <Folder className={`w-3 h-3 ${foldersFirst ? 'text-amber-400' : 'text-slate-500'}`} />
+                        <span className="hidden lg:inline">{foldersFirst ? 'Folders First' : 'Inline'}</span>
+                      </button>
+                    </div>
                   </div>
 
-                  {treeSearchQuery.trim() ? (
-                    <div className="flex items-center justify-between text-[11px] font-mono px-1">
+                  {/* Active Filter & Sort Telemetry Bar */}
+                  <div className="flex items-center justify-between text-[11px] font-mono px-1 flex-wrap gap-2 pt-0.5">
+                    {treeSearchQuery.trim() ? (
                       <span className="text-emerald-400 font-semibold flex items-center gap-1 truncate">
                         <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
                         <span>Found {treeMatchCount} match{treeMatchCount === 1 ? '' : 'es'} for "{treeSearchQuery}"</span>
                       </span>
-                      <span className="text-slate-500 shrink-0">Real-time filter active</span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <SlidersHorizontal className="w-3 h-3 text-indigo-400 shrink-0" />
+                        <span>
+                          Sorted by: <strong className="text-indigo-300 capitalize">{sortField === 'modified' ? 'Date Modified' : sortField === 'type' ? 'File Type' : sortField}</strong> ({sortOrder === 'asc' ? 'Ascending' : 'Descending'})
+                        </span>
+                      </span>
+                    )}
+
+                    <div className="flex items-center gap-2 text-slate-500 shrink-0">
+                      {foldersFirst && (
+                        <span className="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-[10px] text-amber-400/90 font-mono">
+                          📁 Folders First
+                        </span>
+                      )}
+                      <span className="text-[10px] text-slate-500">
+                        {filteredSambaTree.length} root items
+                      </span>
                     </div>
-                  ) : null}
+                  </div>
                 </div>
 
                 {/* Tree Viewer */}

@@ -609,11 +609,26 @@ export const performFastScan = async (
       }
 
       const durationMs = Math.round(performance.now() - startTime);
-      const items = (result || []).map((it: any) => ({
-        name: it.name,
-        rel_path: normalizePathRelativeToShareRoot(it.rel_path, rootPath),
-        is_dir: it.is_dir,
-        size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
+      const items = await Promise.all((result || []).map(async (it: any) => {
+        const fullPath = `${rootPath}/${it.rel_path}`;
+        try {
+          // Explicit check to surface permission and access issues
+          const pathCheck = await checkPathExists(fullPath);
+          if (!pathCheck.exists || !pathCheck.readable) {
+            console.warn(`[performFastScan:PathDiagnostic] ⚠️ ACCESS ISSUE: "${fullPath}" | Status: ${pathCheck.message}`);
+            console.log(`[SyncLog:AccessError] Path: "${fullPath}" | Err: ${pathCheck.message}`);
+          }
+        } catch (err: any) {
+           console.warn(`[performFastScan:PathDiagnostic] ⚠️ ACCESS DENIED: "${fullPath}" | Error: ${err?.message || err}`);
+           console.log(`[SyncLog:AccessError] Path: "${fullPath}" | Err: ${err?.message || err}`);
+        }
+        console.debug(`[performFastScan:PathDiagnostic] Path: "${fullPath}" | Name: "${it.name}"`);
+        return {
+          name: it.name,
+          rel_path: normalizePathRelativeToShareRoot(it.rel_path, rootPath),
+          is_dir: it.is_dir,
+          size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
+        };
       }));
 
       console.log(
@@ -642,49 +657,7 @@ export const performFastScan = async (
         };
       }
 
-      console.warn(`[performFastScan] Native Tauri scan found 0 items at "${rootPath}". Checking alternate mounted volumes or server backend API...`);
-
-      // Check if the share was mounted under an alternate volume name (e.g. /Volumes/Media or /Volumes/media-1)
-      try {
-        const { invoke } = await import('@tauri-apps/api/tauri');
-        const allVols = await invoke<string[]>('list_mounted_volumes').catch(() => []);
-        const cleanShare = rootPath.replace(/^[/\\]+/, '').split('/').pop() || 'media';
-        const matchVol = (allVols || []).find(
-          (v) => v.toLowerCase() === cleanShare.toLowerCase() || v.toLowerCase().includes(cleanShare.toLowerCase())
-        );
-        if (matchVol && `/Volumes/${matchVol}` !== rootPath) {
-          console.log(`[performFastScan] Re-trying native scan on alternative volume: /Volumes/${matchVol}`);
-          const altResult = await invoke<any>('perform_fast_scan', {
-            rootPath: `/Volumes/${matchVol}`,
-            root_path: `/Volumes/${matchVol}`,
-            safeScan,
-            safe_scan: safeScan,
-            maxDepth: effectiveMaxDepth,
-            max_depth: effectiveMaxDepth,
-          }).catch(() => []);
-          if (altResult && altResult.length > 0) {
-            const altItems = altResult.map((it: any) => ({
-              name: it.name,
-              rel_path: normalizePathRelativeToShareRoot(it.rel_path, `/Volumes/${matchVol}`),
-              is_dir: it.is_dir,
-              size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
-            }));
-            return {
-              success: true,
-              mountPath: `/Volumes/${matchVol}`,
-              items: altItems,
-              totalScanned: altItems.length,
-              diagnostics: logDirectoryTraversalDiagnostics(
-                'performFastScan:NativeTauriAlt',
-                `/Volumes/${matchVol}`,
-                altItems,
-                durationMs,
-                { safeScan, timeoutMs }
-              ),
-            };
-          }
-        }
-      } catch (_) {}
+      console.warn(`[performFastScan] Native Tauri scan found 0 items at "${rootPath}". Skipping auto-retry to stick to explicitly configured paths.`);
     } catch (e: any) {
       const durationMs = Math.round(performance.now() - startTime);
       console.warn('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan returned error; checking backend fallback:', e);
@@ -1303,6 +1276,79 @@ export const triggerFileDownload = async (
 
   return finalState;
 };
+
+/**
+ * Executes a network probe to verify target visibility via nmblookup or smbclient.
+ */
+export const runSambaNetworkProbe = async (host: string, share: string): Promise<{ success: boolean; output: string }> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const output = await invoke<string>('run_samba_diagnostic', { host, share });
+      return { success: true, output };
+    } catch (e: any) {
+      return { success: false, output: e?.message || String(e) };
+    }
+  }
+  return { success: false, output: 'Network probe only supported in desktop app mode.' };
+};
+
+/**
+ * Resolves a relative Samba path to an absolute local mount path using the configured mountPath as the root.
+ * Helps diagnostic systems trace potential //192.168.1.25/media vs /Volumes/media mapping issues.
+ */
+export const resolveSambaPathToLocalMount = (
+  relativeSambaPath: string,
+  mountPath: string,
+  shareName: string = 'media'
+): {
+  relativeSambaPath: string;
+  configuredMountPath: string;
+  resolvedLocalPath: string;
+  hasMappingMismatch: boolean;
+  mismatchReason?: string;
+} => {
+  let cleanRel = (relativeSambaPath || '').replace(/\\/g, '/').trim();
+  
+  // Strip any leading SMB URLs or host mount points
+  cleanRel = cleanRel.replace(/^(smb:)?\/\/([^\/]+)\/([^\/]+)\/?/i, '');
+  cleanRel = cleanRel.replace(/^\\\\([^\\]+)\\([^\\]+)\\\/?/i, '');
+  
+  const share = shareName || 'media';
+  const volumeRegex = new RegExp(`^\\/?Volumes\\/${share}\\/`, 'i');
+  const mntRegex = new RegExp(`^\\/?mnt\\/${share}\\/`, 'i');
+  cleanRel = cleanRel.replace(volumeRegex, '');
+  cleanRel = cleanRel.replace(mntRegex, '');
+  cleanRel = cleanRel.replace(/^\/+/, '');
+
+  const baseMount = (mountPath || `/Volumes/${share}`).replace(/\/+$/, '');
+  const resolvedLocalPath = `${baseMount}/${cleanRel}`;
+
+  // Analyze potential mapping cause of missing files
+  const hasMappingMismatch = relativeSambaPath.startsWith('//') || 
+                            relativeSambaPath.startsWith('smb://') || 
+                            relativeSambaPath.startsWith('\\\\') ||
+                            (!mountPath && relativeSambaPath.includes('/Volumes/')) ||
+                            (mountPath && !relativeSambaPath.startsWith(mountPath));
+  
+  let mismatchReason = '';
+  if (relativeSambaPath.startsWith('//') || relativeSambaPath.startsWith('smb://') || relativeSambaPath.startsWith('\\\\')) {
+    mismatchReason = `Path is using raw UNC network protocol (e.g. //192.168.1.25/${share}), which cannot be directly traversed via local filesystem APIs without proper mounting under ${baseMount}.`;
+  } else if (mountPath && !relativeSambaPath.startsWith(mountPath)) {
+    mismatchReason = `Path does not begin with the configured mount root "${mountPath}". Scanners attempting to read it locally will fail due to relative root drift.`;
+  } else if (!mountPath) {
+    mismatchReason = `No mountPath configured in sambaConfig. Using fallback "${baseMount}". Please verify your mount configuration.`;
+  }
+
+  return {
+    relativeSambaPath,
+    configuredMountPath: baseMount,
+    resolvedLocalPath,
+    hasMappingMismatch: !!hasMappingMismatch && !!mismatchReason,
+    mismatchReason: mismatchReason || undefined
+  };
+};
+
 
 
 

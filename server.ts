@@ -1797,56 +1797,194 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
     return res.status(400).json({ exists: false, error: 'Path is required' });
   }
 
-  const clean = checkPath.trim();
+  const rawInput = checkPath;
+  const clean = checkPath.trim().replace(/^file:\/\//, '');
+  const resolvedPath = path.resolve(clean);
+
   try {
-    const exists = fs.existsSync(clean);
+    let target = clean;
+    let exists = fs.existsSync(clean);
+    if (!exists && fs.existsSync(resolvedPath)) {
+      target = resolvedPath;
+      exists = true;
+    }
+
     let isDirectory = false;
     let fileCount = 0;
     let readable = false;
     let writable = false;
+    let accessible = false;
+    let accessDenied = false;
+    let errorCode: string | null = null;
+    let statMode = 0;
 
     if (exists) {
       try {
-        const stat = fs.statSync(clean);
-        isDirectory = stat.isDirectory();
-        if (isDirectory) {
-          const files = fs.readdirSync(clean);
-          fileCount = files.length;
-          readable = true;
-        } else {
-          readable = true;
-        }
-      } catch (err: any) {
-        console.warn(`[check-path] stat error on ${clean}:`, err?.message);
+        fs.accessSync(target, fs.constants.R_OK);
+        readable = true;
+        accessible = true;
+      } catch (accErr: any) {
+        accessDenied = true;
+        errorCode = accErr.code || 'EACCES';
       }
 
       try {
-        fs.accessSync(clean, fs.constants.W_OK);
+        const stat = fs.statSync(target);
+        isDirectory = stat.isDirectory();
+        statMode = stat.mode;
+        if (isDirectory && readable) {
+          const files = fs.readdirSync(target);
+          fileCount = files.length;
+        }
+      } catch (err: any) {
+        if (!errorCode) errorCode = err.code || err.message;
+        console.warn(`[check-path] stat error on ${target}:`, err?.message);
+      }
+
+      try {
+        fs.accessSync(target, fs.constants.W_OK);
         writable = true;
       } catch (_) {}
+    } else {
+      errorCode = 'ENOENT';
     }
+
+    const message = exists
+      ? (accessDenied
+          ? `Host path exists at "${resolvedPath}" but access is DENIED (${errorCode})`
+          : `Host path verified: "${resolvedPath}" (${isDirectory ? `${fileCount} items found` : 'file'})`)
+      : `Host path does not exist on local filesystem: "${clean}" (resolved: "${resolvedPath}")`;
+
+    console.log(`[VerifyPath:PathAnalysis] Raw: "${rawInput}" | Resolved: "${resolvedPath}" | Exists: ${exists} | Accessible: ${accessible} | Error: ${errorCode || 'None'}`);
 
     return res.json({
       exists,
+      accessible,
+      accessDenied,
+      errorCode,
       isDirectory,
       fileCount,
       readable,
       writable,
+      rawInput,
       path: clean,
-      message: exists
-        ? `Host path exists: ${clean} (${isDirectory ? `${fileCount} items found` : 'file'})`
-        : `Host path does not exist on local filesystem: ${clean}`,
+      resolvedPath,
+      mode: statMode ? (statMode & 0o777).toString(8) : undefined,
+      message,
     });
   } catch (e: any) {
+    console.warn(`[check-path] Exception on "${clean}":`, e.message);
     return res.json({
       exists: false,
+      accessible: false,
+      accessDenied: false,
       isDirectory: false,
+      rawInput,
       path: clean,
+      resolvedPath,
       error: e.message,
+      errorCode: e.code || 'UNKNOWN',
       message: `Error verifying host path: ${e.message}`,
     });
   }
 });
+
+// Explicit fs.access diagnostic endpoint
+app.post('/api/samba/fs-access', async (req: Request, res: Response) => {
+  try {
+    const { path: checkPath, mode } = req.body;
+    if (!checkPath || typeof checkPath !== 'string') {
+      return res.status(400).json({ success: false, error: 'Path is required' });
+    }
+
+    const rawInput = checkPath;
+    const clean = checkPath.trim().replace(/^file:\/\//, '');
+    const resolvedPath = path.resolve(clean);
+
+    let target = clean;
+    let exists = fs.existsSync(clean);
+    if (!exists && fs.existsSync(resolvedPath)) {
+      target = resolvedPath;
+      exists = true;
+    }
+
+    let isDirectory = false;
+    let fileCount = 0;
+    let statMode = 0;
+    if (exists) {
+      try {
+        const stat = fs.statSync(target);
+        isDirectory = stat.isDirectory();
+        statMode = stat.mode;
+        if (isDirectory) {
+          try {
+            fileCount = fs.readdirSync(target).length;
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    let testMode = fs.constants.R_OK;
+    if (mode === 'write' || mode === 'W_OK') testMode = fs.constants.W_OK;
+    else if (mode === 'readwrite' || mode === 'RW') testMode = fs.constants.R_OK | fs.constants.W_OK;
+
+    let readable = false;
+    let writable = false;
+    try {
+      fs.accessSync(target, fs.constants.R_OK);
+      readable = true;
+    } catch (_) {}
+    try {
+      fs.accessSync(target, fs.constants.W_OK);
+      writable = true;
+    } catch (_) {}
+
+    try {
+      fs.accessSync(target, testMode);
+      console.log(`[fs.access:Diagnostic] Verified: Raw="${rawInput}" -> Resolved="${resolvedPath}"`);
+      return res.json({
+        success: true,
+        accessible: true,
+        accessDenied: false,
+        exists,
+        readable,
+        writable,
+        rawInput,
+        path: clean,
+        resolvedPath,
+        isDirectory,
+        fileCount,
+        mode: statMode ? (statMode & 0o777).toString(8) : undefined,
+        message: `Explicit fs.access check passed for "${resolvedPath}"`,
+      });
+    } catch (accErr: any) {
+      console.warn(`[fs.access:Diagnostic] Access Denied: Raw="${rawInput}" -> Resolved="${resolvedPath}" | ${accErr.message}`);
+      return res.json({
+        success: false,
+        accessible: false,
+        accessDenied: exists,
+        exists,
+        readable,
+        writable,
+        rawInput,
+        path: clean,
+        resolvedPath,
+        isDirectory,
+        fileCount,
+        errorCode: accErr.code || 'EACCES',
+        message: `fs.access check failed: ${accErr.message || accErr.code}`,
+      });
+    }
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      accessible: false,
+      accessDenied: false,
+      error: err.message,
+    });
+  }
+});
+
 
 // Probe Samba Stream endpoint (attempts to read first 1MB / test byte range read)
 app.post('/api/samba/probe-stream', async (req: Request, res: Response) => {

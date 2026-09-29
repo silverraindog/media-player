@@ -37,7 +37,14 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { HardDrive, ShieldCheck, ShieldAlert, Check, PlayCircle, Eye, HelpCircle } from 'lucide-react';
-import { resolveSambaPathToLocalMount } from '../utils/tauriBridge';
+import {
+  resolveSambaPathToLocalMount,
+  PathAnalysisRecord,
+  getPathAnalysisHistory,
+  subscribePathAnalysis,
+  clearPathAnalysisHistory,
+  verifyPath,
+} from '../utils/tauriBridge';
 
 interface D3SambaTreeVisualizerProps {
   data: any;
@@ -243,7 +250,40 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   const [prevalidateResult, setPrevalidateResult] = useState<any>(null);
 
   // Diagnostic Tab Toggles
-  const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<'info' | 'tree'>('info');
+  const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<'info' | 'analysis' | 'tree'>('info');
+
+  // Real-Time Path Analysis Telemetry History State
+  const [pathAnalysisHistory, setPathAnalysisHistory] = useState<PathAnalysisRecord[]>(() => getPathAnalysisHistory());
+  const [testPathInput, setTestPathInput] = useState(
+    sambaConfig?.mountPath || sambaConfig?.hostPath || '/Volumes/media'
+  );
+  const [isAnalyzingPath, setIsAnalyzingPath] = useState(false);
+  const [latestAnalysisTestResult, setLatestAnalysisTestResult] = useState<any>(null);
+
+  useEffect(() => {
+    const unsub = subscribePathAnalysis((history) => {
+      setPathAnalysisHistory(history);
+    });
+    return () => unsub();
+  }, []);
+
+  const handleRunPathAnalysisTest = async () => {
+    if (!testPathInput.trim()) return;
+    setIsAnalyzingPath(true);
+    setLatestAnalysisTestResult(null);
+    try {
+      const res = await verifyPath(testPathInput.trim());
+      setLatestAnalysisTestResult(res);
+    } catch (e: any) {
+      setLatestAnalysisTestResult({
+        exists: false,
+        accessible: false,
+        error: e.message || String(e),
+      });
+    } finally {
+      setIsAnalyzingPath(false);
+    }
+  };
 
   // D3 Tree Visualizer States
   interface TreeVisualNode {
@@ -505,8 +545,14 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
       }
     }
     if (selectedCategory !== 'all') {
-      if ((selectedCategory as string) === 'Path Diagnostics') {
-        if (!log.message.includes('[performFastScan:PathDiagnostic]')) return false;
+      if ((selectedCategory as string) === 'Path Diagnostics' || (selectedCategory as string) === 'Path Analysis') {
+        const isPathEvent =
+          log.message.includes('[performFastScan:PathDiagnostic]') ||
+          log.message.includes('[VerifyPath:PathAnalysis]') ||
+          log.message.includes('[fs.access:') ||
+          log.message.includes('[SyncLog:AccessError]') ||
+          log.details?.type === 'path_analysis';
+        if (!isPathEvent) return false;
       } else if (log.category !== selectedCategory) {
         return false;
       }
@@ -820,6 +866,24 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                 )}
               </button>
               <button
+                onClick={() => setActiveDiagnosticTab('analysis')}
+                className={`text-xs font-bold font-mono pb-2 relative transition cursor-pointer flex items-center gap-1.5 ${
+                  activeDiagnosticTab === 'analysis'
+                    ? 'text-cyan-400'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <span>🔍 Path Analysis &amp; Verify Traces</span>
+                {pathAnalysisHistory.length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 text-[10px] font-bold">
+                    {pathAnalysisHistory.length}
+                  </span>
+                )}
+                {activeDiagnosticTab === 'analysis' && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-500" />
+                )}
+              </button>
+              <button
                 onClick={() => setActiveDiagnosticTab('tree')}
                 className={`text-xs font-bold font-mono pb-2 relative transition cursor-pointer flex items-center gap-1.5 ${
                   activeDiagnosticTab === 'tree'
@@ -1067,6 +1131,223 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
               );
             })()}
             </>
+            ) : activeDiagnosticTab === 'analysis' ? (
+              <div className="space-y-4">
+                {/* Header & Quick Actions */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950/70 p-4 rounded-xl border border-slate-800">
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-cyan-400" />
+                      Path Analysis &amp; Verify Traces
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Inspects the results of <code className="text-cyan-300 font-mono">path.resolve()</code>, <code className="text-cyan-300 font-mono">fs.access()</code>, and <code className="text-cyan-300 font-mono">fs.stat()</code> across raw Samba inputs and absolute OS filesystem paths.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => clearPathAnalysisHistory()}
+                      className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-rose-300 border border-slate-800 rounded-lg text-xs font-mono transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Clear Traces</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Interactive Path Tester */}
+                <div className="bg-slate-950/80 p-4 rounded-xl border border-indigo-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-indigo-300 uppercase tracking-wider font-mono">
+                      Test Path Resolution &amp; fs.access
+                    </label>
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      e.g. /Users/sargus/media, /Volumes/media, or //192.168.1.25/media
+                    </span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={testPathInput}
+                      onChange={(e) => setTestPathInput(e.target.value)}
+                      placeholder="Enter raw path to analyze (e.g. /Users/sargus/media)"
+                      className="flex-1 bg-slate-900 border border-slate-700/80 focus:border-indigo-500 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-slate-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRunPathAnalysisTest}
+                      disabled={isAnalyzingPath || !testPathInput.trim()}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition flex items-center justify-center gap-2 cursor-pointer shadow-md shrink-0"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isAnalyzingPath ? 'animate-spin' : ''}`} />
+                      <span>{isAnalyzingPath ? 'Analyzing...' : 'Run Path Analysis'}</span>
+                    </button>
+                  </div>
+
+                  {/* Immediate Test Result Card */}
+                  {latestAnalysisTestResult && (
+                    <div className="mt-3 p-3.5 rounded-xl border text-xs font-mono bg-slate-900/90 border-slate-800 space-y-2.5 animate-in fade-in duration-150">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                        <span className="font-bold text-white flex items-center gap-2">
+                          <span>Result for:</span>
+                          <code className="text-amber-300 bg-slate-950 px-1.5 py-0.5 rounded">{latestAnalysisTestResult.rawInput || testPathInput}</code>
+                        </span>
+                        {latestAnalysisTestResult.accessible ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                            ✓ Verified &amp; Accessible
+                          </span>
+                        ) : latestAnalysisTestResult.accessDenied ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                            ✕ Access Denied ({latestAnalysisTestResult.errorCode || 'EACCES'})
+                          </span>
+                        ) : latestAnalysisTestResult.exists ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                            ⚠️ Exists but Not Readable
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950/40 text-rose-300 border border-rose-800">
+                            ✕ Path Does Not Exist
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
+                          <span className="text-[10px] text-slate-500 uppercase block">Raw Input</span>
+                          <span className="text-slate-300 break-all select-all font-semibold">{latestAnalysisTestResult.rawInput || testPathInput}</span>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-slate-950 border border-indigo-950 space-y-1">
+                          <span className="text-[10px] text-indigo-400 uppercase block">Absolute Resolved OS Path</span>
+                          <span className="text-indigo-200 break-all select-all font-semibold">{latestAnalysisTestResult.resolvedPath || 'N/A'}</span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10.5px]">
+                        <div className="p-2 rounded bg-slate-950 border border-slate-800">
+                          <span className="text-slate-500 block text-[9px] uppercase">Exists</span>
+                          <span className={latestAnalysisTestResult.exists ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                            {latestAnalysisTestResult.exists ? 'Yes' : 'No'}
+                          </span>
+                        </div>
+                        <div className="p-2 rounded bg-slate-950 border border-slate-800">
+                          <span className="text-slate-500 block text-[9px] uppercase">fs.access (R_OK)</span>
+                          <span className={latestAnalysisTestResult.readable ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                            {latestAnalysisTestResult.readable ? 'Granted' : 'Denied'}
+                          </span>
+                        </div>
+                        <div className="p-2 rounded bg-slate-950 border border-slate-800">
+                          <span className="text-slate-500 block text-[9px] uppercase">fs.access (W_OK)</span>
+                          <span className={latestAnalysisTestResult.writable ? 'text-blue-400 font-bold' : 'text-amber-400 font-bold'}>
+                            {latestAnalysisTestResult.writable ? 'Writable' : 'Read-Only'}
+                          </span>
+                        </div>
+                        <div className="p-2 rounded bg-slate-950 border border-slate-800">
+                          <span className="text-slate-500 block text-[9px] uppercase">fs.stat Content</span>
+                          <span className="text-slate-300 font-bold">
+                            {latestAnalysisTestResult.isDirectory ? `${latestAnalysisTestResult.fileCount ?? 0} items` : 'File / Other'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="text-[11px] text-slate-300 bg-slate-950/60 p-2 rounded border border-slate-800/80">
+                        {latestAnalysisTestResult.message}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Path Analysis Recorded Events Stream */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                      <span>Recent Path Verifications &amp; Analyses</span>
+                      <span className="text-indigo-400 font-normal">({pathAnalysisHistory.length})</span>
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      Updated whenever Verify Path or scanner checks run
+                    </span>
+                  </div>
+
+                  {pathAnalysisHistory.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-950/60 border border-slate-800 rounded-xl space-y-2">
+                      <Terminal className="w-8 h-8 text-slate-600 mx-auto" />
+                      <p className="text-xs text-slate-400 font-mono">
+                        No path verification traces recorded yet.
+                      </p>
+                      <p className="text-[11px] text-slate-500 font-mono">
+                        Click "Run Path Analysis" above or "Verify Path" in Samba Mount Hub to generate real-time traces.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="max-h-80 overflow-y-auto space-y-2 custom-scrollbar pr-1">
+                      {pathAnalysisHistory.map((item) => {
+                        const d = new Date(item.timestamp);
+                        const timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(
+                          d.getSeconds()
+                        ).padStart(2, '0')}`;
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`p-3 rounded-xl border font-mono text-xs space-y-2 transition ${
+                              item.accessDenied
+                                ? 'bg-rose-950/20 border-rose-500/30'
+                                : item.accessible
+                                ? 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                                : 'bg-slate-900/40 border-slate-800'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 border-b border-slate-800/80 pb-1.5 flex-wrap">
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-500 text-[10px] tabular-nums">{timeStr}</span>
+                                {item.accessible ? (
+                                  <span className="px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 text-[10px] font-bold">
+                                    ✓ Verified
+                                  </span>
+                                ) : item.accessDenied ? (
+                                  <span className="px-1.5 py-0.2 rounded bg-rose-950/60 text-rose-300 border border-rose-800/60 text-[10px] font-bold">
+                                    ✕ Access Denied ({item.errorCode || 'EACCES'})
+                                  </span>
+                                ) : item.exists ? (
+                                  <span className="px-1.5 py-0.2 rounded bg-amber-950/60 text-amber-300 border border-amber-800/60 text-[10px] font-bold">
+                                    ⚠️ Exists (Unreadable)
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 text-[10px]">
+                                    ✕ Not Found
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 space-x-2">
+                                <span>{item.isDirectory ? `${item.fileCount} items` : 'File'}</span>
+                                {item.mode && <span>(Mode {item.mode})</span>}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                              <div>
+                                <span className="text-slate-500 text-[10px] uppercase block">Raw Input</span>
+                                <span className="text-amber-300 break-all select-all font-semibold">{item.rawInput}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-500 text-[10px] uppercase block">Resolved OS Path</span>
+                                <span className="text-cyan-300 break-all select-all font-semibold">{item.resolvedPath}</span>
+                              </div>
+                            </div>
+
+                            {item.message && (
+                              <p className="text-[10.5px] text-slate-400 border-t border-slate-800/60 pt-1.5">
+                                {item.message}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
             ) : (
               <D3SambaTreeVisualizer
                 data={liveTreeRoot}
@@ -1074,6 +1355,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                 isActive={liveScanActive}
               />
             )}
+
           </div>
         )}
       </div>
@@ -1399,7 +1681,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
           {/* Category Filters */}
           <div className="flex items-center gap-1 flex-wrap">
             <span className="text-slate-500 text-[10px] uppercase font-bold tracking-wider mr-1">Category:</span>
-            {(['all', 'Sync', 'Samba', 'Mount', 'Database', 'Scanner', 'Scheduler', 'Auth', 'System', 'Path Diagnostics'] as const).map((cat) => (
+            {(['all', 'Sync', 'Samba', 'Mount', 'Database', 'Scanner', 'Scheduler', 'Auth', 'System', 'Path Analysis', 'Path Diagnostics'] as const).map((cat) => (
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat as any)}
@@ -1412,6 +1694,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                 {cat}
               </button>
             ))}
+
           </div>
         </div>
       </div>
@@ -1486,6 +1769,54 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                     <div className="mt-1 p-2 rounded-lg bg-indigo-950/20 border border-indigo-900/30 font-mono text-[10px] text-indigo-300">
                       <span className="font-bold uppercase text-[9px] block mb-0.5 text-indigo-400">Path Resolver Trace</span>
                       {log.message}
+                    </div>
+                  )}
+
+                  {/* Verify Path / Path Analysis Specialized Card */}
+                  {(log.message.includes('[VerifyPath:PathAnalysis]') || log.details?.type === 'path_analysis') && (
+                    <div className="mt-1.5 p-3 rounded-xl bg-slate-950 border border-indigo-500/40 font-mono text-[11px] text-indigo-200 space-y-2">
+                      <div className="flex items-center justify-between text-[10px] border-b border-indigo-900/40 pb-1.5">
+                        <span className="font-bold uppercase text-indigo-300 flex items-center gap-1.5">
+                          <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+                          Path Analysis &amp; Verify Trace
+                        </span>
+                        {log.details?.accessDenied ? (
+                          <span className="px-2 py-0.5 rounded-full font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[9px]">
+                            ACCESS DENIED ({log.details?.errorCode || 'EACCES'})
+                          </span>
+                        ) : log.details?.accessible ? (
+                          <span className="px-2 py-0.5 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px]">
+                            ✓ VERIFIED &amp; READABLE
+                          </span>
+                        ) : log.details?.exists ? (
+                          <span className="px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px]">
+                            ⚠️ UNREADABLE
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full font-bold bg-rose-950/40 text-rose-300 border border-rose-800 text-[9px]">
+                            NOT FOUND (ENOENT)
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10.5px]">
+                        <div className="p-1.5 bg-slate-900/80 rounded border border-slate-800">
+                          <span className="text-slate-500 text-[9px] uppercase block font-bold">Raw Input</span>
+                          <span className="text-amber-300 break-all select-all font-semibold">
+                            {log.details?.rawInput || 'N/A'}
+                          </span>
+                        </div>
+                        <div className="p-1.5 bg-slate-900/80 rounded border border-slate-800">
+                          <span className="text-indigo-400 text-[9px] uppercase block font-bold">Resolved OS Path</span>
+                          <span className="text-cyan-300 break-all select-all font-semibold">
+                            {log.details?.resolvedPath || 'N/A'}
+                          </span>
+                        </div>
+                      </div>
+                      {log.details?.message && (
+                        <p className="text-[10px] text-slate-400">
+                          {log.details.message}
+                        </p>
+                      )}
                     </div>
                   )}
 

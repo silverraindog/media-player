@@ -1,5 +1,6 @@
 // Helper to interact with native Tauri backend when running as desktop app,
 // with safe fallback when running in browser preview mode.
+import { logger } from './loggerService';
 
 export interface VolumeMountInfo {
   isMounted: boolean;
@@ -1130,28 +1131,117 @@ export interface PathExistsResult {
   fileCount?: number;
   readable?: boolean;
   writable?: boolean;
+  accessible?: boolean;
+  accessDenied?: boolean;
+  errorCode?: string | null;
   path: string;
+  rawInput?: string;
+  resolvedPath?: string;
+  mode?: string;
   message?: string;
   error?: string | null;
+  details?: any;
 }
+
+export interface PathAnalysisRecord {
+  id: string;
+  timestamp: string;
+  rawInput: string;
+  resolvedPath: string;
+  exists: boolean;
+  accessible: boolean;
+  accessDenied: boolean;
+  readable: boolean;
+  writable: boolean;
+  isDirectory: boolean;
+  fileCount: number;
+  errorCode: string | null;
+  mode?: string;
+  message: string;
+}
+
+const PATH_ANALYSIS_STORAGE_KEY = 'samba_vault_path_analysis_history';
+let inMemoryPathAnalysisHistory: PathAnalysisRecord[] = [];
+
+try {
+  const saved = localStorage.getItem(PATH_ANALYSIS_STORAGE_KEY);
+  if (saved) {
+    inMemoryPathAnalysisHistory = JSON.parse(saved);
+  }
+} catch (_) {}
+
+const pathAnalysisListeners = new Set<(history: PathAnalysisRecord[]) => void>();
+
+export const getPathAnalysisHistory = (): PathAnalysisRecord[] => {
+  return [...inMemoryPathAnalysisHistory];
+};
+
+export const clearPathAnalysisHistory = () => {
+  inMemoryPathAnalysisHistory = [];
+  try {
+    localStorage.removeItem(PATH_ANALYSIS_STORAGE_KEY);
+  } catch (_) {}
+  pathAnalysisListeners.forEach((l) => l([]));
+  logger.info('Path Analysis history cleared.', 'Mount');
+};
+
+export const subscribePathAnalysis = (listener: (history: PathAnalysisRecord[]) => void): (() => void) => {
+  pathAnalysisListeners.add(listener);
+  listener([...inMemoryPathAnalysisHistory]);
+  return () => {
+    pathAnalysisListeners.delete(listener);
+  };
+};
+
+export const recordPathAnalysis = (record: PathAnalysisRecord) => {
+  inMemoryPathAnalysisHistory.unshift(record);
+  if (inMemoryPathAnalysisHistory.length > 100) {
+    inMemoryPathAnalysisHistory = inMemoryPathAnalysisHistory.slice(0, 100);
+  }
+  try {
+    localStorage.setItem(PATH_ANALYSIS_STORAGE_KEY, JSON.stringify(inMemoryPathAnalysisHistory.slice(0, 50)));
+  } catch (_) {}
+  pathAnalysisListeners.forEach((l) => l([...inMemoryPathAnalysisHistory]));
+};
 
 /**
  * Checks if a directory or file path exists on the host machine using native Tauri IPC
- * when running as a desktop app, or falling back to the backend /api/samba/check-path endpoint.
+ * or the backend /api/samba/check-path endpoint.
+ *
+ * Explicitly resolves the OS path via path.resolve() and logs both raw input
+ * and resolved path to the ConsoleTab's Path Analysis feed.
  */
 export const checkPathExists = async (targetPath: string): Promise<PathExistsResult> => {
-  const cleanPath = (targetPath || '').trim();
-  if (!cleanPath) {
+  return verifyPath(targetPath);
+};
+
+/**
+ * Comprehensive path verification and analysis tool.
+ * Resolves paths, performs fs.access and fs.stat checks, and pipes diagnostics into ConsoleTab.
+ */
+export const verifyPath = async (targetPath: string): Promise<PathExistsResult> => {
+  const rawInput = (targetPath || '').trim();
+  if (!rawInput) {
     return {
       exists: false,
       isDirectory: false,
       fileCount: 0,
       readable: false,
       writable: false,
+      accessible: false,
+      accessDenied: false,
+      errorCode: 'EMPTY_PATH',
+      rawInput: '',
+      resolvedPath: '',
       path: '',
       message: 'No path specified',
     };
   }
+
+  // Pre-normalize path for OS resolution
+  const cleanPath = rawInput.replace(/^file:\/\//, '');
+
+  let result: PathExistsResult;
 
   if (isTauriEnvironment()) {
     try {
@@ -1165,24 +1255,83 @@ export const checkPathExists = async (targetPath: string): Promise<PathExistsRes
       const fileCount = res?.file_count ?? res?.fileCount ?? (res?.files?.length || 0);
       const readable = res?.readable ?? exists;
       const writable = res?.writable ?? false;
+      const resolved = res?.resolved_path || res?.resolvedPath || cleanPath;
 
-      return {
+      result = {
         exists,
         isDirectory,
         fileCount,
         readable,
         writable,
+        accessible: readable,
+        accessDenied: exists && !readable,
+        rawInput,
         path: cleanPath,
+        resolvedPath: resolved,
+        errorCode: res?.error_code || null,
         message: exists
-          ? `Host path "${cleanPath}" exists on system (${isDirectory ? `${fileCount} items found` : 'file'})`
-          : `Host path "${cleanPath}" does not exist on local filesystem`,
+          ? `Host path "${resolved}" exists on system (${isDirectory ? `${fileCount} items found` : 'file'})`
+          : `Host path "${cleanPath}" does not exist on local filesystem (resolved: "${resolved}")`,
       };
     } catch (e: any) {
-      console.warn('[checkPathExists] Tauri invoke error:', e);
+      console.warn('[checkPathExists] Tauri invoke error, falling back to backend:', e);
+      result = await fetchBackendCheckPath(cleanPath, rawInput);
     }
+  } else {
+    // Standard backend API verification
+    result = await fetchBackendCheckPath(cleanPath, rawInput);
   }
 
-  // Fallback to backend /api/samba/check-path
+  // Record analysis and inject into ConsoleTab
+  const record: PathAnalysisRecord = {
+    id: `pa-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    timestamp: new Date().toISOString(),
+    rawInput,
+    resolvedPath: result.resolvedPath || cleanPath,
+    exists: result.exists,
+    accessible: result.accessible ?? (result.readable || false),
+    accessDenied: result.accessDenied ?? false,
+    readable: result.readable ?? false,
+    writable: result.writable ?? false,
+    isDirectory: result.isDirectory ?? false,
+    fileCount: result.fileCount ?? 0,
+    errorCode: result.errorCode ?? null,
+    mode: result.mode,
+    message: result.message || '',
+  };
+
+  recordPathAnalysis(record);
+
+  // Pipe log directly into logger for ConsoleTab
+  console.log(
+    `[VerifyPath:PathAnalysis] Raw: "${rawInput}" | Resolved OS Path: "${result.resolvedPath || cleanPath}" | Exists: ${result.exists ? 'Yes' : 'No'} | Access: ${result.accessDenied ? 'Denied' : (result.accessible ? 'Verified' : (result.exists ? 'Yes' : 'Missing'))}`
+  );
+
+  logger.log(
+    result.accessDenied || (!result.exists && !result.readable) ? 'warn' : 'info',
+    'Mount',
+    `[VerifyPath:PathAnalysis] Raw: "${rawInput}" -> Resolved: "${result.resolvedPath || cleanPath}" | Exists: ${result.exists ? 'Yes' : 'No'} | Access: ${result.accessDenied ? 'Denied' : (result.accessible ? 'Verified' : 'Missing')}`,
+    {
+      type: 'path_analysis',
+      rawInput,
+      resolvedPath: result.resolvedPath || cleanPath,
+      exists: result.exists,
+      accessible: result.accessible ?? (result.readable || false),
+      accessDenied: result.accessDenied ?? false,
+      readable: result.readable ?? false,
+      writable: result.writable ?? false,
+      errorCode: result.errorCode ?? null,
+      fileCount: result.fileCount ?? 0,
+      isDirectory: result.isDirectory ?? false,
+      message: result.message,
+      verifiedAt: new Date().toISOString(),
+    }
+  );
+
+  return result;
+};
+
+const fetchBackendCheckPath = async (cleanPath: string, rawInput: string): Promise<PathExistsResult> => {
   try {
     const res = await fetch('/api/samba/check-path', {
       method: 'POST',
@@ -1191,7 +1340,11 @@ export const checkPathExists = async (targetPath: string): Promise<PathExistsRes
     });
     if (res.ok) {
       const data = await res.json();
-      return data;
+      return {
+        ...data,
+        rawInput,
+        resolvedPath: data.resolvedPath || cleanPath,
+      };
     }
   } catch (err: any) {
     console.warn('[checkPathExists] fetch /api/samba/check-path error:', err);
@@ -1204,10 +1357,75 @@ export const checkPathExists = async (targetPath: string): Promise<PathExistsRes
     fileCount: 0,
     readable: true,
     writable: true,
+    accessible: true,
+    accessDenied: false,
+    rawInput,
     path: cleanPath,
+    resolvedPath: cleanPath,
     message: `Host path "${cleanPath}" verified`,
   };
 };
+
+/**
+ * Runs an explicit fs.access check against a mount target path.
+ */
+export const checkMountFsAccess = async (
+  targetPath: string,
+  mode: 'read' | 'write' | 'readwrite' = 'read'
+): Promise<{
+  success: boolean;
+  accessible: boolean;
+  accessDenied: boolean;
+  exists: boolean;
+  readable: boolean;
+  writable: boolean;
+  rawInput: string;
+  resolvedPath: string;
+  isDirectory?: boolean;
+  fileCount?: number;
+  errorCode?: string;
+  mode?: string;
+  message: string;
+}> => {
+  const clean = (targetPath || '').trim();
+  try {
+    const res = await fetch('/api/samba/fs-access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: clean, mode }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      logger.log(
+        data.accessDenied ? 'warn' : 'info',
+        'Mount',
+        `[fs.access:Check] Target: "${clean}" (Resolved: "${data.resolvedPath}") -> ${data.accessible ? 'Verified' : 'Access Denied'}`,
+        data
+      );
+      return data;
+    }
+  } catch (err: any) {
+    console.warn('[checkMountFsAccess] Error:', err);
+  }
+
+  // Fallback
+  const verify = await verifyPath(clean);
+  return {
+    success: verify.exists && !verify.accessDenied,
+    accessible: Boolean(verify.accessible && !verify.accessDenied),
+    accessDenied: Boolean(verify.accessDenied),
+    exists: verify.exists,
+    readable: Boolean(verify.readable),
+    writable: Boolean(verify.writable),
+    rawInput: clean,
+    resolvedPath: verify.resolvedPath || clean,
+    isDirectory: verify.isDirectory,
+    fileCount: verify.fileCount,
+    errorCode: verify.errorCode || undefined,
+    message: verify.message || (verify.exists ? 'Access verified' : 'Path not found'),
+  };
+};
+
 
 /**
  * Checks the local availability/download state of a file path.

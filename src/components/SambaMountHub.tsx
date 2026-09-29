@@ -33,9 +33,10 @@ import {
   Maximize2,
   Search,
   Network,
+  Info,
 } from 'lucide-react';
 import { SambaConfig, CustomMountPath } from '../types';
-import { VolumeMountInfo, checkPathExists, PathExistsResult, runSambaNetworkProbe } from '../utils/tauriBridge';
+import { VolumeMountInfo, checkPathExists, PathExistsResult, runSambaNetworkProbe, checkMountFsAccess, verifyPath } from '../utils/tauriBridge';
 import { normalizeCustomMountPaths } from '../utils/customMountUtils';
 
 interface SambaMountHubProps {
@@ -73,11 +74,21 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
 
-  // Automated Permission Fixer State
-  const [permissionPath, setPermissionPath] = useState(sambaConfig.mountPath || `/Volumes/${sambaConfig.share || 'media'}`);
+  // Automated Permission Fixer & Active Path State (Synchronized with sambaConfig)
+  const [permissionPath, setPermissionPath] = useState(
+    sambaConfig.hostPath || sambaConfig.mountPath || `/Volumes/${sambaConfig.share || 'media'}`
+  );
   const [isFixingPermissions, setIsFixingPermissions] = useState(false);
   const [permissionLogs, setPermissionLogs] = useState<string[]>([]);
   const [permissionResult, setPermissionResult] = useState<{ success: boolean; message: string; fixedDirs?: number; fixedFiles?: number } | null>(null);
+
+  // Synchronize permissionPath when sambaConfig hostPath or mountPath changes
+  useEffect(() => {
+    const active = (sambaConfig.hostPath || sambaConfig.mountPath || '').trim();
+    if (active) {
+      setPermissionPath(active);
+    }
+  }, [sambaConfig.hostPath, sambaConfig.mountPath]);
 
   // Process Access User & Mount Diagnostics State
   const [processUserInfo, setProcessUserInfo] = useState<{
@@ -94,19 +105,49 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
   const [isVerifyingHostPath, setIsVerifyingHostPath] = useState(false);
   const [hostPathVerifyResult, setHostPathVerifyResult] = useState<{ checked: boolean; exists: boolean; message: string; details?: any } | null>(null);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (permissionPath.trim()) {
-        handleVerifyHostPath();
-      }
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [permissionPath]);
+  // Dedicated Mount Path fs.access Diagnostic State
+  const [isCheckingMountAccess, setIsCheckingMountAccess] = useState(false);
+  const [isTroubleshootOpen, setIsTroubleshootOpen] = useState(false);
+  const [mountAccessResult, setMountAccessResult] = useState<{
+    checked: boolean;
+    accessible: boolean;
+    accessDenied: boolean;
+    exists: boolean;
+    readable: boolean;
+    writable: boolean;
+    rawPath: string;
+    resolvedPath: string;
+    isDirectory?: boolean;
+    fileCount?: number;
+    errorCode?: string | null;
+    message?: string;
+  } | null>(null);
 
-  const handleVerifyHostPath = async () => {
-    const currentPath = permissionPath.trim();
+  const activeMountTarget = useMemo(() => {
+    return (
+      (sambaConfig.hostPath && sambaConfig.hostPath.trim()) ||
+      (sambaConfig.mountPath && sambaConfig.mountPath.trim()) ||
+      permissionPath ||
+      `/Volumes/${sambaConfig.share || 'media'}`
+    ).trim();
+  }, [sambaConfig.hostPath, sambaConfig.mountPath, permissionPath, sambaConfig.share]);
+
+  const handleVerifyHostPath = async (overridePath?: string) => {
+    const currentPath = (
+      (typeof overridePath === 'string' && overridePath.trim()) ||
+      (sambaConfig.hostPath && sambaConfig.hostPath.trim()) ||
+      (sambaConfig.mountPath && sambaConfig.mountPath.trim()) ||
+      (permissionPath && permissionPath.trim()) ||
+      ''
+    ).trim();
+
+    if (!currentPath) return;
+
+    // Ensure state tracks the verified path
+    setPermissionPath(currentPath);
     setIsVerifyingHostPath(true);
     setHostPathVerifyResult(null);
+
     try {
       const res = await checkPathExists(currentPath);
       setHostPathVerifyResult({
@@ -115,6 +156,23 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
         message: res.message || (res.exists ? `Host path "${currentPath}" verified on system` : `Host path "${currentPath}" does not exist`),
         details: res,
       });
+
+      // Keep mountAccessResult in sync
+      setMountAccessResult({
+        checked: true,
+        accessible: res.accessible ?? (res.readable || false),
+        accessDenied: res.accessDenied ?? false,
+        exists: res.exists,
+        readable: res.readable ?? false,
+        writable: res.writable ?? false,
+        rawPath: currentPath,
+        resolvedPath: res.resolvedPath || currentPath,
+        isDirectory: res.isDirectory ?? false,
+        fileCount: res.fileCount ?? 0,
+        errorCode: res.errorCode || null,
+        message: res.message || '',
+      });
+
       if (onTestConnection) {
         await onTestConnection();
       }
@@ -128,6 +186,57 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
       setIsVerifyingHostPath(false);
     }
   };
+
+  const handleCheckMountAccess = async (targetOverride?: string) => {
+    const pathToCheck = (
+      targetOverride ||
+      activeMountTarget ||
+      '/Volumes/media'
+    ).trim();
+
+    setIsCheckingMountAccess(true);
+    try {
+      const res = await checkMountFsAccess(pathToCheck, 'read');
+      setMountAccessResult({
+        checked: true,
+        accessible: res.accessible,
+        accessDenied: res.accessDenied,
+        exists: res.exists,
+        readable: res.readable,
+        writable: res.writable,
+        rawPath: pathToCheck,
+        resolvedPath: res.resolvedPath || pathToCheck,
+        isDirectory: res.isDirectory,
+        fileCount: res.fileCount,
+        errorCode: res.errorCode || null,
+        message: res.message,
+      });
+    } catch (err: any) {
+      setMountAccessResult({
+        checked: true,
+        accessible: false,
+        accessDenied: false,
+        exists: false,
+        readable: false,
+        writable: false,
+        rawPath: pathToCheck,
+        resolvedPath: pathToCheck,
+        errorCode: err?.message || 'CHECK_FAILED',
+        message: `fs.access check failed: ${err?.message || err}`,
+      });
+    } finally {
+      setIsCheckingMountAccess(false);
+    }
+  };
+
+  // Run initial fs.access check on load or when mount path changes
+  useEffect(() => {
+    const active = activeMountTarget;
+    if (active) {
+      handleCheckMountAccess(active);
+    }
+  }, [sambaConfig.mountPath, sambaConfig.hostPath]);
+
 
   const fetchProcessUserInfo = async () => {
     try {
@@ -572,7 +681,7 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
               className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white font-mono"
             />
             <button
-              onClick={handleVerifyHostPath}
+              onClick={() => handleVerifyHostPath(sambaConfig.hostPath)}
               disabled={isVerifyingHostPath}
               className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-800 text-slate-950 font-bold rounded-lg text-xs transition cursor-pointer"
             >
@@ -587,6 +696,220 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
           )}
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* SECTION: MOUNT PATH FS.ACCESS DIAGNOSTIC PANEL & TROUBLESHOOTER */}
+      {/* ========================================================================= */}
+      <div className="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+              <FolderTree className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-bold text-white">Mount Path POSIX Diagnostic</h2>
+                {/* Real-time Status Badge */}
+                {isCheckingMountAccess ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                    <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />
+                    Checking fs.access...
+                  </span>
+                ) : mountAccessResult ? (
+                  mountAccessResult.accessible ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-xs">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      Verified
+                    </span>
+                  ) : mountAccessResult.accessDenied ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-xs">
+                      <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                      Access Denied ({mountAccessResult.errorCode || 'EACCES'})
+                    </span>
+                  ) : mountAccessResult.exists ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                      Unreadable
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-rose-950/40 text-rose-300 border border-rose-800/50">
+                      <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                      Path Not Found
+                    </span>
+                  )
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                    Unchecked
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Runs explicit <code className="text-indigo-300 font-mono">fs.access</code> checks on active mount path to identify permission blocks and path mapping drift.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-center">
+            <button
+              type="button"
+              onClick={() => setIsTroubleshootOpen(!isTroubleshootOpen)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer border ${
+                isTroubleshootOpen
+                  ? 'bg-indigo-600 text-white border-indigo-500'
+                  : 'bg-slate-800 hover:bg-slate-700 text-indigo-300 border-slate-700'
+              }`}
+              title="Click to view detailed path resolution and troubleshooting"
+            >
+              <Info className="w-3.5 h-3.5" />
+              <span>{isTroubleshootOpen ? 'Hide Troubleshoot' : 'Troubleshoot'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleCheckMountAccess()}
+              disabled={isCheckingMountAccess}
+              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+              title="Execute explicit fs.access read/write check on current mount"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isCheckingMountAccess ? 'animate-spin' : ''}`} />
+              <span>Re-check Access</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Path Quick Overview */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
+          <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl space-y-1">
+            <span className="text-[10px] text-slate-500 font-bold uppercase block">Configured Mount Target</span>
+            <div className="text-white font-semibold break-all">
+              {activeMountTarget || '[Not Set]'}
+            </div>
+          </div>
+          <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl space-y-1">
+            <span className="text-[10px] text-indigo-400 font-bold uppercase block">Resolved OS Absolute Path</span>
+            <div className="text-indigo-200 font-semibold break-all">
+              {mountAccessResult?.resolvedPath || activeMountTarget || 'Resolving...'}
+            </div>
+          </div>
+        </div>
+
+        {/* Clickable Troubleshoot Details Panel */}
+        {isTroubleshootOpen && (
+          <div className="p-4 bg-slate-950/90 border border-indigo-500/30 rounded-xl space-y-4 text-xs font-mono animate-in fade-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <span className="text-indigo-300 font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                <Terminal className="w-4 h-4 text-indigo-400" />
+                Path Mapping &amp; Troubleshooting Details
+              </span>
+              <span className="text-[10px] text-slate-500">
+                Generated via Node.js path.resolve &amp; fs.accessSync
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                <span className="text-slate-400">Raw Input Path:</span>
+                <span className="text-amber-300 select-all font-bold">{mountAccessResult?.rawPath || activeMountTarget}</span>
+              </div>
+              <div className="flex items-center justify-between bg-indigo-950/30 p-2.5 rounded-lg border border-indigo-900/40">
+                <span className="text-slate-400">Absolute Resolved OS Path:</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-indigo-200 select-all font-bold">{mountAccessResult?.resolvedPath || activeMountTarget}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(mountAccessResult?.resolvedPath || activeMountTarget);
+                      setCopiedKey('resolved_path');
+                      setTimeout(() => setCopiedKey(null), 2000);
+                    }}
+                    className="p-1 rounded hover:bg-slate-800 text-indigo-400 cursor-pointer"
+                    title="Copy resolved path"
+                  >
+                    {copiedKey === 'resolved_path' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Test Matrix */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]">
+              <div className="p-2 rounded bg-slate-900 border border-slate-800 flex flex-col">
+                <span className="text-slate-500 text-[10px]">Exists on Disk</span>
+                <span className={mountAccessResult?.exists ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                  {mountAccessResult?.exists ? '✓ True' : '✕ False'}
+                </span>
+              </div>
+              <div className="p-2 rounded bg-slate-900 border border-slate-800 flex flex-col">
+                <span className="text-slate-500 text-[10px]">Read (fs.constants.R_OK)</span>
+                <span className={mountAccessResult?.readable ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                  {mountAccessResult?.readable ? '✓ Granted' : '✕ Denied'}
+                </span>
+              </div>
+              <div className="p-2 rounded bg-slate-900 border border-slate-800 flex flex-col">
+                <span className="text-slate-500 text-[10px]">Write (fs.constants.W_OK)</span>
+                <span className={mountAccessResult?.writable ? 'text-blue-400 font-bold' : 'text-amber-400 font-bold'}>
+                  {mountAccessResult?.writable ? '✓ Writable' : 'Read-Only'}
+                </span>
+              </div>
+              <div className="p-2 rounded bg-slate-900 border border-slate-800 flex flex-col">
+                <span className="text-slate-500 text-[10px]">Item Count / Type</span>
+                <span className="text-slate-200 font-bold">
+                  {mountAccessResult?.isDirectory ? `${mountAccessResult?.fileCount ?? 0} files` : 'File'}
+                </span>
+              </div>
+            </div>
+
+            {/* Path Mapping Troubleshooting Explanation */}
+            <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 text-[11px] text-slate-300 space-y-1.5 font-sans">
+              <strong className="text-indigo-300 block font-mono uppercase text-[10px]">Troubleshooting Guidance:</strong>
+              {activeMountTarget.startsWith('//') || activeMountTarget.startsWith('\\\\') || activeMountTarget.startsWith('smb://') ? (
+                <p className="text-amber-300 leading-relaxed">
+                  ⚠️ <strong>Network UNC Pointer Detected:</strong> You entered a network UNC path (<code className="font-mono text-xs">{activeMountTarget}</code>). Node.js and desktop file system APIs require a mounted POSIX directory. On macOS, mount your share via Finder (Cmd+K), which exposes it at <code className="font-mono text-xs">/Volumes/{sambaConfig.share || 'media'}</code>, or set the local folder path directly (e.g. <code className="font-mono text-xs">/Users/sargus/media</code>).
+                </p>
+              ) : !mountAccessResult?.exists ? (
+                <p className="text-rose-300 leading-relaxed">
+                  ❌ <strong>Path does not exist on host:</strong> The resolved path <code className="font-mono text-xs text-white">{mountAccessResult?.resolvedPath || activeMountTarget}</code> was not found on this machine's filesystem. Please verify spelling, user directory names, or mount status.
+                </p>
+              ) : mountAccessResult?.accessDenied ? (
+                <p className="text-rose-300 leading-relaxed">
+                  🛑 <strong>Access Denied (POSIX Permission Error):</strong> The target folder exists, but the process does not have read permissions ({mountAccessResult?.errorCode || 'EACCES'}). Click "Fix Permissions (chmod 775)" below or run <code className="font-mono text-xs">chmod -R 775 {mountAccessResult?.resolvedPath}</code> in Terminal.
+                </p>
+              ) : (
+                <p className="text-emerald-300 leading-relaxed">
+                  ✅ <strong>Path Mapping Verified:</strong> Absolute host path <code className="font-mono text-xs text-white">{mountAccessResult?.resolvedPath}</code> is verified readable by the system process. Folder traversal will succeed without permission blocks.
+                </p>
+              )}
+            </div>
+
+            {/* Quick Actions */}
+            <div className="flex flex-wrap gap-2 pt-1 font-sans">
+              <button
+                type="button"
+                onClick={() => {
+                  setPermissionPath(mountAccessResult?.resolvedPath || activeMountTarget);
+                  handleFixPermissions();
+                }}
+                disabled={isFixingPermissions}
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Fix Permissions (chmod 775)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleVerifyHostPath(mountAccessResult?.resolvedPath || activeMountTarget)}
+                disabled={isVerifyingHostPath}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isVerifyingHostPath ? 'animate-spin' : ''}`} />
+                <span>Re-verify Path</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
 
       {/* ========================================================================= */}
       {/* SECTION: PROCESS ACCESS USER & MOUNT DIAGNOSTICS */}
@@ -1138,14 +1461,21 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
             <span className="text-[11px] text-slate-500">Target Presets:</span>
             <button
               type="button"
-              onClick={() => setPermissionPath(sambaConfig.mountPath || `/Volumes/${sambaConfig.share || 'media'}`)}
+              onClick={() => {
+                const p = (sambaConfig.hostPath || sambaConfig.mountPath || `/Volumes/${sambaConfig.share || 'media'}`).trim();
+                setPermissionPath(p);
+                handleVerifyHostPath(p);
+              }}
               className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700/60 rounded text-[11px] font-mono transition cursor-pointer"
             >
               Current Active Share
             </button>
             <button
               type="button"
-              onClick={() => setPermissionPath('/Volumes/media')}
+              onClick={() => {
+                setPermissionPath('/Volumes/media');
+                handleVerifyHostPath('/Volumes/media');
+              }}
               className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700/60 rounded text-[11px] font-mono transition cursor-pointer"
             >
               /Volumes/media
@@ -1305,6 +1635,7 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                       hostPath: val,
                       mountPath: val,
                     }));
+                    setPermissionPath(val);
                   }}
                   className={`flex-1 rounded-lg px-3 py-2 text-sm font-mono transition-all ${
                     sambaConfig.enabled === false
@@ -1316,7 +1647,7 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
                 <button
                   type="button"
                   id="samba-verify-path-btn"
-                  onClick={handleVerifyHostPath}
+                  onClick={() => handleVerifyHostPath(sambaConfig.hostPath || sambaConfig.mountPath)}
                   disabled={isVerifyingHostPath || isTesting}
                   className={`px-3.5 py-2 rounded-lg text-xs font-bold font-mono transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
                     sambaConfig.enabled === false

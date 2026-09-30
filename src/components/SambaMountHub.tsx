@@ -240,7 +240,28 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
 
   const fetchProcessUserInfo = async () => {
     try {
-      const res = await fetch('/api/samba/user-info');
+      const userAddedPaths: string[] = [];
+      if (sambaConfig.hostPath) userAddedPaths.push(sambaConfig.hostPath);
+      if (sambaConfig.mountPath) userAddedPaths.push(sambaConfig.mountPath);
+      
+      if (Array.isArray(sambaConfig.customMountPaths)) {
+        sambaConfig.customMountPaths.forEach((cp: any) => {
+          if (cp && typeof cp === 'object' && cp.path) {
+            userAddedPaths.push(cp.path);
+          } else if (typeof cp === 'string') {
+            userAddedPaths.push(cp);
+          }
+        });
+      }
+
+      // Filter duplicates and empty values
+      const uniquePaths = Array.from(new Set(userAddedPaths.map(p => p.trim()).filter(Boolean)));
+
+      const res = await fetch('/api/samba/user-info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: uniquePaths }),
+      });
       const data = await res.json();
       if (data.success) {
         setProcessUserInfo(data);
@@ -250,7 +271,7 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
 
   React.useEffect(() => {
     fetchProcessUserInfo();
-  }, []);
+  }, [sambaConfig.hostPath, sambaConfig.mountPath, sambaConfig.customMountPaths]);
 
   // WhoAmI Diagnostic Tool State
   const [isWhoAmIModalOpen, setIsWhoAmIModalOpen] = useState(false);

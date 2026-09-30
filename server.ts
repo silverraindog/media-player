@@ -3169,7 +3169,15 @@ app.all('/api/samba/user-info', (req: Request, res: Response) => {
     
     // Check access on configured custom mounts
     const customMountsStatus: Record<string, any> = {};
-    const mountsToCheck = ['/Volumes/media/Series', '/Volumes/media', '/Volumes', SAMBA_SHARE_ROOT];
+    let mountsToCheck: string[] = [];
+    
+    if (req.body && Array.isArray(req.body.paths) && req.body.paths.length > 0) {
+      mountsToCheck = req.body.paths;
+    } else {
+      if (SAMBA_SHARE_ROOT) {
+        mountsToCheck.push(SAMBA_SHARE_ROOT);
+      }
+    }
     
     mountsToCheck.forEach((m) => {
       const exists = fs.existsSync(m);

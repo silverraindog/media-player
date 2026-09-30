@@ -73,6 +73,7 @@ import {
 } from '../types';
 import { SambaStorageSummaryDashboard } from './SambaStorageSummaryDashboard';
 import { SambaTreemap } from './SambaTreemap';
+import { SambaVolumeHealthCard } from './SambaVolumeHealthCard';
 import { DiscoveredFilesInspector } from './DiscoveredFilesInspector';
 import { ConsoleLogSection } from './ConsoleLogSection';
 import { MediaExtensionManager } from './MediaExtensionManager';
@@ -3389,6 +3390,14 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           onInspectFiles={() => setActiveSubTab('files')}
         />
       )}
+
+      {/* Samba Volume Health Monitor Panel */}
+      <SambaVolumeHealthCard
+        sambaConfig={sambaConfig}
+        sambaTree={sambaTree}
+        isScanningOrSyncing={isSyncing}
+        className="mb-4"
+      />
 
       {/* Media Format & Extension Controller */}
       <MediaExtensionManager

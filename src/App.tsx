@@ -1838,7 +1838,7 @@ function App() {
   // Open Smart Classifier and Folder Review Modal
   const handleOpenClassifierModal = async (customScanPath?: string) => {
     const shareName = sambaConfig.share || 'media';
-    setActiveScanPath(customScanPath || `//${sambaConfig.server || 'nas'}/${shareName}`);
+    setActiveScanPath(customScanPath || (sambaConfig.enabled === false ? (sambaConfig.hostPath || '/Volumes/media') : `//${sambaConfig.server || 'Server'}/${shareName}`));
 
     let discoveredPaths = lastDiscoveredPaths;
     if (discoveredPaths.length === 0) {
@@ -2061,7 +2061,7 @@ function App() {
       `[SambaSync] Initializing Sync scan (Safe Scan: ${effectiveSafeScan ? 'ON' : 'OFF'}, Depth Limit: ${effectiveDepthLimit})...`
     );
     logger.info(
-      `Initializing Samba sync scan on "${customScanPath || sambaConfig.mountPath || '//' + (sambaConfig.server || 'nas') + '/' + (sambaConfig.share || 'media')}" (SafeScan: ${effectiveSafeScan ? 'ON' : 'OFF'}, Depth: ${effectiveDepthLimit})`,
+      `Initializing Samba sync scan on "${customScanPath || sambaConfig.hostPath || sambaConfig.mountPath || (sambaConfig.server ? '//' + sambaConfig.server + '/' + (sambaConfig.share || 'media') : 'Custom Share')}" (SafeScan: ${effectiveSafeScan ? 'ON' : 'OFF'}, Depth: ${effectiveDepthLimit})`,
       'Sync'
     );
     setIsSyncingShare(true);
@@ -2984,7 +2984,9 @@ function App() {
 
         logger.warn(
           `Samba Sync completed with 0 items: target path "${rootPath}" is empty or not mounted. ` +
-          `Verify that share //${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'} is mounted in macOS Finder (Cmd+K -> smb://${sambaConfig.server || '192.168.1.25'}/${sambaConfig.share || 'media'}) or Windows Explorer.`,
+          (sambaConfig.enabled === false
+            ? `Please verify that your host path exists and is readable.`
+            : `Verify that network share //${sambaConfig.server || 'Server'}/${sambaConfig.share || 'media'} is mounted in Finder (Cmd+K) or Windows Explorer.`),
           'Sync',
           {
             rootPath,
@@ -2999,7 +3001,10 @@ function App() {
             timestamp: new Date().toLocaleTimeString(),
             type: 'warning',
             title: `Samba Sync: 0 Items Discovered on Share`,
-            details: `Target "${rootPath}" is empty or unmounted. Verify network share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'} is mounted in Finder.`,
+            details: `Target "${rootPath}" is empty or unmounted. ` +
+              (sambaConfig.enabled === false
+                ? `Please check your configured host path.`
+                : `Verify that network share //${sambaConfig.server || 'Server'}/${sambaConfig.share || 'media'} is mounted in Finder.`),
             status: 'warning',
           },
           ...prev,
@@ -3044,7 +3049,7 @@ function App() {
 
         logger.resolveIncident();
         logger.success(
-          `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) across share //${sambaConfig.server || 'nas'}/${sambaConfig.share || 'media'} in ${durationSec}s.`,
+          `Samba Sync Complete! Discovered ${discoveredRelativePaths.length} items (${discoveredMedia.length} media entries) in ${durationSec}s.`,
           'Sync',
           {
             totalFiles: discoveredRelativePaths.length,
@@ -3068,7 +3073,7 @@ function App() {
             timestamp: new Date().toLocaleTimeString(),
             type: 'connected',
             title: `Samba Sync Complete: ${discoveredRelativePaths.length} Media Files Discovered (${durationSec}s)`,
-            details: `Deep-scanned directories from //${sambaConfig.server || 'nas'}/${sambaConfig.share} in ${durationSec}s (${uniqueBottlenecks.length} bottlenecks detected). Populated All Media, TV Series, Movies, and Music Albums!${
+            details: `Deep-scanned directories in ${durationSec}s (${uniqueBottlenecks.length} bottlenecks detected). Populated All Media, TV Series, Movies, and Music Albums!${
               detectedBranchCount > 0
                 ? ` Multi-Version Detector linked ${detectedBranchCount} branches across ${detectedFranchiseCount} franchises.`
                 : ''

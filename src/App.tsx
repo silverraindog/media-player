@@ -2160,7 +2160,7 @@ function App() {
 
       // 1. Scan filesystem using native Tauri Rust perform_fast_scan command or fallback with retry
       const scanPromise = (async () => {
-        const scanTimeout = effectiveSafeScan ? 30000 : 180000;
+        const scanTimeout = effectiveSafeScan ? 120000 : 240000;
 
         let resolvedScanPath = rootPath;
         if (isTauri) {

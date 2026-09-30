@@ -12,5 +12,9 @@
     <true/>
     <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
+    <key>com.apple.security.files.volumes.read-write</key>
+    <true/>
+    <key>com.apple.security.files.volumes.completed</key>
+    <true/>
 </dict>
 </plist>

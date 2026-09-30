@@ -235,9 +235,15 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
 
   // Samba Traversability & Path Diagnostics States
+  const actualUserPath = (
+    sambaConfig?.hostPath ||
+    sambaConfig?.mountPath ||
+    (sambaConfig?.server ? `//${sambaConfig.server}/${sambaConfig?.share || 'media'}` : '/Users/sargus/media')
+  );
+
   const [isDiagnosticExpanded, setIsDiagnosticExpanded] = useState(true);
-  const [diagnosticPath, setDiagnosticPath] = useState(sambaConfig?.mountPath || '/Volumes/media');
-  const [pathToResolve, setPathToResolve] = useState('//192.168.1.25/media/Series/Stranger Things (2016)');
+  const [diagnosticPath, setDiagnosticPath] = useState(actualUserPath);
+  const [pathToResolve, setPathToResolve] = useState(`${actualUserPath}/Series/Stranger Things (2016)`);
   const [diagnosticLoading, setDiagnosticLoading] = useState(false);
   const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
@@ -254,11 +260,19 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   // Real-Time Path Analysis Telemetry History State
   const [pathAnalysisHistory, setPathAnalysisHistory] = useState<PathAnalysisRecord[]>(() => getPathAnalysisHistory());
-  const [testPathInput, setTestPathInput] = useState(
-    sambaConfig?.mountPath || sambaConfig?.hostPath || '/Volumes/media'
-  );
+  const [testPathInput, setTestPathInput] = useState(actualUserPath);
   const [isAnalyzingPath, setIsAnalyzingPath] = useState(false);
   const [latestAnalysisTestResult, setLatestAnalysisTestResult] = useState<any>(null);
+
+  // Sync actual paths when sambaConfig changes
+  useEffect(() => {
+    const current = (sambaConfig?.hostPath || sambaConfig?.mountPath || '').trim();
+    if (current) {
+      setDiagnosticPath(current);
+      setTestPathInput(current);
+      setPathToResolve(`${current}/Series/Stranger Things (2016)`);
+    }
+  }, [sambaConfig?.hostPath, sambaConfig?.mountPath]);
 
   useEffect(() => {
     const unsub = subscribePathAnalysis((history) => {
@@ -1064,19 +1078,19 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                       </label>
                     </div>
                     <p className="text-[10.5px] text-slate-400">
-                      Type any path (such as a UNC network pointer like <code className="text-indigo-400">//192.168.1.25/media/Series/...</code> or a relative path) to see how it aligns to your absolute local storage mountpoint. Helps debug missing files!
+                      Type any path (such as <code className="text-indigo-400">{actualUserPath}/Series/...</code> or a UNC network pointer) to see how it aligns to your absolute local storage mountpoint. Helps debug missing files!
                     </p>
                     <div className="flex gap-2">
                       <input
                         type="text"
                         value={pathToResolve}
                         onChange={(e) => setPathToResolve(e.target.value)}
-                        placeholder="e.g. //192.168.1.25/media/Series/Stranger Things (2016)"
+                        placeholder={`e.g. ${actualUserPath}/Series/Stranger Things (2016)`}
                         className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 font-mono text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
                       />
                       <button
                         type="button"
-                        onClick={() => setPathToResolve('//192.168.1.25/media/Series/Stranger Things (2016)')}
+                        onClick={() => setPathToResolve(`${actualUserPath}/Series/Stranger Things (2016)`)}
                         className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-medium border border-slate-800 transition shrink-0 cursor-pointer"
                       >
                         Reset Demo

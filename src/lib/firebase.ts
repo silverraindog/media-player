@@ -25,15 +25,6 @@ export const signInWithPopup = async (authInstance: any, providerInstance: any) 
     throw tauriErr;
   }
 
-  // If running inside an iframe preview sandbox, browser blocks popup auth
-  const isIframe = typeof window !== 'undefined' && window.self !== window.top;
-  if (isIframe) {
-    const iframeErr = new Error('Cross-origin iframe preview restriction: Popup authentication disabled in preview frame.');
-    (iframeErr as any).code = 'auth/cancelled-popup-request';
-    (iframeErr as any).isIframePreview = true;
-    throw iframeErr;
-  }
-
   try {
     const result = await firebaseSignInWithPopup(authInstance, providerInstance);
     return result;

@@ -134,6 +134,9 @@ export const listMountedVolumes = async (): Promise<string[]> => {
 };
 
 export const probeLocalNetwork = async (host: string, port: number): Promise<NetworkProbeResult> => {
+  if (!host || !host.trim()) {
+    throw new Error('Samba server IP or hostname is required and not configured.');
+  }
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
@@ -752,7 +755,10 @@ export const scanSambaVolume = async (
   max_depth?: number
 ): Promise<ScanVolumeResult> => {
   const startTime = performance.now();
-  const mountLocation = customPath || `/Volumes/${shareName}`;
+  const mountLocation = (customPath || '').trim();
+  if (!mountLocation) {
+    throw new Error(`Samba scan path or mount path is not configured. Please specify a valid local host path or mount directory.`);
+  }
   const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 20 : 60;
 
   console.log(
@@ -863,13 +869,7 @@ export const scanSambaVolume = async (
     console.warn('[scanSambaVolume Fallback] API error:', e);
   }
 
-  return {
-    success: false,
-    mountPath: mountLocation,
-    items: [],
-    totalScanned: 0,
-    error: 'Preview mode API fallback failed.',
-  };
+  throw new Error(`Unable to scan Samba path at "${mountLocation}": Path does not exist, is unmounted, or unreadable.`);
 };
 
 export const openInSystemPlayer = async (filePath: string): Promise<{ success: boolean; message: string }> => {

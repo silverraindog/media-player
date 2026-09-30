@@ -212,8 +212,10 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="font-mono truncate max-w-[200px]">
                 {sambaConfig.enabled === false
                   ? `Host: ${sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media'}`
+                  : (sambaConfig.hostPath || sambaConfig.mountPath)
+                  ? `Path: ${sambaConfig.hostPath || sambaConfig.mountPath}`
                   : sambaConfig.server
-                  ? `//${sambaConfig.server}/${sambaConfig.share}`
+                  ? `//${sambaConfig.server}/${sambaConfig.share || 'media'}`
                   : 'Configure Samba Share'}
               </span>
               <span className={`text-[10px] font-semibold uppercase tracking-wider ${

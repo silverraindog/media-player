@@ -2165,14 +2165,24 @@ function App() {
         let resolvedScanPath = rootPath;
         if (isTauri) {
           try {
-            const mountedVols = await listMountedVolumes().catch(() => []);
-            const cleanShare = (shareName || 'media').toLowerCase();
-            const matchVol = (mountedVols || []).find(
-              (v) => v.toLowerCase() === cleanShare || v.toLowerCase().startsWith(cleanShare)
-            );
-            if (matchVol && `/Volumes/${matchVol}` !== resolvedScanPath) {
-              console.log(`[SambaSync] Auto-resolved mount path from /Volumes/${matchVol}`);
-              resolvedScanPath = `/Volumes/${matchVol}`;
+            const isExplicitPath = Boolean(customScanPath) ||
+                                  (sambaConfig.enabled === false) ||
+                                  Boolean(sambaConfig.hostPath && rootPath.includes(sambaConfig.hostPath)) ||
+                                  Boolean(sambaConfig.mountPath && rootPath.includes(sambaConfig.mountPath)) ||
+                                  rootPath.startsWith('/Users/') ||
+                                  rootPath.startsWith('/home/') ||
+                                  rootPath.startsWith('C:') ||
+                                  rootPath.startsWith('D:');
+            if (!isExplicitPath) {
+              const mountedVols = await listMountedVolumes().catch(() => []);
+              const cleanShare = (shareName || 'media').toLowerCase();
+              const matchVol = (mountedVols || []).find(
+                (v) => v.toLowerCase() === cleanShare || v.toLowerCase().startsWith(cleanShare)
+              );
+              if (matchVol && `/Volumes/${matchVol}` !== resolvedScanPath) {
+                console.log(`[SambaSync] Auto-resolved mount path from /Volumes/${matchVol}`);
+                resolvedScanPath = `/Volumes/${matchVol}`;
+              }
             }
           } catch (_) {}
         }

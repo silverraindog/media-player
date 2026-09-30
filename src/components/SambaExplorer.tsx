@@ -72,6 +72,7 @@ import {
   LastScanSummary,
 } from '../types';
 import { SambaStorageSummaryDashboard } from './SambaStorageSummaryDashboard';
+import { SambaTreemap } from './SambaTreemap';
 import { DiscoveredFilesInspector } from './DiscoveredFilesInspector';
 import { ConsoleLogSection } from './ConsoleLogSection';
 import { MediaExtensionManager } from './MediaExtensionManager';
@@ -1002,18 +1003,22 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
   // Probe Latency Handler
   const handleProbeNetworkLatency = async () => {
+    if (!sambaConfig.server) {
+      throw new Error('Samba server IP or hostname is not configured.');
+    }
     setIsProbingLatency(true);
     const start = performance.now();
     try {
-      const res = await probeLocalNetwork(sambaConfig.server || '192.168.1.25', 445);
+      const res = await probeLocalNetwork(sambaConfig.server, 445);
       const end = performance.now();
       const lat = Math.round(res.latencyMs || (end - start));
       setNetworkLatencyMs(lat);
       setPerformanceMetrics((prev) => ({ ...prev, networkLatencyMs: lat }));
-      setCopyToast(`Network Latency Probe: ${lat}ms to ${sambaConfig.server || '192.168.1.25'}:445 (${res.message || 'Reachable'})`);
+      setCopyToast(`Network Latency Probe: ${lat}ms to ${sambaConfig.server}:445 (${res.message || 'Reachable'})`);
       setTimeout(() => setCopyToast(null), 3500);
-    } catch {
-      setNetworkLatencyMs(18);
+    } catch (err: any) {
+      setCopyToast(`Network Probe Error: ${err?.message || 'Unreachable'}`);
+      setTimeout(() => setCopyToast(null), 3500);
     } finally {
       setIsProbingLatency(false);
     }
@@ -2962,8 +2967,14 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
               <span>Samba Network Share Browser</span>
             </div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">
-              {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'Configure Samba Share'}
+            <h2 className="text-2xl font-bold text-white tracking-tight font-mono text-emerald-300">
+              {sambaConfig.enabled === false
+                ? (sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media')
+                : (sambaConfig.hostPath || sambaConfig.mountPath)
+                ? (sambaConfig.hostPath || sambaConfig.mountPath)
+                : sambaConfig.server
+                ? `//${sambaConfig.server}/${sambaConfig.share || 'media'}`
+                : 'Configure Samba Share'}
             </h2>
             <p className="mt-1 text-sm text-slate-300 max-w-2xl">
               Live filesystem representation of your Samba media library. Recursively scans any folder structure (series, movies, films, or flat files) and pulls canonical metadata.
@@ -3482,7 +3493,8 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
       )}
 
       {activeSubTab === 'storage' && (
-        <div className="space-y-4">
+        <div className="space-y-6">
+          <SambaTreemap sambaTree={sambaTree} />
           <SambaStorageSummaryDashboard
             sambaTree={sambaTree}
             onOpenDetails={onOpenDetails}
@@ -3686,7 +3698,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                   {sambaConfig.enabled === false ? 'Direct FS' : (networkLatencyMs > 0 ? `${networkLatencyMs} ms` : '14 ms')}
                 </div>
                 <div className="text-[9px] text-slate-500 truncate">
-                  {sambaConfig.enabled === false ? (sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media') : (sambaConfig.server || '192.168.1.25') + ':445'}
+                  {sambaConfig.enabled === false ? (sambaConfig.hostPath || sambaConfig.mountPath || 'Host Path Unconfigured') : (sambaConfig.server ? `${sambaConfig.server}:445` : 'Server Unconfigured')}
                 </div>
               </div>
 

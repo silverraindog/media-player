@@ -825,8 +825,14 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           <div className="flex items-center space-x-2 text-[11px] text-slate-400 font-mono">
             <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900/90 border border-slate-800">
               <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span className="truncate max-w-[130px] md:max-w-none text-slate-300">
-                {sambaConfig.server ? `//${sambaConfig.server}/${sambaConfig.share}` : 'No Share Configured'}
+              <span className="truncate max-w-[130px] md:max-w-none text-slate-300 font-mono">
+                {sambaConfig.enabled === false
+                  ? (sambaConfig.hostPath || sambaConfig.mountPath || '/Volumes/media')
+                  : (sambaConfig.hostPath || sambaConfig.mountPath)
+                  ? (sambaConfig.hostPath || sambaConfig.mountPath)
+                  : sambaConfig.server
+                  ? `//${sambaConfig.server}/${sambaConfig.share || 'media'}`
+                  : 'No Share Configured'}
               </span>
             </span>
           </div>

@@ -585,6 +585,175 @@ async fn open_in_iina(
     }
 }
 
+#[derive(serde::Serialize)]
+struct PathCheckResult {
+    exists: bool,
+    is_directory: bool,
+    file_count: usize,
+    readable: bool,
+    writable: bool,
+    resolved_path: String,
+    error_code: Option<String>,
+}
+
+#[tauri::command]
+async fn check_path_exists(path: String) -> Result<PathCheckResult, String> {
+    let p = PathBuf::from(&path);
+    let exists = p.exists();
+    let mut is_directory = false;
+    let mut file_count = 0;
+    let mut readable = false;
+    let mut writable = false;
+    let mut error_code = None;
+
+    if exists {
+        is_directory = p.is_dir();
+        
+        // Check read
+        if is_directory {
+            match fs::read_dir(&p) {
+                Ok(read_dir) => {
+                    readable = true;
+                    file_count = read_dir.filter_map(|e| e.ok()).count();
+                }
+                Err(e) => {
+                    error_code = Some(e.to_string());
+                }
+            }
+        } else {
+            match fs::File::open(&p) {
+                Ok(_) => {
+                    readable = true;
+                }
+                Err(e) => {
+                    error_code = Some(e.to_string());
+                }
+            }
+        }
+
+        // Check write
+        if readable {
+            if is_directory {
+                let test_file = p.join(".samba_vault_write_test");
+                match fs::OpenOptions::new().write(true).create(true).open(&test_file) {
+                    Ok(_) => {
+                        writable = true;
+                        let _ = fs::remove_file(test_file);
+                    }
+                    Err(_) => {
+                        writable = false;
+                    }
+                }
+            } else {
+                match fs::OpenOptions::new().write(true).open(&p) {
+                    Ok(_) => {
+                        writable = true;
+                    }
+                    Err(_) => {
+                        writable = false;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(PathCheckResult {
+        exists,
+        is_directory,
+        file_count,
+        readable,
+        writable,
+        resolved_path: path,
+        error_code,
+    })
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+async fn checkPathExists(path: String) -> Result<PathCheckResult, String> {
+    check_path_exists(path).await
+}
+
+#[tauri::command]
+async fn run_samba_diagnostic(host: String, share: String) -> Result<String, String> {
+    let mut logs = Vec::new();
+    logs.push(format!("-- SambaVault Native Network Diagnostics for //{}/{} --", host, share));
+
+    // 1. Resolve IP via DNS natively
+    logs.push(format!("[DNS] Attempting native hostname resolution for '{}'...", host));
+    let resolved_addr = format!("{}:445", host);
+    match std::net::ToSocketAddrs::to_socket_addrs(&resolved_addr) {
+        Ok(addrs) => {
+            let list: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
+            if list.is_empty() {
+                logs.push("[DNS] [WARN] Resolved address list is empty.".to_string());
+            } else {
+                logs.push(format!("[DNS] [SUCCESS] Resolved IPs: {:?}", list));
+            }
+        }
+        Err(e) => {
+            logs.push(format!("[DNS] [FAIL] DNS resolution failed: {}", e));
+        }
+    }
+
+    // 2. Perform a TCP connection test to port 445
+    logs.push("[Socket] Attempting TCP socket connection on port 445 (SMB)...".to_string());
+    if let Ok(mut addrs) = std::net::ToSocketAddrs::to_socket_addrs(&resolved_addr) {
+        if let Some(addr) = addrs.next() {
+            match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) {
+                Ok(_) => {
+                    logs.push(format!("[Socket] [SUCCESS] Connected successfully to {}", addr));
+                }
+                Err(e) => {
+                    logs.push(format!("[Socket] [FAIL] Connection failed: {}", e));
+                }
+            }
+        } else {
+            logs.push("[Socket] [FAIL] No address could be resolved.".to_string());
+        }
+    } else {
+        logs.push("[Socket] [FAIL] Invalid host/port combination.".to_string());
+    }
+
+    // 3. Try execution of ping for latency estimation
+    #[cfg(target_os = "macos")]
+    {
+        logs.push("[System] Running ping to measure latency...".to_string());
+        if let Ok(output) = Command::new("ping").args(["-c", "3", "-t", "2", &host]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if !stdout.is_empty() {
+                logs.push(format!("[Ping Output]\n{}", stdout));
+            } else {
+                logs.push("[Ping] No output returned.".to_string());
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        logs.push("[System] Running ping to measure latency...".to_string());
+        if let Ok(output) = Command::new("ping").args(["-n", "3", "-w", "2000", &host]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if !stdout.is_empty() {
+                logs.push(format!("[Ping Output]\n{}", stdout));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        logs.push("[System] Running ping to measure latency...".to_string());
+        if let Ok(output) = Command::new("ping").args(["-c", "3", "-W", "2", &host]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if !stdout.is_empty() {
+                logs.push(format!("[Ping Output]\n{}", stdout));
+            }
+        }
+    }
+
+    Ok(logs.join("\n"))
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -603,6 +772,9 @@ fn main() {
             open_in_system_player,
             open_in_vlc,
             open_in_iina,
+            check_path_exists,
+            checkPathExists,
+            run_samba_diagnostic,
             db::get_all_media,
             db::save_media,
             db::update_watch_progress,

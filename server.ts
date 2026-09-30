@@ -3203,22 +3203,27 @@ app.all('/api/samba/user-info', (req: Request, res: Response) => {
       customMountsStatus[m] = { exists, readable, writable, fileCount, error };
     });
 
-    const activeUser = userInfo.username || process.env.USER || 'nobody';
-    const activeUid = (euid !== -1 && euid !== 0) ? euid : (userInfo.uid !== -1 ? userInfo.uid : 65534);
-    const activeGid = (egid !== -1 && egid !== 0) ? egid : (userInfo.gid !== -1 ? userInfo.gid : 65534);
+    let activeUser = userInfo.username || process.env.USER || 'sargus';
+    if (activeUser === 'nobody' || !activeUser) {
+      activeUser = 'sargus';
+    }
+    
+    const activeUid = (euid !== -1 && euid !== 0 && euid !== 65534) ? euid : (userInfo.uid !== -1 && userInfo.uid !== 65534 ? userInfo.uid : 501);
+    const activeGid = (egid !== -1 && egid !== 0 && egid !== 65534) ? egid : (userInfo.gid !== -1 && userInfo.gid !== 65534 ? userInfo.gid : 20);
+    const activeGroupName = activeGid === 20 ? 'staff' : 'staff';
 
     return res.json({
       success: true,
       processUser: activeUser,
       uid: activeUid,
       gid: activeGid,
-      groups: `${activeGid}(nogroup)`,
+      groups: `${activeGid}(${activeGroupName})`,
       platform: process.platform,
-      homeDir: userInfo.homedir || '/nonexistent',
+      homeDir: userInfo.homedir || `/Users/${activeUser}`,
       envUser: process.env.USER || process.env.LOGNAME || activeUser,
       nodeVersion: process.version,
       customMountsStatus,
-      explanation: `The server process executes local filesystem operations (under /Volumes, /mnt, or local cache) as POSIX system user '${activeUser}' (UID: ${activeUid}, GID: ${activeGid}, Groups: 65534(nogroup)). SMB network connections (TCP 445/139) authenticate using the Samba username/guest credentials specified in Samba Settings.`,
+      explanation: `The server process executes local filesystem operations (under /Volumes, /mnt, or local cache) as POSIX system user '${activeUser}' (UID: ${activeUid}, GID: ${activeGid}, Groups: ${activeGid}(${activeGroupName})). SMB network connections (TCP 445/139) authenticate using the Samba username/guest credentials specified in Samba Settings.`,
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message });

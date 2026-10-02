@@ -38,6 +38,7 @@ import {
 import { SambaConfig, CustomMountPath } from '../types';
 import { VolumeMountInfo, checkPathExists, PathExistsResult, runSambaNetworkProbe, checkMountFsAccess, verifyPath } from '../utils/tauriBridge';
 import { normalizeCustomMountPaths } from '../utils/customMountUtils';
+import { SambaPathDiagnosticCard } from './SambaPathDiagnosticCard';
 
 interface SambaMountHubProps {
   sambaConfig: SambaConfig;
@@ -717,6 +718,11 @@ export const SambaMountHub: React.FC<SambaMountHubProps> = ({
           )}
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* SECTION: MOUNTPOINT PERMISSIONS ACCESS DIAGNOSTICS */}
+      {/* ========================================================================= */}
+      <SambaPathDiagnosticCard className="mb-6" />
 
       {/* ========================================================================= */}
       {/* SECTION: MOUNT PATH FS.ACCESS DIAGNOSTIC PANEL & TROUBLESHOOTER */}

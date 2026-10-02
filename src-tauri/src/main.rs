@@ -675,6 +675,78 @@ async fn checkPathExists(path: String) -> Result<PathCheckResult, String> {
 }
 
 #[tauri::command]
+async fn fix_path_permissions(path: String, username: String) -> Result<String, String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    let mut logs = Vec::new();
+    logs.push(format!("Attempting to fix permissions on: {}", path));
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Try to run chmod -R 755
+        match std::process::Command::new("chmod")
+            .args(["-R", "755", &path])
+            .output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        logs.push("[chmod] Successfully updated permissions to 755.".to_string());
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        logs.push(format!("[chmod] Warning: {}", stderr));
+                    }
+                }
+                Err(e) => {
+                    logs.push(format!("[chmod] Error: {}", e));
+                }
+            }
+
+        // Try to run chown to the active username
+        if !username.is_empty() {
+            match std::process::Command::new("chown")
+                .args(["-R", &username, &path])
+                .output() {
+                    Ok(output) => {
+                        if output.status.success() {
+                            logs.push(format!("[chown] Successfully set owner to {}.", username));
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            logs.push(format!("[chown] Warning: {}", stderr));
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("[chown] Error: {}", e));
+                    }
+                }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Try to take ownership or grant permissions using icacls
+        match std::process::Command::new("icacls")
+            .args([&path, "/grant", "Everyone:(OI)(CI)F", "/T"])
+            .output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        logs.push("[icacls] Successfully granted Full Control to Everyone.".to_string());
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        logs.push(format!("[icacls] Warning: {}", stderr));
+                    }
+                }
+                Err(e) => {
+                    logs.push(format!("[icacls] Error: {}", e));
+                }
+            }
+    }
+
+    Ok(logs.join("\n"))
+}
+
+#[tauri::command]
 async fn run_samba_diagnostic(host: String, share: String) -> Result<String, String> {
     let mut logs = Vec::new();
     logs.push(format!("-- SambaVault Native Network Diagnostics for //{}/{} --", host, share));
@@ -774,6 +846,7 @@ fn main() {
             open_in_iina,
             check_path_exists,
             checkPathExists,
+            fix_path_permissions,
             run_samba_diagnostic,
             db::get_all_media,
             db::save_media,

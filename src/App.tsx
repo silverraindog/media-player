@@ -74,6 +74,7 @@ import { thumbnailStorage } from './utils/thumbnailStorage';
 import { detectDuplicatesAndVersionBranches } from './utils/duplicateDetector';
 import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
+import { permissionsManager } from './utils/permissionsManager';
 import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl, diagnoseSambaPath } from './utils/pathSanitizer';
 import { categorizeMediaWithRetry } from './utils/metadataCategorizer';
 import { localDbFallback } from './utils/localDatabaseFallback';
@@ -486,8 +487,12 @@ function App() {
   const [selectedMediaType, setSelectedMediaType] = useState<'all' | MediaType>('all');
   const [serverVersionInfo, setServerVersionInfo] = useState<any>(null);
 
-  // Check for new version on mount
+  // Check for new version and register TCC probe on mount
   useEffect(() => {
+    try {
+      permissionsManager.requestAndRegisterFullDiskAccess().catch(() => {});
+    } catch (_) {}
+
     const checkVersion = async () => {
       try {
         // 1. Fetch build-time metadata from public/version.json
@@ -1678,6 +1683,10 @@ function App() {
             const beyond25 = Math.max(0, count - 25);
 
             setSyncCurrentPath(`[Samba ${effectiveSafeScan ? 'SafeScan' : 'FastScan'}] Scanned ${count} files (${currentFile})`);
+
+            if (currentFile) {
+              logger.info(`[Scanner] Traversing: ${resolvedScanPath}/${clean} (Item #${count})`, 'Scanner');
+            }
 
             // Dispatch file discovery event in real-time for D3 layout visualization
             try {

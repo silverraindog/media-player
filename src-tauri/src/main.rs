@@ -78,10 +78,29 @@ pub mod macos_permissions {
         }
     }
 
-    /// Directly opens macOS System Settings to Privacy & Security > Full Disk Access without intrusive popups.
+    /// Opens macOS System Settings to Privacy & Security > Full Disk Access after triggering TCC registration probe.
     #[tauri::command]
     pub async fn request_full_disk_access_and_register() -> Result<String, String> {
-        open_macos_security_privacy().await
+        #[cfg(target_os = "macos")]
+        {
+            // Perform safe read probes on TCC paths so macOS registers SambaVault in System Settings application list
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
+            let candidate_probes = [
+                std::path::PathBuf::from(&home).join("Library").join("Safari"),
+                std::path::PathBuf::from("/Library/Application Support/com.apple.TCC"),
+                std::path::PathBuf::from("/Volumes"),
+            ];
+            for p in &candidate_probes {
+                let _ = std::fs::read_dir(p);
+            }
+
+            open_macos_security_privacy().await
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok("Not on macOS.".to_string())
+        }
     }
 }
 
@@ -100,6 +119,8 @@ pub struct ScannedFileItem {
 pub struct ScanProgressEvent {
     pub scanned_count: usize,
     pub current_file: String,
+    pub current_path: String,
+    pub is_dir: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -324,7 +345,7 @@ async fn perform_fast_scan(
         || std::env::var("DEBUG_WALK").map(|v| v == "1" || v == "true").unwrap_or(false);
 
     let walker = WalkDir::new(&resolved_path)
-        .follow_links(false)
+        .follow_links(true)
         .max_depth(depth_limit)
         .into_iter();
 
@@ -381,18 +402,16 @@ async fn perform_fast_scan(
         let is_dir = metadata.is_dir();
         let size = if is_dir { 0 } else { metadata.len() };
 
-        if debug_enabled && scanned_count % 100 == 0 {
-            eprintln!("[WalkDir Progress] Scanned item #{}: {}", scanned_count + 1, rel_path);
-        }
-
         scanned_count += 1;
 
-        if scanned_count % 50 == 0 || scanned_count == 1 {
+        if scanned_count % 5 == 0 || is_dir || scanned_count == 1 {
             let _ = window.emit(
                 "scan-progress",
                 ScanProgressEvent {
                     scanned_count,
                     current_file: rel_path.clone(),
+                    current_path: full_path_str.clone(),
+                    is_dir,
                 },
             );
         }
@@ -654,7 +673,7 @@ async fn scan_samba_volume(
     let mut scanned_count = 0;
 
     let walker = WalkDir::new(&resolved_path)
-        .follow_links(false)
+        .follow_links(true)
         .max_depth(depth_limit)
         .into_iter();
     for entry_res in walker {

@@ -630,6 +630,8 @@ export const performFastScan = async (
               const parts = clean.split('/').filter(Boolean);
               const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : resolvedTarget;
               const depth = parts.length > 1 ? parts.length - 1 : 0;
+              const fullPath = event.payload.current_path || `${resolvedTarget}/${clean}`;
+              logger.info(`[Scanner] Traversing: "${fullPath}" (Item #${count})`, 'Scanner');
               console.log(
                 `[performFastScan:StreamEvent #${streamedEventCount}] Visited dir: "${dir}" | Depth: ${depth} | Discovered items: ${count} | Item: "${file}"`
               );

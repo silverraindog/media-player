@@ -391,12 +391,25 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               type="button"
               onClick={async () => {
                 try {
-                  // @ts-ignore
-                  const { invoke } = window.__TAURI__;
-                  const res = await invoke('diagnostic_check_full_disk_access');
-                  alert(res);
-                } catch (e) {
-                  console.error(e);
+                  let resText = '';
+                  if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+                    // @ts-ignore
+                    const { invoke } = await import('@tauri-apps/api/tauri');
+                    resText = await invoke('diagnostic_check_full_disk_access');
+                  } else {
+                    resText = 'Web Environment: Local permissions ready.';
+                  }
+                  setFdaToast({
+                    type: 'success',
+                    message: resText,
+                  });
+                } catch (e: any) {
+                  const errMsg = e?.message || String(e);
+                  console.error('FDA Diagnostic error:', errMsg);
+                  setFdaToast({
+                    type: 'error',
+                    message: `FDA Diagnostic check failed: ${errMsg}`,
+                  });
                   setIsHelpModalOpen(true);
                 }
               }}
@@ -405,7 +418,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <Activity className="w-3.5 h-3.5 text-indigo-400" />
               <span>Run FDA Diagnostic</span>
             </button>
-            <PermissionHelpModal isOpen={isHelpModalOpen} onClose={() => setIsHelpModalOpen(false)} />
+            <PermissionHelpModal
+              isOpen={isHelpModalOpen}
+              onClose={() => setIsHelpModalOpen(false)}
+              diagnosticError={fdaToast?.type === 'error' ? fdaToast.message : undefined}
+            />
             <button
               type="button"
               onClick={handleOpenSecuritySettings}

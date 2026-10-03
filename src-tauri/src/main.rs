@@ -358,13 +358,15 @@ fn generate_media_id(path: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn scan_and_import_volumes(
+async fn scan_and_import_volumes(
     app_handle: tauri::AppHandle,
-    mount_paths: Vec<String>,
+    mount_paths: Option<Vec<String>>,
+    mountPaths: Option<Vec<String>>,
 ) -> Result<Vec<String>, String> {
+    let paths = mount_paths.or(mountPaths).unwrap_or_default();
     let mut results = Vec::new();
 
-    for path_str in mount_paths {
+    for path_str in paths {
         let path = PathBuf::from(&path_str);
         
         // 1. Test permissions

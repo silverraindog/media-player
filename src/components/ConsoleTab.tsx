@@ -24,6 +24,7 @@ import {
   ChevronUp,
   Flame,
   Code,
+  ExternalLink,
 } from 'lucide-react';
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident, SambaConfig } from '../types';
 import * as d3 from 'd3';
@@ -54,6 +55,7 @@ import {
 } from '../utils/scanPathDebugger';
 import { PathInspectorView } from './PathInspectorView';
 import { PathTesterModal } from './PathTesterModal';
+import { permissionsManager } from '../utils/permissionsManager';
 
 interface D3SambaTreeVisualizerProps {
   data: any;
@@ -2173,6 +2175,27 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* macOS Full Disk Access Guidance & Quick Trigger */}
+              <div className="p-3.5 bg-amber-950/30 border border-amber-500/40 rounded-xl space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>macOS Full Disk Access (FDA)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => permissionsManager.openSecurityAndPrivacy()}
+                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[10.5px] font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Open Security &amp; Privacy</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-amber-200/90 leading-relaxed font-mono">
+                  If scanning local mounts or <code className="text-cyan-300">/Volumes</code> fails silently, grant Full Disk Access to SambaVault (or Terminal / VS Code) in <strong> &gt; System Settings &gt; Privacy &amp; Security &gt; Full Disk Access</strong>.
+                </p>
               </div>
 
               {/* Pre-validation live suite */}

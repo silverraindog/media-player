@@ -7,13 +7,13 @@ import {
 
 /**
  * Unit test suite for diagnoseSambaPath, sanitizeSambaPath, sanitizeFilename, and calculatePathCleanlinessScore.
- * Covers:
- * 1. Multiple network slashes ('//', '///', '\\\\', '\\\\\\') & UNC prefixes (e.g. '//192.168.1.25/media/Series')
- * 2. Windows drive letters ('C:\\', 'D:/', 'E:\\Movies\\')
- * 3. Trailing slashes and leading/redundant slashes ('folder///', '/share/media/')
- * 4. Mixed slash directions ('Series\\Season 1/Episode 1\\video.mkv')
- * 5. Parenthesis and bracket balancing ('Stranger Things (2016', 'Show [2020')
- * 6. Path anomaly diagnosis & cleanliness score calculations
+ * Comprehensive test coverage for:
+ * 1. Mixed-OS environment path resolution (macOS /Volumes/, Linux /mnt/ and /media/, Windows drives C:\, D:\)
+ * 2. Scanner '//' prefix resolution (UNC IPv4, hostnames, FQDNs, redundant leading/internal slashes)
+ * 3. Cross-platform delimiter normalizations (mixed '/' and '\', multi-slash concatenation during recursive scans)
+ * 4. Trailing slash and path boundary normalization
+ * 5. Parenthesis and bracket balancing across filesystem segments
+ * 6. Anomaly diagnostics (diagnoseSambaPath) & character cleanliness scoring (calculatePathCleanlinessScore)
  */
 export function runPathSanitizerTests(): {
   passed: number;
@@ -21,9 +21,11 @@ export function runPathSanitizerTests(): {
   results: Array<{ name: string; success: boolean; error?: string }>;
 } {
   const tests = [
-    // 1. Multiple network slashes & UNC prefixes
+    // ---------------------------------------------------------
+    // 1. Scanner '//' Prefix Resolution in Mixed-OS Environments
+    // ---------------------------------------------------------
     {
-      name: 'Sanitize standard UNC prefix with IP: //192.168.1.25/media/Series/Stranger Things (2016',
+      name: 'Mixed-OS UNC: Sanitize IPv4 double slash prefix //192.168.1.25/media/Series/Stranger Things (2016',
       fn: () => {
         const res = sanitizeSambaPath('//192.168.1.25/media/Series/Stranger Things (2016');
         if (res !== 'Series/Stranger Things (2016)') {
@@ -32,7 +34,25 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize multiple triple leading slashes: ///192.168.1.25/media/Series/Breaking Bad',
+      name: 'Mixed-OS UNC: Sanitize hostname double slash prefix //MEDIA-SERVER/media/Movies/Dune (2021)',
+      fn: () => {
+        const res = sanitizeSambaPath('//MEDIA-SERVER/media/Movies/Dune (2021)');
+        if (res !== 'Movies/Dune (2021)') {
+          throw new Error(`Expected 'Movies/Dune (2021)', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Mixed-OS UNC: Sanitize FQDN double slash prefix //nas.local.lan/vault/Documentaries/Planet Earth',
+      fn: () => {
+        const res = sanitizeSambaPath('//nas.local.lan/vault/Documentaries/Planet Earth');
+        if (res !== 'Documentaries/Planet Earth') {
+          throw new Error(`Expected 'Documentaries/Planet Earth', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Mixed-OS UNC: Sanitize triple leading slashes ///192.168.1.25/media/Series/Breaking Bad',
       fn: () => {
         const res = sanitizeSambaPath('///192.168.1.25/media/Series/Breaking Bad');
         if (res !== 'Series/Breaking Bad') {
@@ -41,7 +61,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize Windows double backslash UNC: \\\\192.168.1.25\\media\\Series\\Stranger Things (2016',
+      name: 'Mixed-OS UNC: Sanitize Windows double backslash prefix \\\\192.168.1.25\\media\\Series\\Stranger Things (2016',
       fn: () => {
         const res = sanitizeSambaPath('\\\\192.168.1.25\\media\\Series\\Stranger Things (2016');
         if (res !== 'Series/Stranger Things (2016)') {
@@ -50,18 +70,60 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize smb:// URI prefix with redundant slashes: smb://vault-server/media//Movies/Dune (2021)',
+      name: 'Mixed-OS UNC: Sanitize smb:// protocol prefix smb://192.168.1.25/media/Anime/Attack on Titan',
       fn: () => {
-        const res = sanitizeSambaPath('smb://vault-server/media//Movies/Dune (2021)');
-        if (res !== 'Movies/Dune (2021)') {
-          throw new Error(`Expected 'Movies/Dune (2021)', got '${res}'`);
+        const res = sanitizeSambaPath('smb://192.168.1.25/media/Anime/Attack on Titan');
+        if (res !== 'Anime/Attack on Titan') {
+          throw new Error(`Expected 'Anime/Attack on Titan', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Mixed-OS UNC: Handle recursive scan join creating double slashes //192.168.1.25/media//Series//Season 1',
+      fn: () => {
+        const res = sanitizeSambaPath('//192.168.1.25/media//Series//Season 1');
+        if (res !== 'Series/Season 1') {
+          throw new Error(`Expected 'Series/Season 1', got '${res}'`);
         }
       },
     },
 
-    // 2. Windows drive letters
+    // ---------------------------------------------------------
+    // 2. Mixed-OS Mount Paths (macOS /Volumes/, Linux /mnt/ & /media/)
+    // ---------------------------------------------------------
     {
-      name: 'Sanitize Windows drive letter path with backslashes: C:\\Users\\Media\\Movies\\Inception',
+      name: 'macOS Mount: Strip /Volumes/<share>/ prefix (/Volumes/media/Movies/Blade Runner 2049)',
+      fn: () => {
+        const res = sanitizeSambaPath('/Volumes/media/Movies/Blade Runner 2049');
+        if (res !== 'Movies/Blade Runner 2049') {
+          throw new Error(`Expected 'Movies/Blade Runner 2049', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Linux Mount: Strip /mnt/<share>/ prefix (/mnt/vault/Series/Severance [2022])',
+      fn: () => {
+        const res = sanitizeSambaPath('/mnt/vault/Series/Severance [2022]');
+        if (res !== 'Series/Severance [2022]') {
+          throw new Error(`Expected 'Series/Severance [2022]', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Linux Mount: Strip /media/<share>/ prefix (/media/samba_share/Music/Pink Floyd)',
+      fn: () => {
+        const res = sanitizeSambaPath('/media/samba_share/Music/Pink Floyd');
+        if (res !== 'Music/Pink Floyd') {
+          throw new Error(`Expected 'Music/Pink Floyd', got '${res}'`);
+        }
+      },
+    },
+
+    // ---------------------------------------------------------
+    // 3. Windows Drive Letters & Cross-OS Slash Directions
+    // ---------------------------------------------------------
+    {
+      name: 'Windows Path: Sanitize drive letter with backslashes C:\\Users\\Media\\Movies\\Inception',
       fn: () => {
         const res = sanitizeSambaPath('C:\\Users\\Media\\Movies\\Inception');
         if (res !== 'Users/Media/Movies/Inception') {
@@ -70,7 +132,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize Windows drive letter path with forward slashes: D:/Media/Series/Westworld (2016',
+      name: 'Windows Path: Sanitize drive letter with forward slashes D:/Media/Series/Westworld (2016',
       fn: () => {
         const res = sanitizeSambaPath('D:/Media/Series/Westworld (2016');
         if (res !== 'Media/Series/Westworld (2016)') {
@@ -79,7 +141,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize Windows drive root with trailing slash: E:\\',
+      name: 'Windows Path: Sanitize drive root with trailing slash E:\\',
       fn: () => {
         const res = sanitizeSambaPath('E:\\');
         if (res !== '') {
@@ -87,39 +149,8 @@ export function runPathSanitizerTests(): {
         }
       },
     },
-
-    // 3. Trailing slashes and redundant consecutive slashes
     {
-      name: 'Sanitize path with trailing slash: /Volumes/media/Series/Movies/',
-      fn: () => {
-        const res = sanitizeSambaPath('/Volumes/media/Series/Movies/');
-        if (res !== 'Series/Movies') {
-          throw new Error(`Expected 'Series/Movies', got '${res}'`);
-        }
-      },
-    },
-    {
-      name: 'Sanitize path with multiple trailing slashes: //192.168.1.50/vault/Music/Pink Floyd///',
-      fn: () => {
-        const res = sanitizeSambaPath('//192.168.1.50/vault/Music/Pink Floyd///');
-        if (res !== 'Music/Pink Floyd') {
-          throw new Error(`Expected 'Music/Pink Floyd', got '${res}'`);
-        }
-      },
-    },
-    {
-      name: 'Sanitize redundant internal slashes: Series///Season 1////Episode 01.mkv',
-      fn: () => {
-        const res = sanitizeSambaPath('Series///Season 1////Episode 01.mkv');
-        if (res !== 'Series/Season 1/Episode 01.mkv') {
-          throw new Error(`Expected 'Series/Season 1/Episode 01.mkv', got '${res}'`);
-        }
-      },
-    },
-
-    // 4. Mixed slash directions
-    {
-      name: 'Sanitize mixed forward and backward slashes: Series\\Season 1/Episode 1\\video.mkv',
+      name: 'Mixed Slashes: Sanitize alternating slashes Series\\Season 1/Episode 1\\video.mkv',
       fn: () => {
         const res = sanitizeSambaPath('Series\\Season 1/Episode 1\\video.mkv');
         if (res !== 'Series/Season 1/Episode 1/video.mkv') {
@@ -128,7 +159,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize mixed UNC with backslashes and forward slashes: //192.168.1.25\\media/Series\\Show',
+      name: 'Mixed Slashes: Sanitize UNC with backslashes & forward slashes //192.168.1.25\\media/Series\\Show',
       fn: () => {
         const res = sanitizeSambaPath('//192.168.1.25\\media/Series\\Show');
         if (res !== 'Series/Show') {
@@ -137,9 +168,42 @@ export function runPathSanitizerTests(): {
       },
     },
 
-    // 5. diagnoseSambaPath anomaly detection
+    // ---------------------------------------------------------
+    // 4. Trailing Slashes and Redundant Consecutives
+    // ---------------------------------------------------------
     {
-      name: 'diagnoseSambaPath detects multiple network slashes on //192.168.1.25/media/Series',
+      name: 'Trailing Slashes: Sanitize single trailing slash /Volumes/media/Series/Movies/',
+      fn: () => {
+        const res = sanitizeSambaPath('/Volumes/media/Series/Movies/');
+        if (res !== 'Series/Movies') {
+          throw new Error(`Expected 'Series/Movies', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Trailing Slashes: Sanitize multiple trailing slashes //192.168.1.50/vault/Music/Pink Floyd///',
+      fn: () => {
+        const res = sanitizeSambaPath('//192.168.1.50/vault/Music/Pink Floyd///');
+        if (res !== 'Music/Pink Floyd') {
+          throw new Error(`Expected 'Music/Pink Floyd', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Redundant Slashes: Sanitize excessive internal slashes Series///Season 1////Episode 01.mkv',
+      fn: () => {
+        const res = sanitizeSambaPath('Series///Season 1////Episode 01.mkv');
+        if (res !== 'Series/Season 1/Episode 01.mkv') {
+          throw new Error(`Expected 'Series/Season 1/Episode 01.mkv', got '${res}'`);
+        }
+      },
+    },
+
+    // ---------------------------------------------------------
+    // 5. diagnoseSambaPath Anomaly Diagnostics & Anomaly Flags
+    // ---------------------------------------------------------
+    {
+      name: 'diagnoseSambaPath: Detects double slash anomaly on //192.168.1.25/media/Series',
       fn: () => {
         const diag = diagnoseSambaPath('//192.168.1.25/media/Series');
         if (!diag.hasDoubleSlash || !diag.isSuspicious) {
@@ -151,7 +215,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'diagnoseSambaPath detects mixed slashes on Series\\Season 1/Episode 1',
+      name: 'diagnoseSambaPath: Detects mixed slashes on Series\\Season 1/Episode 1',
       fn: () => {
         const diag = diagnoseSambaPath('Series\\Season 1/Episode 1');
         if (!diag.hasMixedSlashes || !diag.isSuspicious) {
@@ -160,7 +224,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'diagnoseSambaPath detects unclosed parentheses in Stranger Things (2016',
+      name: 'diagnoseSambaPath: Detects unclosed parentheses in Stranger Things (2016',
       fn: () => {
         const diag = diagnoseSambaPath('Series/Stranger Things (2016/Episode 1.mkv');
         if (!diag.hasUnclosedParens || !diag.isSuspicious) {
@@ -169,7 +233,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'diagnoseSambaPath validates clean path with high cleanliness score',
+      name: 'diagnoseSambaPath: Validates clean normalized path with high cleanliness score',
       fn: () => {
         const diag = diagnoseSambaPath('Series/Stranger Things (2016)/Season 1/Episode 1.mkv');
         if (diag.hasDoubleSlash || diag.hasMixedSlashes || diag.hasUnclosedParens || diag.isSuspicious) {
@@ -181,9 +245,11 @@ export function runPathSanitizerTests(): {
       },
     },
 
-    // 6. Filename illegal characters & bracket balancing
+    // ---------------------------------------------------------
+    // 6. Filename Sanitization & Illegal Character Replacement
+    // ---------------------------------------------------------
     {
-      name: 'Sanitize filename balancing unclosed parentheses and square brackets',
+      name: 'Sanitize Filename: Balance unclosed parentheses and square brackets',
       fn: () => {
         const res1 = sanitizeFilename('Stranger Things (2016');
         if (res1 !== 'Stranger Things (2016)') {
@@ -196,7 +262,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize filename replacing colon with spaced hyphen',
+      name: 'Sanitize Filename: Replace colons with spaced hyphen for SMB compatibility',
       fn: () => {
         const res = sanitizeFilename('Dune: Part Two (2024)');
         if (res !== 'Dune - Part Two (2024)') {
@@ -205,7 +271,7 @@ export function runPathSanitizerTests(): {
       },
     },
     {
-      name: 'Sanitize filename removing illegal filesystem characters: < > " ? *',
+      name: 'Sanitize Filename: Strip illegal Windows/Samba characters (< > " ? *)',
       fn: () => {
         const res = sanitizeFilename('Movie<?>*"Special".mp4');
         if (res.includes('<') || res.includes('>') || res.includes('?') || res.includes('*') || res.includes('"')) {
@@ -214,9 +280,11 @@ export function runPathSanitizerTests(): {
       },
     },
 
-    // 7. Cleanliness score penalty calculations
+    // ---------------------------------------------------------
+    // 7. Cleanliness Scoring Tests
+    // ---------------------------------------------------------
     {
-      name: 'calculatePathCleanlinessScore penalizes double slash and mixed slashes',
+      name: 'Cleanliness Score: Penalize leading double slashes and mixed slashes',
       fn: () => {
         const cleanScore = calculatePathCleanlinessScore('Series/Show/Episode.mkv');
         const dirtyScore = calculatePathCleanlinessScore('//192.168.1.25\\media/Series//Show (2024');

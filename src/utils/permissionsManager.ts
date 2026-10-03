@@ -13,6 +13,7 @@ export interface FullDiskAccessStatus {
   details?: string;
   systemSettingsPath: string;
   lastChecked: number;
+  isSimulated?: boolean;
 }
 
 export interface PermissionInstructions {
@@ -50,10 +51,51 @@ class PermissionsManager {
   }
 
   /**
+   * Checks whether the client environment is macOS.
+   */
+  public isClientMacOS(): boolean {
+    if (typeof window === 'undefined') return false;
+    
+    // Check manual override/simulation flag
+    const simulated = localStorage.getItem('sambavault_fda_simulate_macos');
+    if (simulated === 'true') return true;
+    if (simulated === 'false') return false;
+
+    // Check navigator properties
+    const nav = navigator as any;
+    const userAgent = (nav.userAgent || '').toLowerCase();
+    const platform = (nav.platform || '').toLowerCase();
+    const uaPlatform = (nav.userAgentData?.platform || '').toLowerCase();
+
+    return (
+      userAgent.includes('macintosh') ||
+      userAgent.includes('mac os x') ||
+      userAgent.includes('mac_powerpc') ||
+      platform.includes('mac') ||
+      uaPlatform.includes('mac')
+    );
+  }
+
+  /**
+   * Toggle or set simulation mode for testing macOS permissions in any browser.
+   */
+  public setSimulateMacOS(enabled: boolean): void {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sambavault_fda_simulate_macos', enabled ? 'true' : 'false');
+    }
+    this.checkFullDiskAccess(true);
+  }
+
+  public isSimulatedMacOS(): boolean {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('sambavault_fda_simulate_macos') === 'true';
+  }
+
+  /**
    * Checks whether the application has Full Disk Access on macOS.
    */
   public async checkFullDiskAccess(forceRefresh = false): Promise<FullDiskAccessStatus> {
-    if (!forceRefresh && this.lastStatus && Date.now() - this.lastStatus.lastChecked < 5000) {
+    if (!forceRefresh && this.lastStatus && Date.now() - this.lastStatus.lastChecked < 4000) {
       return this.lastStatus;
     }
 
@@ -62,6 +104,9 @@ class PermissionsManager {
     }
 
     this.checkingPromise = (async () => {
+      const isClientMac = this.isClientMacOS();
+      const isSimulated = this.isSimulatedMacOS();
+
       let isTauri = false;
       try {
         isTauri = Boolean((window as any).__TAURI__ || (window as any).__TAURI_METADATA__);
@@ -73,13 +118,14 @@ class PermissionsManager {
           const { invoke } = await import('@tauri-apps/api/tauri');
           const result = await invoke<any>('check_full_disk_access');
           const status: FullDiskAccessStatus = {
-            isMacOS: Boolean(result?.is_macos ?? result?.isMacOS),
+            isMacOS: Boolean(result?.is_macos ?? result?.isMacOS ?? isClientMac),
             hasFullDiskAccess: Boolean(result?.has_full_disk_access ?? result?.hasFullDiskAccess),
-            platform: result?.platform || 'macos',
+            platform: result?.platform || (isClientMac ? 'macos' : 'unknown'),
             checkedPath: result?.checked_path || result?.checkedPath || '/Volumes',
             details: result?.details || 'Tauri native TCC permission probe completed.',
             systemSettingsPath: result?.system_settings_path || 'System Settings > Privacy & Security > Full Disk Access',
             lastChecked: Date.now(),
+            isSimulated,
           };
           this.updateStatus(status);
           return status;
@@ -88,19 +134,28 @@ class PermissionsManager {
         }
       }
 
-      // 2. Try HTTP backend proxy endpoint
+      // 2. Try HTTP backend proxy endpoint with clientPlatform query hint
       try {
-        const res = await fetch('/api/system/macos-permissions');
+        const clientHint = isClientMac ? 'macos' : 'other';
+        const res = await fetch(`/api/system/macos-permissions?clientPlatform=${clientHint}`);
         if (res.ok) {
           const data = await res.json();
+          const effectiveIsMac = isClientMac || Boolean(data.isMacOS);
+          const effectiveHasAccess = isClientMac && !data.isMacOS
+            ? false // If client is Mac but server is Linux proxy without confirmed TCC, flag as pending
+            : Boolean(data.hasFullDiskAccess);
+
           const status: FullDiskAccessStatus = {
-            isMacOS: Boolean(data.isMacOS),
-            hasFullDiskAccess: Boolean(data.hasFullDiskAccess),
-            platform: data.platform || 'macos',
-            checkedPath: data.checkedPath,
-            details: data.details,
+            isMacOS: effectiveIsMac,
+            hasFullDiskAccess: effectiveHasAccess,
+            platform: data.platform || (isClientMac ? 'macos' : 'browser'),
+            checkedPath: data.checkedPath || (effectiveIsMac ? '/Volumes' : ''),
+            details: data.details || (effectiveIsMac
+              ? 'macOS Full Disk Access verification required for /Volumes traversal.'
+              : 'Full Disk Access is only enforced on macOS.'),
             systemSettingsPath: data.systemSettingsPath || 'System Settings > Privacy & Security > Full Disk Access',
             lastChecked: Date.now(),
+            isSimulated,
           };
           this.updateStatus(status);
           return status;
@@ -109,20 +164,20 @@ class PermissionsManager {
         console.warn('[PermissionsManager] Backend /api/system/macos-permissions error:', httpErr);
       }
 
-      // 3. Fallback browser / platform detection
-      const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
-      const isMac = userAgent.includes('macintosh') || userAgent.includes('mac os x');
+      // 3. Fallback client-side resolution
       const fallbackStatus: FullDiskAccessStatus = {
-        isMacOS: isMac,
-        hasFullDiskAccess: !isMac, // Assume ok if not mac, prompt if mac
-        platform: isMac ? 'macos' : 'browser',
-        checkedPath: isMac ? '/Volumes' : '',
-        details: isMac
-          ? 'Browser preview mode: grant Full Disk Access to your local browser/runtime to scan /Volumes Samba mounts.'
+        isMacOS: isClientMac,
+        hasFullDiskAccess: !isClientMac, // If on Mac, default to pending (false) to ensure warning box is visible
+        platform: isClientMac ? 'macos' : 'browser',
+        checkedPath: isClientMac ? '/Volumes' : '',
+        details: isClientMac
+          ? 'macOS Security & Privacy requires Full Disk Access for Samba /Volumes mounts.'
           : 'Full Disk Access is only enforced on macOS.',
         systemSettingsPath: 'System Settings > Privacy & Security > Full Disk Access',
         lastChecked: Date.now(),
+        isSimulated,
       };
+
       this.updateStatus(fallbackStatus);
       return fallbackStatus;
     })().finally(() => {

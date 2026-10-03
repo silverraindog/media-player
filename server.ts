@@ -4381,15 +4381,31 @@ app.post('/api/samba/fix-permissions', async (req: Request, res: Response) => {
 // macOS Full Disk Access Permission Probe
 app.get('/api/system/macos-permissions', async (req: Request, res: Response) => {
   try {
-    const isMacOS = process.platform === 'darwin';
-    if (!isMacOS) {
+    const isClientMac = req.query.clientPlatform === 'macos' ||
+      (req.headers['user-agent'] || '').toLowerCase().includes('macintosh') ||
+      (req.headers['user-agent'] || '').toLowerCase().includes('mac os x');
+    const isServerMac = process.platform === 'darwin';
+
+    if (!isServerMac && !isClientMac) {
       return res.json({
         isMacOS: false,
         hasFullDiskAccess: true,
         platform: process.platform,
         checkedPath: '',
         details: 'Full Disk Access check is only applicable on macOS.',
-        systemSettingsPath: '',
+        systemSettingsPath: 'System Settings > Privacy & Security > Full Disk Access',
+      });
+    }
+
+    if (!isServerMac && isClientMac) {
+      // Client is Mac, server is web runtime (requires user to grant FDA to local runtime/browser)
+      return res.json({
+        isMacOS: true,
+        hasFullDiskAccess: false,
+        platform: 'macos',
+        checkedPath: '/Volumes',
+        details: 'macOS Security & Privacy (TCC) requires Full Disk Access for /Volumes and Samba network shares.',
+        systemSettingsPath: 'System Settings > Privacy & Security > Full Disk Access',
       });
     }
 

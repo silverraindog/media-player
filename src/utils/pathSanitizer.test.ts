@@ -3,6 +3,7 @@ import {
   diagnoseSambaPath,
   sanitizeFilename,
   calculatePathCleanlinessScore,
+  normalizeLeadingSlashes,
 } from './pathSanitizer';
 
 /**
@@ -24,6 +25,23 @@ export function runPathSanitizerTests(): {
     // ---------------------------------------------------------
     // 1. Scanner '//' Prefix Resolution in Mixed-OS Environments
     // ---------------------------------------------------------
+    {
+      name: 'normalizeLeadingSlashes: converts double or triple slashes to a single leading slash',
+      fn: () => {
+        const res1 = normalizeLeadingSlashes('//Volumes/media/Movies');
+        if (res1 !== '/Volumes/media/Movies') {
+          throw new Error(`Expected '/Volumes/media/Movies', got '${res1}'`);
+        }
+        const res2 = normalizeLeadingSlashes('\\\\Volumes\\media\\Series');
+        if (res2 !== '/Volumes/media/Series') {
+          throw new Error(`Expected '/Volumes/media/Series', got '${res2}'`);
+        }
+        const res3 = normalizeLeadingSlashes('///Volumes/media/Anime');
+        if (res3 !== '/Volumes/media/Anime') {
+          throw new Error(`Expected '/Volumes/media/Anime', got '${res3}'`);
+        }
+      },
+    },
     {
       name: 'Mixed-OS UNC: Sanitize IPv4 double slash prefix //192.168.1.25/media/Series/Stranger Things (2016',
       fn: () => {

@@ -48,6 +48,22 @@ export function sanitizeFilename(name: string): string {
 }
 
 /**
+ * Globally replaces any leading double-slashes (or multiple leading slashes/backslashes)
+ * with a single forward slash, ensuring absolute path resolution remains consistent
+ * before passing strings to the Rust scanner or backend filesystem calls.
+ * - Handles "//192.168.1.25/media" -> "/192.168.1.25/media"
+ * - Handles "\\\\Volumes\\media" -> "/Volumes/media"
+ * - Handles "///Volumes/media" -> "/Volumes/media"
+ */
+export function normalizeLeadingSlashes(inputPath: string): string {
+  if (!inputPath) return '';
+  // Convert all backslashes to forward slashes first
+  const normalized = inputPath.replace(/\\/g, '/');
+  // Globally replace any leading double or multiple slashes with a single slash
+  return normalized.replace(/^\/{2,}/, '/');
+}
+
+/**
  * Sanitizes a full relative or absolute path for Samba shares.
  * Automatically normalizes slashes, handles UNC network prefixes (e.g. "//192.168.1.25/media/"),
  * strips Windows drive letters, and balances unclosed brackets on every segment.
@@ -55,13 +71,13 @@ export function sanitizeFilename(name: string): string {
 export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsolutePrefix?: boolean }): string {
   if (!rawPath) return '';
 
-  let normalized = rawPath.replace(/\\/g, '/');
+  // 1. Globally replace any leading double-slashes with a single slash & normalize backslashes
+  let normalized = normalizeLeadingSlashes(rawPath);
 
-  // Strip raw UNC host & share prefixes if present e.g. "//192.168.1.25/media/Series/..." -> "Series/..."
+  // Strip raw UNC host & share prefixes if present e.g. "/192.168.1.25/media/Series/..." -> "Series/..."
   // or "smb://192.168.1.25/media/Series/..." -> "Series/..."
-  // Handles variable leading slashes: //, ///, \\\\, etc.
   const uncMatch = normalized.match(/^(?:smb:)?\/+([^\/]+)\/([^\/]+)(?:\/(.*))?$/i);
-  if (uncMatch) {
+  if (uncMatch && !options?.preserveAbsolutePrefix) {
     normalized = uncMatch[3] || '';
   }
 
@@ -80,8 +96,8 @@ export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsoluteP
 
   const result = sanitizedSegments.join('/');
 
-  if (options?.preserveAbsolutePrefix && rawPath.startsWith('/') && !result.startsWith('/')) {
-    return `/${result}`;
+  if (options?.preserveAbsolutePrefix && (rawPath.startsWith('/') || rawPath.startsWith('\\'))) {
+    return normalizeLeadingSlashes(`/${result}`);
   }
 
   return result;

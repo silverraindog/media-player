@@ -1,7 +1,7 @@
 // Helper to interact with native Tauri backend when running as desktop app,
 // with safe fallback when running in browser preview mode.
 import { logger } from './loggerService';
-import { sanitizeSambaPath } from './pathSanitizer';
+import { sanitizeSambaPath, normalizeLeadingSlashes } from './pathSanitizer';
 import { recordScanBatchDiscovered } from './scanPathDebugger';
 
 export interface VolumeMountInfo {
@@ -549,7 +549,7 @@ export function resolveLocalMountPath(inputPath: string, shareName = 'media'): s
   const raw = (inputPath || '').trim();
   if (!raw) return `/Volumes/${shareName}`;
 
-  let normalized = raw.replace(/\\/g, '/');
+  let normalized = normalizeLeadingSlashes(raw);
 
   // 1. Strip leading smb: protocol if present
   normalized = normalized.replace(/^smb:\/\//i, '');

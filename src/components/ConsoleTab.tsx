@@ -247,6 +247,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
 
   // Samba Traversability & Path Diagnostics States
+  const [onlyShowAccessBarriers, setOnlyShowAccessBarriers] = useState(false);
   const actualUserPath = (
     sambaConfig?.hostPath ||
     sambaConfig?.mountPath ||
@@ -272,18 +273,23 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      {/* ... (keep top banner) */}
-      
-      {/* Samba Traversability & Path Diagnostics Panel */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-md space-y-4">
-        {/* ... (keep header as is) */}
-        
-        {isDiagnosticExpanded && (
-          <div className="space-y-4">
-            {/* ... (render tab content) */}
-          </div>
-        )}
+      {/* Top Banner Header */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-md flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+            <button
+              onClick={() => setOnlyShowAccessBarriers(!onlyShowAccessBarriers)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2 cursor-pointer ${
+                onlyShowAccessBarriers
+                  ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                  : 'bg-slate-800 text-slate-300 border border-slate-700'
+              }`}
+            >
+              <ShieldAlert className="w-4 h-4" />
+              Path Audit ({lastScanErrors.length})
+            </button>
+        </div>
       </div>
+      {/* ... (rest of the content) */}
     </div>
   );
 };

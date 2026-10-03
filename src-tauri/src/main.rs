@@ -26,11 +26,29 @@ pub mod macos_permissions {
 
     /// Diagnostic check: attempts to read a protected path to verify FDA
     #[tauri::command]
+    pub async fn check_tcc_access() -> Result<bool, String> {
+        #[cfg(target_os = "macos")]
+        {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
+            let path = std::path::PathBuf::from(home).join("Documents");
+            match std::fs::read_dir(path) {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(true) // Not applicable
+        }
+    }
+
+    /// Diagnostic check: attempts to read a protected path to verify FDA
+    #[tauri::command]
     pub async fn diagnostic_check_full_disk_access() -> Result<String, String> {
         #[cfg(target_os = "macos")]
         {
             let path = "/Library/Application Support/com.apple.TCC/TCC.db";
-            match std::fs::read_dir(path) {
+            match std::fs::metadata(path) {
                 Ok(_) => Ok("Success: Full Disk Access is active (Successfully read TCC.db).".to_string()),
                 Err(e) => Err(format!("Access Denied: Full Disk Access may be disabled. Cannot read {}. Error: {}", path, e)),
             }
@@ -377,8 +395,11 @@ async fn perform_fast_scan(
         let entry = match entry_res {
             Ok(e) => e,
             Err(err) => {
-                if debug_enabled {
-                    eprintln!("[WalkDir Error] Path: {:?} | Error: {:?}", err.path(), err);
+                // Log specifically if it's a permission issue
+                if err.io_error().map_or(false, |io_err| io_err.kind() == std::io::ErrorKind::PermissionDenied) {
+                    eprintln!("[Scanner] [Permission Denied] Path: {:?} | Error: {:?}", err.path().unwrap_or(std::path::Path::new("unknown")), err);
+                } else if debug_enabled {
+                    eprintln!("[Scanner] [Error] Path: {:?} | Error: {:?}", err.path().unwrap_or(std::path::Path::new("unknown")), err);
                 }
                 continue;
             }
@@ -1142,6 +1163,7 @@ fn main() {
             db::update_watch_progress,
             ai::generate_synopsis,
             macos_permissions::diagnostic_check_full_disk_access,
+            macos_permissions::check_tcc_access,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

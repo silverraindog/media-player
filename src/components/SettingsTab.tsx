@@ -43,6 +43,7 @@ import {
   timeAndDaysToCron,
   cronToTimeAndDays,
 } from '../utils/syncScheduler';
+import { PermissionDiagnostics } from './PermissionDiagnostics';
 import { logger } from '../utils/loggerService';
 import { permissionsManager, FullDiskAccessStatus } from '../utils/permissionsManager';
 
@@ -381,32 +382,35 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                // @ts-ignore
-                const { invoke } = window.__TAURI__;
-                const res = await invoke('diagnostic_check_full_disk_access');
-                alert(res);
-              } catch (e) {
-                alert(e);
-              }
-            }}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow shrink-0"
-          >
-            <Activity className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Run FDA Diagnostic</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleOpenSecuritySettings}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow shrink-0"
-          >
-            <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Open System Settings</span>
-          </button>
+        <div className="flex flex-col gap-3">
+          <PermissionDiagnostics />
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  // @ts-ignore
+                  const { invoke } = window.__TAURI__;
+                  const res = await invoke('diagnostic_check_full_disk_access');
+                  alert(res);
+                } catch (e) {
+                  alert(e);
+                }
+              }}
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow shrink-0"
+            >
+              <Activity className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Run FDA Diagnostic</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenSecuritySettings}
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow shrink-0"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Open System Settings</span>
+            </button>
+          </div>
         </div>
       </div>
 

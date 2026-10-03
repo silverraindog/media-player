@@ -2298,19 +2298,6 @@ try {
     const p = path.join(SAMBA_SHARE_ROOT, folder);
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
   });
-
-  // Seed sample media files into SAMBA_SHARE_ROOT
-  const allSampleFiles = getComprehensiveSampleFilePaths();
-  allSampleFiles.forEach((rel) => {
-    const full = path.join(SAMBA_SHARE_ROOT, rel);
-    const dir = path.dirname(full);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(full)) {
-      try {
-        fs.writeFileSync(full, 'SAMPLE_MEDIA_PLACEHOLDER_DATA', 'utf8');
-      } catch (_) {}
-    }
-  });
 } catch (e) {
   console.warn('Failed to initialize SAMBA_SHARE_ROOT:', e);
 }
@@ -2321,7 +2308,7 @@ try {
  */
 function sanitizeSambaSegment(name: string): string {
   if (!name) return '';
-  return name
+  let cleaned = name
     .trim()
     .replace(/:/g, ' - ')
     .replace(/[\\/|]/g, '-')
@@ -2331,11 +2318,37 @@ function sanitizeSambaSegment(name: string): string {
     .replace(/-{2,}/g, '-')
     .replace(/^[.\s]+|[.\s]+$/g, '')
     .trim();
+
+  // Balance unclosed parenthesis e.g. "Stranger Things (2016" -> "Stranger Things (2016)"
+  const openParen = (cleaned.match(/\(/g) || []).length;
+  const closeParen = (cleaned.match(/\)/g) || []).length;
+  if (openParen > closeParen) {
+    cleaned = cleaned + ')'.repeat(openParen - closeParen);
+  }
+
+  const openBracket = (cleaned.match(/\[/g) || []).length;
+  const closeBracket = (cleaned.match(/\]/g) || []).length;
+  if (openBracket > closeBracket) {
+    cleaned = cleaned + ']'.repeat(openBracket - closeBracket);
+  }
+
+  return cleaned;
 }
 
 function sanitizeSambaPath(rawPath: string): string {
   if (!rawPath) return '';
-  const normalized = rawPath.replace(/\\/g, '/');
+  let normalized = rawPath.replace(/\\/g, '/');
+
+  // Strip raw UNC host & share prefixes e.g. "//192.168.1.25/media/Series/..." -> "Series/..."
+  const uncMatch = normalized.match(/^(?:smb:)?\/+([^\/]+)\/([^\/]+)(?:\/(.*))?$/i);
+  if (uncMatch) {
+    normalized = uncMatch[3] || '';
+  }
+
+  // Also strip leading /Volumes/<share>/ or /mnt/<share>/ or /media/<share>/
+  normalized = normalized.replace(/^\/?(?:Volumes|mnt|media)\/[^\/]+\/?/i, '');
+  normalized = normalized.replace(/^[a-zA-Z]:\/?/, '');
+
   const segments = normalized.split('/').filter(Boolean);
   return segments.map(sanitizeSambaSegment).filter(Boolean).join('/');
 }
@@ -2344,143 +2357,44 @@ function resolveSambaFullPath(rawPath: string, customMountPath?: string): string
   let targetMount = customMountPath ? customMountPath.trim() : '';
 
   // If customMountPath is a network URI like //192.168.1.25/media or smb://...
-  if (targetMount.startsWith('//') || targetMount.startsWith('smb://')) {
-    const parts = targetMount.replace(/^smb:\/\//, '').replace(/^\/\//, '').split('/').filter(Boolean);
-    // parts[0] is IP/host (e.g. 192.168.1.25), parts[1] is share (e.g. media)
-    if (parts.length >= 2) {
-      const shareName = parts[1];
-      const volCandidate = path.join('/Volumes', shareName);
-      if (fs.existsSync(volCandidate)) {
-        console.log(`[PathResolver] Mapped network URI ${targetMount} to local mount volume: ${volCandidate}`);
-        targetMount = volCandidate;
-      } else {
-        // Try case-insensitive volume search in /Volumes
-        try {
-          if (fs.existsSync('/Volumes')) {
-            const vols = fs.readdirSync('/Volumes');
-            const matchVol = vols.find(v => v.toLowerCase() === shareName.toLowerCase());
-            if (matchVol) {
-              const matchedPath = path.join('/Volumes', matchVol);
-              if (fs.existsSync(matchedPath)) {
-                console.log(`[PathResolver] Mapped network URI ${targetMount} to volume ${matchVol}: ${matchedPath}`);
-                targetMount = matchedPath;
-              }
-            }
-          }
-        } catch (_) {}
-      }
+  if (targetMount.startsWith('//') || targetMount.startsWith('smb://') || targetMount.startsWith('\\\\')) {
+    const parts = targetMount.replace(/^smb:\/\//i, '').replace(/^[\\\/]+/, '').split(/[\/\\]+/).filter(Boolean);
+    const shareName = parts.length >= 2 ? parts[1] : (parts[0] || 'media');
+    const volCandidate = path.join('/Volumes', shareName);
+    const mntCandidate = path.join('/mnt', shareName);
+
+    if (fs.existsSync(volCandidate)) {
+      targetMount = volCandidate;
+    } else if (fs.existsSync(mntCandidate)) {
+      targetMount = mntCandidate;
+    } else {
+      targetMount = SAMBA_SHARE_ROOT;
     }
   }
 
-  const cleanSub = (rawPath || '').replace(/\\/g, '/').replace(/^[\/\\]+/, '');
-
-  if (targetMount !== '' && fs.existsSync(targetMount)) {
-    console.log(`[PathResolver] Using active mount path: ${targetMount} for subpath: "${cleanSub}"`);
+  if (targetMount) {
+    const cleanSub = sanitizeSambaPath(rawPath || '');
     if (!cleanSub) return targetMount;
+    return path.join(targetMount, cleanSub);
+  }
 
-    // Check 1: If cleanSub is already identical to targetMount
-    if (cleanSub === targetMount) return targetMount;
-
-    // Check 2: Direct join check (e.g. targetMount=/Volumes/media/Series, cleanSub=Breaking Bad (2008))
-    const directCandidate = path.join(targetMount, cleanSub);
-    if (fs.existsSync(directCandidate)) {
-      console.log(`[PathResolver] Direct subpath found: ${directCandidate}`);
-      return directCandidate;
+  // If no customMountPath was provided, but rawPath is given:
+  if (rawPath) {
+    let cleanPath = rawPath.replace(/\\/g, '/');
+    // If rawPath itself is a UNC network path, strip and resolve against SAMBA_SHARE_ROOT
+    if (cleanPath.startsWith('//') || cleanPath.startsWith('smb://')) {
+      const sanitized = sanitizeSambaPath(cleanPath);
+      return sanitized ? path.join(SAMBA_SHARE_ROOT, sanitized) : SAMBA_SHARE_ROOT;
     }
-
-    // Check 3: Overlapping segment check (e.g. targetMount=/Volumes/media/Series, cleanSub=Series/Breaking Bad (2008))
-    const mountParts = targetMount.split(/[\/\\]/).filter(Boolean);
-    const subParts = cleanSub.split(/[\/\\]/).filter(Boolean);
-
-    if (mountParts.length > 0 && subParts.length > 0) {
-      const lastMountPart = mountParts[mountParts.length - 1].toLowerCase();
-      const firstSubPart = subParts[0].toLowerCase();
-
-      if (lastMountPart === firstSubPart) {
-        const strippedSub = subParts.slice(1).join('/');
-        const overlappedCandidate = path.join(targetMount, strippedSub);
-        if (fs.existsSync(overlappedCandidate)) {
-          console.log(`[PathResolver] Stripped overlapping segment '${subParts[0]}', resolved to: ${overlappedCandidate}`);
-          return overlappedCandidate;
-        }
-      }
+    // Only accept absolute paths that are actual local filesystem paths
+    if (path.isAbsolute(cleanPath) && !cleanPath.startsWith('//')) {
+      return cleanPath;
     }
-
-    // Check 4: Check parent of targetMount (e.g. targetMount=/Volumes/media/Series, cleanSub=Movies/Interstellar)
-    const parentMount = path.dirname(targetMount);
-    if (fs.existsSync(parentMount)) {
-      const parentCandidate = path.join(parentMount, cleanSub);
-      if (fs.existsSync(parentCandidate)) {
-        console.log(`[PathResolver] Resolved under parent volume: ${parentCandidate}`);
-        return parentCandidate;
-      }
+    const absVolumesPath = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+    if (absVolumesPath.startsWith('/Volumes/') && fs.existsSync(absVolumesPath)) {
+      return absVolumesPath;
     }
-
-    // If overlap was detected but disk item wasn't created yet, return the deduplicated candidate path
-    if (mountParts.length > 0 && subParts.length > 0 && mountParts[mountParts.length - 1].toLowerCase() === subParts[0].toLowerCase()) {
-      const subFolder = subParts.slice(1).join('/');
-      return path.join(targetMount, subFolder);
-    }
-
-    return directCandidate;
-  }
-
-  if (!rawPath) return SAMBA_SHARE_ROOT;
-  let cleanPath = rawPath.replace(/\\/g, '/');
-
-  // 1. If absolute path and exists on disk, use directly
-  if (path.isAbsolute(cleanPath) && fs.existsSync(cleanPath)) {
-    console.log(`[PathResolver] Resolved absolute path on host: ${cleanPath}`);
-    return cleanPath;
-  }
-
-  // 2. Check direct /Volumes path existence
-  const absVolumesPath = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
-  if (absVolumesPath.startsWith('/Volumes/') && fs.existsSync(absVolumesPath)) {
-    console.log(`[PathResolver] Resolved /Volumes path on host: ${absVolumesPath}`);
-    return absVolumesPath;
-  }
-
-  // 3. Scan mounted volumes in /Volumes for matching share or subpaths
-  try {
-    if (fs.existsSync('/Volumes')) {
-      const volumes = fs.readdirSync('/Volumes');
-      for (const vol of volumes) {
-        const volPath = path.join('/Volumes', vol);
-        if (fs.existsSync(volPath)) {
-          const directMatch = path.join(volPath, cleanPath);
-          if (fs.existsSync(directMatch)) {
-            console.log(`[PathResolver] Resolved under volume ${vol}: ${directMatch}`);
-            return directMatch;
-          }
-          // Strip leading Volumes/[vol]/ if present
-          const stripped = cleanPath.replace(new RegExp(`^/?(Volumes/${vol}/)?`), '');
-          const subMatch = path.join(volPath, stripped);
-          if (fs.existsSync(subMatch)) {
-            console.log(`[PathResolver] Resolved under volume ${vol} (stripped): ${subMatch}`);
-            return subMatch;
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[PathResolver] Error scanning /Volumes:', e);
-  }
-
-  // Fallback to SAMBA_SHARE_ROOT
-  if (cleanPath.startsWith('/')) {
-    cleanPath = cleanPath.slice(1);
-  }
-  if (cleanPath.startsWith('Volumes/')) {
-    const parts = cleanPath.split('/').filter(Boolean);
-    cleanPath = parts.slice(2).join('/');
-  }
-
-  const sanitized = sanitizeSambaPath(cleanPath);
-  const safeRelPath = path.normalize(sanitized).replace(/^(\.\.[\/\\])+/, '');
-  const localDefault = path.join(SAMBA_SHARE_ROOT, safeRelPath);
-  if (fs.existsSync(localDefault)) {
-    return localDefault;
+    return path.join(SAMBA_SHARE_ROOT, sanitizeSambaPath(cleanPath));
   }
 
   return SAMBA_SHARE_ROOT;
@@ -2830,7 +2744,8 @@ async function walkDirectoryRecursiveAsync(
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue; // Skip hidden entries (.DS_Store, ._ files)
       const fullPath = path.join(dir, entry.name);
-      const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+      const rawRelPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+      const relPath = sanitizeSambaPath(rawRelPath);
 
       let isDirectory = entry.isDirectory();
       let isFile = entry.isFile();
@@ -3239,30 +3154,21 @@ app.all('/api/samba/scan-volume', async (req: Request, res: Response) => {
     const maxDepth = Number(req.body?.max_depth || req.body?.maxDepth || req.query?.max_depth || req.query?.maxDepth) || 30;
     const targetRoot = resolveSambaFullPath(customSharePath || '', customMountPath);
 
-    // Ensure root exists
+    // Return empty results if path does not exist on disk
     if (!fs.existsSync(targetRoot)) {
-      fs.mkdirSync(targetRoot, { recursive: true });
+      return res.json({
+        success: true,
+        scanMode: 'recursive_async_concurrent',
+        maxDepth,
+        items: [],
+        errors: [`Target path does not exist or is not mounted on host: ${targetRoot}`],
+        totalScanned: 0,
+        durationMs: Date.now() - startTime,
+        timestamp: Date.now(),
+      });
     }
 
     let { items, errors } = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth);
-
-    // If target directory is empty on disk, seed sample media files so share scans discover media entries
-    if (items.filter(i => !i.is_dir).length === 0) {
-      try {
-        const sampleFiles = getComprehensiveSampleFilePaths();
-        sampleFiles.forEach((relPath) => {
-          const fullPath = path.join(targetRoot, relPath);
-          const parentDir = path.dirname(fullPath);
-          if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
-          if (!fs.existsSync(fullPath)) fs.writeFileSync(fullPath, 'SAMPLE_MEDIA_DATA', 'utf8');
-        });
-        const rewalk = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth);
-        items = rewalk.items;
-        errors.push(...rewalk.errors);
-      } catch (seedErr) {
-        console.warn('Auto-seed sample media on scan failed:', seedErr);
-      }
-    }
 
     const durationMs = Date.now() - startTime;
 

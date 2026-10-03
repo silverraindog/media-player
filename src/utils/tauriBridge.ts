@@ -1,6 +1,8 @@
 // Helper to interact with native Tauri backend when running as desktop app,
 // with safe fallback when running in browser preview mode.
 import { logger } from './loggerService';
+import { sanitizeSambaPath } from './pathSanitizer';
+import { recordScanBatchDiscovered } from './scanPathDebugger';
 
 export interface VolumeMountInfo {
   isMounted: boolean;
@@ -536,6 +538,37 @@ export function normalizePathRelativeToShareRoot(itemRelPath: string, scanRootPa
   return cleanItem.replace(/\/+/g, '/').replace(/^\/+/, '');
 }
 
+/**
+ * Resolves any network URI, UNC path, or relative folder into an absolute local filesystem path.
+ * - Handles UNC network pointers e.g. "//192.168.1.25/media" -> "/Volumes/media"
+ * - Handles smb:// URIs e.g. "smb://192.168.1.25/media/Series" -> "/Volumes/media/Series"
+ * - Resolves relative paths against standard mount locations
+ */
+export function resolveLocalMountPath(inputPath: string, shareName = 'media'): string {
+  const raw = (inputPath || '').trim();
+  if (!raw) return `/Volumes/${shareName}`;
+
+  let normalized = raw.replace(/\\/g, '/');
+
+  // Handle UNC / smb URI network pointers: //192.168.1.25/media or smb://192.168.1.25/media
+  if (normalized.startsWith('//') || normalized.startsWith('smb://')) {
+    const stripped = normalized.replace(/^smb:\/\//i, '').replace(/^\/+/, '');
+    const parts = stripped.split('/').filter(Boolean);
+    const targetShare = parts.length >= 2 ? parts[1] : (parts[0] || shareName);
+    const subpath = parts.length > 2 ? parts.slice(2).join('/') : '';
+    const baseMount = `/Volumes/${targetShare}`;
+    return subpath ? `${baseMount}/${subpath}` : baseMount;
+  }
+
+  // If already absolute local filesystem path (single leading slash or Windows drive letter)
+  if ((normalized.startsWith('/') && !normalized.startsWith('//')) || /^[a-zA-Z]:/.test(normalized)) {
+    return normalized;
+  }
+
+  // If relative path
+  return `/Volumes/${shareName}/${normalized.replace(/^\/+/, '')}`;
+}
+
 export const performFastScan = async (
   rootPath: string,
   onProgress?: (scannedCount: number, currentFile: string) => void,
@@ -545,9 +578,10 @@ export const performFastScan = async (
 ): Promise<ScanVolumeResult> => {
   const startTime = performance.now();
   const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 20 : 60;
+  const resolvedTarget = resolveLocalMountPath(rootPath);
 
   console.log(
-    `[recursive_limit] performFastScan initialized: target="${rootPath}", max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`
+    `[recursive_limit] performFastScan initialized: target="${rootPath}" (resolved: "${resolvedTarget}"), max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`
   );
 
   if (isTauriEnvironment()) {
@@ -567,7 +601,7 @@ export const performFastScan = async (
             if (file) {
               const clean = file.replace(/^[/\\]+/g, '').replace(/\\/g, '/');
               const parts = clean.split('/').filter(Boolean);
-              const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : rootPath;
+              const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : resolvedTarget;
               const depth = parts.length > 1 ? parts.length - 1 : 0;
               console.log(
                 `[performFastScan:StreamEvent #${streamedEventCount}] Visited dir: "${dir}" | Depth: ${depth} | Discovered items: ${count} | Item: "${file}"`
@@ -585,8 +619,8 @@ export const performFastScan = async (
 
       // Race invoke against timeout to prevent hanging forever if unmounted
       const invokePromise = invoke<any>('perform_fast_scan', {
-        rootPath,
-        root_path: rootPath,
+        rootPath: resolvedTarget,
+        root_path: resolvedTarget,
         safeScan,
         safe_scan: safeScan,
         maxDepth: effectiveMaxDepth,
@@ -614,7 +648,8 @@ export const performFastScan = async (
 
       const durationMs = Math.round(performance.now() - startTime);
       const items = await Promise.all((result || []).map(async (it: any) => {
-        const fullPath = `${rootPath}/${it.rel_path}`;
+        const fullPath = `${resolvedTarget}/${it.rel_path}`;
+        const sanitizedRel = sanitizeSambaPath(it.rel_path);
         try {
           // Explicit check to surface permission and access issues
           const pathCheck = await checkPathExists(fullPath);
@@ -629,11 +664,23 @@ export const performFastScan = async (
         console.debug(`[performFastScan:PathDiagnostic] Path: "${fullPath}" | Name: "${it.name}"`);
         return {
           name: it.name,
-          rel_path: normalizePathRelativeToShareRoot(it.rel_path, rootPath),
+          rel_path: sanitizedRel,
           is_dir: it.is_dir,
           size_str: `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
         };
       }));
+
+      // Pipe discovered items into the Diagnostic Debug view
+      recordScanBatchDiscovered(
+        items.map((it) => ({
+          source: 'performFastScan',
+          rawPath: `${rootPath}/${it.rel_path}`,
+          resolvedAbsolutePath: `${resolvedTarget}/${it.rel_path}`,
+          sanitizedRelativePath: it.rel_path,
+          isDir: it.is_dir,
+          sizeStr: it.size_str,
+        }))
+      );
 
       console.log(
         `[recursive_limit] performFastScan completed in ${durationMs}ms: retrieved ${items.length} items with max_depth=${effectiveMaxDepth}. ` +
@@ -645,7 +692,7 @@ export const performFastScan = async (
       // Deep-dive recursive depth and barrier analysis
       const diagnostics = logDirectoryTraversalDiagnostics(
         'performFastScan:NativeTauri',
-        rootPath,
+        resolvedTarget,
         items,
         durationMs,
         { safeScan, timeoutMs }
@@ -654,14 +701,14 @@ export const performFastScan = async (
       if (items.length > 0) {
         return {
           success: true,
-          mountPath: rootPath,
+          mountPath: resolvedTarget,
           items,
           totalScanned: items.length,
           diagnostics,
         };
       }
 
-      console.warn(`[performFastScan] Native Tauri scan found 0 items at "${rootPath}". Skipping auto-retry to stick to explicitly configured paths.`);
+      console.warn(`[performFastScan] Native Tauri scan found 0 items at "${resolvedTarget}". Skipping auto-retry to stick to explicitly configured paths.`);
     } catch (e: any) {
       const durationMs = Math.round(performance.now() - startTime);
       console.warn('[SambaVault Rust Scanner] Tauri invoke perform_fast_scan returned error; checking backend fallback:', e);
@@ -674,7 +721,8 @@ export const performFastScan = async (
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sharePath: rootPath,
+        sharePath: resolvedTarget,
+        mountPath: resolvedTarget,
         max_depth: effectiveMaxDepth,
         maxDepth: effectiveMaxDepth,
       }),
@@ -760,9 +808,10 @@ export const scanSambaVolume = async (
     throw new Error(`Samba scan path or mount path is not configured. Please specify a valid local host path or mount directory.`);
   }
   const effectiveMaxDepth = typeof max_depth === 'number' && max_depth > 0 ? max_depth : safeScan ? 20 : 60;
+  const resolvedMount = resolveLocalMountPath(mountLocation, shareName);
 
   console.log(
-    `[recursive_limit] scanSambaVolume initialized: target="${mountLocation}", max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`
+    `[recursive_limit] scanSambaVolume initialized: target="${mountLocation}" (resolved: "${resolvedMount}"), max_depth=${effectiveMaxDepth}, safeScan=${safeScan}, timeoutMs=${timeoutMs}`
   );
 
   if (isTauriEnvironment()) {
@@ -772,8 +821,8 @@ export const scanSambaVolume = async (
       const invokePromise = invoke<any>('scan_samba_volume', {
         shareName,
         share_name: shareName,
-        customPath: customPath || null,
-        custom_path: customPath || null,
+        customPath: resolvedMount,
+        custom_path: resolvedMount,
         safeScan,
         safe_scan: safeScan,
         maxDepth: effectiveMaxDepth,
@@ -788,10 +837,22 @@ export const scanSambaVolume = async (
 
       const items = (result?.items || []).map((it: any) => ({
         name: it.name,
-        rel_path: normalizePathRelativeToShareRoot(it.rel_path, mountLocation),
+        rel_path: sanitizeSambaPath(it.rel_path),
         is_dir: Boolean(it.is_dir),
         size_str: it.size_str || `${Math.round((it.size || 0) / (1024 * 1024))} MB`,
       }));
+
+      // Pipe discovered items into the Diagnostic Debug view
+      recordScanBatchDiscovered(
+        items.map((it: any) => ({
+          source: 'scanSambaVolume',
+          rawPath: `${mountLocation}/${it.rel_path}`,
+          resolvedAbsolutePath: `${resolvedMount}/${it.rel_path}`,
+          sanitizedRelativePath: it.rel_path,
+          isDir: it.is_dir,
+          sizeStr: it.size_str,
+        }))
+      );
 
       console.log(
         `[recursive_limit] scanSambaVolume completed in ${durationMs}ms: retrieved ${items.length} items with max_depth=${effectiveMaxDepth}. ` +
@@ -803,7 +864,7 @@ export const scanSambaVolume = async (
       // Deep-dive recursive depth and barrier analysis
       const diagnostics = logDirectoryTraversalDiagnostics(
         'scanSambaVolume:NativeTauri',
-        mountLocation,
+        resolvedMount,
         items,
         durationMs,
         { safeScan, timeoutMs }
@@ -812,14 +873,14 @@ export const scanSambaVolume = async (
       if (items.length > 0) {
         return {
           success: Boolean(result?.success),
-          mountPath: result?.mount_path || mountLocation,
+          mountPath: result?.mount_path || resolvedMount,
           items,
           totalScanned: result?.total_scanned || items.length,
           error: result?.error || null,
           diagnostics,
         };
       }
-      console.warn(`[scanSambaVolume] Native scan returned 0 items on "${mountLocation}". Falling back to server backend API...`);
+      console.warn(`[scanSambaVolume] Native scan returned 0 items on "${resolvedMount}". Falling back to server backend API...`);
     } catch (e: any) {
       const durationMs = Math.round(performance.now() - startTime);
       console.warn('[SambaVault Scanner] Tauri invoke scan_samba_volume failed; checking backend fallback:', e);
@@ -832,8 +893,8 @@ export const scanSambaVolume = async (
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sharePath: customPath || '',
-        mountPath: customPath || '',
+        sharePath: resolvedMount,
+        mountPath: resolvedMount,
         max_depth: effectiveMaxDepth,
         maxDepth: effectiveMaxDepth,
       }),
@@ -850,15 +911,26 @@ export const scanSambaVolume = async (
         // Deep-dive recursive depth and barrier analysis for browser fallback
         const diagnostics = logDirectoryTraversalDiagnostics(
           'scanSambaVolume:BrowserFallback',
-          mountLocation,
+          resolvedMount,
           data.items,
           durationMs,
           { safeScan, timeoutMs }
         );
 
+        recordScanBatchDiscovered(
+          data.items.map((it: any) => ({
+            source: 'serverApiScanVolume',
+            rawPath: it.path || `${mountLocation}/${it.rel_path}`,
+            resolvedAbsolutePath: `${resolvedMount}/${it.rel_path}`,
+            sanitizedRelativePath: sanitizeSambaPath(it.rel_path),
+            isDir: Boolean(it.is_dir),
+            sizeStr: it.size_str,
+          }))
+        );
+
         return {
           success: true,
-          mountPath: mountLocation,
+          mountPath: resolvedMount,
           items: data.items,
           totalScanned: data.totalScanned || data.items.length,
           diagnostics,

@@ -58,7 +58,6 @@ import {
   classifyAllDiscoveredPaths,
   DEFAULT_CLASSIFIER_SETTINGS,
 } from './utils/folderClassifier';
-import { generateLargeSambaCatalogPaths } from './utils/sambaCatalogGenerator';
 import {
   isTauriEnvironment,
   checkMacVolume,
@@ -66,13 +65,15 @@ import {
   probeLocalNetwork,
   scanSambaVolume,
   performFastScan,
+  resolveLocalMountPath,
   VolumeMountInfo,
 } from './utils/tauriBridge';
+import { recordScanBatchDiscovered } from './utils/scanPathDebugger';
 import { thumbnailStorage } from './utils/thumbnailStorage';
 import { detectDuplicatesAndVersionBranches } from './utils/duplicateDetector';
 import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
-import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl } from './utils/pathSanitizer';
+import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl, diagnoseSambaPath } from './utils/pathSanitizer';
 import { categorizeMediaWithRetry } from './utils/metadataCategorizer';
 import { localDbFallback } from './utils/localDatabaseFallback';
 
@@ -300,533 +301,7 @@ const INITIAL_SAMBA_CONFIG: SambaConfig = {
   customMountPaths: [],
 };
 
-const INITIAL_SAMBA_TREE: SambaShareNode[] = [
-  {
-    id: 'root-movies',
-    name: 'Movies',
-    path: 'Movies',
-    type: 'folder',
-    children: [
-      {
-        id: 'folder-interstellar',
-        name: 'Interstellar (2014)',
-        path: 'Movies/Interstellar (2014)',
-        type: 'folder',
-        hasNfo: true,
-        hasPoster: true,
-        mediaType: 'movie',
-        matchedMedia: CURATED_MEDIA_DATABASE.find((m) => m.id === 'movie-interstellar'),
-        children: [
-          {
-            id: 'file-interstellar-mkv',
-            name: 'Interstellar (2014) [1080p].mp4',
-            path: 'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4',
-            type: 'file',
-            size: '4.8 GB',
-          },
-          {
-            id: 'file-interstellar-srt',
-            name: 'Interstellar (2014).en.srt',
-            path: 'Movies/Interstellar (2014)/Interstellar (2014).en.srt',
-            type: 'file',
-            size: '85 KB',
-          },
-          {
-            id: 'file-interstellar-nfo',
-            name: 'movie.nfo',
-            path: 'Movies/Interstellar (2014)/movie.nfo',
-            type: 'file',
-            size: '2.4 KB',
-          },
-          {
-            id: 'file-interstellar-poster',
-            name: 'poster.jpg',
-            path: 'Movies/Interstellar (2014)/poster.jpg',
-            type: 'file',
-            size: '340 KB',
-          },
-          {
-            id: 'file-interstellar-fanart',
-            name: 'fanart.jpg',
-            path: 'Movies/Interstellar (2014)/fanart.jpg',
-            type: 'file',
-            size: '1.2 MB',
-          },
-        ],
-      },
-      {
-        id: 'folder-dune-two',
-        name: 'Dune - Part Two (2024)',
-        path: 'Movies/Dune - Part Two (2024)',
-        type: 'folder',
-        hasNfo: true,
-        hasPoster: true,
-        mediaType: 'movie',
-        matchedMedia: CURATED_MEDIA_DATABASE.find((m) => m.id === 'movie-dune-two'),
-        children: [
-          {
-            id: 'file-dune-mkv',
-            name: 'Dune - Part Two (2024) [2160p HDR].mkv',
-            path: 'Movies/Dune - Part Two (2024)/Dune - Part Two (2024) [2160p HDR].mkv',
-            type: 'file',
-            size: '18.4 GB',
-          },
-          {
-            id: 'file-dune-vtt',
-            name: 'Dune - Part Two (2024).en.vtt',
-            path: 'Movies/Dune - Part Two (2024)/Dune - Part Two (2024).en.vtt',
-            type: 'file',
-            size: '92 KB',
-          },
-          {
-            id: 'file-dune-nfo',
-            name: 'movie.nfo',
-            path: 'Movies/Dune - Part Two (2024)/movie.nfo',
-            type: 'file',
-            size: '2.8 KB',
-          },
-          {
-            id: 'file-dune-poster',
-            name: 'poster.jpg',
-            path: 'Movies/Dune - Part Two (2024)/poster.jpg',
-            type: 'file',
-            size: '420 KB',
-          },
-        ],
-      },
-      {
-        id: 'folder-avatar-two',
-        name: 'Avatar - The Way of Water (2022)',
-        path: 'Movies/Avatar - The Way of Water (2022)',
-        type: 'folder',
-        hasNfo: true,
-        hasPoster: true,
-        mediaType: 'movie',
-        children: [
-          {
-            id: 'file-avatar-iso',
-            name: 'Avatar.The.Way.of.Water.2022.iso',
-            path: 'Movies/Avatar - The Way of Water (2022)/Avatar.The.Way.of.Water.2022.iso',
-            type: 'file',
-            size: '48.2 GB',
-          },
-          {
-            id: 'file-avatar-nfo',
-            name: 'movie.nfo',
-            path: 'Movies/Avatar - The Way of Water (2022)/movie.nfo',
-            type: 'file',
-            size: '3.1 KB',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'root-shows',
-    name: 'Series',
-    path: 'Series',
-    type: 'folder',
-    children: [
-      {
-        id: 'folder-breaking-bad',
-        name: 'Breaking Bad (2008)',
-        path: 'Series/Breaking Bad (2008)',
-        type: 'folder',
-        hasNfo: true,
-        hasPoster: true,
-        mediaType: 'series',
-        matchedMedia: CURATED_MEDIA_DATABASE.find((m) => m.id === 'series-breaking-bad'),
-        children: [
-          {
-            id: 'file-bb-tvshow-nfo',
-            name: 'tvshow.nfo',
-            path: 'Series/Breaking Bad (2008)/tvshow.nfo',
-            type: 'file',
-            size: '3.6 KB',
-          },
-          {
-            id: 'file-bb-poster',
-            name: 'poster.jpg',
-            path: 'Series/Breaking Bad (2008)/poster.jpg',
-            type: 'file',
-            size: '510 KB',
-          },
-          {
-            id: 'folder-bb-s1',
-            name: 'Season 01',
-            path: 'Series/Breaking Bad (2008)/Season 01',
-            type: 'folder',
-            children: [
-              {
-                id: 'file-bb-s01e01',
-                name: 'Breaking Bad - S01E01 - Pilot.mkv',
-                path: 'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv',
-                type: 'file',
-                size: '1.4 GB',
-              },
-              {
-                id: 'file-bb-s01e01-srt',
-                name: 'Breaking Bad - S01E01 - Pilot.en.srt',
-                path: 'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.en.srt',
-                type: 'file',
-                size: '58 KB',
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'folder-24-series',
-        name: '24 (2001)',
-        path: 'Series/24 (2001)',
-        type: 'folder',
-        hasNfo: false,
-        hasPoster: false,
-        mediaType: 'series',
-        metadataStatus: 'metadata-missing',
-        artworkStatus: 'missing',
-        children: [
-          {
-            id: 'file-24-s01e01',
-            name: '24 - S01E01 - 12-00 AM - 1-00 AM.mkv',
-            path: 'Series/24 (2001)/24 - S01E01 - 12-00 AM - 1-00 AM.mkv',
-            type: 'file',
-            size: '1.2 GB',
-          },
-          {
-            id: 'file-24-s01e02',
-            name: '24 - S01E02 - 1-00 AM - 2-00 AM.mkv',
-            path: 'Series/24 (2001)/24 - S01E02 - 1-00 AM - 2-00 AM.mkv',
-            type: 'file',
-            size: '1.2 GB',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'root-franchises',
-    name: 'Franchises',
-    path: 'Franchises',
-    type: 'folder',
-    isFranchiseRoot: true,
-    children: [
-      {
-        id: 'franchise-battlestar-galactica',
-        name: 'Battlestar Galactica',
-        path: 'Franchises/Battlestar Galactica',
-        type: 'folder',
-        isFranchiseContainer: true,
-        children: [
-          {
-            id: 'series-bsg-2004',
-            name: 'Battlestar Galactica (2004)',
-            path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)',
-            type: 'folder',
-            hasNfo: true,
-            hasPoster: true,
-            mediaType: 'series',
-            children: [
-              {
-                id: 'folder-bsg-s01',
-                name: 'Season 01',
-                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 01',
-                type: 'folder',
-                children: [
-                  {
-                    id: 'file-bsg-s01e01',
-                    name: 'Battlestar Galactica - S01E01 - 33.mkv',
-                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 01/Battlestar Galactica - S01E01 - 33.mkv',
-                    type: 'file',
-                    size: '1.4 GB',
-                  },
-                  {
-                    id: 'file-bsg-s01e02',
-                    name: 'Battlestar Galactica - S01E02 - Water.mkv',
-                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 01/Battlestar Galactica - S01E02 - Water.mkv',
-                    type: 'file',
-                    size: '1.3 GB',
-                  },
-                ],
-              },
-              {
-                id: 'folder-bsg-s02',
-                name: 'Season 02',
-                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 02',
-                type: 'folder',
-                children: [
-                  {
-                    id: 'file-bsg-s02e01',
-                    name: 'Battlestar Galactica - S02E01 - Scattered.mkv',
-                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Season 02/Battlestar Galactica - S02E01 - Scattered.mkv',
-                    type: 'file',
-                    size: '1.4 GB',
-                  },
-                ],
-              },
-              {
-                id: 'folder-bsg-extras',
-                name: 'Specials & Extras',
-                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras',
-                type: 'folder',
-                children: [
-                  {
-                    id: 'file-bsg-miniseries',
-                    name: 'Battlestar Galactica - S00E01 - The Miniseries (Part 1).mkv',
-                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Battlestar Galactica - S00E01 - The Miniseries (Part 1).mkv',
-                    type: 'file',
-                    size: '2.8 GB',
-                  },
-                  {
-                    id: 'file-bsg-razor',
-                    name: 'Battlestar Galactica - S00E03 - Razor.mkv',
-                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Battlestar Galactica - S00E03 - Razor.mkv',
-                    type: 'file',
-                    size: '3.1 GB',
-                  },
-                  {
-                    id: 'file-bsg-disc4-iso',
-                    name: 'Disc 4 - Extended Cuts & Commentary.iso',
-                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Disc 4 - Extended Cuts & Commentary.iso',
-                    type: 'file',
-                    size: '7.8 GB',
-                  },
-                  {
-                    id: 'file-bsg-disc5-iso',
-                    name: 'Disc 5 - Behind the Scenes & Featurettes.iso',
-                    path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/Specials & Extras/Disc 5 - Behind the Scenes & Featurettes.iso',
-                    type: 'file',
-                    size: '8.2 GB',
-                  },
-                ],
-              },
-              {
-                id: 'file-bsg-tvshow-nfo',
-                name: 'tvshow.nfo',
-                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/tvshow.nfo',
-                type: 'file',
-                size: '3.8 KB',
-              },
-              {
-                id: 'file-bsg-poster',
-                name: 'poster.jpg',
-                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/poster.jpg',
-                type: 'file',
-                size: '512 KB',
-              },
-              {
-                id: 'file-bsg-fanart',
-                name: 'fanart.jpg',
-                path: 'Franchises/Battlestar Galactica/Battlestar Galactica (2004)/fanart.jpg',
-                type: 'file',
-                size: '1.4 MB',
-              },
-            ],
-          },
-          {
-            id: 'series-caprica-2010',
-            name: 'Caprica (2010)',
-            path: 'Franchises/Battlestar Galactica/Caprica (2010)',
-            type: 'folder',
-            hasNfo: true,
-            hasPoster: true,
-            mediaType: 'series',
-            children: [
-              {
-                id: 'folder-caprica-s01',
-                name: 'Season 01',
-                path: 'Franchises/Battlestar Galactica/Caprica (2010)/Season 01',
-                type: 'folder',
-                children: [
-                  {
-                    id: 'file-caprica-s01e01',
-                    name: 'Caprica - S01E01 - Pilot.mkv',
-                    path: 'Franchises/Battlestar Galactica/Caprica (2010)/Season 01/Caprica - S01E01 - Pilot.mkv',
-                    type: 'file',
-                    size: '1.5 GB',
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'franchise-star-wars',
-        name: 'Star Wars Saga',
-        path: 'Franchises/Star Wars Saga',
-        type: 'folder',
-        isFranchiseContainer: true,
-        children: [
-          {
-            id: 'series-mandalorian',
-            name: 'The Mandalorian (2019)',
-            path: 'Franchises/Star Wars Saga/The Mandalorian (2019)',
-            type: 'folder',
-            hasNfo: true,
-            hasPoster: true,
-            mediaType: 'series',
-            children: [
-              {
-                id: 'folder-mando-s01',
-                name: 'Season 01',
-                path: 'Franchises/Star Wars Saga/The Mandalorian (2019)/Season 01',
-                type: 'folder',
-                children: [
-                  {
-                    id: 'file-mando-s01e01',
-                    name: 'The Mandalorian - S01E01 - Chapter 1.mkv',
-                    path: 'Franchises/Star Wars Saga/The Mandalorian (2019)/Season 01/The Mandalorian - S01E01 - Chapter 1.mkv',
-                    type: 'file',
-                    size: '2.1 GB',
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'root-documentaries',
-    name: 'Documentaries',
-    path: 'Documentaries',
-    type: 'folder',
-    children: [
-      {
-        id: 'folder-planet-earth',
-        name: 'Planet Earth III (2023)',
-        path: 'Documentaries/Planet Earth III (2023)',
-        type: 'folder',
-        hasNfo: true,
-        hasPoster: true,
-        mediaType: 'series',
-        children: [
-          {
-            id: 'file-pe3-nfo',
-            name: 'tvshow.nfo',
-            path: 'Documentaries/Planet Earth III (2023)/tvshow.nfo',
-            type: 'file',
-            size: '2.1 KB',
-          },
-          {
-            id: 'file-pe3-e01',
-            name: 'Planet.Earth.III.S01E01.Coasts.2160p.mkv',
-            path: 'Documentaries/Planet Earth III (2023)/Planet.Earth.III.S01E01.Coasts.2160p.mkv',
-            type: 'file',
-            size: '6.2 GB',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'root-music',
-    name: 'Music',
-    path: 'Music',
-    type: 'folder',
-    children: [
-      {
-        id: 'folder-daft-punk',
-        name: 'Daft Punk',
-        path: 'Music/Daft Punk',
-        type: 'folder',
-        children: [
-          {
-            id: 'folder-daft-punk-ram',
-            name: 'Random Access Memories (2013)',
-            path: 'Music/Daft Punk/Random Access Memories (2013)',
-            type: 'folder',
-            hasNfo: true,
-            hasPoster: true,
-            mediaType: 'album',
-            matchedMedia: CURATED_MEDIA_DATABASE.find((m) => m.id === 'album-daft-punk-ram'),
-            children: [
-              {
-                id: 'file-ram-nfo',
-                name: 'album.nfo',
-                path: 'Music/Daft Punk/Random Access Memories (2013)/album.nfo',
-                type: 'file',
-                size: '2.9 KB',
-              },
-              {
-                id: 'file-ram-01',
-                name: '01 - Give Life Back to Music.flac',
-                path: 'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac',
-                type: 'file',
-                size: '34.2 MB',
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'root-anime',
-    name: 'Anime',
-    path: 'Anime',
-    type: 'folder',
-    children: [
-      {
-        id: 'folder-aot',
-        name: 'Attack on Titan (2013)',
-        path: 'Anime/Attack on Titan (2013)',
-        type: 'folder',
-        hasNfo: true,
-        hasPoster: true,
-        mediaType: 'series',
-        children: [
-          {
-            id: 'file-aot-e01',
-            name: 'Attack.on.Titan.S01E01.1080p.mkv',
-            path: 'Anime/Attack on Titan (2013)/Attack.on.Titan.S01E01.1080p.mkv',
-            type: 'file',
-            size: '1.5 GB',
-          },
-          {
-            id: 'file-aot-e01-sub',
-            name: 'Attack.on.Titan.S01E01.ja.sub',
-            path: 'Anime/Attack on Titan (2013)/Attack.on.Titan.S01E01.ja.sub',
-            type: 'file',
-            size: '76 KB',
-          },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'root-books',
-    name: 'Books',
-    path: 'Books',
-    type: 'folder',
-    children: [
-      {
-        id: 'folder-scifi-books',
-        name: 'Sci-Fi Literature',
-        path: 'Books/Sci-Fi Literature',
-        type: 'folder',
-        children: [
-          {
-            id: 'file-dune-epub',
-            name: 'Dune - Frank Herbert (1965).epub',
-            path: 'Books/Sci-Fi Literature/Dune - Frank Herbert (1965).epub',
-            type: 'file',
-            size: '4.8 MB',
-          },
-          {
-            id: 'file-thinking-pdf',
-            name: 'Thinking Fast and Slow - Daniel Kahneman.pdf',
-            path: 'Books/Sci-Fi Literature/Thinking Fast and Slow - Daniel Kahneman.pdf',
-            type: 'file',
-            size: '14.2 MB',
-          },
-        ],
-      },
-    ],
-  },
-];
+const INITIAL_SAMBA_TREE: SambaShareNode[] = [];
 
 const INITIAL_SYNC_LOGS: SyncLog[] = [
   {
@@ -2162,7 +1637,7 @@ function App() {
       const scanPromise = (async () => {
         const scanTimeout = effectiveSafeScan ? 120000 : 240000;
 
-        let resolvedScanPath = rootPath;
+        let resolvedScanPath = resolveLocalMountPath(rootPath, shareName);
         if (isTauri) {
           try {
             const isExplicitPath = Boolean(customScanPath) ||
@@ -2185,6 +1660,12 @@ function App() {
               }
             }
           } catch (_) {}
+        }
+
+        const rootDiagnostic = diagnoseSambaPath(resolvedScanPath);
+        console.log(`[PathDiagnostics:handleSyncSamba] Root scan path diagnosis for "${rootPath}" (resolved: "${resolvedScanPath}"). Is suspicious: ${rootDiagnostic.isSuspicious}`, rootDiagnostic);
+        if (rootDiagnostic.hasDoubleSlash || rootDiagnostic.isSuspicious) {
+          console.warn(`[PathDiagnostics:handleSyncSamba] ⚠️ Suspicious path prefix or anomaly detected before performFastScan:`, rootDiagnostic.issues);
         }
 
         const scanResult = await performFastScan(
@@ -2230,6 +1711,17 @@ function App() {
         });
 
         if (scanResult.success && scanResult.items.length > 0) {
+          recordScanBatchDiscovered(
+            scanResult.items.map((it: any) => ({
+              source: 'performFastScan' as const,
+              rawPath: it.path || `${rootPath}/${it.rel_path}`,
+              resolvedAbsolutePath: `${resolvedScanPath}/${it.rel_path}`,
+              sanitizedRelativePath: sanitizeSambaPath(it.rel_path),
+              isDir: Boolean(it.is_dir),
+              sizeStr: it.size_str,
+            }))
+          );
+
           if (scanResult.errors && scanResult.errors.length > 0) {
             try {
               localStorage.setItem('samba_vault_last_scan_errors', JSON.stringify(scanResult.errors));
@@ -2275,6 +1767,16 @@ function App() {
         }
 
         if (fallbackResult.success && fallbackResult.items.length > 0) {
+          recordScanBatchDiscovered(
+            fallbackResult.items.map((it: any) => ({
+              source: 'scanSambaVolume' as const,
+              rawPath: it.path || `${rootPath}/${it.rel_path}`,
+              resolvedAbsolutePath: `${resolvedScanPath}/${it.rel_path}`,
+              sanitizedRelativePath: sanitizeSambaPath(it.rel_path),
+              isDir: Boolean(it.is_dir),
+              sizeStr: it.size_str,
+            }))
+          );
           return fallbackResult.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
         }
 
@@ -2295,6 +1797,16 @@ function App() {
               const apiData = await apiRes.json();
               if (apiData.success && Array.isArray(apiData.items) && apiData.items.length > 0) {
                 console.log(`[SambaSync] Server API returned ${apiData.items.length} items from share!`);
+                recordScanBatchDiscovered(
+                  apiData.items.map((it: any) => ({
+                    source: 'serverApiScanVolume' as const,
+                    rawPath: it.path || `${rootPath}/${it.rel_path}`,
+                    resolvedAbsolutePath: `${resolvedScanPath}/${it.rel_path}`,
+                    sanitizedRelativePath: sanitizeSambaPath(it.rel_path),
+                    isDir: Boolean(it.is_dir),
+                    sizeStr: it.size_str,
+                  }))
+                );
                 return apiData.items.filter((it: any) => !it.is_dir).map((it: any) => it.rel_path);
               }
             }
@@ -2315,26 +1827,27 @@ function App() {
 
       if (!raceScanOutcome.forceSkipped && raceScanOutcome.paths && raceScanOutcome.paths.length > 0) {
         console.log(`[SambaSync] Scan successful: ${raceScanOutcome.paths.length} items found.`);
-        rawDiscoveredPaths = raceScanOutcome.paths;
+        rawDiscoveredPaths = raceScanOutcome.paths.map((p) => sanitizeSambaPath(p)).filter(Boolean);
         showToast(`Samba scan completed: ${rawDiscoveredPaths.length} files discovered.`);
       } else {
         if (raceScanOutcome.forceSkipped) {
           encounteredBottlenecks.push('Directory scan was force-skipped by user before completion');
-          console.log('[SambaSync] User force skipped scan step. Continuing media copy and catalog import.');
-          showToast('Force skipped directory scan. Continuing media copy...');
+          console.log('[SambaSync] User force skipped scan step. Aborting import.');
+          showToast('Force skipped directory scan.');
         } else {
-          encounteredBottlenecks.push('Physical scan returned 0 files; fallback catalog used for share layout');
-          console.log('[SambaSync] Local physical scan returned 0 files. Seeding fallback catalog paths for share structure...');
-          rawDiscoveredPaths = generateLargeSambaCatalogPaths();
-          showToast(`Discovered ${rawDiscoveredPaths.length} media catalog entries across share!`);
+          encounteredBottlenecks.push('Physical scan returned 0 files on disk');
+          console.log('[SambaSync] Local physical scan returned 0 files. No fallback mock data will be injected.');
+          showToast('Scan completed: 0 files discovered. Check that the share is mounted.');
         }
         setSyncProgress(p => ({
           ...p,
-          phaseDescription: raceScanOutcome.forceSkipped
-            ? 'Scan force-skipped. Continuing media import and catalog construction...'
-            : `Indexed ${rawDiscoveredPaths.length} items across Samba share.`,
-          currentStep: 10,
+          isActive: false,
+          phase: 'idle',
+          phaseDescription: 'Scan finished: 0 files found on disk.',
+          currentStep: 0,
         }));
+        setIsSyncingShare(false);
+        return;
       }
 
       // =========================================================================

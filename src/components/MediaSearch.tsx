@@ -54,7 +54,6 @@ import {
 } from 'lucide-react';
 import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore, SambaShareNode } from '../types';
 import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
-import { generateLargeSambaCatalogPaths } from '../utils/sambaCatalogGenerator';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
 import { BulkSubtitlesModal } from './BulkSubtitlesModal';
@@ -1078,29 +1077,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     try {
       let libraryToCategorize = mediaLibrary;
       if (libraryToCategorize.length === 0) {
-        const sampleItems: MediaMetadata[] = generateLargeSambaCatalogPaths().slice(0, 35).map((path, idx) => {
-          const parts = path.split('/');
-          const title = parts[parts.length - 1].replace(/\.[^/.]+$/, '');
-          const isSeries = path.toLowerCase().includes('series') || path.toLowerCase().includes('season');
-          return {
-            id: `auto-lib-${idx}-${Date.now()}`,
-            title: title.replace(/[-_]/g, ' '),
-            type: (isSeries ? 'series' : 'movie') as MediaType,
-            year: 2024,
-            genres: isSeries ? ['Drama', 'Sci-Fi'] : ['Action', 'Thriller'],
-            overview: `Catalog entry for ${title.replace(/[-_]/g, ' ')}.`,
-            rating: 8.2,
-            posterUrl: 'https://images.unsplash.com/photo-1485846234645-a62644f84728?w=500&auto=format&fit=crop&q=60',
-            recommendedFilenames: [parts[parts.length - 1] || 'media.mkv'],
-            playbackUrl: `/api/samba/stream?path=${encodeURIComponent(path)}`,
-            folderPath: path,
-            recommendedFolderStructure: path,
-          };
-        });
-        if (onSaveCategorizedMedia) {
-          sampleItems.forEach(item => onSaveCategorizedMedia(item));
-        }
-        libraryToCategorize = sampleItems;
+        setIsBatchCategorizing(false);
+        return;
       }
 
       const titles = libraryToCategorize.map((m) => ({ title: m.title, type: m.type }));

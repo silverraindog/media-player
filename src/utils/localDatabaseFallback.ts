@@ -411,30 +411,15 @@ class LocalDatabaseFallbackService {
       }
 
       if (path === '/api/samba/scan-volume' || path === '/api/samba/scan') {
-        const sampleItems = [
-          { name: 'Breaking Bad - S01E01 - Pilot.mkv', rel_path: 'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E01 - Pilot.mkv', is_dir: false, size_str: '2.1 GB' },
-          { name: 'Breaking Bad - S01E02 - Cat\'s in the Bag.mkv', rel_path: 'Series/Breaking Bad (2008)/Season 01/Breaking Bad - S01E02 - Cat\'s in the Bag.mkv', is_dir: false, size_str: '2.1 GB' },
-          { name: 'Severance - S01E01 - Good News About Hell.mkv', rel_path: 'Series/Severance (2022)/Season 01/Severance - S01E01 - Good News About Hell.mkv', is_dir: false, size_str: '2.4 GB' },
-          { name: 'Stranger Things - S01E01 - Chapter One.mkv', rel_path: 'Series/Stranger Things (2016)/Season 01/Stranger Things - S01E01 - Chapter One.mkv', is_dir: false, size_str: '2.8 GB' },
-          { name: 'The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv', rel_path: 'Series/The Last of Us (2023)/Season 01/The Last of Us - S01E01 - When You\'re Lost in the Darkness.mkv', is_dir: false, size_str: '3.1 GB' },
-          { name: 'Interstellar (2014) [1080p].mp4', rel_path: 'Movies/Interstellar (2014)/Interstellar (2014) [1080p].mp4', is_dir: false, size_str: '4.8 GB' },
-          { name: 'Dune Part Two (2024) [4K HDR].mkv', rel_path: 'Movies/Dune - Part Two (2024)/Dune Part Two (2024) [4K HDR].mkv', is_dir: false, size_str: '8.5 GB' },
-          { name: 'Oppenheimer (2023) [1080p].mkv', rel_path: 'Movies/Oppenheimer (2023)/Oppenheimer (2023) [1080p].mkv', is_dir: false, size_str: '5.2 GB' },
-          { name: '01 - Give Life Back to Music.flac', rel_path: 'Music/Daft Punk/Random Access Memories (2013)/01 - Give Life Back to Music.flac', is_dir: false, size_str: '42 MB' },
-          { name: '02 - Instant Crush.flac', rel_path: 'Music/Daft Punk/Random Access Memories (2013)/02 - Instant Crush.flac', is_dir: false, size_str: '48 MB' },
-          { name: 'Chapter 01 - An Unexpected Party.m4b', rel_path: 'Audio books/J.R.R. Tolkien/The Hobbit/Chapter 01 - An Unexpected Party.m4b', is_dir: false, size_str: '120 MB' },
-          { name: 'Planet Earth III - S01E01 - Coasts.mkv', rel_path: 'Documentaries/Planet Earth III (2023)/Planet Earth III - S01E01 - Coasts.mkv', is_dir: false, size_str: '4.2 GB' },
-          { name: 'Attack on Titan - S01E01.mkv', rel_path: 'Anime/Attack on Titan (2013)/Season 1/Attack on Titan - S01E01.mkv', is_dir: false, size_str: '1.2 GB' },
-        ];
         return new Response(
           JSON.stringify({
             success: true,
             scanMode: 'recursive_async_concurrent',
             maxDepth: 30,
-            items: sampleItems,
+            items: [],
             errors: [],
-            totalScanned: sampleItems.length,
-            durationMs: 45,
+            totalScanned: 0,
+            durationMs: 5,
             timestamp: Date.now(),
             source: 'local_storage_cache',
           }),
@@ -446,15 +431,7 @@ class LocalDatabaseFallbackService {
         return new Response(
           JSON.stringify({
             success: true,
-            topLevelDirectories: [
-              { name: 'Movies', path: 'Movies', isDirectory: true, subFolders: ['Interstellar (2014)', 'Dune - Part Two (2024)', 'Avatar - The Way of Water (2022)', 'Oppenheimer (2023)', 'The Dark Knight (2008)'] },
-              { name: 'Series', path: 'Series', isDirectory: true, subFolders: ['Breaking Bad (2008)', 'Severance (2022)', 'Stranger Things (2016)', 'The Last of Us (2023)'] },
-              { name: 'Music', path: 'Music', isDirectory: true, subFolders: ['Daft Punk', 'Pink Floyd', 'Radiohead', 'Miles Davis'] },
-              { name: 'Audio books', path: 'Audio books', isDirectory: true, subFolders: ['J.R.R. Tolkien', 'James Clear'] },
-              { name: 'Books', path: 'Books', isDirectory: true, subFolders: ['Sci-Fi', 'Non-Fiction', 'Comics'] },
-              { name: 'Documentaries', path: 'Documentaries', isDirectory: true, subFolders: ['Planet Earth III (2023)'] },
-              { name: 'Anime', path: 'Anime', isDirectory: true, subFolders: ['Attack on Titan (2013)'] },
-            ],
+            topLevelDirectories: [],
             source: 'local_storage_cache',
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }

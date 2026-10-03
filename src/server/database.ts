@@ -278,17 +278,6 @@ export async function getDatabase(): Promise<Database> {
     }
   }
 
-  // Seed default items if empty
-  const countResult = dbInstance.exec(`SELECT COUNT(*) as count FROM media_items`);
-  const count = countResult.length > 0 && countResult[0].values[0] ? (countResult[0].values[0][0] as number) : 0;
-
-  if (count === 0) {
-    seedInitialSqliteData(dbInstance);
-  } else {
-    // Ensure richer catalog has items populated
-    seedExtraCuratedIfMissing(dbInstance);
-  }
-
   persistDbToDisk();
   return dbInstance;
 }

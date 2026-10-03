@@ -64,6 +64,163 @@ pub struct ScanVolumeResult {
     pub error: Option<String>,
 }
 
+pub fn sanitize_filename(name: &str) -> String {
+    let mut cleaned = name.trim().to_string();
+    cleaned = cleaned.replace(':', " - ");
+    cleaned = cleaned.replace(['/', '\\', '|'], "-");
+    cleaned = cleaned.chars().filter(|c| !matches!(c, '<' | '>' | '"' | '?' | '*')).collect();
+    cleaned = cleaned.chars().filter(|c| !c.is_control()).collect();
+    while cleaned.contains("  ") {
+        cleaned = cleaned.replace("  ", " ");
+    }
+    while cleaned.contains("--") {
+        cleaned = cleaned.replace("--", "-");
+    }
+    cleaned = cleaned.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
+
+    let open_parens = cleaned.matches('(').count();
+    let close_parens = cleaned.matches(')').count();
+    if open_parens > close_parens {
+        for _ in 0..(open_parens - close_parens) {
+            cleaned.push(')');
+        }
+    }
+
+    let open_brackets = cleaned.matches('[').count();
+    let close_brackets = cleaned.matches(']').count();
+    if open_brackets > close_brackets {
+        for _ in 0..(open_brackets - close_brackets) {
+            cleaned.push(']');
+        }
+    }
+
+    cleaned
+}
+
+pub fn sanitize_samba_path(raw_path: &str) -> String {
+    let mut normalized = raw_path.replace('\\', "/");
+    
+    // Strip raw UNC host & share prefixes e.g. "//192.168.1.25/media/Series/..." -> "Series/..."
+    // or "smb://192.168.1.25/media/Series/..." -> "Series/..."
+    let lower = normalized.to_lowercase();
+    if lower.starts_with("smb://") || lower.starts_with("//") || lower.starts_with('/') {
+        let stripped = normalized
+            .trim_start_matches("smb:")
+            .trim_start_matches('/');
+        let parts: Vec<&str> = stripped.split('/').filter(|s| !s.is_empty()).collect();
+        // Check if first part looks like an IP or hostname (contains . or :) followed by share
+        if parts.len() >= 2 && (parts[0].contains('.') || parts[0].contains(':') || parts[0].eq_ignore_ascii_case("localhost")) {
+            normalized = parts[2..].join("/");
+        } else if parts.len() >= 2 && (parts[0].eq_ignore_ascii_case("volumes") || parts[0].eq_ignore_ascii_case("mnt") || parts[0].eq_ignore_ascii_case("media")) {
+            // Strip leading /Volumes/<share>/ or /mnt/<share>/ or /media/<share>/
+            normalized = parts[2..].join("/");
+        }
+    }
+
+    // Strip Windows drive letters e.g. "C:/" or "D:\"
+    if normalized.len() >= 2 {
+        let bytes = normalized.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            normalized = normalized[2..].trim_start_matches('/').to_string();
+        }
+    }
+
+    let segments: Vec<String> = normalized
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(sanitize_filename)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    segments.join("/")
+}
+
+pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return PathBuf::from("/Volumes/media");
+    }
+
+    let normalized = trimmed.replace('\\', "/");
+
+    // Handle UNC or smb:// URIs: //192.168.1.25/media or smb://192.168.1.25/media
+    if normalized.starts_with("//") || normalized.to_lowercase().starts_with("smb://") {
+        let stripped = normalized
+            .trim_start_matches("smb:")
+            .trim_start_matches('/');
+        let parts: Vec<&str> = stripped.split('/').filter(|s| !s.is_empty()).collect();
+        let share_name = if parts.len() >= 2 {
+            parts[1]
+        } else {
+            "media"
+        };
+        let subpath = if parts.len() > 2 { parts[2..].join("/") } else { String::new() };
+
+        let mut candidates = vec![
+            format!("/Volumes/{}", share_name),
+            format!("/mnt/{}", share_name),
+            format!("/media/{}", share_name),
+        ];
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(format!("{}/media", home));
+        }
+
+        for cand in candidates {
+            let p = PathBuf::from(&cand);
+            if p.exists() {
+                return if subpath.is_empty() { p } else { p.join(&subpath) };
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        let default_mount = PathBuf::from(format!("/Volumes/{}", share_name));
+        #[cfg(target_os = "windows")]
+        let default_mount = PathBuf::from(format!("//192.168.1.25/{}", share_name));
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let default_mount = PathBuf::from(format!("/mnt/{}", share_name));
+
+        return if subpath.is_empty() { default_mount } else { default_mount.join(&subpath) };
+    }
+
+    // Windows drive path check (e.g. C:/media or D:\media)
+    if normalized.len() >= 2 {
+        let bytes = normalized.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return PathBuf::from(&normalized);
+        }
+    }
+
+    // Local absolute path check: starts with / and not //
+    if normalized.starts_with('/') && !normalized.starts_with("//") {
+        let p = PathBuf::from(&normalized);
+        if let Ok(canon) = fs::canonicalize(&p) {
+            return canon;
+        }
+        return p;
+    }
+
+    let volumes_candidate = PathBuf::from("/Volumes").join(&normalized);
+    if volumes_candidate.exists() {
+        return volumes_candidate;
+    }
+
+    let mnt_candidate = PathBuf::from("/mnt").join(&normalized);
+    if mnt_candidate.exists() {
+        return mnt_candidate;
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        return cwd.join(&normalized);
+    }
+
+    PathBuf::from(&normalized)
+}
+
+#[tauri::command]
+async fn sanitize_samba_path_command(raw_path: String) -> Result<String, String> {
+    Ok(sanitize_samba_path(&raw_path))
+}
+
 #[tauri::command]
 async fn perform_fast_scan(
     window: tauri::Window,
@@ -75,9 +232,9 @@ async fn perform_fast_scan(
     maxDepth: Option<usize>,
 ) -> Result<Vec<ScannedFileItem>, String> {
     let target = root_path.or(rootPath).unwrap_or_default();
-    let path = Path::new(&target);
-    if !path.exists() {
-        return Err(format!("Root path does not exist: {}", target));
+    let resolved_path = resolve_absolute_samba_path(&target);
+    if !resolved_path.exists() {
+        return Err(format!("Root path does not exist: {}", resolved_path.display()));
     }
 
     let is_safe = safe_scan.or(safeScan).unwrap_or(false);
@@ -91,7 +248,7 @@ async fn perform_fast_scan(
     let debug_enabled = std::env::var("RUST_LOG").map(|v| v == "debug" || v == "trace").unwrap_or(false)
         || std::env::var("DEBUG_WALK").map(|v| v == "1" || v == "true").unwrap_or(false);
 
-    let walker = WalkDir::new(path)
+    let walker = WalkDir::new(&resolved_path)
         .follow_links(false)
         .max_depth(depth_limit)
         .into_iter();
@@ -115,7 +272,7 @@ async fn perform_fast_scan(
         };
 
         let entry_path = entry.path();
-        if entry_path == path {
+        if entry_path == resolved_path {
             continue;
         }
 
@@ -129,14 +286,22 @@ async fn perform_fast_scan(
             }
         };
 
-        let name = entry.file_name().to_string_lossy().to_string();
+        let raw_name = entry.file_name().to_string_lossy().to_string();
+        let name = sanitize_filename(&raw_name);
         let full_path_str = entry_path.to_string_lossy().to_string();
-        let rel_path = entry_path
-            .strip_prefix(path)
-            .unwrap_or(entry_path)
-            .to_string_lossy()
-            .to_string()
-            .replace('\\', "/");
+        let raw_rel = match entry_path.strip_prefix(&resolved_path) {
+            Ok(p) => p.to_string_lossy().to_string().replace('\\', "/"),
+            Err(_) => {
+                let entry_str = full_path_str.replace('\\', "/");
+                let res_str = resolved_path.to_string_lossy().replace('\\', "/");
+                if entry_str.starts_with(&res_str) {
+                    entry_str[res_str.len()..].trim_start_matches('/').to_string()
+                } else {
+                    sanitize_samba_path(&entry_str)
+                }
+            }
+        };
+        let rel_path = sanitize_samba_path(&raw_rel);
 
         let is_dir = metadata.is_dir();
         let size = if is_dir { 0 } else { metadata.len() };
@@ -384,16 +549,16 @@ async fn scan_samba_volume(
 ) -> Result<ScanVolumeResult, String> {
     let target_share = share_name.or(shareName).unwrap_or_default();
     let default_mount = format!("/Volumes/{}", target_share);
-    let resolved_path = custom_path.or(customPath).unwrap_or(default_mount);
-    let path = Path::new(&resolved_path);
+    let resolved_raw = custom_path.or(customPath).unwrap_or(default_mount);
+    let resolved_path = resolve_absolute_samba_path(&resolved_raw);
 
-    if !path.exists() {
+    if !resolved_path.exists() {
         return Ok(ScanVolumeResult {
             success: false,
-            mount_path: resolved_path.clone(),
+            mount_path: resolved_path.to_string_lossy().to_string(),
             items: Vec::new(),
             total_scanned: 0,
-            error: Some(format!("Volume or path is not mounted: {}", path.display())),
+            error: Some(format!("Volume or path is not mounted: {}", resolved_path.display())),
         });
     }
 
@@ -413,7 +578,7 @@ async fn scan_samba_volume(
     let mut items = Vec::new();
     let mut scanned_count = 0;
 
-    let walker = WalkDir::new(path)
+    let walker = WalkDir::new(&resolved_path)
         .follow_links(false)
         .max_depth(depth_limit)
         .into_iter();
@@ -436,7 +601,7 @@ async fn scan_samba_volume(
         };
 
         let entry_path = entry.path();
-        if entry_path == path {
+        if entry_path == resolved_path {
             continue;
         }
 
@@ -451,7 +616,8 @@ async fn scan_samba_volume(
         };
 
         let is_dir = metadata.is_dir();
-        let name = entry.file_name().to_string_lossy().to_string();
+        let raw_name = entry.file_name().to_string_lossy().to_string();
+        let name = sanitize_filename(&raw_name);
 
         if !is_dir {
             if let Some(exts) = &allowed_exts {
@@ -467,12 +633,19 @@ async fn scan_samba_volume(
         }
 
         let full_path_str = entry_path.to_string_lossy().to_string();
-        let rel_path = entry_path
-            .strip_prefix(path)
-            .unwrap_or(entry_path)
-            .to_string_lossy()
-            .to_string()
-            .replace('\\', "/");
+        let raw_rel = match entry_path.strip_prefix(&resolved_path) {
+            Ok(p) => p.to_string_lossy().to_string().replace('\\', "/"),
+            Err(_) => {
+                let entry_str = full_path_str.replace('\\', "/");
+                let res_str = resolved_path.to_string_lossy().replace('\\', "/");
+                if entry_str.starts_with(&res_str) {
+                    entry_str[res_str.len()..].trim_start_matches('/').to_string()
+                } else {
+                    sanitize_samba_path(&entry_str)
+                }
+            }
+        };
+        let rel_path = sanitize_samba_path(&raw_rel);
 
         let size = if is_dir { 0 } else { metadata.len() };
         scanned_count += 1;
@@ -499,7 +672,7 @@ async fn scan_samba_volume(
     let total = items.len();
     Ok(ScanVolumeResult {
         success: true,
-        mount_path: resolved_path,
+        mount_path: resolved_path.to_string_lossy().to_string(),
         items,
         total_scanned: total,
         error: None,
@@ -598,7 +771,7 @@ struct PathCheckResult {
 
 #[tauri::command]
 async fn check_path_exists(path: String) -> Result<PathCheckResult, String> {
-    let p = PathBuf::from(&path);
+    let p = resolve_absolute_samba_path(&path);
     let exists = p.exists();
     let mut is_directory = false;
     let mut file_count = 0;
@@ -663,7 +836,7 @@ async fn check_path_exists(path: String) -> Result<PathCheckResult, String> {
         file_count,
         readable,
         writable,
-        resolved_path: path,
+        resolved_path: p.to_string_lossy().to_string(),
         error_code,
     })
 }

@@ -14,7 +14,7 @@
 export function sanitizeFilename(name: string): string {
   if (!name) return '';
 
-  return name
+  let cleaned = name
     .trim()
     // Replace colon with spaced hyphen (e.g. "Dune: Part Two" -> "Dune - Part Two")
     .replace(/:/g, ' - ')
@@ -30,32 +30,126 @@ export function sanitizeFilename(name: string): string {
     // Strip leading/trailing dots or spaces from the segment
     .replace(/^[.\s]+|[.\s]+$/g, '')
     .trim();
+
+  // Balance unclosed parenthesis e.g. "Stranger Things (2016" -> "Stranger Things (2016)"
+  const openParen = (cleaned.match(/\(/g) || []).length;
+  const closeParen = (cleaned.match(/\)/g) || []).length;
+  if (openParen > closeParen) {
+    cleaned = cleaned + ')'.repeat(openParen - closeParen);
+  }
+
+  const openBracket = (cleaned.match(/\[/g) || []).length;
+  const closeBracket = (cleaned.match(/\]/g) || []).length;
+  if (openBracket > closeBracket) {
+    cleaned = cleaned + ']'.repeat(openBracket - closeBracket);
+  }
+
+  return cleaned;
 }
 
 /**
  * Sanitizes a full relative or absolute path for Samba shares.
- * Preserves directory structure while ensuring each path segment is safe.
+ * Automatically normalizes slashes, handles UNC network prefixes (e.g. "//192.168.1.25/media/"),
+ * strips Windows drive letters, and balances unclosed brackets on every segment.
  */
-export function sanitizeSambaPath(rawPath: string): string {
+export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsolutePrefix?: boolean }): string {
   if (!rawPath) return '';
 
-  // Standardize slashes to forward slashes
-  const normalized = rawPath.replace(/\\/g, '/');
-  
+  let normalized = rawPath.replace(/\\/g, '/');
+
+  // Strip raw UNC host & share prefixes if present e.g. "//192.168.1.25/media/Series/..." -> "Series/..."
+  // or "smb://192.168.1.25/media/Series/..." -> "Series/..."
+  // Handles variable leading slashes: //, ///, \\\\, etc.
+  const uncMatch = normalized.match(/^(?:smb:)?\/+([^\/]+)\/([^\/]+)(?:\/(.*))?$/i);
+  if (uncMatch) {
+    normalized = uncMatch[3] || '';
+  }
+
+  // Also strip leading /Volumes/<share>/ or /mnt/<share>/ or /media/<share>/ if extracting share relative path
+  if (!options?.preserveAbsolutePrefix) {
+    normalized = normalized.replace(/^\/?(?:Volumes|mnt|media)\/[^\/]+\/?/i, '');
+    // Strip Windows drive letters e.g. "C:/" or "D:\"
+    normalized = normalized.replace(/^[a-zA-Z]:\/?/, '');
+  }
+
   // Split into segments
   const segments = normalized.split('/').filter(Boolean);
   
-  // Sanitize each individual folder or file segment
+  // Sanitize each individual folder or file segment (balances parens/brackets, removes forbidden chars)
   const sanitizedSegments = segments.map((seg) => sanitizeFilename(seg)).filter(Boolean);
 
-  return sanitizedSegments.join('/');
+  const result = sanitizedSegments.join('/');
+
+  if (options?.preserveAbsolutePrefix && rawPath.startsWith('/') && !result.startsWith('/')) {
+    return `/${result}`;
+  }
+
+  return result;
+}
+
+export function encodeSambaPathForUrl(path: string): string {
+  return encodeURIComponent(sanitizeSambaPath(path));
+}
+
+export interface PathDiagnosticReport {
+  rawPath: string;
+  sanitizedPath: string;
+  hasDoubleSlash: boolean;
+  hasMixedSlashes: boolean;
+  hasUnclosedParens: boolean;
+  issues: string[];
+  isSuspicious: boolean;
 }
 
 /**
- * URL-encodes a Samba path safely for query strings or API params.
+ * Explicitly takes a raw path string and runs it through a series of regex checks
+ * to detect and report unescaped network prefixes like '//' or mixed slash directions.
  */
-export function encodeSambaPathForUrl(path: string): string {
-  return encodeURIComponent(sanitizeSambaPath(path));
+export function diagnoseSambaPath(rawPath: string): PathDiagnosticReport {
+  const raw = rawPath || '';
+  const issues: string[] = [];
+
+  // 1. Check for double slash start
+  const hasDoubleSlash = raw.startsWith('//') || raw.startsWith('\\\\');
+  if (hasDoubleSlash) {
+    issues.push('Path begins with a suspicious double slash (UNC network prefix or double root)');
+  }
+
+  // 2. Check for mixed slash directions
+  const hasBackslash = raw.includes('\\');
+  const hasForwardSlash = raw.includes('/');
+  const hasMixedSlashes = hasBackslash && hasForwardSlash;
+  if (hasMixedSlashes) {
+    issues.push('Path contains mixed slash directions (both / and \\)');
+  } else if (raw.includes('\\\\\\\\')) {
+    issues.push('Path contains redundant consecutive backslashes');
+  }
+
+  // 3. Check for unescaped network prefixes / consecutive slashes
+  const cleanNoProto = raw.replace(/^(?:smb|https?):/i, '');
+  if (/\/{2,}/.test(cleanNoProto.replace(/^\/\//, ''))) {
+    issues.push('Path contains redundant consecutive slashes (//)');
+  }
+
+  // 4. Check for unclosed parentheses
+  const openParens = (raw.match(/\(/g) || []).length;
+  const closeParens = (raw.match(/\)/g) || []).length;
+  const hasUnclosedParens = openParens !== closeParens;
+  if (hasUnclosedParens) {
+    issues.push(`Unbalanced parentheses (${openParens} open vs ${closeParens} close)`);
+  }
+
+  const sanitizedPath = sanitizeSambaPath(raw);
+
+  return {
+    rawPath: raw,
+    sanitizedPath,
+    hasDoubleSlash,
+    hasMixedSlashes,
+    hasUnclosedParens,
+    issues,
+    isSuspicious: issues.length > 0 || hasDoubleSlash,
+  };
 }
 
 /**

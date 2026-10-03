@@ -84,6 +84,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [isOpeningSettings, setIsOpeningSettings] = useState(false);
   const [fdaActionMessage, setFdaActionMessage] = useState<string | null>(null);
   const [fdaToast, setFdaToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; message: string } | null>(null);
+  const [isPollingFda, setIsPollingFda] = useState(false);
   const [copiedSettingsPath, setCopiedSettingsPath] = useState(false);
 
   useEffect(() => {
@@ -94,48 +95,61 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
   const handleRequestFullDiskAccess = async () => {
     setIsOpeningSettings(true);
+    setIsPollingFda(true);
     setFdaActionMessage(null);
-    setFdaToast(null);
+    setFdaToast({
+      type: 'info',
+      message: 'Requesting macOS Full Disk Access permission & registering app in System Settings...',
+    });
+
     try {
-      const res = await permissionsManager.openSecurityAndPrivacy();
+      const res = await permissionsManager.requestAndRegisterFullDiskAccess();
       if (!res.success) {
         setFdaToast({
           type: 'error',
-          message: `Permission check failed to trigger: ${res.message}`,
+          message: `Permission request failed: ${res.message}`,
         });
         setFdaActionMessage(res.message);
+        setIsPollingFda(false);
       } else {
+        setFdaActionMessage(res.message);
         setFdaToast({
           type: 'info',
-          message: res.message || 'Triggered macOS Security & Privacy pane for Full Disk Access.',
+          message: 'Opened macOS System Settings > Full Disk Access. Toggle switch to ON for SambaVault. Live verifying access...',
         });
-        setFdaActionMessage(res.message);
-        // Automatically re-verify permissions after user switches to Settings
-        setTimeout(async () => {
-          try {
-            const updated = await permissionsManager.checkFullDiskAccess(true);
-            setFdaStatus(updated);
-            if (updated.hasFullDiskAccess) {
-              setFdaToast({
-                type: 'success',
-                message: '✓ Full Disk Access successfully granted and verified!',
-              });
-            }
-          } catch (probeErr: any) {
+
+        // Live polling every 1s for 15s to detect when user flips toggle in System Settings
+        let pollCount = 0;
+        const interval = setInterval(async () => {
+          pollCount++;
+          const status = await permissionsManager.checkFullDiskAccess(true);
+          setFdaStatus(status);
+          if (status.hasFullDiskAccess) {
+            clearInterval(interval);
+            setIsPollingFda(false);
             setFdaToast({
-              type: 'error',
-              message: `Permission check failed to trigger: ${probeErr?.message || probeErr}`,
+              type: 'success',
+              message: '✓ Full Disk Access successfully allowed and verified!',
+            });
+            setFdaActionMessage('✓ Full Disk Access successfully allowed and verified!');
+          } else if (pollCount >= 15) {
+            clearInterval(interval);
+            setIsPollingFda(false);
+            setFdaToast({
+              type: 'warning',
+              message: 'Permission is still pending. Ensure the toggle switch for SambaVault is set to ON in System Settings.',
             });
           }
-        }, 3500);
+        }, 1000);
       }
     } catch (e: any) {
-      const errorMsg = `Permission check failed to trigger: ${e?.message || e}`;
+      const errorMsg = `Permission request error: ${e?.message || e}`;
       setFdaToast({
         type: 'error',
         message: errorMsg,
       });
       setFdaActionMessage(errorMsg);
+      setIsPollingFda(false);
     } finally {
       setIsOpeningSettings(false);
     }
@@ -385,11 +399,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <button
                 type="button"
                 onClick={handleRequestFullDiskAccess}
-                disabled={isOpeningSettings}
+                disabled={isOpeningSettings || isPollingFda}
                 className="px-4 py-2.5 bg-gradient-to-r from-amber-600 via-rose-600 to-red-600 hover:from-amber-500 hover:to-rose-500 active:from-amber-700 active:to-rose-700 text-white rounded-xl text-xs font-bold transition shadow-lg flex items-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                <ExternalLink className={`w-4 h-4 ${isOpeningSettings ? 'animate-spin' : ''}`} />
-                <span>Request Full Disk Access</span>
+                <ExternalLink className={`w-4 h-4 ${isOpeningSettings || isPollingFda ? 'animate-spin text-amber-300' : ''}`} />
+                <span>{isPollingFda ? 'Polling System Settings...' : 'Allow & Register Full Disk Access'}</span>
               </button>
 
               <button

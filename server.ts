@@ -4488,6 +4488,42 @@ app.post('/api/system/open-security-privacy', async (req: Request, res: Response
   }
 });
 
+// Request macOS Full Disk Access Permission & Register App in TCC
+app.post('/api/system/request-full-disk-access', async (req: Request, res: Response) => {
+  try {
+    if (process.platform !== 'darwin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Full Disk Access permission registration is only applicable on macOS.',
+      });
+    }
+
+    const { exec } = await import('child_process');
+    const home = os.homedir();
+
+    // Attempt TCC probe read
+    try {
+      fs.readdirSync(path.join(home, 'Library', 'Safari'));
+    } catch (_) {}
+
+    // Present osascript native permission dialog and launch System Settings
+    const script = `display dialog "SambaVault requests Full Disk Access to read network shares and mounted volumes under /Volumes." buttons {"Cancel", "Allow & Open Settings"} default button "Allow & Open Settings" with title "SambaVault Full Disk Access Permission" with icon caution`;
+
+    exec(`osascript -e '${script}'`, (err, stdout) => {
+      if (stdout && stdout.includes('Cancel')) {
+        return res.json({ success: false, message: 'User cancelled permission request.' });
+      }
+      exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"');
+      res.json({
+        success: true,
+        message: 'Permission requested. App registered in macOS TCC and opened System Settings > Full Disk Access.',
+      });
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to request Full Disk Access', message: error?.message });
+  }
+});
+
 // Network Diagnostics Endpoint (Ping, Traceroute, SMB Port Query)
 app.post('/api/samba/network-diagnostics', async (req: Request, res: Response) => {
   try {

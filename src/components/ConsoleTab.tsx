@@ -55,6 +55,7 @@ import {
 } from '../utils/scanPathDebugger';
 import { PathInspectorView } from './PathInspectorView';
 import { PathTesterModal } from './PathTesterModal';
+import { ScanPerformanceDashboard } from './ScanPerformanceDashboard';
 import { permissionsManager } from '../utils/permissionsManager';
 
 interface D3SambaTreeVisualizerProps {
@@ -267,7 +268,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   const [prevalidateResult, setPrevalidateResult] = useState<any>(null);
 
   // Diagnostic Tab Toggles
-  const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<'info' | 'analysis' | 'tree' | 'scan-debug' | 'folder-inspector'>('info');
+  const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<'info' | 'analysis' | 'tree' | 'scan-debug' | 'folder-inspector' | 'performance'>('performance');
   const [folderInspectorLogs, setFolderInspectorLogs] = useState<Array<{ id: string; path: string; isDir: boolean; count: number; timestamp: number }>>([]);
   const [isPathTesterOpen, setIsPathTesterOpen] = useState(false);
 
@@ -954,6 +955,19 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
             {/* Diagnostic Mode Tab Selector */}
             <div className="flex border-b border-slate-800 pb-1.5 gap-4">
               <button
+                onClick={() => setActiveDiagnosticTab('performance')}
+                className={`text-xs font-bold font-mono pb-2 relative transition cursor-pointer flex items-center gap-1.5 ${
+                  activeDiagnosticTab === 'performance'
+                    ? 'text-cyan-400'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <span>⚡ Performance Dashboard (Recharts)</span>
+                {activeDiagnosticTab === 'performance' && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-500" />
+                )}
+              </button>
+              <button
                 onClick={() => setActiveDiagnosticTab('info')}
                 className={`text-xs font-bold font-mono pb-2 relative transition cursor-pointer ${
                   activeDiagnosticTab === 'info'
@@ -1604,6 +1618,8 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                   </div>
                 </div>
               </div>
+            ) : activeDiagnosticTab === 'performance' ? (
+              <ScanPerformanceDashboard onTriggerSync={onTriggerSync} isSyncing={liveScanActive} />
             ) : (
               /* activeDiagnosticTab === 'scan-debug' */
               <PathInspectorView records={scanDebugRecords} onTriggerSync={onTriggerSync} />

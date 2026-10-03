@@ -267,6 +267,59 @@ export class PermissionsManager {
   }
 
   /**
+   * Triggers native permission request dialog via AppleScript/TCC, registers app in macOS Full Disk Access list,
+   * opens System Settings, and starts auto-polling for permission verification.
+   */
+  public async requestAndRegisterFullDiskAccess(): Promise<{ success: boolean; message: string }> {
+    let isTauri = false;
+    try {
+      isTauri = Boolean((window as any).__TAURI__ || (window as any).__TAURI_METADATA__);
+    } catch (_) {}
+
+    let requestResult: { success: boolean; message: string } = { success: false, message: 'Initial request' };
+
+    // 1. Try Tauri native invocation
+    if (isTauri) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        const res = await invoke<string>('request_full_disk_access_and_register');
+        requestResult = { success: true, message: res || 'Requested Full Disk Access and registered app in macOS TCC' };
+      } catch (err: any) {
+        console.warn('[PermissionsManager] Tauri request_full_disk_access_and_register error:', err);
+        requestResult = { success: false, message: err?.message || String(err) };
+      }
+    } else {
+      // 2. Try HTTP backend proxy endpoint
+      try {
+        const res = await fetch('/api/system/request-full-disk-access', { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          requestResult = { success: Boolean(data.success), message: data.message || 'Requested Full Disk Access' };
+        }
+      } catch (httpErr: any) {
+        console.warn('[PermissionsManager] HTTP request-full-disk-access error:', httpErr);
+      }
+    }
+
+    if (!requestResult.success) {
+      // Fallback to launching Security & Privacy directly
+      requestResult = await this.openSecurityAndPrivacy();
+    }
+
+    // 3. Start live 15-second polling loop to automatically detect when user flips toggle in System Settings
+    let pollCount = 0;
+    const pollInterval = setInterval(async () => {
+      pollCount++;
+      const updatedStatus = await this.checkFullDiskAccess(true);
+      if (updatedStatus.hasFullDiskAccess || pollCount >= 15) {
+        clearInterval(pollInterval);
+      }
+    }, 1000);
+
+    return requestResult;
+  }
+
+  /**
    * Opens the macOS Security & Privacy pane directly to the Full Disk Access section.
    */
   public async openSecurityAndPrivacy(): Promise<{ success: boolean; message: string }> {

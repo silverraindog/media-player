@@ -9,7 +9,176 @@ use walkdir::WalkDir;
 
 mod ai;
 mod db;
-mod permissions;
+
+pub mod macos_permissions {
+    use serde::{Deserialize, Serialize};
+    use std::process::Command;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct FullDiskAccessResult {
+        pub is_macos: bool,
+        pub has_full_disk_access: bool,
+        pub platform: String,
+        pub checked_path: String,
+        pub details: String,
+        pub system_settings_path: String,
+    }
+
+    /// Verifies macOS Full Disk Access (FDA) by probing TCC-protected locations
+    /// with secure command-line checks (`stat -f` and `ls -@`) and filesystem read tests.
+    #[tauri::command]
+    pub async fn check_full_disk_access() -> Result<FullDiskAccessResult, String> {
+        #[cfg(target_os = "macos")]
+        {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
+            let candidate_paths = [
+                std::path::PathBuf::from(&home).join("Library").join("Safari"),
+                std::path::PathBuf::from(&home).join("Library").join("Mail"),
+                std::path::PathBuf::from(&home).join("Library").join("Messages"),
+                std::path::PathBuf::from("/Library/Application Support/com.apple.TCC"),
+                std::path::PathBuf::from("/Volumes"),
+            ];
+
+            let mut has_access = false;
+            let mut checked_path = candidate_paths[0].to_string_lossy().to_string();
+            let mut details = "Checked standard macOS TCC directories via command-line stat/ls probes.".to_string();
+
+            for p in &candidate_paths {
+                if p.exists() {
+                    checked_path = p.to_string_lossy().to_string();
+
+                    // 1. Perform reliable CLI `stat -f "%Sp %N"` check
+                    let stat_check = Command::new("stat")
+                        .arg("-f")
+                        .arg("%Sp %N")
+                        .arg(p)
+                        .output();
+
+                    // 2. Perform `ls -@` attribute check
+                    let ls_check = Command::new("ls")
+                        .arg("-@")
+                        .arg(p)
+                        .output();
+
+                    let stat_ok = stat_check.as_ref().map(|o| o.status.success()).unwrap_or(false);
+                    let ls_ok = ls_check.as_ref().map(|o| o.status.success()).unwrap_or(false);
+
+                    // 3. Perform std::fs directory read test
+                    let read_ok = std::fs::read_dir(p).is_ok();
+
+                    if (stat_ok || ls_ok) && read_ok {
+                        has_access = true;
+                        details = format!("Successfully verified stat and read access to {} (cli stat: {}, ls -@: {}).", p.display(), stat_ok, ls_ok);
+                        break;
+                    } else if !read_ok {
+                        has_access = false;
+                        details = format!("Access denied to {} (stat: {}, ls -@: {}). Full Disk Access required.", p.display(), stat_ok, ls_ok);
+                        break;
+                    }
+                }
+            }
+
+            if !has_access && checked_path == candidate_paths[0].to_string_lossy() && !candidate_paths[0].exists() {
+                let volumes = std::path::PathBuf::from("/Volumes");
+                let stat_v = Command::new("stat").arg("-f").arg("%Sp").arg(&volumes).output();
+                let read_v = std::fs::read_dir(&volumes).is_ok();
+                if stat_v.as_ref().map(|o| o.status.success()).unwrap_or(false) && read_v {
+                    has_access = true;
+                    details = "Verified read access to /Volumes root.".to_string();
+                } else {
+                    has_access = false;
+                    details = "Access denied to /Volumes. Full Disk Access required.".to_string();
+                }
+            }
+
+            Ok(FullDiskAccessResult {
+                is_macos: true,
+                has_full_disk_access: has_access,
+                platform: "macos".to_string(),
+                checked_path,
+                details,
+                system_settings_path: "System Settings > Privacy & Security > Full Disk Access".to_string(),
+            })
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(FullDiskAccessResult {
+                is_macos: false,
+                has_full_disk_access: true,
+                platform: std::env::consts::OS.to_string(),
+                checked_path: "".to_string(),
+                details: "Full Disk Access check is only applicable on macOS.".to_string(),
+                system_settings_path: "".to_string(),
+            })
+        }
+    }
+
+    /// Triggers macOS System Settings to directly open the Privacy & Security > Full Disk Access pane.
+    #[tauri::command]
+    pub async fn open_macos_security_privacy() -> Result<String, String> {
+        #[cfg(target_os = "macos")]
+        {
+            let res = Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+                .spawn();
+
+            match res {
+                Ok(_) => Ok("Opened macOS Security & Privacy pane successfully.".to_string()),
+                Err(e) => {
+                    let _ = Command::new("open")
+                        .arg("/System/Library/PreferencePanes/Security.prefPane")
+                        .spawn();
+                    Ok(format!("Opened Security.prefPane fallback: {}", e))
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err("Security & Privacy pane is only available on macOS.".to_string())
+        }
+    }
+
+    /// Prompts user permission dialog via AppleScript, attempts TCC read to register app in Full Disk Access list,
+    /// and opens macOS System Settings to Privacy & Security > Full Disk Access.
+    #[tauri::command]
+    pub async fn request_full_disk_access_and_register() -> Result<String, String> {
+        #[cfg(target_os = "macos")]
+        {
+            // 1. Attempt TCC read to ensure application is registered in macOS TCC database
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
+            let tcc_probe = std::path::PathBuf::from(&home).join("Library").join("Safari");
+            let _ = std::fs::read_dir(&tcc_probe);
+
+            // 2. Present native macOS dialog via osascript asking for permission
+            let script = r#'display dialog "SambaVault requests Full Disk Access to read network shares and mounted volumes under /Volumes." buttons {"Cancel", "Allow & Open Settings"} default button "Allow & Open Settings" with title "SambaVault Full Disk Access Permission" with icon caution'#;
+            let dialog_res = Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .output();
+
+            if let Ok(out) = dialog_res {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("Cancel") {
+                    return Err("User cancelled permission request.".to_string());
+                }
+            }
+
+            // 3. Open macOS System Settings to Full Disk Access pane
+            let _ = Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+                .spawn();
+
+            Ok("Permission requested. App registered in macOS TCC and opened System Settings > Full Disk Access.".to_string())
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err("Full Disk Access registration is only applicable on macOS.".to_string())
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1022,8 +1191,9 @@ fn main() {
             checkPathExists,
             fix_path_permissions,
             run_samba_diagnostic,
-            permissions::check_full_disk_access,
-            permissions::open_macos_security_privacy,
+            macos_permissions::check_full_disk_access,
+            macos_permissions::open_macos_security_privacy,
+            macos_permissions::request_full_disk_access_and_register,
             db::get_all_media,
             db::save_media,
             db::update_watch_progress,

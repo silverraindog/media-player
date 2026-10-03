@@ -44,6 +44,7 @@ import {
   cronToTimeAndDays,
 } from '../utils/syncScheduler';
 import { PermissionDiagnostics } from './PermissionDiagnostics';
+import { PermissionHelpModal } from './PermissionHelpModal';
 import { logger } from '../utils/loggerService';
 import { permissionsManager, FullDiskAccessStatus } from '../utils/permissionsManager';
 
@@ -87,6 +88,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [fdaToast, setFdaToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; message: string } | null>(null);
   const [isPollingFda, setIsPollingFda] = useState(false);
   const [copiedSettingsPath, setCopiedSettingsPath] = useState(false);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
 
   useEffect(() => {
     permissionsManager.checkFullDiskAccess().then(setFdaStatus);
@@ -394,7 +396,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   const res = await invoke('diagnostic_check_full_disk_access');
                   alert(res);
                 } catch (e) {
-                  alert(e);
+                  console.error(e);
+                  setIsHelpModalOpen(true);
                 }
               }}
               className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow shrink-0"
@@ -402,6 +405,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <Activity className="w-3.5 h-3.5 text-indigo-400" />
               <span>Run FDA Diagnostic</span>
             </button>
+            <PermissionHelpModal isOpen={isHelpModalOpen} onClose={() => setIsHelpModalOpen(false)} />
             <button
               type="button"
               onClick={handleOpenSecuritySettings}

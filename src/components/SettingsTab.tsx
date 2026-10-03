@@ -83,6 +83,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [isCheckingFda, setIsCheckingFda] = useState(false);
   const [isOpeningSettings, setIsOpeningSettings] = useState(false);
   const [fdaActionMessage, setFdaActionMessage] = useState<string | null>(null);
+  const [fdaToast, setFdaToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; message: string } | null>(null);
   const [copiedSettingsPath, setCopiedSettingsPath] = useState(false);
 
   useEffect(() => {
@@ -91,38 +92,87 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     return () => unsub();
   }, []);
 
-  const handleOpenSecuritySettings = async () => {
+  const handleRequestFullDiskAccess = async () => {
     setIsOpeningSettings(true);
     setFdaActionMessage(null);
+    setFdaToast(null);
     try {
       const res = await permissionsManager.openSecurityAndPrivacy();
-      setFdaActionMessage(res.message);
-      setTimeout(() => {
-        permissionsManager.checkFullDiskAccess(true).then(setFdaStatus);
-      }, 3500);
+      if (!res.success) {
+        setFdaToast({
+          type: 'error',
+          message: `Permission check failed to trigger: ${res.message}`,
+        });
+        setFdaActionMessage(res.message);
+      } else {
+        setFdaToast({
+          type: 'info',
+          message: res.message || 'Triggered macOS Security & Privacy pane for Full Disk Access.',
+        });
+        setFdaActionMessage(res.message);
+        // Automatically re-verify permissions after user switches to Settings
+        setTimeout(async () => {
+          try {
+            const updated = await permissionsManager.checkFullDiskAccess(true);
+            setFdaStatus(updated);
+            if (updated.hasFullDiskAccess) {
+              setFdaToast({
+                type: 'success',
+                message: '✓ Full Disk Access successfully granted and verified!',
+              });
+            }
+          } catch (probeErr: any) {
+            setFdaToast({
+              type: 'error',
+              message: `Permission check failed to trigger: ${probeErr?.message || probeErr}`,
+            });
+          }
+        }, 3500);
+      }
     } catch (e: any) {
-      setFdaActionMessage(`Could not launch System Settings: ${e?.message || e}`);
+      const errorMsg = `Permission check failed to trigger: ${e?.message || e}`;
+      setFdaToast({
+        type: 'error',
+        message: errorMsg,
+      });
+      setFdaActionMessage(errorMsg);
     } finally {
       setIsOpeningSettings(false);
     }
   };
 
+  const handleOpenSecuritySettings = handleRequestFullDiskAccess;
+
   const handleVerifyFdaPermission = async () => {
     setIsCheckingFda(true);
     setFdaActionMessage(null);
+    setFdaToast(null);
     try {
       const status = await permissionsManager.checkFullDiskAccess(true);
       setFdaStatus(status);
       if (status.hasFullDiskAccess) {
+        setFdaToast({
+          type: 'success',
+          message: '✓ Full Disk Access successfully verified!',
+        });
         setFdaActionMessage('✓ Full Disk Access successfully verified!');
       } else {
+        setFdaToast({
+          type: 'warning',
+          message: '⚠️ Full Disk Access is still pending. Ensure SambaVault is enabled in System Settings > Privacy & Security > Full Disk Access.',
+        });
         setFdaActionMessage('⚠️ Full Disk Access is still pending. Ensure SambaVault is enabled in System Settings > Privacy & Security > Full Disk Access.');
       }
     } catch (e: any) {
-      setFdaActionMessage(`Verification error: ${e?.message || e}`);
+      const errorMsg = `Permission verification error: ${e?.message || e}`;
+      setFdaToast({
+        type: 'error',
+        message: errorMsg,
+      });
+      setFdaActionMessage(errorMsg);
     } finally {
       setIsCheckingFda(false);
-      setTimeout(() => setFdaActionMessage(null), 5000);
+      setTimeout(() => setFdaActionMessage(null), 6000);
     }
   };
 
@@ -334,12 +384,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
               <button
                 type="button"
-                onClick={handleOpenSecuritySettings}
+                onClick={handleRequestFullDiskAccess}
                 disabled={isOpeningSettings}
-                className="px-4 py-2.5 bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 active:from-amber-700 active:to-rose-700 text-white rounded-xl text-xs font-bold transition shadow-lg flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-600 via-rose-600 to-red-600 hover:from-amber-500 hover:to-rose-500 active:from-amber-700 active:to-rose-700 text-white rounded-xl text-xs font-bold transition shadow-lg flex items-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <ExternalLink className={`w-4 h-4 ${isOpeningSettings ? 'animate-spin' : ''}`} />
-                <span>Open Security &amp; Privacy</span>
+                <span>Request Full Disk Access</span>
               </button>
 
               <button
@@ -353,6 +403,39 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Real-Time Toast Notification Banner */}
+          {fdaToast && (
+            <div
+              className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs font-mono animate-in fade-in duration-200 ${
+                fdaToast.type === 'error'
+                  ? 'bg-rose-950/80 border-rose-500/50 text-rose-200'
+                  : fdaToast.type === 'success'
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-200'
+                  : fdaToast.type === 'warning'
+                  ? 'bg-amber-950/80 border-amber-500/50 text-amber-200'
+                  : 'bg-cyan-950/80 border-cyan-500/50 text-cyan-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {fdaToast.type === 'error' ? (
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                ) : fdaToast.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <Info className="w-4 h-4 text-cyan-400 shrink-0" />
+                )}
+                <span>{fdaToast.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFdaToast(null)}
+                className="text-slate-400 hover:text-white text-[11px] uppercase tracking-wider font-bold cursor-pointer shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
 
           {/* System Settings Path & Step-by-Step Instructions */}
           <div className="bg-black/60 border border-amber-900/60 rounded-xl p-4 space-y-3">

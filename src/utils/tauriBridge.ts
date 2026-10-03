@@ -540,6 +540,7 @@ export function normalizePathRelativeToShareRoot(itemRelPath: string, scanRootPa
 
 /**
  * Resolves any network URI, UNC path, or relative folder into an absolute local filesystem path.
+ * - Strips leading '//', '///+', and '\\\\' network prefixes before sending paths to the Rust scanner.
  * - Handles UNC network pointers e.g. "//192.168.1.25/media" -> "/Volumes/media"
  * - Handles smb:// URIs e.g. "smb://192.168.1.25/media/Series" -> "/Volumes/media/Series"
  * - Resolves relative paths against standard mount locations
@@ -550,23 +551,49 @@ export function resolveLocalMountPath(inputPath: string, shareName = 'media'): s
 
   let normalized = raw.replace(/\\/g, '/');
 
-  // Handle UNC / smb URI network pointers: //192.168.1.25/media or smb://192.168.1.25/media
-  if (normalized.startsWith('//') || normalized.startsWith('smb://')) {
-    const stripped = normalized.replace(/^smb:\/\//i, '').replace(/^\/+/, '');
+  // 1. Strip leading smb: protocol if present
+  normalized = normalized.replace(/^smb:\/\//i, '');
+
+  // 2. Handle UNC / double-slash network pointers: //192.168.1.25/media, //media, //Volumes/media
+  if (normalized.startsWith('//') || /^\/{2,}/.test(normalized)) {
+    const stripped = normalized.replace(/^\/+/, '');
     const parts = stripped.split('/').filter(Boolean);
-    const targetShare = parts.length >= 2 ? parts[1] : (parts[0] || shareName);
-    const subpath = parts.length > 2 ? parts.slice(2).join('/') : '';
-    const baseMount = `/Volumes/${targetShare}`;
-    return subpath ? `${baseMount}/${subpath}` : baseMount;
+
+    if (parts.length === 0) {
+      return `/Volumes/${shareName}`;
+    }
+
+    // Check if the first segment is already 'Volumes' or 'mnt'
+    if (parts[0].toLowerCase() === 'volumes') {
+      const remaining = parts.slice(1).join('/');
+      return remaining ? `/Volumes/${remaining}` : `/Volumes/${shareName}`;
+    }
+    if (parts[0].toLowerCase() === 'mnt') {
+      const remaining = parts.slice(1).join('/');
+      return remaining ? `/mnt/${remaining}` : `/mnt/${shareName}`;
+    }
+
+    // Check if parts[0] is an IP/host (contains dots, numbers, or uppercase host) and parts[1] is share
+    if (parts.length >= 2) {
+      const targetShare = parts[1];
+      const subpath = parts.slice(2).join('/');
+      const baseMount = `/Volumes/${targetShare}`;
+      return subpath ? `${baseMount}/${subpath}` : baseMount;
+    }
+
+    // Single segment e.g. "//media" -> "/Volumes/media"
+    return `/Volumes/${parts[0]}`;
   }
 
-  // If already absolute local filesystem path (single leading slash or Windows drive letter)
+  // 3. If already a single-slash absolute path (e.g. /Volumes/media or /mnt/media) or Windows drive letter (C:/...)
   if ((normalized.startsWith('/') && !normalized.startsWith('//')) || /^[a-zA-Z]:/.test(normalized)) {
-    return normalized;
+    // Normalize any internal consecutive slashes
+    return normalized.replace(/\/{2,}/g, '/');
   }
 
-  // If relative path
-  return `/Volumes/${shareName}/${normalized.replace(/^\/+/, '')}`;
+  // 4. If relative path, anchor to /Volumes/<shareName>
+  const cleanRel = normalized.replace(/^\/+/, '').replace(/\/{2,}/g, '/');
+  return `/Volumes/${shareName}/${cleanRel}`;
 }
 
 export const performFastScan = async (

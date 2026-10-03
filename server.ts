@@ -4378,6 +4378,100 @@ app.post('/api/samba/fix-permissions', async (req: Request, res: Response) => {
   }
 });
 
+// macOS Full Disk Access Permission Probe
+app.get('/api/system/macos-permissions', async (req: Request, res: Response) => {
+  try {
+    const isMacOS = process.platform === 'darwin';
+    if (!isMacOS) {
+      return res.json({
+        isMacOS: false,
+        hasFullDiskAccess: true,
+        platform: process.platform,
+        checkedPath: '',
+        details: 'Full Disk Access check is only applicable on macOS.',
+        systemSettingsPath: '',
+      });
+    }
+
+    const home = os.homedir();
+    const candidatePaths = [
+      path.join(home, 'Library', 'Safari'),
+      path.join(home, 'Library', 'Mail'),
+      path.join(home, 'Library', 'Messages'),
+      '/Library/Application Support/com.apple.TCC',
+      '/Volumes',
+    ];
+
+    let hasAccess = false;
+    let checkedPath = candidatePaths[0];
+    let details = 'Checked standard macOS TCC directories.';
+
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        checkedPath = p;
+        try {
+          fs.readdirSync(p);
+          hasAccess = true;
+          details = `Successfully verified access to ${p}.`;
+          break;
+        } catch (err: any) {
+          hasAccess = false;
+          details = `Access denied to ${p} (${err?.message || 'EPERM'}). Full Disk Access required.`;
+          break;
+        }
+      }
+    }
+
+    if (!hasAccess && checkedPath === candidatePaths[0] && !fs.existsSync(checkedPath)) {
+      try {
+        fs.readdirSync('/Volumes');
+        hasAccess = true;
+        details = 'Verified read access to /Volumes root.';
+      } catch (err: any) {
+        hasAccess = false;
+        details = `Access denied to /Volumes (${err?.message || 'EPERM'}). Full Disk Access required.`;
+      }
+    }
+
+    res.json({
+      isMacOS: true,
+      hasFullDiskAccess: hasAccess,
+      platform: 'macos',
+      checkedPath,
+      details,
+      systemSettingsPath: 'System Settings > Privacy & Security > Full Disk Access',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to check macOS permissions', message: error?.message });
+  }
+});
+
+// Launch macOS Security & Privacy System Settings Pane
+app.post('/api/system/open-security-privacy', async (req: Request, res: Response) => {
+  try {
+    if (process.platform !== 'darwin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Security & Privacy settings pane is only available on macOS.',
+      });
+    }
+
+    const { exec } = await import('child_process');
+    exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"', (err) => {
+      if (err) {
+        exec('open "/System/Library/PreferencePanes/Security.prefPane"');
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Triggered macOS Security & Privacy pane (Privacy_AllFiles).',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to open Security & Privacy', message: error?.message });
+  }
+});
+
 // Network Diagnostics Endpoint (Ping, Traceroute, SMB Port Query)
 app.post('/api/samba/network-diagnostics', async (req: Request, res: Response) => {
   try {

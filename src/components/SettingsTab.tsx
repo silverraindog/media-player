@@ -44,6 +44,7 @@ import {
   cronToTimeAndDays,
 } from '../utils/syncScheduler';
 import { logger } from '../utils/loggerService';
+import { permissionsManager, FullDiskAccessStatus } from '../utils/permissionsManager';
 
 interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
@@ -76,6 +77,60 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [mountMappingsCount, setMountMappingsCount] = useState<number>(0);
   const [clearedMappingsToast, setClearedMappingsToast] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+
+  // macOS Full Disk Access State
+  const [fdaStatus, setFdaStatus] = useState<FullDiskAccessStatus | null>(() => permissionsManager.getCachedStatus());
+  const [isCheckingFda, setIsCheckingFda] = useState(false);
+  const [isOpeningSettings, setIsOpeningSettings] = useState(false);
+  const [fdaActionMessage, setFdaActionMessage] = useState<string | null>(null);
+  const [copiedSettingsPath, setCopiedSettingsPath] = useState(false);
+
+  useEffect(() => {
+    permissionsManager.checkFullDiskAccess().then(setFdaStatus);
+    const unsub = permissionsManager.subscribe(setFdaStatus);
+    return () => unsub();
+  }, []);
+
+  const handleOpenSecuritySettings = async () => {
+    setIsOpeningSettings(true);
+    setFdaActionMessage(null);
+    try {
+      const res = await permissionsManager.openSecurityAndPrivacy();
+      setFdaActionMessage(res.message);
+      setTimeout(() => {
+        permissionsManager.checkFullDiskAccess(true).then(setFdaStatus);
+      }, 3500);
+    } catch (e: any) {
+      setFdaActionMessage(`Could not launch System Settings: ${e?.message || e}`);
+    } finally {
+      setIsOpeningSettings(false);
+    }
+  };
+
+  const handleVerifyFdaPermission = async () => {
+    setIsCheckingFda(true);
+    setFdaActionMessage(null);
+    try {
+      const status = await permissionsManager.checkFullDiskAccess(true);
+      setFdaStatus(status);
+      if (status.hasFullDiskAccess) {
+        setFdaActionMessage('✓ Full Disk Access successfully verified!');
+      } else {
+        setFdaActionMessage('⚠️ Full Disk Access is still pending. Ensure SambaVault is enabled in System Settings > Privacy & Security > Full Disk Access.');
+      }
+    } catch (e: any) {
+      setFdaActionMessage(`Verification error: ${e?.message || e}`);
+    } finally {
+      setIsCheckingFda(false);
+      setTimeout(() => setFdaActionMessage(null), 5000);
+    }
+  };
+
+  const handleCopySettingsPath = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedSettingsPath(true);
+    setTimeout(() => setCopiedSettingsPath(false), 2500);
+  };
 
   const handleCopyCommand = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -242,6 +297,150 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           <span>{isSyncRunning ? 'Syncing Samba Storage...' : 'Sync Samba Now'}</span>
         </button>
       </div>
+
+      {/* SECTION 0: macOS FULL DISK ACCESS (FDA) PERMISSIONS WARNING BANNER */}
+      {fdaStatus?.isMacOS && !fdaStatus.hasFullDiskAccess && (
+        <div className="bg-gradient-to-br from-amber-950/60 via-rose-950/40 to-slate-900/90 border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl backdrop-blur-md space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start space-x-3.5">
+              <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 shrink-0 mt-0.5 shadow-md">
+                <AlertTriangle className="w-6 h-6 text-amber-400 animate-pulse" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+                    macOS Full Disk Access Required
+                  </h3>
+                  <span className="px-2.5 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-600/60 text-[10.5px] font-bold uppercase tracking-wider">
+                    Permission Pending
+                  </span>
+                </div>
+                <p className="text-xs text-amber-200/90 leading-relaxed max-w-3xl">
+                  macOS Security &amp; Privacy (TCC) requires explicit permission for SambaVault to read mounted Samba network volumes, <code className="text-cyan-300 font-mono font-bold">/Volumes</code>, external drives, and media folders without silent permission denials or scan interruptions.
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Action Trigger Buttons */}
+            <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+              <button
+                type="button"
+                onClick={handleOpenSecuritySettings}
+                disabled={isOpeningSettings}
+                className="px-4 py-2.5 bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 active:from-amber-700 active:to-rose-700 text-white rounded-xl text-xs font-bold transition shadow-lg flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <ExternalLink className={`w-4 h-4 ${isOpeningSettings ? 'animate-spin' : ''}`} />
+                <span>Open Security &amp; Privacy</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleVerifyFdaPermission}
+                disabled={isCheckingFda}
+                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer disabled:opacity-50 shadow"
+              >
+                <RotateCw className={`w-4 h-4 text-cyan-400 ${isCheckingFda ? 'animate-spin' : ''}`} />
+                <span>Verify Permission</span>
+              </button>
+            </div>
+          </div>
+
+          {/* System Settings Path & Step-by-Step Instructions */}
+          <div className="bg-black/60 border border-amber-900/60 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                <Terminal className="w-3.5 h-3.5 text-amber-400" />
+                macOS System Settings Path:
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopySettingsPath('System Settings > Privacy & Security > Full Disk Access')}
+                className="text-[11px] font-mono text-slate-400 hover:text-cyan-300 transition flex items-center gap-1 cursor-pointer"
+              >
+                {copiedSettingsPath ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400 font-bold">Copied Path!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Path</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-amber-200 select-all flex items-center justify-between">
+              <span>Apple menu () &gt; System Settings &gt; Privacy &amp; Security &gt; Full Disk Access</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1 text-xs">
+              <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                <span className="text-[10px] text-amber-400 font-bold uppercase block">Step 1</span>
+                <span className="text-slate-200 font-medium block">Click <strong>Open Security &amp; Privacy</strong> above or open System Settings.</span>
+              </div>
+              <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                <span className="text-[10px] text-amber-400 font-bold uppercase block">Step 2</span>
+                <span className="text-slate-200 font-medium block">Locate <strong>SambaVault</strong> (or Terminal / VS Code) in the list and toggle the switch to <strong>ON</strong>.</span>
+              </div>
+              <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-1">
+                <span className="text-[10px] text-amber-400 font-bold uppercase block">Step 3</span>
+                <span className="text-slate-200 font-medium block">Return here and click <strong>Verify Permission</strong> to confirm unrestricted access.</span>
+              </div>
+            </div>
+          </div>
+
+          {fdaActionMessage && (
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-cyan-300 flex items-center gap-2">
+              <Info className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span>{fdaActionMessage}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Verified Status Banner when Full Disk Access is granted on macOS */}
+      {fdaStatus?.isMacOS && fdaStatus.hasFullDiskAccess && (
+        <div className="bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-4 shadow-lg flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-white">macOS Full Disk Access: Granted</h4>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-600/40 text-[10px] font-bold">
+                  VERIFIED
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                SambaVault has verified filesystem and volume traversal permissions ({fdaStatus.checkedPath || '/Volumes'}).
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenSecuritySettings}
+              className="px-3 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>System Settings</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleVerifyFdaPermission}
+              disabled={isCheckingFda}
+              className="px-3 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <RotateCw className={`w-3.5 h-3.5 text-emerald-400 ${isCheckingFda ? 'animate-spin' : ''}`} />
+              <span>Re-check</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* SECTION 1: BACKGROUND SYNC SCHEDULE (CRON) */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">

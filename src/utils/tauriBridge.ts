@@ -1639,6 +1639,10 @@ export const resolveSambaPathToLocalMount = (
   };
 };
 
+export { permissionsManager } from './permissionsManager';
+export type { FullDiskAccessStatus, PermissionInstructions } from './permissionsManager';
+
+
 
 
 

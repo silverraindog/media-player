@@ -362,9 +362,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </button>
       </div>
 
-      {/* SECTION 0: macOS FULL DISK ACCESS (FDA) PERMISSIONS WARNING BANNER */}
-      {(!fdaStatus?.hasFullDiskAccess || fdaStatus?.isMacOS) && (
-        <div className="bg-gradient-to-br from-amber-950/60 via-rose-950/40 to-slate-900/90 border-2 border-amber-500/50 rounded-2xl p-6 shadow-2xl backdrop-blur-md space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+      {/* SECTION 0: macOS FULL DISK ACCESS (FDA) OPTIONAL SETTINGS CARD */}
+      {(!fdaStatus?.hasFullDiskAccess) && (
+        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex items-start space-x-3.5">
               <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 shrink-0 mt-0.5 shadow-md">

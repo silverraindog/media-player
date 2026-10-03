@@ -99,6 +99,46 @@ export interface PathDiagnosticReport {
   hasUnclosedParens: boolean;
   issues: string[];
   isSuspicious: boolean;
+  cleanlinessScore: number;
+}
+
+/**
+ * Calculates a path cleanliness score (0 to 100) based on slash consistency,
+ * character density, absence of double slashes, and balanced parentheses.
+ */
+export function calculatePathCleanlinessScore(rawPath: string): number {
+  const raw = rawPath || '';
+  if (!raw) return 100;
+
+  let score = 100;
+
+  const hasDoubleSlash = raw.startsWith('//') || raw.startsWith('\\\\');
+  if (hasDoubleSlash) score -= 45;
+
+  const hasBackslash = raw.includes('\\');
+  const hasForwardSlash = raw.includes('/');
+  if (hasBackslash && hasForwardSlash) score -= 25;
+
+  const openParens = (raw.match(/\(/g) || []).length;
+  const closeParens = (raw.match(/\)/g) || []).length;
+  if (openParens !== closeParens) score -= 15;
+
+  const openBrackets = (raw.match(/\[/g) || []).length;
+  const closeBrackets = (raw.match(/\]/g) || []).length;
+  if (openBrackets !== closeBrackets) score -= 15;
+
+  const cleanNoProto = raw.replace(/^(?:smb|https?):/i, '');
+  if (/\/{2,}/.test(cleanNoProto.replace(/^\/\//, ''))) {
+    score -= 20;
+  }
+
+  // Check illegal or abnormal character density
+  const illegalMatch = raw.match(/[<>?"*|]/g);
+  if (illegalMatch) {
+    score -= illegalMatch.length * 10;
+  }
+
+  return Math.max(0, Math.min(100, score));
 }
 
 /**
@@ -140,6 +180,7 @@ export function diagnoseSambaPath(rawPath: string): PathDiagnosticReport {
   }
 
   const sanitizedPath = sanitizeSambaPath(raw);
+  const cleanlinessScore = calculatePathCleanlinessScore(raw);
 
   return {
     rawPath: raw,
@@ -149,6 +190,7 @@ export function diagnoseSambaPath(rawPath: string): PathDiagnosticReport {
     hasUnclosedParens,
     issues,
     isSuspicious: issues.length > 0 || hasDoubleSlash,
+    cleanlinessScore,
   };
 }
 

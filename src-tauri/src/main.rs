@@ -152,7 +152,7 @@ pub mod macos_permissions {
             let _ = std::fs::read_dir(&tcc_probe);
 
             // 2. Present native macOS dialog via osascript asking for permission
-            let script = r#'display dialog "SambaVault requests Full Disk Access to read network shares and mounted volumes under /Volumes." buttons {"Cancel", "Allow & Open Settings"} default button "Allow & Open Settings" with title "SambaVault Full Disk Access Permission" with icon caution'#;
+            let script = r#"display dialog "SambaVault requests Full Disk Access to read network shares and mounted volumes under /Volumes." buttons {"Cancel", "Allow & Open Settings"} default button "Allow & Open Settings" with title "SambaVault Full Disk Access Permission" with icon caution"#;
             let dialog_res = Command::new("osascript")
                 .arg("-e")
                 .arg(script)

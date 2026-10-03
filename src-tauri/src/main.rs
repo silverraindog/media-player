@@ -24,6 +24,23 @@ pub mod macos_permissions {
         pub system_settings_path: String,
     }
 
+    /// Diagnostic check: attempts to read a protected path to verify FDA
+    #[tauri::command]
+    pub async fn diagnostic_check_full_disk_access() -> Result<String, String> {
+        #[cfg(target_os = "macos")]
+        {
+            let path = "/Library/Application Support/com.apple.TCC/TCC.db";
+            match std::fs::read_dir(path) {
+                Ok(_) => Ok("Success: Full Disk Access is active (Successfully read TCC.db).".to_string()),
+                Err(e) => Err(format!("Access Denied: Full Disk Access may be disabled. Cannot read {}. Error: {}", path, e)),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok("Diagnostic not applicable on this OS.".to_string())
+        }
+    }
+
     /// Verifies macOS Full Disk Access status (non-blocking)
     #[tauri::command]
     pub async fn check_full_disk_access() -> Result<FullDiskAccessResult, String> {
@@ -409,7 +426,7 @@ async fn perform_fast_scan(
                 "scan-progress",
                 ScanProgressEvent {
                     scanned_count,
-                    current_file: rel_path.clone(),
+                    current_file: format!("[Scanner] {}", rel_path),
                     current_path: full_path_str.clone(),
                     is_dir,
                 },
@@ -749,7 +766,9 @@ async fn scan_samba_volume(
                 "scan-progress",
                 ScanProgressEvent {
                     scanned_count,
-                    current_file: rel_path.clone(),
+                    current_file: format!("[Scanner] {}", rel_path),
+                    current_path: full_path_str.clone(),
+                    is_dir: false, // scan_samba_volume current ScanProgressEvent is simpler
                 },
             );
         }
@@ -1122,6 +1141,7 @@ fn main() {
             db::save_media,
             db::update_watch_progress,
             ai::generate_synopsis,
+            macos_permissions::diagnostic_check_full_disk_access,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

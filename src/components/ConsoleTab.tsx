@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
   Flame,
+  Code,
 } from 'lucide-react';
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident, SambaConfig } from '../types';
 import * as d3 from 'd3';
@@ -51,7 +52,8 @@ import {
   subscribeScanDebug,
   clearScanDebugHistory,
 } from '../utils/scanPathDebugger';
-import { PathInspector } from './PathInspector';
+import { PathInspectorView } from './PathInspectorView';
+import { PathTesterModal } from './PathTesterModal';
 
 interface D3SambaTreeVisualizerProps {
   data: any;
@@ -265,6 +267,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   // Diagnostic Tab Toggles
   const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<'info' | 'analysis' | 'tree' | 'scan-debug' | 'folder-inspector'>('info');
   const [folderInspectorLogs, setFolderInspectorLogs] = useState<Array<{ id: string; path: string; isDir: boolean; count: number; timestamp: number }>>([]);
+  const [isPathTesterOpen, setIsPathTesterOpen] = useState(false);
 
   // Real-Time Scan Debug Discovered Paths State
   const [scanDebugRecords, setScanDebugRecords] = useState<ScanDiscoveredPathRecord[]>(() => getScanDebugHistory());
@@ -925,12 +928,23 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setIsDiagnosticExpanded(!isDiagnosticExpanded)}
-            className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 transition"
-          >
-            {isDiagnosticExpanded ? 'Collapse' : 'Expand'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsPathTesterOpen(true)}
+              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold transition flex items-center gap-1.5 shadow cursor-pointer"
+              title="Open interactive Samba Path Regex and Sanitizer Sandbox modal"
+            >
+              <Code className="w-3.5 h-3.5" />
+              <span>Test Path Regex</span>
+            </button>
+            <button
+              onClick={() => setIsDiagnosticExpanded(!isDiagnosticExpanded)}
+              className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+            >
+              {isDiagnosticExpanded ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
         </div>
 
         {isDiagnosticExpanded && (
@@ -1590,7 +1604,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
               </div>
             ) : (
               /* activeDiagnosticTab === 'scan-debug' */
-              <PathInspector records={scanDebugRecords} onTriggerSync={onTriggerSync} />
+              <PathInspectorView records={scanDebugRecords} onTriggerSync={onTriggerSync} />
             )}
 
           </div>
@@ -2229,6 +2243,12 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
           </div>
         </div>
       )}
+
+      {/* Samba Path Regex and Sanitizer Sandbox Modal */}
+      <PathTesterModal
+        isOpen={isPathTesterOpen}
+        onClose={() => setIsPathTesterOpen(false)}
+      />
     </div>
   );
 };

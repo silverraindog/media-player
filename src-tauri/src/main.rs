@@ -1010,7 +1010,7 @@ pub struct FullDiskAccessResult {
 }
 
 #[tauri::command]
-pub async fn check_full_disk_access() -> Result<FullDiskAccessResult, String> {
+async fn check_full_disk_access() -> Result<FullDiskAccessResult, String> {
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
@@ -1082,7 +1082,7 @@ pub async fn check_full_disk_access() -> Result<FullDiskAccessResult, String> {
 }
 
 #[tauri::command]
-pub async fn open_macos_security_privacy() -> Result<String, String> {
+async fn open_macos_security_privacy() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         let res = Command::new("open")

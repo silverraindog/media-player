@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Terminal,
   Search,
   Trash2,
   Download,
@@ -13,7 +12,8 @@ import {
   Sparkles,
   ShieldCheck,
   Code,
-  Zap,
+  Layers,
+  Flame,
 } from 'lucide-react';
 import { ScanDiscoveredPathRecord, clearScanDebugHistory } from '../utils/scanPathDebugger';
 import { calculatePathCleanlinessScore } from '../utils/pathSanitizer';
@@ -30,7 +30,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 
-interface PathInspectorProps {
+export interface PathInspectorViewProps {
   records: ScanDiscoveredPathRecord[];
   onTriggerSync?: () => void;
 }
@@ -38,7 +38,7 @@ interface PathInspectorProps {
 type SortField = 'source' | 'rawPath' | 'sanitizedPath' | 'timestamp';
 type SortOrder = 'asc' | 'desc';
 
-export const PathInspector: React.FC<PathInspectorProps> = ({ records, onTriggerSync }) => {
+export const PathInspectorView: React.FC<PathInspectorViewProps> = ({ records, onTriggerSync }) => {
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [anomalyOnly, setAnomalyOnly] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -182,10 +182,10 @@ export const PathInspector: React.FC<PathInspectorProps> = ({ records, onTrigger
         <div>
           <h4 className="text-sm font-bold text-white flex items-center gap-2">
             <Bug className="w-4 h-4 text-cyan-400" />
-            Real-Time Path Inspector (Raw vs Sanitized &amp; Cleanliness)
+            Real-Time Path Inspector (Raw vs Sanitized History)
           </h4>
           <p className="text-xs text-slate-400 mt-0.5">
-            Inspects discovered paths during <code className="text-cyan-300">handleSyncSamba</code> scans with path cleanliness scores and double slash anomaly detection.
+            Visualizes real-time path normalization, cleanliness scores, and double-slash anomalies during Samba scans.
           </p>
         </div>
 
@@ -236,6 +236,29 @@ export const PathInspector: React.FC<PathInspectorProps> = ({ records, onTrigger
         </div>
       </div>
 
+      {/* Summary Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+        <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+          <span className="text-slate-500 block">Total Paths Discovered</span>
+          <span className="font-bold text-white text-lg">{records.length}</span>
+        </div>
+        <div className={`p-3 rounded-xl border ${avgCleanliness >= 80 ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300' : 'bg-amber-950/40 border-amber-800/60 text-amber-300'}`}>
+          <span className="text-slate-400 block flex items-center justify-between">
+            <span>Avg Cleanliness Score</span>
+            <Flame className="w-3.5 h-3.5 text-amber-400" />
+          </span>
+          <span className="font-bold text-lg">{avgCleanliness}%</span>
+        </div>
+        <div className={`p-3 rounded-xl border ${doubleSlashCount > 0 ? 'bg-rose-950/60 border-rose-800 text-rose-300' : 'bg-slate-950/80 border-slate-800 text-slate-400'}`}>
+          <span className="text-slate-500 block">Double-Slash Anomalies</span>
+          <span className="font-bold text-lg">{doubleSlashCount}</span>
+        </div>
+        <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+          <span className="text-slate-500 block">Sanitized &amp; Normalized</span>
+          <span className="font-bold text-emerald-400 text-lg">{records.length}</span>
+        </div>
+      </div>
+
       {/* Recharts BarChart: Folder Depth vs Discovery Time (ms) */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
@@ -250,150 +273,139 @@ export const PathInspector: React.FC<PathInspectorProps> = ({ records, onTrigger
               </p>
             </div>
           </div>
-          <div className="text-xs text-slate-400 font-mono">
-            Analyzed: <strong className="text-white">{depthLatencyChartData.length} paths</strong>
-          </div>
         </div>
 
-        <div className="h-52 w-full pt-1">
-          {depthLatencyChartData.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-xs text-slate-500 font-mono">
-              No path data recorded yet. Run a Samba sync scan to generate latency distribution.
-            </div>
-          ) : (
+        <div className="h-44 w-full">
+          {depthLatencyChartData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={depthLatencyChartData} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
+              <BarChart data={depthLatencyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="depth" stroke="#64748b" fontSize={11} tickLine={false} label={{ value: 'Folder Depth', position: 'insideBottom', offset: -2, fill: '#64748b', fontSize: 10 }} />
-                <YAxis stroke="#64748b" fontSize={11} tickLine={false} label={{ value: 'Discovery Time (ms)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0f172a',
-                    borderColor: '#334155',
-                    borderRadius: '0.75rem',
-                    color: '#f8fafc',
-                    fontSize: '12px',
-                    fontFamily: 'monospace',
-                  }}
-                  formatter={(value: any, name: any, props: any) => [
-                    `${value} ms (Path: ${props.payload.path})`,
-                    'Discovery Time',
-                  ]}
+                <XAxis
+                  dataKey="depth"
+                  stroke="#64748b"
+                  fontSize={10}
+                  tickLine={false}
+                  label={{ value: 'Folder Depth', position: 'insideBottomRight', offset: -5, fill: '#64748b', fontSize: 10 }}
                 />
-                <Bar dataKey="discoveryTimeMs" name="Discovery Time (ms)" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                <YAxis
+                  stroke="#64748b"
+                  fontSize={10}
+                  tickLine={false}
+                  unit="ms"
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (active && payload && payload.length) {
+                      const data = payload[0].payload;
+                      return (
+                        <div className="bg-slate-950 border border-slate-700 p-2.5 rounded-lg shadow-xl text-xs space-y-1 font-mono">
+                          <p className="text-white font-bold flex items-center gap-1.5">
+                            <span>Depth {data.depth}</span>
+                            <span className="text-purple-400">({data.discoveryTimeMs} ms)</span>
+                          </p>
+                          <p className="text-[10px] text-slate-300 truncate max-w-xs">{data.path}</p>
+                          {data.isStrangerThings && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800 block">
+                              ★ Stranger Things Hierarchy Target
+                            </span>
+                          )}
+                        </div>
+                      );
+                    }
+                    return null;
+                  }}
+                />
+                <Bar
+                  dataKey="discoveryTimeMs"
+                  fill="#8b5cf6"
+                  radius={[4, 4, 0, 0]}
+                />
               </BarChart>
             </ResponsiveContainer>
+          ) : (
+            <div className="h-full flex items-center justify-center text-slate-600 text-xs italic">
+              Run a scan to generate folder depth vs discovery time latency correlation chart
+            </div>
           )}
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-          <span className="text-[10px] text-slate-500 block uppercase">Total Discovered</span>
-          <span className="text-base font-bold text-white mt-0.5 block">{records.length}</span>
-        </div>
-        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-          <span className="text-[10px] text-slate-500 block uppercase">Avg Cleanliness</span>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className={`text-base font-bold ${avgCleanliness >= 80 ? 'text-emerald-400' : avgCleanliness >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>
-              {avgCleanliness}%
-            </span>
-            <ShieldCheck className={`w-4 h-4 ${avgCleanliness >= 80 ? 'text-emerald-400' : 'text-amber-400'}`} />
-          </div>
-        </div>
-        <div className="p-3 rounded-xl bg-rose-950/20 border border-rose-900/50">
-          <span className="text-[10px] text-rose-400 block uppercase">Double Slash (//)</span>
-          <span className="text-base font-bold text-rose-300 mt-0.5 block">{doubleSlashCount}</span>
-        </div>
-        <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-900/50">
-          <span className="text-[10px] text-amber-400 block uppercase">Other Anomalies</span>
-          <span className="text-base font-bold text-amber-300 mt-0.5 block">
-            {records.filter((r) => r.hasAnomaly && !r.rawPath.startsWith('//') && !r.rawPath.startsWith('\\\\')).length}
-          </span>
-        </div>
-        <div className="p-3 rounded-xl bg-emerald-950/20 border border-emerald-900/50 col-span-2 sm:col-span-1">
-          <span className="text-[10px] text-emerald-400 block uppercase">Clean Paths</span>
-          <span className="text-base font-bold text-emerald-300 mt-0.5 block">
-            {records.filter((r) => !r.hasAnomaly && !r.rawPath.startsWith('//') && !r.rawPath.startsWith('\\\\')).length}
-          </span>
-        </div>
-      </div>
-
       {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-slate-950/70 p-3 rounded-xl border border-slate-800">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-slate-400">Source:</span>
-          {(['all', 'performFastScan', 'scanSambaVolume', 'serverApiScanVolume', 'handleSyncSamba'] as const).map((src) => (
-            <button
-              key={src}
-              type="button"
-              onClick={() => setSourceFilter(src)}
-              className={`px-2.5 py-1 rounded text-[11px] transition cursor-pointer ${
-                sourceFilter === src
-                  ? 'bg-cyan-600 text-white font-bold'
-                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {src === 'all' ? 'All' : src}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          <button
-            type="button"
-            onClick={() => setAnomalyOnly(!anomalyOnly)}
-            className={`px-2.5 py-1 rounded text-[11px] transition cursor-pointer flex items-center gap-1.5 ${
-              anomalyOnly ? 'bg-rose-600 text-white font-bold' : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-            }`}
-          >
-            <AlertTriangle className="w-3.5 h-3.5" />
-            <span>Anomalies Only</span>
-          </button>
-
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <div className="relative flex-1 sm:w-64">
-            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
+              placeholder="Search raw or sanitized paths..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search raw or sanitized path..."
-              className="w-full pl-8 pr-3 py-1 bg-slate-900 border border-slate-700 rounded text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-500"
             />
           </div>
+
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="all">All Sources</option>
+            <option value="performFastScan">Fast Scanner</option>
+            <option value="scanSambaVolume">Direct SMB</option>
+            <option value="serverApiScanVolume">Server API</option>
+          </select>
         </div>
+
+        <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none self-start sm:self-auto">
+          <input
+            type="checkbox"
+            checked={anomalyOnly}
+            onChange={(e) => setAnomalyOnly(e.target.checked)}
+            className="rounded border-slate-700 bg-slate-950 text-cyan-500 focus:ring-cyan-500 cursor-pointer"
+          />
+          <span className="flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+            <span>Show Anomalies Only</span>
+          </span>
+        </label>
       </div>
 
-      {/* Sortable Table */}
-      <div className="bg-slate-950/90 rounded-xl border border-slate-800 overflow-hidden">
-        <div className="overflow-x-auto max-h-[420px]">
+      {/* Raw vs Sanitized Path Table */}
+      <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+        <div className="overflow-x-auto max-h-[460px] overflow-y-auto">
           {filteredAndSortedRecords.length === 0 ? (
-            <div className="p-12 text-center text-slate-500 text-xs">
-              {records.length === 0
-                ? 'No path traces recorded yet. Run a Samba sync scan to inspect raw vs sanitized paths.'
-                : 'No paths match the selected filter or search criteria.'}
+            <div className="p-8 text-center text-slate-500 text-xs">
+              No discovered path traces matching the current filter.
             </div>
           ) : (
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-900 text-slate-400 text-[10.5px] uppercase tracking-wider border-b border-slate-800 sticky top-0">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="sticky top-0 z-10 bg-slate-900 border-b border-slate-800 text-slate-400 select-none">
                 <tr>
-                  <th className="p-2.5 cursor-pointer hover:text-white" onClick={() => toggleSort('source')}>
+                  <th
+                    className="p-2.5 cursor-pointer hover:text-slate-200 transition"
+                    onClick={() => toggleSort('source')}
+                  >
                     <div className="flex items-center gap-1">
                       <span>Source</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-500" />
+                      <ArrowUpDown className="w-3 h-3 opacity-60" />
                     </div>
                   </th>
-                  <th className="p-2.5 cursor-pointer hover:text-white" onClick={() => toggleSort('rawPath')}>
+                  <th
+                    className="p-2.5 cursor-pointer hover:text-slate-200 transition"
+                    onClick={() => toggleSort('rawPath')}
+                  >
                     <div className="flex items-center gap-1">
-                      <span>Raw Path (Discovered)</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-500" />
+                      <span>Raw Discovered Path</span>
+                      <ArrowUpDown className="w-3 h-3 opacity-60" />
                     </div>
                   </th>
-                  <th className="p-2.5 cursor-pointer hover:text-white" onClick={() => toggleSort('sanitizedPath')}>
+                  <th
+                    className="p-2.5 cursor-pointer hover:text-slate-200 transition"
+                    onClick={() => toggleSort('sanitizedPath')}
+                  >
                     <div className="flex items-center gap-1">
-                      <span>Sanitized Path</span>
-                      <ArrowUpDown className="w-3 h-3 text-slate-500" />
+                      <span>Sanitized Normalized Path</span>
+                      <ArrowUpDown className="w-3 h-3 opacity-60" />
                     </div>
                   </th>
                   <th className="p-2.5">Cleanliness Gauge</th>
@@ -518,5 +530,5 @@ export const PathInspector: React.FC<PathInspectorProps> = ({ records, onTrigger
   );
 };
 
-export const PathInspectorView = PathInspector;
-export default PathInspector;
+export const PathInspector = PathInspectorView;
+export default PathInspectorView;

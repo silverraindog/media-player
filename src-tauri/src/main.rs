@@ -347,6 +347,84 @@ pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
     PathBuf::from(&normalized)
 }
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+// Helper function to create a unique ID based on the file path
+fn generate_media_id(path: &str) -> String {
+    let mut s = DefaultHasher::new();
+    path.hash(&mut s);
+    format!("{:x}", s.finish())
+}
+
+#[tauri::command]
+pub async fn scan_and_import_volumes(
+    app_handle: tauri::AppHandle,
+    mount_paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let mut results = Vec::new();
+
+    for path_str in mount_paths {
+        let path = PathBuf::from(&path_str);
+        
+        // 1. Test permissions
+        if let Err(e) = std::fs::metadata(&path) {
+            results.push(format!("Permission denied for {}: {}", path_str, e));
+            continue;
+        }
+
+        // 2. Scan
+        let walker = walkdir::WalkDir::new(&path)
+            .follow_links(true)
+            .into_iter();
+
+        let mut count = 0;
+        for entry_res in walker {
+            let entry = match entry_res {
+                Ok(e) => e,
+                Err(err) => {
+                    eprintln!("[Scanner] [Permission Denied/Error] Path: {:?} | Error: {:?}", err.path().unwrap_or(std::path::Path::new("unknown")), err);
+                    continue;
+                }
+            };
+
+            let entry_path = entry.path();
+            if entry_path.is_dir() { continue; }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            let full_path = entry_path.to_string_lossy().to_string();
+            
+            // 3. Import into SQLite
+            let media_item = db::MediaItem {
+                id: generate_media_id(&full_path),
+                media_type: "file".to_string(),
+                title: name,
+                original_title: None,
+                synopsis: "No synopsis available".to_string(),
+                year: None,
+                rating: None,
+                poster_url: None,
+                fanart_url: None,
+                genres: None,
+                cast: None,
+                recommended_folder: Some(path_str.clone()),
+                raw_data: None,
+                file_size_bytes: Some(entry.metadata().map(|m| m.len() as i64).unwrap_or(0)),
+                created_at: None,
+                updated_at: None,
+            };
+
+            if let Err(e) = db::save_media(app_handle.clone(), media_item) {
+                eprintln!("[DB] Failed to save media {}: {}", full_path, e);
+            } else {
+                count += 1;
+            }
+        }
+        results.push(format!("Successfully imported {} items from {}", count, path_str));
+    }
+    Ok(results)
+}
+
 #[tauri::command]
 async fn sanitize_samba_path_command(raw_path: String) -> Result<String, String> {
     Ok(sanitize_samba_path(&raw_path))
@@ -1164,6 +1242,7 @@ fn main() {
             ai::generate_synopsis,
             macos_permissions::diagnostic_check_full_disk_access,
             macos_permissions::check_tcc_access,
+            scan_and_import_volumes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

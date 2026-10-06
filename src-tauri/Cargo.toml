@@ -1,0 +1,26 @@
+[package]
+name = "sambavault-tauri"
+version = "0.0.2"
+description = "SambaVault high-performance media scanner in Rust"
+authors = ["SambaVault Team"]
+edition = "2021"
+
+[dependencies]
+tauri = { version = "1.5", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+walkdir = "2.5"
+jwalk = "0.8"
+rayon = "1.10"
+dua-core = "4.1"
+tokio = { version = "1.0", features = ["full"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+reqwest = { version = "0.11", features = ["json"] }
+ffmpeg-light = "0.2"
+
+[build-dependencies]
+tauri-build = "1.5"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

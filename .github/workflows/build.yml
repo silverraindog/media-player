@@ -1,0 +1,84 @@
+name: Build and Package Desktop App
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-desktop:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "windows"
+            os: windows-latest
+          - platform: "macos"
+            os: macos-latest
+          - platform: "linux"
+            os: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
+      - name: Clean Lockfile for Fresh Cross-Platform Resolution
+        shell: bash
+        run: rm -f bun.lock bun.lockb yarn.lock pnpm-lock.yaml package-lock.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Determine Version
+        id: ver
+        shell: bash
+        run: |
+          echo "🔍 Extracting version from package.json..."
+          VERSION=$(node -p "require('./package.json').version")
+          echo "✅ Version detected: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "🔄 Synchronizing all config files to $VERSION (Commit: ${{ github.sha }}, Date: $BUILD_DATE)..."
+          node scripts/sync-version.cjs "$VERSION" "${{ github.sha }}" "$BUILD_DATE"
+          echo "✨ Synchronization complete."
+
+      - name: Install System Dependencies (Linux Only)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Frontend Dependencies
+        run: npm install --include=optional --force
+
+      - name: Run Quality Verification and Loop-Immunity Tests
+        run: npm test
+
+      - name: Build Tauri Desktop Application
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: "./"
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SambaVault-v${{ steps.ver.outputs.version }}-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage

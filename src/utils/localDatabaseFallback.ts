@@ -16,48 +16,7 @@ const STORAGE_KEYS = {
 };
 
 // Seed default watch history if cache is completely empty
-const INITIAL_WATCH_HISTORY = [
-  {
-    id: 'hist-seed-1',
-    media_id: 'movie-interstellar',
-    title: 'Interstellar',
-    media_type: 'movie',
-    playback_position_seconds: 9840,
-    duration_seconds: 10140,
-    progress_percentage: 97.0,
-    is_completed: 1,
-    poster_url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&auto=format&fit=crop&q=80',
-    watched_at: new Date(Date.now() - 3600000 * 5).toISOString(),
-  },
-  {
-    id: 'hist-seed-2',
-    media_id: 'movie-blade-runner-2049',
-    title: 'Blade Runner 2049',
-    media_type: 'movie',
-    playback_position_seconds: 4800,
-    duration_seconds: 9800,
-    progress_percentage: 49.0,
-    is_completed: 0,
-    poster_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
-    watched_at: new Date(Date.now() - 3600000 * 28).toISOString(),
-  },
-  {
-    id: 'hist-seed-3',
-    media_id: 'series-stranger-things-s01e01',
-    series_id: 'series-stranger-things',
-    title: 'Stranger Things',
-    media_type: 'series',
-    season_number: 1,
-    episode_number: 1,
-    episode_title: 'Chapter One: The Vanishing of Will Byers',
-    playback_position_seconds: 2900,
-    duration_seconds: 2950,
-    progress_percentage: 98.3,
-    is_completed: 1,
-    poster_url: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&auto=format&fit=crop&q=80',
-    watched_at: new Date(Date.now() - 3600000 * 72).toISOString(),
-  },
-];
+const INITIAL_WATCH_HISTORY: any[] = [];
 
 class LocalDatabaseFallbackService {
   private getJson<T>(key: string, defaultVal: T): T {

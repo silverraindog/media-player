@@ -2336,10 +2336,13 @@ export async function resetDatabaseInDb(): Promise<void> {
     const vaultState = getVaultStateFromDisk();
     if (vaultState) {
       vaultState.sambaTree = [];
+      vaultState.mediaLibrary = [];
       saveVaultStateToDisk(vaultState);
+    } else {
+      saveVaultStateToDisk({ mediaLibrary: [], sambaTree: [] });
     }
   } catch (e) {
-    console.error('Error clearing vault_state.json sambaTree during reset:', e);
+    console.error('Error clearing vault state during reset:', e);
   }
 
   persistDbToDisk();

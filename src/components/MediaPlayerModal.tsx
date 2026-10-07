@@ -1006,7 +1006,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       }
     } catch (error: any) {
       console.warn('[MediaPlayerModal] Transcoding initialization error:', error);
-      setPlaybackError(error?.message || 'Could not start FFmpeg transcoding.');
+      const errMsg = typeof error === 'string' ? error : (error?.message || 'Could not start FFmpeg transcoding.');
+      setPlaybackError(errMsg);
       setIsPlaying(false);
     } finally {
       setIsTranscoding(false);

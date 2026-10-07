@@ -186,6 +186,131 @@ pub fn get_all_media(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
 }
 
 #[tauri::command]
+pub fn get_movies(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
+    let path = get_db_path(&app_handle);
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT * FROM media_items WHERE media_type = 'movie' ORDER BY updated_at DESC")
+        .map_err(|e| e.to_string())?;
+
+    let media_iter = stmt
+        .query_map([], |row| {
+            Ok(MediaItem {
+                id: row.get(0)?,
+                media_type: row.get(1)?,
+                title: row.get(2)?,
+                original_title: row.get(3)?,
+                synopsis: row.get(4)?,
+                year: row.get(5)?,
+                rating: row.get(6)?,
+                poster_url: row.get(7)?,
+                fanart_url: row.get(8)?,
+                genres: row.get(9)?,
+                cast: row.get(10)?,
+                recommended_folder: row.get(11)?,
+                raw_data: row.get(12)?,
+                file_size_bytes: row.get(13)?,
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut results = Vec::new();
+    for item in media_iter {
+        results.push(item.map_err(|e| e.to_string())?);
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn get_series(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
+    let path = get_db_path(&app_handle);
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT * FROM media_items WHERE media_type = 'series' ORDER BY updated_at DESC")
+        .map_err(|e| e.to_string())?;
+
+    let media_iter = stmt
+        .query_map([], |row| {
+            Ok(MediaItem {
+                id: row.get(0)?,
+                media_type: row.get(1)?,
+                title: row.get(2)?,
+                original_title: row.get(3)?,
+                synopsis: row.get(4)?,
+                year: row.get(5)?,
+                rating: row.get(6)?,
+                poster_url: row.get(7)?,
+                fanart_url: row.get(8)?,
+                genres: row.get(9)?,
+                cast: row.get(10)?,
+                recommended_folder: row.get(11)?,
+                raw_data: row.get(12)?,
+                file_size_bytes: row.get(13)?,
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut results = Vec::new();
+    for item in media_iter {
+        results.push(item.map_err(|e| e.to_string())?);
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn get_albums(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
+    let path = get_db_path(&app_handle);
+    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT * FROM media_items WHERE media_type IN ('album', 'music', 'audio') ORDER BY updated_at DESC")
+        .map_err(|e| e.to_string())?;
+
+    let media_iter = stmt
+        .query_map([], |row| {
+            Ok(MediaItem {
+                id: row.get(0)?,
+                media_type: row.get(1)?,
+                title: row.get(2)?,
+                original_title: row.get(3)?,
+                synopsis: row.get(4)?,
+                year: row.get(5)?,
+                rating: row.get(6)?,
+                poster_url: row.get(7)?,
+                fanart_url: row.get(8)?,
+                genres: row.get(9)?,
+                cast: row.get(10)?,
+                recommended_folder: row.get(11)?,
+                raw_data: row.get(12)?,
+                file_size_bytes: row.get(13)?,
+                created_at: row.get(14)?,
+                updated_at: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut results = Vec::new();
+    for item in media_iter {
+        results.push(item.map_err(|e| e.to_string())?);
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn get_media_by_type(app_handle: AppHandle, media_type: String) -> Result<Vec<MediaItem>, String> {
+    let lower = media_type.to_lowercase();
+    match lower.as_str() {
+        "movie" | "movies" => get_movies(app_handle),
+        "series" | "tv" | "shows" => get_series(app_handle),
+        "album" | "albums" | "music" | "audio" => get_albums(app_handle),
+        _ => get_all_media(app_handle),
+    }
+}
+
+#[tauri::command]
 pub fn save_media(app_handle: AppHandle, media: MediaItem) -> Result<(), String> {
     let path = get_db_path(&app_handle);
     let conn = Connection::open(path).map_err(|e| e.to_string())?;

@@ -732,6 +732,56 @@ export async function getAllMediaFromDb(): Promise<MediaItemDb[]> {
   });
 }
 
+export async function getMoviesFromDb(): Promise<MediaItemDb[]> {
+  const db = await getDatabase();
+  const res = db.exec(`SELECT * FROM media_items WHERE media_type = 'movie' ORDER BY updated_at DESC`);
+  if (res.length === 0) return [];
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as MediaItemDb;
+  });
+}
+
+export async function getSeriesFromDb(): Promise<MediaItemDb[]> {
+  const db = await getDatabase();
+  const res = db.exec(`SELECT * FROM media_items WHERE media_type = 'series' ORDER BY updated_at DESC`);
+  if (res.length === 0) return [];
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as MediaItemDb;
+  });
+}
+
+export async function getAlbumsFromDb(): Promise<MediaItemDb[]> {
+  const db = await getDatabase();
+  const res = db.exec(`SELECT * FROM media_items WHERE media_type IN ('album', 'music', 'audio') ORDER BY updated_at DESC`);
+  if (res.length === 0) return [];
+  const columns = res[0].columns;
+  return res[0].values.map((row) => {
+    const item: any = {};
+    columns.forEach((col, idx) => {
+      item[col] = row[idx];
+    });
+    return item as MediaItemDb;
+  });
+}
+
+export async function getMediaByTypeFromDb(type: string): Promise<MediaItemDb[]> {
+  const lower = (type || 'all').toLowerCase();
+  if (lower === 'movie' || lower === 'movies') return getMoviesFromDb();
+  if (lower === 'series' || lower === 'tv' || lower === 'shows') return getSeriesFromDb();
+  if (lower === 'album' || lower === 'albums' || lower === 'music' || lower === 'audio') return getAlbumsFromDb();
+  return getAllMediaFromDb();
+}
+
 export async function getRecentlyAddedMediaFromDb(limit: number = 10): Promise<MediaItemDb[]> {
   const db = await getDatabase();
   const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50));

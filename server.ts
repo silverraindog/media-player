@@ -10,6 +10,10 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import {
   getAllMediaFromDb,
+  getMoviesFromDb,
+  getSeriesFromDb,
+  getAlbumsFromDb,
+  getMediaByTypeFromDb,
   getRecentlyAddedMediaFromDb,
   getAllWatchlistFromDb,
   toggleWatchlistInDb,
@@ -3975,13 +3979,44 @@ app.post('/api/vault/backup/restore', (req: Request, res: Response) => {
 // ==========================================
 
 // Get all media items (titles & synopses) stored in SQLite DB
-app.get('/api/db/media', async (req: Request, res: Response) => {
+app.get(['/api/db/media', '/api/media', '/api/media/all', '/api/db/media/all'], async (req: Request, res: Response) => {
   try {
-    const items = await getAllMediaFromDb();
-    res.json({ success: true, items });
+    const typeParam = req.query.type as string;
+    const items = typeParam ? await getMediaByTypeFromDb(typeParam) : await getAllMediaFromDb();
+    res.json({ success: true, count: items.length, items });
   } catch (error: any) {
     console.error('Error fetching media from SQLite:', error);
     res.status(500).json({ error: 'Failed to fetch media from SQLite', message: error?.message });
+  }
+});
+
+app.get(['/api/media/movies', '/api/db/media/movies'], async (req: Request, res: Response) => {
+  try {
+    const items = await getMoviesFromDb();
+    res.json({ success: true, count: items.length, items });
+  } catch (error: any) {
+    console.error('Error fetching movies from SQLite:', error);
+    res.status(500).json({ error: 'Failed to fetch movies', message: error?.message });
+  }
+});
+
+app.get(['/api/media/series', '/api/db/media/series'], async (req: Request, res: Response) => {
+  try {
+    const items = await getSeriesFromDb();
+    res.json({ success: true, count: items.length, items });
+  } catch (error: any) {
+    console.error('Error fetching series from SQLite:', error);
+    res.status(500).json({ error: 'Failed to fetch series', message: error?.message });
+  }
+});
+
+app.get(['/api/media/music', '/api/media/albums', '/api/db/media/music', '/api/db/media/albums'], async (req: Request, res: Response) => {
+  try {
+    const items = await getAlbumsFromDb();
+    res.json({ success: true, count: items.length, items });
+  } catch (error: any) {
+    console.error('Error fetching albums from SQLite:', error);
+    res.status(500).json({ error: 'Failed to fetch albums', message: error?.message });
   }
 });
 

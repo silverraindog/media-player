@@ -387,37 +387,19 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     }
   }
 
-  // Check if curated database has an exact or robust match
-  const curatedMatch = CURATED_MEDIA_DATABASE.find((m) => {
-    const titleLower = m.title.toLowerCase();
-    const cleanTitleLower = title.toLowerCase();
-    if (cleanTitleLower === titleLower) return true;
-    if (titleLower.length >= 4 && cleanTitleLower.includes(titleLower)) return true;
-    return false;
-  });
-
-  if (curatedMatch) {
-    return {
-      ...curatedMatch,
-      id: `imported-${curatedMatch.id}-${node.id || Math.random().toString(36).substring(2, 7)}`,
-      folderPath: fullPath,
-      path: fullPath,
-      recommendedFolderStructure: fullPath,
-      matchedFilename: node.name,
-      playbackUrl: curatedMatch.playbackUrl || (curatedMatch.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.scifi),
-    };
-  }
+  // Real user files should use their actual disk path and stream proxy, not fake curated sample media
+  const actualPlaybackUrl = `/api/samba/stream?path=${encodeURIComponent(node.path || fullPath)}`;
 
   // Posters based on type
   let posterUrl = 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80';
-  let defaultPlayback = SAMPLE_VIDEO_STREAMS.movie;
+  let defaultPlayback = actualPlaybackUrl;
 
   if (mediaType === 'series') {
     posterUrl = 'https://images.unsplash.com/photo-1522869635100-9f4c5e86aa37?w=800&auto=format&fit=crop&q=80';
-    defaultPlayback = SAMPLE_VIDEO_STREAMS.series;
+    defaultPlayback = actualPlaybackUrl;
   } else if (mediaType === 'album') {
     posterUrl = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80';
-    defaultPlayback = SAMPLE_AUDIO_STREAM;
+    defaultPlayback = actualPlaybackUrl;
   }
 
   // Extract episodes if this is a folder containing media files
@@ -433,6 +415,8 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
         const fileEpNum = fileEpInfo.episode || 1;
         const epTitle = fileEpInfo.episodeTitle || `${title} S${String(fileSeason).padStart(2, '0')}E${String(fileEpNum).padStart(2, '0')}`;
 
+        const epFilePath = file.path || `${fullPath}/${file.name}`;
+        const epPlaybackUrl = `/api/samba/stream?path=${encodeURIComponent(epFilePath)}`;
         if (!seasonMap.has(fileSeason)) {
           seasonMap.set(fileSeason, []);
         }
@@ -442,8 +426,8 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
           title: epTitle,
           plot: `File on disk: ${file.name}`,
           rating: 8.5,
-          playbackUrl: SAMPLE_VIDEO_STREAMS.series,
-          filePath: file.path || `${fullPath}/${file.name}`,
+          playbackUrl: epPlaybackUrl,
+          filePath: epFilePath,
           filename: file.name,
         });
       });
@@ -469,7 +453,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
                 ? `Special feature and bonus material for ${title} (${node.name}).`
                 : `Synopsis for ${title} Season ${season ?? 1} Episode ${episode || 1}. Tagged from Samba network share (${node.name}).`,
               rating: 8.5,
-              playbackUrl: SAMPLE_VIDEO_STREAMS.series,
+              playbackUrl: actualPlaybackUrl,
               filePath: fullPath,
               filename: node.name,
             },
@@ -487,7 +471,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
             title: title,
             duration: '3:45',
             artist: fullPath.split('/')[1] || 'Imported Artist',
-            playbackUrl: SAMPLE_AUDIO_STREAM,
+            playbackUrl: actualPlaybackUrl,
           },
         ]
       : undefined;

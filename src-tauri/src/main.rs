@@ -1468,17 +1468,41 @@ async fn probe_media_file(source_path: String) -> Result<String, String> {
 async fn transcode_media_file(source_path: String, media_type: String) -> Result<String, String> {
     let is_url = source_path.starts_with("http://") || source_path.starts_with("https://");
     
-    let source_path_buf = if is_url {
-        PathBuf::from(&source_path) // Just pass as string
+    let resolved_source = if is_url {
+        source_path.clone()
     } else {
-        PathBuf::from(&source_path)
-            .canonicalize()
-            .map_err(|error| format!("Could not access the media file: {}", error))?
+        let p = PathBuf::from(&source_path);
+        if p.is_file() {
+            p.to_string_lossy().to_string()
+        } else if let Ok(canon) = p.canonicalize() {
+            if canon.is_file() {
+                canon.to_string_lossy().to_string()
+            } else {
+                source_path.clone()
+            }
+        } else {
+            // Check relative to cwd or samba_share
+            let cwd_path = std::env::current_dir().unwrap_or_default().join(&source_path);
+            if cwd_path.is_file() {
+                cwd_path.to_string_lossy().to_string()
+            } else {
+                let share_path = std::env::current_dir().unwrap_or_default().join("samba_share").join(&source_path);
+                if share_path.is_file() {
+                    share_path.to_string_lossy().to_string()
+                } else if source_path.starts_with('/') {
+                    let trimmed = source_path.trim_start_matches('/');
+                    let share_path2 = std::env::current_dir().unwrap_or_default().join("samba_share").join(trimmed);
+                    if share_path2.is_file() {
+                        share_path2.to_string_lossy().to_string()
+                    } else {
+                        source_path.clone()
+                    }
+                } else {
+                    source_path.clone()
+                }
+            }
+        }
     };
-
-    if !is_url && !source_path_buf.is_file() {
-        return Err("The selected media source is not a file.".to_string());
-    }
 
     let is_audio = match media_type.as_str() {
         "audio" => true,
@@ -1494,7 +1518,7 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
         output_extension
     ));
     let task_output_path = output_path.clone();
-    let task_source_path = source_path.clone();
+    let task_source_path = resolved_source;
 
     tokio::task::spawn_blocking(move || {
         let locator = locate_ffmpeg()?;
@@ -1504,13 +1528,14 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
             .output(&task_output_path)
             .audio_codec("aac")
             .audio_bitrate(192)
-            .extra_arg("-map")
-            .extra_arg(if is_audio { "0:a:0" } else { "0:v:0" })
             .extra_arg("-ac")
             .extra_arg("2");
 
         if is_audio {
-            builder = builder.extra_arg("-vn");
+            builder = builder
+                .extra_arg("-map")
+                .extra_arg("0:a:0?")
+                .extra_arg("-vn");
         } else {
             builder = builder
                 .video_codec("libx264")
@@ -1519,6 +1544,8 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
                 .extra_arg("23")
                 .extra_arg("-pix_fmt")
                 .extra_arg("yuv420p")
+                .extra_arg("-map")
+                .extra_arg("0:v:0?")
                 .extra_arg("-map")
                 .extra_arg("0:a:0?")
                 .extra_arg("-sn")
@@ -1571,6 +1598,10 @@ fn main() {
             macos_permissions::open_macos_security_privacy,
             macos_permissions::request_full_disk_access_and_register,
             db::get_all_media,
+            db::get_movies,
+            db::get_series,
+            db::get_albums,
+            db::get_media_by_type,
             db::save_media,
             db::save_media_batch,
             db::get_vault_state,

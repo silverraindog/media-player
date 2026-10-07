@@ -6,9 +6,27 @@ export const isTauri = typeof window !== 'undefined' && Boolean((window as any).
 export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T> {
   if (isTauri) {
     // Map REST endpoints to native Tauri commands writing to ~/.media-player
-    if (endpoint === '/api/db/media' && (!options.method || options.method === 'GET')) {
+    if ((endpoint.startsWith('/api/db/media') || endpoint.startsWith('/api/media')) && (!options.method || options.method === 'GET')) {
+      let typeParam = '';
+      if (endpoint.includes('?')) {
+        try {
+          typeParam = new URL(endpoint, 'http://localhost').searchParams.get('type') || '';
+        } catch {}
+      }
+      if (endpoint.includes('/movies') || typeParam.toLowerCase() === 'movie' || typeParam.toLowerCase() === 'movies') {
+        const items = await invoke<any[]>('get_movies').catch(() => []);
+        return { success: true, count: items.length, items } as any;
+      }
+      if (endpoint.includes('/series') || typeParam.toLowerCase() === 'series') {
+        const items = await invoke<any[]>('get_series').catch(() => []);
+        return { success: true, count: items.length, items } as any;
+      }
+      if (endpoint.includes('/music') || endpoint.includes('/albums') || typeParam.toLowerCase() === 'music' || typeParam.toLowerCase() === 'album' || typeParam.toLowerCase() === 'albums') {
+        const items = await invoke<any[]>('get_albums').catch(() => []);
+        return { success: true, count: items.length, items } as any;
+      }
       const items = await invoke<any[]>('get_all_media').catch(() => []);
-      return { success: true, items } as any;
+      return { success: true, count: items.length, items } as any;
     }
     if (endpoint === '/api/db/media' && options.method === 'POST') {
       const media = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;

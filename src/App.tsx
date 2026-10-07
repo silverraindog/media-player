@@ -1563,15 +1563,6 @@ function App() {
         folderNode.hasNfo = true;
         folderNode.hasPoster = true;
         folderNode.mediaType = targetType !== 'ignore' ? targetType : 'movie';
-
-        const matchedCurated = CURATED_MEDIA_DATABASE.find((m) => {
-          const tLower = m.title.toLowerCase();
-          const segLower = segment.toLowerCase();
-          return segLower === tLower || (tLower.length >= 4 && segLower.includes(tLower));
-        });
-        if (matchedCurated) {
-          folderNode.matchedMedia = matchedCurated;
-        }
       }
 
       getOrCreateNode(
@@ -2422,15 +2413,6 @@ function App() {
           folderNode.hasNfo = true;
           folderNode.hasPoster = true;
           folderNode.mediaType = isShow ? 'series' : isMusic ? 'album' : 'movie';
-
-          const matchedCurated = CURATED_MEDIA_DATABASE.find((m) => {
-            const tLower = m.title.toLowerCase();
-            const segLower = segment.toLowerCase();
-            return segLower === tLower || (tLower.length >= 4 && segLower.includes(tLower));
-          });
-          if (matchedCurated) {
-            folderNode.matchedMedia = matchedCurated;
-          }
         }
 
         getOrCreateNodeInTree(

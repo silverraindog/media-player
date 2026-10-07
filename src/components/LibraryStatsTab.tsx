@@ -48,6 +48,7 @@ import {
 } from '../types';
 import { BatchMetadataEnricher } from './BatchMetadataEnricher';
 import { SambaStorageSummaryDashboard } from './SambaStorageSummaryDashboard';
+import { D3MediaSpacePieChart, MediaSpaceTypeItem } from './D3MediaSpacePieChart';
 
 interface LibraryStatsTabProps {
   onNavigateToVault: () => void;
@@ -168,18 +169,35 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
     }));
   }, [processedGenres, storageUnit]);
 
-  // Media type breakdown for pie chart
-  const mediaTypePieData = useMemo(() => {
-    if (!statsData) return [];
-    return statsData.mediaTypeDistribution.map((item) => ({
-      name: item.name,
-      value: chartViewMode === 'storage' ? item.totalGB : item.count,
-      count: item.count,
-      totalGB: item.totalGB,
-      percent: item.percent,
-      color: item.color,
-    }));
-  }, [statsData, chartViewMode]);
+  // Media library space breakdown data for D3 Pie Chart
+  const d3MediaSpaceData = useMemo<MediaSpaceTypeItem[]>(() => {
+    if (statsData?.mediaTypeDistribution && statsData.mediaTypeDistribution.length > 0) {
+      return statsData.mediaTypeDistribution.map((item) => ({
+        name: item.name,
+        typeKey: item.typeKey,
+        count: item.count,
+        totalGB: item.totalGB,
+        color: item.color,
+      }));
+    }
+    // Dynamic fallback calculated from mediaLibrary when statsData is pending
+    if (mediaLibrary && mediaLibrary.length > 0) {
+      let movieCount = 0;
+      let seriesCount = 0;
+      let albumCount = 0;
+      for (const m of mediaLibrary) {
+        if (m.type === 'movie') movieCount++;
+        else if (m.type === 'series') seriesCount++;
+        else if (m.type === 'album') albumCount++;
+      }
+      return [
+        { name: 'Movies', typeKey: 'movie', count: movieCount, totalGB: Number((movieCount * 14.5).toFixed(1)), color: '#6366f1' },
+        { name: 'TV Series', typeKey: 'series', count: seriesCount, totalGB: Number((seriesCount * 26.0).toFixed(1)), color: '#a855f7' },
+        { name: 'Music Albums', typeKey: 'album', count: albumCount, totalGB: Number((albumCount * 0.45).toFixed(1)), color: '#06b6d4' },
+      ].filter((x) => x.count > 0);
+    }
+    return [];
+  }, [statsData, mediaLibrary]);
 
   // Metadata health breakdown for pie chart
   const healthPieData = useMemo(() => {
@@ -335,7 +353,7 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
                 <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2.5">
                   Library Stats & Storage Analytics
                   <span className="text-[11px] font-mono uppercase px-2 py-0.5 rounded-md bg-indigo-950/80 border border-indigo-800/50 text-indigo-300">
-                    Recharts • SQLite Vault
+                    D3 Pie • Recharts • SQLite Vault
                   </span>
                 </h1>
                 <p className="text-sm text-slate-400">
@@ -769,109 +787,21 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
           </div>
         </div>
 
-        {/* Secondary Chart: Donut Chart (Movies vs Series vs Music) */}
-        <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-4 mb-3 border-b border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <PieChartIcon className="w-4 h-4 text-purple-400" />
-                  Format Breakdown
-                </h3>
-                <p className="text-xs text-slate-400">
-                  {chartViewMode === 'storage' ? 'Storage share (GB)' : 'Item count ratio'}
-                </p>
-              </div>
-
-              {/* Toggle storage vs count */}
-              <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-xs">
-                <button
-                  id="chart-mode-storage-btn"
-                  onClick={() => setChartViewMode('storage')}
-                  className={`px-2 py-0.5 rounded font-medium transition-colors ${
-                    chartViewMode === 'storage'
-                      ? 'bg-purple-600 text-white'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  GB
-                </button>
-                <button
-                  id="chart-mode-count-btn"
-                  onClick={() => setChartViewMode('count')}
-                  className={`px-2 py-0.5 rounded font-medium transition-colors ${
-                    chartViewMode === 'count'
-                      ? 'bg-purple-600 text-white'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  Count
-                </button>
-              </div>
-            </div>
-
-            {/* Recharts Pie / Donut Chart */}
-            <div className="h-56 w-full relative flex items-center justify-center">
-              {isLoading ? (
-                <div className="text-slate-500 text-xs">Loading chart…</div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Tooltip content={<CustomPieTooltip />} />
-                    <Pie
-                      data={mediaTypePieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={55}
-                      outerRadius={85}
-                      paddingAngle={4}
-                      dataKey="value"
-                    >
-                      {mediaTypePieData.map((entry, index) => (
-                        <Cell key={`pie-cell-${index}`} fill={entry.color} stroke="#0f172a" strokeWidth={2} />
-                      ))}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
-
-              {/* Center donut text */}
-              <div className="absolute flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-xs text-slate-400">Total</span>
-                <span className="text-lg font-bold font-mono text-white">
-                  {chartViewMode === 'storage'
-                    ? `${statsData?.summary.totalSizeGB || 0} GB`
-                    : `${statsData?.summary.totalMediaItems || 0} Items`}
-                </span>
-              </div>
-            </div>
-
-            {/* Custom Format Legend */}
-            <div className="mt-2 space-y-2">
-              {mediaTypePieData.map((item) => (
-                <div
-                  key={item.name}
-                  className="flex items-center justify-between p-2 rounded-lg bg-slate-950/60 border border-slate-800/80 text-xs"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="w-2.5 h-2.5 rounded-full"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <span className="font-semibold text-slate-200">{item.name}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-slate-400">{item.count} items</span>
-                    <span className="font-mono font-bold text-emerald-400">{item.totalGB} GB</span>
-                    <span className="text-[11px] text-slate-500 w-9 text-right font-mono">
-                      {item.percent}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        {/* Secondary Chart: Interactive D3 Media Space Usage Breakdown Pie Chart */}
+        <D3MediaSpacePieChart
+          data={d3MediaSpaceData}
+          totalSizeGB={statsData?.summary.totalSizeGB}
+          totalItemsCount={statsData?.summary.totalMediaItems}
+          selectedType={selectedMediaType}
+          onSelectType={(typeKey) => {
+            setSelectedMediaType(typeKey as any);
+            showToast(
+              typeKey === 'all'
+                ? 'Showing all media formats'
+                : `Filtered library stats to ${typeKey === 'movie' ? 'Movies' : typeKey === 'series' ? 'TV Series' : 'Music Albums'}`
+            );
+          }}
+        />
       </div>
 
       {/* Secondary Row: Composed Chart (GB vs Count Correlation) & Decade Distribution Area Chart */}

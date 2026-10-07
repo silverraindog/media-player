@@ -987,13 +987,16 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         }
         setTranscodedPlaybackUrl(`/api/media/transcode/${result.token}?type=${isAudio ? 'audio' : 'video'}`);
       } else {
+        const payload = {
+          sourceUrl: currentStreamUrl,
+          sourcePath: resolvedLocalFilePath || validatedPlaybackPath.resolvedPath || media?.path || media?.folderPath || media?.recommendedFolderStructure || '',
+          mediaTitle: media?.title || '',
+          mediaType: isAudio ? 'audio' : 'video',
+        };
         const response = await fetch('/api/media/transcode', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sourceUrl: currentStreamUrl,
-            sourcePath: validatedPlaybackPath.resolvedPath,
-          }),
+          body: JSON.stringify(payload),
         });
         const result = await response.json();
         if (!response.ok || !result.token) {
@@ -1002,6 +1005,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         setTranscodedPlaybackUrl(`/api/media/transcode/${result.token}?type=${isAudio ? 'audio' : 'video'}`);
       }
     } catch (error: any) {
+      console.warn('[MediaPlayerModal] Transcoding initialization error:', error);
       setPlaybackError(error?.message || 'Could not start FFmpeg transcoding.');
       setIsPlaying(false);
     } finally {
@@ -1796,8 +1800,25 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <div className="space-y-1">
                     <h4 className="text-base font-bold text-white">Stream Source Notice</h4>
                     <p className="text-xs text-slate-300 max-w-md mx-auto">{playbackError}</p>
+                    <p className="text-[11px] text-slate-400 max-w-md mx-auto">
+                      Network share media might be unmounted on this machine, or requires browser-compatible transcoding. You can start the direct HD Vault sample stream below, select a local media file, or open via VLC / IINA.
+                    </p>
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-2 pt-1 max-w-xl">
+                    <button
+                      onClick={() => {
+                        resetTranscodedPlayback();
+                        setSelectedStreamId('local-vault-stream');
+                        setIsManualStreamOverride(true);
+                        setPlaybackError(null);
+                        setTimeout(startPlayback, 120);
+                      }}
+                      className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-600/25 transition"
+                      title="Play built-in high-definition direct sample feed"
+                    >
+                      <Play className="w-4 h-4 fill-white" />
+                      <span>Play HD Vault Feed</span>
+                    </button>
                     <button
                       onClick={handleLaunchExternalVlc}
                       className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-amber-500/20 transition"
@@ -1823,7 +1844,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                           setPlaybackError(null);
                           setTimeout(startPlayback, 100);
                         }}
-                        className="px-3.5 py-1.5 rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition"
+                        className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition border border-slate-700"
                         title="Retry direct Samba stream from server"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
@@ -1836,7 +1857,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       title="Select and play video file directly from your disk"
                     >
                       <FolderOpen className="w-3.5 h-3.5" />
-                      <span>Select Episode File from Disk</span>
+                      <span>Select File from Disk</span>
                     </button>
                     <button
                       onClick={handleCycleNextStream}

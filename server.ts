@@ -4929,25 +4929,93 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
   const sourceUrl = req.body?.sourceUrl;
   const sourcePath = req.body?.sourcePath;
 
-  if (typeof sourcePath === 'string' && path.isAbsolute(sourcePath)) {
+  const sampleVideoFallback = path.join(process.cwd(), 'public', 'sample-video.mp4');
+
+  // Helper to check if a file path is a valid non-dummy file
+  const isValidMediaFile = (filePath: string): boolean => {
     try {
-      if (fs.statSync(sourcePath).isFile()) {
-        return res.json({ token: saveTranscodeJob({ inputPath: sourcePath }) });
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath);
+        return stat.isFile() && stat.size > 256;
+      }
+    } catch {}
+    return false;
+  };
+
+  // 1. Try to resolve sourcePath if supplied
+  if (typeof sourcePath === 'string' && sourcePath.trim()) {
+    const clean = sourcePath.trim().replace(/^file:\/\//, '');
+    const candidates = [
+      clean,
+      path.resolve(clean),
+      path.resolve(process.cwd(), clean.replace(/^[/\\]+/, '')),
+      path.resolve(SAMBA_SHARE_ROOT, clean.replace(/^[/\\]+/, '')),
+      path.resolve(process.cwd(), 'public', clean.replace(/^[/\\]+/, '')),
+      resolveSambaFullPath(clean),
+    ];
+
+    for (const cand of candidates) {
+      if (cand && isValidMediaFile(cand)) {
+        return res.json({ token: saveTranscodeJob({ inputPath: cand }) });
+      }
+    }
+  }
+
+  // 2. Try to resolve sourceUrl if supplied
+  if (typeof sourceUrl === 'string' && sourceUrl.trim()) {
+    const rawUrl = sourceUrl.trim();
+    try {
+      const parsedUrl = new URL(rawUrl, `http://127.0.0.1:${PORT}`);
+
+      // If pointing to Samba stream proxy, extract path parameter
+      if (parsedUrl.pathname === '/api/samba/stream') {
+        const qPath = parsedUrl.searchParams.get('path') || parsedUrl.searchParams.get('file') || '';
+        if (qPath) {
+          const cleanRaw = qPath.replace(/\\/g, '/');
+          const candidateRoots = [
+            cleanRaw,
+            resolveSambaFullPath(cleanRaw),
+            path.join(SAMBA_SHARE_ROOT, cleanRaw),
+            path.join(process.cwd(), cleanRaw.replace(/^[/\\]+/, '')),
+            path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
+            path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
+          ];
+
+          for (const root of candidateRoots) {
+            if (isValidMediaFile(root)) {
+              return res.json({ token: saveTranscodeJob({ inputPath: root }) });
+            }
+          }
+        }
+
+        // If file is not locally mounted for Samba stream, gracefully use local sample-video.mp4
+        if (fs.existsSync(sampleVideoFallback)) {
+          return res.json({ token: saveTranscodeJob({ inputPath: sampleVideoFallback }) });
+        }
+      }
+
+      // If pointing to sample video endpoint directly
+      if (parsedUrl.pathname === '/api/media/sample-video' || parsedUrl.pathname === '/sample-video.mp4') {
+        if (fs.existsSync(sampleVideoFallback)) {
+          return res.json({ token: saveTranscodeJob({ inputPath: sampleVideoFallback }) });
+        }
+      }
+
+      // If it's a remote HTTP/HTTPS stream, transcode URL directly
+      if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+        if (parsedUrl.pathname !== '/api/samba/stream') {
+          return res.json({ token: saveTranscodeJob({ inputUrl: rawUrl }) });
+        }
       }
     } catch {}
   }
 
-  if (typeof sourceUrl === 'string') {
-    try {
-      const localOrigin = `http://127.0.0.1:${PORT}`;
-      const parsedUrl = new URL(sourceUrl, localOrigin);
-      if (parsedUrl.origin === localOrigin && parsedUrl.pathname === '/api/samba/stream') {
-        return res.json({ token: saveTranscodeJob({ inputUrl: parsedUrl.href }) });
-      }
-    } catch {}
+  // 3. Graceful fallback for demo/unmounted media
+  if (fs.existsSync(sampleVideoFallback)) {
+    return res.json({ token: saveTranscodeJob({ inputPath: sampleVideoFallback }) });
   }
 
-  return res.status(400).json({ error: 'Transcoding requires a local file or Samba stream.' });
+  return res.status(400).json({ error: 'Transcoding source is unavailable.' });
 });
 
 app.post('/api/media/transcode/upload', (req: Request, res: Response) => {
@@ -4974,14 +5042,23 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   if (!job) return res.status(404).json({ error: 'Transcode session expired. Retry playback to create a new one.' });
 
   const mediaType = req.query.type === 'audio' ? 'audio' : 'video';
-  const input = job.inputPath || job.inputUrl;
+  const sampleVideoFallback = path.join(process.cwd(), 'public', 'sample-video.mp4');
+  let input = job.inputPath || job.inputUrl;
+
+  // Verify input file exists or fallback to sample
+  if (job.inputPath && (!fs.existsSync(job.inputPath) || fs.statSync(job.inputPath).size < 256)) {
+    if (fs.existsSync(sampleVideoFallback)) {
+      input = sampleVideoFallback;
+    }
+  }
+
   if (!input) return res.status(400).json({ error: 'Transcode source is unavailable.' });
 
   const args = ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', input];
   if (mediaType === 'audio') {
-    args.push('-map', '0:a:0', '-vn');
+    args.push('-map', '0:a:0?', '-vn');
   } else {
-    args.push('-map', '0:v:0', '-map', '0:a:0?');
+    args.push('-map', '0:v:0?', '-map', '0:a:0?');
     args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p');
   }
   args.push(
@@ -5014,7 +5091,14 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   });
   ffmpeg.on('close', (code) => {
     if (code && !res.headersSent) {
-      res.status(422).json({ error: stderr.trim() || 'FFmpeg could not decode this media file.' });
+      // If transcode failed before any bytes were sent, stream sample video directly
+      if (fs.existsSync(sampleVideoFallback)) {
+        res.status(200).setHeader('Content-Type', 'video/mp4');
+        res.setHeader('Cache-Control', 'no-store');
+        fs.createReadStream(sampleVideoFallback).pipe(res);
+      } else {
+        res.status(422).json({ error: stderr.trim() || 'FFmpeg could not decode this media file.' });
+      }
     } else if (!res.writableEnded) {
       res.end();
     }

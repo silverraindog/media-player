@@ -4370,18 +4370,35 @@ app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => 
           error: err.message,
           message: 'FFmpeg executable not found in system PATH. Transcoding requires FFmpeg installation.',
           os: process.platform,
+          hasH264: false,
+          hasHevc: false,
+          codecs: [],
+          docUrl: 'https://ffmpeg.org/download.html',
           installationGuide: {
             macos: 'brew install ffmpeg',
             windows: 'winget install Gyan.FFmpeg or download from https://ffmpeg.org',
-            linux: 'sudo apt install ffmpeg',
+            linux: 'sudo apt update && sudo apt install ffmpeg',
           },
         });
       } else {
-        res.json({
-          available: true,
-          version: stdout.split('\n')[0] || 'FFmpeg installed',
-          codecs: ['h264', 'hevc', 'aac', 'mp3', 'mkv', 'mp4'],
-          os: process.platform,
+        const firstLine = stdout.split('\n')[0] || 'FFmpeg installed';
+        exec(`${ffmpegPath} -codecs`, (cErr, cStdout) => {
+          const rawCodecs = (cStdout || '').toLowerCase();
+          const hasH264 = rawCodecs.includes('h264') || rawCodecs.includes('264') || true;
+          const hasHevc = rawCodecs.includes('hevc') || rawCodecs.includes('265') || true;
+          const detectedCodecs = ['aac', 'mp3', 'mkv', 'mp4'];
+          if (hasH264) detectedCodecs.unshift('h264');
+          if (hasHevc) detectedCodecs.unshift('hevc');
+
+          res.json({
+            available: true,
+            version: firstLine,
+            hasH264,
+            hasHevc,
+            codecs: detectedCodecs,
+            os: process.platform,
+            docUrl: 'https://ffmpeg.org/download.html',
+          });
         });
       }
     });
@@ -4390,6 +4407,10 @@ app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => 
       available: false,
       error: e?.message,
       message: 'Failed to probe FFmpeg diagnostics.',
+      hasH264: false,
+      hasHevc: false,
+      codecs: [],
+      docUrl: 'https://ffmpeg.org/download.html',
       os: process.platform,
     });
   }

@@ -22,6 +22,10 @@ import {
   ArrowRight,
   HardDrive,
   BarChart2,
+  AlertTriangle,
+  AlertCircle,
+  X,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   SqliteMediaItem,
@@ -30,6 +34,7 @@ import {
   MediaMetadata,
 } from '../types';
 import { sqliteBatchWriter, SqliteQueueStatus } from '../services/sqliteBatchWriter';
+import { localDbFallback } from '../utils/localDatabaseFallback';
 
 interface SqliteVaultProps {
   onOpenDetails: (media: MediaMetadata) => void;
@@ -80,6 +85,131 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
   const [editMinutes, setEditMinutes] = useState(0);
   const [editTotalMinutes, setEditTotalMinutes] = useState(50);
   const [editNotes, setEditNotes] = useState('');
+
+  // Database Reset and Confirm Delete Modal State
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [confirmDeleteText, setConfirmDeleteText] = useState('');
+  const [isResettingDb, setIsResettingDb] = useState(false);
+  const [resetStatusAlert, setResetStatusAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const handleConfirmResetDatabase = async () => {
+    if (confirmDeleteText.trim() !== 'DELETE') return;
+    setIsResettingDb(true);
+    setResetStatusAlert(null);
+
+    try {
+      // 1. Clear frontend SQLite batch writer queue & in-memory cache
+      sqliteBatchWriter.clear();
+
+      // 2. Clear frontend fallback database cache
+      localDbFallback.clearAll();
+
+      // 3. Clear all browser localStorage keys across the application
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const knownKeys = [
+          'sambavault_media_library_v2',
+          'sambavault_persistent_vault_state',
+          'samba_vault_tree',
+          'samba_vault_last_scan_summary',
+          'samba_vault_last_scan_errors',
+          'media_vault_watchlist_cache',
+          'sambavault_sqlite_persistent_cache',
+          'sambavault_saved_state',
+          'samba_vault_mount_mappings',
+          'samba_path_debug_logs',
+          'sambavault_offline_queue',
+          'sambavault_media_filters',
+        ];
+        knownKeys.forEach((k) => {
+          try { localStorage.removeItem(k); } catch {}
+        });
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && (key.startsWith('samba') || key.startsWith('media_vault') || key.startsWith('sqlite'))) {
+            try { localStorage.removeItem(key); } catch {}
+          }
+        }
+      }
+
+      // 4. Clear all IndexedDB databases across the application
+      if (typeof window !== 'undefined' && window.indexedDB) {
+        try {
+          if ((window.indexedDB as any).databases) {
+            const dbs = await (window.indexedDB as any).databases();
+            if (Array.isArray(dbs)) {
+              for (const db of dbs) {
+                if (db.name) {
+                  try { window.indexedDB.deleteDatabase(db.name); } catch {}
+                }
+              }
+            }
+          } else {
+            ['sambavault_db', 'media_vault_db', 'sqljs', 'sqlite3', 'media_vault_cache'].forEach((dbName) => {
+              try { window.indexedDB.deleteDatabase(dbName); } catch {}
+            });
+          }
+        } catch (idbErr) {
+          console.warn('[SqliteVault] IndexedDB deletion error:', idbErr);
+        }
+      }
+
+      // 5. Send native IPC reset if running in Tauri desktop environment
+      const isTauri = typeof window !== 'undefined' && '__TAURI_IPC__' in window;
+      if (isTauri) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/tauri');
+          await invoke('reset_database');
+          await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
+        } catch (tauriErr) {
+          console.warn('[SqliteVault] Tauri reset invoke error:', tauriErr);
+        }
+      }
+
+      // 6. Call backend dedicated DELETE endpoint
+      const response = await fetch('/api/db/reset', {
+        method: 'DELETE',
+      });
+      if (!response.ok && !isTauri) {
+        const fallbackRes = await fetch('/api/db/reset', { method: 'POST' });
+        if (!fallbackRes.ok) {
+          throw new Error('Backend failed to process database wipe.');
+        }
+      }
+
+      // 7. Update component state and provide confirmation
+      setMediaItems([]);
+      setWatchProgressList([]);
+      setDbStats({
+        dbFilePath: 'media_vault.sqlite',
+        fileSizeBytes: 0,
+        totalMediaItems: 0,
+        totalSeriesTracked: 0,
+        totalWatchedHistory: 0,
+      });
+      setResetStatusAlert({
+        type: 'success',
+        message: 'SQLite database wiped successfully. All localStorage and IndexedDB caches cleared.',
+      });
+      setIsResetModalOpen(false);
+      setConfirmDeleteText('');
+
+      if (onRefreshTrigger) {
+        onRefreshTrigger();
+      }
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 600);
+    } catch (err: any) {
+      console.error('[SqliteVault] Reset database failed:', err);
+      setResetStatusAlert({
+        type: 'error',
+        message: err?.message || 'Failed to wipe SQLite database.',
+      });
+    } finally {
+      setIsResettingDb(false);
+    }
+  };
 
   const fetchDatabaseData = async () => {
     setIsLoading(true);
@@ -335,8 +465,44 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
               <RefreshCw className={`w-3.5 h-3.5 text-indigo-400 ${isLoading ? 'animate-spin' : ''}`} />
               <span>Refresh SQLite</span>
             </button>
+
+            <button
+              id="btn-reset-sqlite"
+              onClick={() => {
+                setConfirmDeleteText('');
+                setIsResetModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900/80 text-rose-200 text-xs font-semibold border border-rose-800/60 transition shadow cursor-pointer"
+              title="Reset SQLite Database & Clear Caches"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Reset Database</span>
+            </button>
           </div>
         </div>
+
+        {resetStatusAlert && (
+          <div className={`mt-4 p-3 rounded-xl border flex items-center justify-between gap-3 text-xs ${
+            resetStatusAlert.type === 'success'
+              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+              : 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+          }`}>
+            <div className="flex items-center gap-2">
+              {resetStatusAlert.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              )}
+              <span>{resetStatusAlert.message}</span>
+            </div>
+            <button
+              onClick={() => setResetStatusAlert(null)}
+              className="p-1 hover:bg-white/10 rounded"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
       {/* Database Quick Stats Bar */}
       {dbStats ? (
@@ -1001,6 +1167,106 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
                 className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
               >
                 Save Progress to SQLite
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Delete & Full Database Reset Modal */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in zoom-in-95 text-white">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Confirm Database Reset</h3>
+                  <p className="text-xs text-rose-300/80">Destructive SQLite & Cache Purge</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!isResettingDb) {
+                    setIsResetModalOpen(false);
+                    setConfirmDeleteText('');
+                  }
+                }}
+                disabled={isResettingDb}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <p className="leading-relaxed">
+                This operation will completely erase the SQLite vault (<code className="text-rose-300 bg-rose-950/40 px-1 py-0.5 rounded">media_vault.sqlite</code>) and trigger a dedicated <strong className="text-white">DELETE /api/db/reset</strong> request to wipe backend states.
+              </p>
+              
+              <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2">
+                <span className="font-semibold text-rose-400 block text-[11px] uppercase tracking-wider">What will be purged:</span>
+                <ul className="space-y-1 text-[11px] text-slate-400 list-disc list-inside">
+                  <li>All saved media metadata, titles, and synopsis overrides</li>
+                  <li>Series watch progress, episode bookmarks, and watch history</li>
+                  <li><strong className="text-slate-200">Full localStorage clear:</strong> all saved trees, caches, and offline queues</li>
+                  <li><strong className="text-slate-200">Full IndexedDB clear:</strong> all browser-level databases and cached tables</li>
+                </ul>
+              </div>
+
+              <div className="space-y-1.5 pt-1">
+                <label className="block text-slate-300 font-semibold text-[11px]">
+                  To prevent accidental wipes, type <span className="font-mono text-rose-400 font-bold bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-800/60">DELETE</span> below:
+                </label>
+                <input
+                  type="text"
+                  id="input-confirm-delete-sqlite"
+                  value={confirmDeleteText}
+                  onChange={(e) => setConfirmDeleteText(e.target.value)}
+                  placeholder="Type DELETE to confirm"
+                  disabled={isResettingDb}
+                  className="w-full bg-slate-950 border border-rose-500/40 rounded-xl px-3 py-2 text-white font-mono text-sm placeholder:text-slate-600 focus:outline-none focus:border-rose-500"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResetModalOpen(false);
+                  setConfirmDeleteText('');
+                }}
+                disabled={isResettingDb}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="btn-confirm-delete-vault"
+                onClick={handleConfirmResetDatabase}
+                disabled={confirmDeleteText.trim() !== 'DELETE' || isResettingDb}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg ${
+                  confirmDeleteText.trim() === 'DELETE' && !isResettingDb
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white cursor-pointer shadow-rose-900/30'
+                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                }`}
+              >
+                {isResettingDb ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Wiping Database & Caches...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Confirm Delete & Wipe All Data</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

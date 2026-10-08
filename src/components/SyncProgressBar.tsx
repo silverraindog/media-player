@@ -22,6 +22,7 @@ import {
   FileText,
   Maximize2,
   ExternalLink,
+  Wifi,
 } from 'lucide-react';
 
 export interface RecursiveAuditProgress {

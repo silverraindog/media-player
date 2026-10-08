@@ -97,6 +97,8 @@ export interface MediaVersionBranch {
   posterUrl?: string;
   overview?: string;
   folderPath?: string;
+  resolution?: string;
+  format?: string;
   media?: MediaMetadata;
 }
 

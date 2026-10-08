@@ -2054,6 +2054,7 @@ export interface PersistentVaultState {
   version: number;
   lastSavedAt: string;
   sambaTree?: any[];
+  mediaLibrary?: any[];
   syncLogs?: any[];
   sambaConfig?: any;
   classifierSettings?: any;

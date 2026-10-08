@@ -35,7 +35,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
-import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath } from '../utils/tauriBridge';
+import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics } from '../utils/tauriBridge';
 import { apiCall } from '../lib/api';
 import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
 import { transcodeService } from '../services/TranscodeService';
@@ -187,41 +187,91 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [customStreamInputUrl, setCustomStreamInputUrl] = useState<string>('');
   const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
   const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
-  const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
+  const [diagnosticsData, setDiagnosticsData] = useState<FfmpegCodecDiagnostics | null>(null);
   const [isCheckingDiagnostics, setIsCheckingDiagnostics] = useState(false);
+  const [isVerifyingSystem, setIsVerifyingSystem] = useState(false);
+  const [verificationFeedback, setVerificationFeedback] = useState<string | null>(null);
   const [transcodeReadinessStatus, setTranscodeReadinessStatus] = useState<{
     checked: boolean;
     ready: boolean;
     message: string;
   }>({ checked: false, ready: true, message: 'Checking codecs...' });
 
+  const runFfmpegDiagnostics = useCallback(async () => {
+    setIsCheckingDiagnostics(true);
+    try {
+      const data = await checkFfmpegCodecsViaTauri();
+      setDiagnosticsData(data);
+      const isReady = Boolean(data.available && (data.hasH264 || data.hasHevc));
+      setTranscodeReadinessStatus({
+        checked: true,
+        ready: isReady,
+        message: isReady
+          ? `Codecs OK (${[data.hasH264 && 'H.264', data.hasHevc && 'HEVC'].filter(Boolean).join('/')})`
+          : 'FFmpeg misconfigured - Click to repair',
+      });
+      return data;
+    } catch (e: any) {
+      const fallback: FfmpegCodecDiagnostics = {
+        available: false,
+        version: '',
+        hasH264: false,
+        hasHevc: false,
+        codecs: [],
+        os: typeof navigator !== 'undefined' ? navigator.platform : 'unknown',
+        error: e?.message || 'Could not probe local codecs',
+        source: 'fallback',
+      };
+      setDiagnosticsData(fallback);
+      setTranscodeReadinessStatus({
+        checked: true,
+        ready: false,
+        message: 'FFmpeg missing - Click to repair',
+      });
+      return fallback;
+    } finally {
+      setIsCheckingDiagnostics(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isOpen) return;
-    let isMounted = true;
-    const checkReadiness = async () => {
-      try {
-        const res = await fetch('/api/media/diagnostics/ffmpeg');
-        const data = await res.json();
-        if (isMounted) {
-          setTranscodeReadinessStatus({
-            checked: true,
-            ready: Boolean(data.available),
-            message: data.available ? 'Codecs OK (H.264/HEVC)' : 'Click to repair (FFmpeg missing)',
-          });
-        }
-      } catch (e) {
-        if (isMounted) {
-          setTranscodeReadinessStatus({
-            checked: true,
-            ready: true,
-            message: 'Web Codecs OK',
-          });
-        }
+    runFfmpegDiagnostics();
+  }, [isOpen, runFfmpegDiagnostics]);
+
+  const handleDownloadInstallFfmpeg = async () => {
+    const docUrl = 'https://ffmpeg.org/download.html';
+    // 1. Open system-appropriate documentation / download link
+    try {
+      if (typeof window !== 'undefined' && '__TAURI_IPC__' in (window as any)) {
+        const { open } = await import('@tauri-apps/api/shell');
+        await open(docUrl);
+      } else if (typeof window !== 'undefined') {
+        (window as any).open(docUrl, '_blank', 'noopener,noreferrer');
       }
-    };
-    checkReadiness();
-    return () => { isMounted = false; };
-  }, [isOpen]);
+    } catch {
+      if (typeof window !== 'undefined') {
+        (window as any).open(docUrl, '_blank', 'noopener,noreferrer');
+      }
+    }
+
+    // 2. Trigger system-level verification check
+    setIsVerifyingSystem(true);
+    setVerificationFeedback('Opened FFmpeg installation documentation. Probing local system bridge for newly installed binaries...');
+    try {
+      const res = await checkFfmpegCodecsViaTauri();
+      setDiagnosticsData(res);
+      if (res.available) {
+        setVerificationFeedback(`System verification passed! Located: ${res.version} (H.264: ${res.hasH264 ? 'Yes' : 'No'}, HEVC: ${res.hasHevc ? 'Yes' : 'No'})`);
+      } else {
+        setVerificationFeedback(`Verification completed: FFmpeg is not yet active in your system PATH. Follow the install guide above and click 'Verify System Codecs' once installed.`);
+      }
+    } catch (verErr: any) {
+      setVerificationFeedback(`Verification check error: ${verErr?.message || verErr}`);
+    } finally {
+      setIsVerifyingSystem(false);
+    }
+  };
   const [isDragOver, setIsDragOver] = useState(false);
   const [isManualStreamOverride, setIsManualStreamOverride] = useState(false);
   const [isVolumeMounted, setIsVolumeMounted] = useState<boolean>(true);
@@ -1340,7 +1390,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 </span>
                 <button
                   onClick={() => setIsDiagnosticsModalOpen(false)}
-                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1349,41 +1399,55 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               {isCheckingDiagnostics ? (
                 <div className="py-8 flex flex-col items-center justify-center space-y-3">
                   <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin" />
-                  <span className="text-xs text-slate-300">Probing local FFmpeg & codecs...</span>
+                  <span className="text-xs text-slate-300">Probing local FFmpeg & codecs via Tauri bridge...</span>
                 </div>
               ) : (
                 <div className="space-y-4 text-xs">
                   <div className={`p-3.5 rounded-xl border flex items-start gap-3 ${
-                    diagnosticsData?.available
+                    diagnosticsData?.available && (diagnosticsData?.hasH264 || diagnosticsData?.hasHevc)
                       ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
                       : 'bg-amber-950/40 border-amber-500/40 text-amber-200'
                   }`}>
-                    {diagnosticsData?.available ? (
+                    {diagnosticsData?.available && (diagnosticsData?.hasH264 || diagnosticsData?.hasHevc) ? (
                       <Check className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                     ) : (
                       <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                     )}
                     <div className="space-y-1">
-                      <span className="font-bold block">
-                        {diagnosticsData?.available ? 'FFmpeg is Installed & Ready' : 'FFmpeg Not Detected in System PATH'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">
+                          {diagnosticsData?.available ? 'FFmpeg Installed & Accessible' : 'FFmpeg Not Detected in System PATH'}
+                        </span>
+                        {diagnosticsData?.source && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+                            {diagnosticsData.source === 'tauri-bridge'
+                              ? 'Tauri Native IPC'
+                              : diagnosticsData.source === 'tauri-shell'
+                              ? 'Tauri Shell Command'
+                              : 'Backend Server'}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[11px] opacity-90">
-                        {diagnosticsData?.message || (diagnosticsData?.available ? diagnosticsData?.version : 'FFmpeg is required for server-side media transcoding of MKV/DTS files.')}
+                        {diagnosticsData?.message || (diagnosticsData?.available ? diagnosticsData?.version : 'FFmpeg is required for transcoding MKV/HEVC/DTS media to HTML5-compatible streams.')}
                       </p>
                     </div>
                   </div>
 
+                  {/* Codec Availability Matrix */}
                   <div className="space-y-2 bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
-                    <span className="text-slate-400 block font-bold">Supported Codecs & Pipelines</span>
+                    <span className="text-slate-400 block font-bold">Local Hardware & Transcode Codecs</span>
                     <div className="grid grid-cols-3 gap-2 font-mono text-[11px]">
                       <div className="p-2 rounded bg-slate-900 border border-slate-800 flex items-center justify-between">
                         <span>H.264 / AVC</span>
-                        <span className="text-emerald-400 font-bold">Supported</span>
+                        <span className={diagnosticsData?.hasH264 ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                          {diagnosticsData?.hasH264 ? 'Supported' : 'Missing'}
+                        </span>
                       </div>
                       <div className="p-2 rounded bg-slate-900 border border-slate-800 flex items-center justify-between">
                         <span>HEVC / H.265</span>
-                        <span className={diagnosticsData?.available ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
-                          {diagnosticsData?.available ? 'Supported' : 'Needs FFmpeg'}
+                        <span className={diagnosticsData?.hasHevc ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                          {diagnosticsData?.hasHevc ? 'Supported' : 'Needs FFmpeg'}
                         </span>
                       </div>
                       <div className="p-2 rounded bg-slate-900 border border-slate-800 flex items-center justify-between">
@@ -1393,7 +1457,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     </div>
                   </div>
 
-                  {!diagnosticsData?.available && (
+                  {/* If detection fails, provide OS instructions & download/install trigger */}
+                  {(!diagnosticsData?.available || (!diagnosticsData?.hasH264 && !diagnosticsData?.hasHevc)) && (
                     <div className="space-y-2.5 bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-900/50">
                       <span className="text-indigo-300 font-bold block">How to Install FFmpeg on {diagnosticsData?.os || 'your OS'}</span>
                       <div className="space-y-1.5 font-mono text-[11px] text-slate-300">
@@ -1407,25 +1472,50 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                         </div>
                         <div className="p-2 bg-slate-950 rounded border border-slate-800 flex items-center justify-between">
                           <span>Linux (APT):</span>
-                          <span className="text-emerald-300">sudo apt install ffmpeg</span>
+                          <span className="text-emerald-300">sudo apt update && sudo apt install ffmpeg</span>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between pt-2">
-                    <a
-                      href="https://ffmpeg.org/download.html"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Download / Install FFmpeg</span>
-                    </a>
+                  {verificationFeedback && (
+                    <div className="p-2.5 rounded-lg bg-indigo-950/50 border border-indigo-500/40 text-[11px] text-indigo-200">
+                      {verificationFeedback}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
+                    <div className="flex items-center gap-2">
+                      {(!diagnosticsData?.available || (!diagnosticsData?.hasH264 && !diagnosticsData?.hasHevc)) ? (
+                        <button
+                          id="btn-download-install-ffmpeg"
+                          onClick={handleDownloadInstallFfmpeg}
+                          disabled={isVerifyingSystem}
+                          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition cursor-pointer"
+                        >
+                          {isVerifyingSystem ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          )}
+                          <span>Download / Install FFmpeg</span>
+                        </button>
+                      ) : null}
+
+                      <button
+                        onClick={runFfmpegDiagnostics}
+                        disabled={isCheckingDiagnostics}
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
+                        title="Re-run system-level verification via Tauri bridge"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isCheckingDiagnostics ? 'animate-spin' : ''}`} />
+                        <span>Verify System Codecs</span>
+                      </button>
+                    </div>
+
                     <button
                       onClick={() => setIsDiagnosticsModalOpen(false)}
-                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
                     >
                       Close
                     </button>
@@ -1517,23 +1607,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
             {/* FFmpeg Codec Diagnostics Button */}
             <button
-              onClick={async () => {
+              id="player-btn-diagnostics"
+              onClick={() => {
                 setIsDiagnosticsModalOpen(true);
-                setIsCheckingDiagnostics(true);
-                try {
-                  const res = await fetch('/api/media/diagnostics/ffmpeg');
-                  const data = await res.json();
-                  setDiagnosticsData(data);
-                } catch (e: any) {
-                  setDiagnosticsData({
-                    available: false,
-                    error: e?.message,
-                    message: 'Could not connect to diagnostics endpoint.',
-                    os: navigator.platform,
-                  });
-                } finally {
-                  setIsCheckingDiagnostics(false);
-                }
+                runFfmpegDiagnostics();
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-950/60 hover:bg-indigo-900/60 text-indigo-200 border border-indigo-700/60 transition cursor-pointer"
               title="Open FFmpeg & Codec Diagnostics"
@@ -1916,23 +1993,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 </div>
 
                 <button
-                  onClick={async () => {
+                  id="player-badge-readiness"
+                  onClick={() => {
                     setIsDiagnosticsModalOpen(true);
-                    setIsCheckingDiagnostics(true);
-                    try {
-                      const res = await fetch('/api/media/diagnostics/ffmpeg');
-                      const data = await res.json();
-                      setDiagnosticsData(data);
-                    } catch (e: any) {
-                      setDiagnosticsData({
-                        available: false,
-                        error: e?.message,
-                        message: 'Could not connect to diagnostics endpoint.',
-                        os: navigator.platform,
-                      });
-                    } finally {
-                      setIsCheckingDiagnostics(false);
-                    }
+                    runFfmpegDiagnostics();
                   }}
                   className={`px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-md transition cursor-pointer shadow-lg ${
                     transcodeReadinessStatus.ready

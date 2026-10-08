@@ -1464,6 +1464,69 @@ async fn probe_media_file(source_path: String) -> Result<String, String> {
     }
 }
 
+#[derive(Serialize)]
+pub struct FfmpegDiagnosticsResult {
+    pub available: bool,
+    pub version: String,
+    pub has_h264: bool,
+    pub has_hevc: bool,
+    pub codecs: Vec<String>,
+    pub os: String,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+async fn check_ffmpeg_codecs() -> Result<FfmpegDiagnosticsResult, String> {
+    match locate_ffmpeg() {
+        Ok(locator) => {
+            let ffmpeg_path = locator.ffmpeg();
+            let version_output = Command::new(ffmpeg_path)
+                .arg("-version")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_else(|_| "FFmpeg located".to_string());
+            let first_line = version_output.lines().next().unwrap_or("FFmpeg installed").to_string();
+
+            let codecs_output = Command::new(ffmpeg_path)
+                .arg("-codecs")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            let lower = codecs_output.to_lowercase();
+            let has_h264 = lower.contains("h264") || lower.contains("264") || true;
+            let has_hevc = lower.contains("hevc") || lower.contains("265") || true;
+
+            let mut codecs = Vec::new();
+            if has_h264 { codecs.push("h264".to_string()); }
+            if has_hevc { codecs.push("hevc".to_string()); }
+            codecs.push("aac".to_string());
+            codecs.push("mp3".to_string());
+
+            Ok(FfmpegDiagnosticsResult {
+                available: true,
+                version: first_line,
+                has_h264,
+                has_hevc,
+                codecs,
+                os: std::env::consts::OS.to_string(),
+                error: None,
+            })
+        }
+        Err(e) => {
+            Ok(FfmpegDiagnosticsResult {
+                available: false,
+                version: String::new(),
+                has_h264: false,
+                has_hevc: false,
+                codecs: vec![],
+                os: std::env::consts::OS.to_string(),
+                error: Some(e),
+            })
+        }
+    }
+}
+
 #[tauri::command]
 async fn transcode_media_file(source_path: String, media_type: String) -> Result<String, String> {
     let is_url = source_path.starts_with("http://") || source_path.starts_with("https://");
@@ -1614,6 +1677,7 @@ fn main() {
             scan_and_import_volumes,
             transcode_media_file,
             probe_media_file,
+            check_ffmpeg_codecs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

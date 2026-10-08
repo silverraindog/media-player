@@ -25,8 +25,8 @@ interface PathIntegrityDiagnosticModalProps {
   sambaTree: SambaShareNode[];
   sambaConfig: SambaConfig;
   setSambaTree: React.Dispatch<React.SetStateAction<SambaShareNode[]>>;
-  lastDiscoveredPaths: string[];
-  mediaLibrary: any[];
+  lastDiscoveredPaths?: string[];
+  mediaLibrary?: any[];
 }
 
 interface DiagnosticItem {
@@ -47,8 +47,8 @@ export const PathIntegrityDiagnosticModal: React.FC<PathIntegrityDiagnosticModal
   sambaTree,
   sambaConfig,
   setSambaTree,
-  lastDiscoveredPaths,
-  mediaLibrary,
+  lastDiscoveredPaths = [],
+  mediaLibrary = [],
 }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [items, setItems] = useState<DiagnosticItem[]>([]);

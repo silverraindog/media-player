@@ -1755,6 +1755,112 @@ export const resolveSambaPathToLocalMount = (
 export { permissionsManager } from './permissionsManager';
 export type { FullDiskAccessStatus, PermissionInstructions } from './permissionsManager';
 
+export interface FfmpegCodecDiagnostics {
+  available: boolean;
+  version: string;
+  hasH264: boolean;
+  hasHevc: boolean;
+  codecs: string[];
+  os: string;
+  error?: string;
+  message?: string;
+  source: 'tauri-bridge' | 'tauri-shell' | 'server-api' | 'fallback';
+}
+
+/**
+ * Checks if FFmpeg and specifically H.264 / HEVC codecs are available locally
+ * via Tauri bridge (native IPC or Tauri Shell Command) with graceful backend API fallback.
+ */
+export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostics> => {
+  if (isTauriEnvironment()) {
+    // 1. Try dedicated check_ffmpeg_codecs Tauri IPC command
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const res = await invoke<any>('check_ffmpeg_codecs');
+      if (res && typeof res === 'object') {
+        return {
+          available: Boolean(res.available),
+          version: res.version || 'FFmpeg (Tauri Bridge)',
+          hasH264: Boolean(res.has_h264),
+          hasHevc: Boolean(res.has_hevc),
+          codecs: Array.isArray(res.codecs) ? res.codecs : ['h264', 'hevc', 'aac'],
+          os: res.os || navigator.platform,
+          error: res.error,
+          source: 'tauri-bridge',
+        };
+      }
+    } catch (ipcErr) {
+      console.warn('[TauriBridge] check_ffmpeg_codecs IPC error, attempting Tauri shell Command fallback:', ipcErr);
+    }
+
+    // 2. Try Tauri Shell Command ('ffmpeg', ['-version'] and ['-codecs'])
+    try {
+      const { Command } = await import('@tauri-apps/api/shell');
+      const versionCmd = new Command('ffmpeg', ['-version']);
+      const versionOutput = await versionCmd.execute();
+      if (versionOutput.code === 0 || versionOutput.stdout) {
+        const firstLine = versionOutput.stdout.split('\n')[0] || 'FFmpeg system binary';
+        let hasH264 = true;
+        let hasHevc = true;
+
+        try {
+          const codecsCmd = new Command('ffmpeg', ['-codecs']);
+          const codecsOutput = await codecsCmd.execute();
+          const lower = (codecsOutput.stdout || '').toLowerCase();
+          hasH264 = lower.includes('h264') || lower.includes('264');
+          hasHevc = lower.includes('hevc') || lower.includes('265');
+        } catch {}
+
+        const codecsList = ['aac', 'mp3'];
+        if (hasH264) codecsList.unshift('h264');
+        if (hasHevc) codecsList.unshift('hevc');
+
+        return {
+          available: true,
+          version: firstLine,
+          hasH264,
+          hasHevc,
+          codecs: codecsList,
+          os: navigator.platform,
+          source: 'tauri-shell',
+        };
+      }
+    } catch (shellErr) {
+      console.warn('[TauriBridge] Shell command failed, falling back to API:', shellErr);
+    }
+  }
+
+  // 3. Fallback to server API endpoint /api/media/diagnostics/ffmpeg
+  try {
+    const res = await fetch('/api/media/diagnostics/ffmpeg');
+    const data = await res.json();
+    return {
+      available: Boolean(data.available),
+      version: data.version || 'FFmpeg API check',
+      hasH264: Boolean(data.hasH264 ?? true),
+      hasHevc: Boolean(data.hasHevc ?? true),
+      codecs: Array.isArray(data.codecs) ? data.codecs : ['h264', 'hevc', 'aac'],
+      os: data.os || (typeof navigator !== 'undefined' ? navigator.platform : 'unknown'),
+      error: data.error,
+      message: data.message,
+      source: 'server-api',
+    };
+  } catch (apiErr: any) {
+    return {
+      available: false,
+      version: '',
+      hasH264: false,
+      hasHevc: false,
+      codecs: [],
+      os: typeof navigator !== 'undefined' ? navigator.platform : 'unknown',
+      error: apiErr?.message || 'FFmpeg diagnostics unavailable',
+      message: 'Failed to probe FFmpeg diagnostics.',
+      source: 'fallback',
+    };
+  }
+};
+
+
 
 
 

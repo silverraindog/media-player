@@ -50,6 +50,7 @@ import { permissionsManager, FullDiskAccessStatus } from '../utils/permissionsMa
 import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 import { localDbFallback } from '../utils/localDatabaseFallback';
 import { FfmpegHardwareDiagnosticsCard } from './FfmpegHardwareDiagnosticsCard';
+import { NetworkConnectionDiagnosticsCard } from './NetworkConnectionDiagnosticsCard';
 
 interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
@@ -1348,6 +1349,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
       {/* SECTION 4.5: HARDWARE & FFPEG SYSTEM DIAGNOSTICS */}
       <FfmpegHardwareDiagnosticsCard />
+
+      {/* SECTION 4.6: NETWORK CONNECTION DIAGNOSTICS */}
+      <NetworkConnectionDiagnosticsCard
+        sambaConfig={sambaConfig}
+        onUpdateSambaConfig={onUpdateSambaConfig}
+      />
 
       {/* SECTION 5: RELEASE VERSION TRACKER & BUILD INCREMENTS */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">

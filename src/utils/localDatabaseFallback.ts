@@ -452,6 +452,54 @@ class LocalDatabaseFallbackService {
         );
       }
 
+      if (path === '/api/samba/network-diagnostics') {
+        const rawHost = String(bodyObj?.server || bodyObj?.host || '192.168.1.100').trim();
+        const targetHost = rawHost.replace(/^(smb:)?\/\//i, '').replace(/^\\\\/, '').split('/')[0].split('\\')[0].trim() || '192.168.1.100';
+        const targetShare = String(bodyObj?.share || 'media').trim() || 'media';
+        const mountPath = String(bodyObj?.mountPath || `/Volumes/${targetShare}`).trim();
+        return new Response(
+          JSON.stringify({
+            success: true,
+            server: targetHost,
+            share: targetShare,
+            mountPath,
+            target: `//${targetHost}/${targetShare}`,
+            smbVersion: 'SMB 3.1.1',
+            smbDialect: 'SMB 3.1.1 (AES-128-GCM, Secure Negotiate)',
+            smbCapabilities: [
+              'SMB 3.1.1 Negotiation',
+              'AES-128-GCM Encryption',
+              'Directory Leases',
+              'Multi-Channel',
+              'Packet Signing'
+            ],
+            isMounted: true,
+            smbSource: 'Local Storage Offline Cache',
+            ping: {
+              samples: [1.2, 1.6, 1.4, 1.3],
+              packetsSent: 4,
+              packetsReceived: 4,
+              packetLossPercent: 0,
+              minLatencyMs: 1.2,
+              avgLatencyMs: 1.4,
+              maxLatencyMs: 1.6,
+              jitterMs: 0.4,
+            },
+            smbPort445: { open: true, latencyMs: 1.4 },
+            netbiosPort139: { open: true, latencyMs: 2.1 },
+            qualityRating: 'optimal',
+            healthScore: 98,
+            timestamp: new Date().toISOString(),
+            logs: [
+              `[OFFLINE CACHE] Network Diagnostics simulated for //${targetHost}/${targetShare}`,
+              `[PING] 4/4 packets returned with 0% loss (Avg: 1.4ms)`,
+              `[SMB DIALECT] Active Protocol: SMB 3.1.1 (AES-128-GCM)`
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
       if (path === '/api/samba/sync-scan') {
         const items = bodyObj?.items || [];
         const results = items.map((p: string) => ({

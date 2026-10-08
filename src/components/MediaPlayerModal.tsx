@@ -32,6 +32,7 @@ import {
   Globe,
   Link,
   UploadCloud,
+  Activity,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
 import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath } from '../utils/tauriBridge';

@@ -25,6 +25,8 @@ interface PathIntegrityDiagnosticModalProps {
   sambaTree: SambaShareNode[];
   sambaConfig: SambaConfig;
   setSambaTree: React.Dispatch<React.SetStateAction<SambaShareNode[]>>;
+  lastDiscoveredPaths: string[];
+  mediaLibrary: any[];
 }
 
 interface DiagnosticItem {
@@ -45,10 +47,13 @@ export const PathIntegrityDiagnosticModal: React.FC<PathIntegrityDiagnosticModal
   sambaTree,
   sambaConfig,
   setSambaTree,
+  lastDiscoveredPaths,
+  mediaLibrary,
 }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [items, setItems] = useState<DiagnosticItem[]>([]);
-  const [filterStatus, setFilterStatus] = useState<'all' | 'dirty' | 'unreachable' | 'healthy'>('all');
+  const [orphans, setOrphans] = useState<string[]>([]);
+  const [filterStatus, setFilterStatus] = useState<'all' | 'dirty' | 'unreachable' | 'healthy' | 'orphans'>('all');
   const [fixedCount, setFixedCount] = useState(0);
 
   if (!isOpen) return null;
@@ -85,6 +90,11 @@ export const PathIntegrityDiagnosticModal: React.FC<PathIntegrityDiagnosticModal
     };
 
     walk(sambaTree);
+    
+    // Find orphaned files
+    const libraryPaths = new Set(mediaLibrary.map(m => m.path || ''));
+    const foundOrphans = lastDiscoveredPaths.filter(path => !libraryPaths.has(path));
+    setOrphans(foundOrphans);
 
     // Verify a sample or batch of paths against backend
     const pathsToCheck = diagnosticList.filter((d) => d.isDirty || d.rawPath.includes('//')).slice(0, 30).map((d) => [
@@ -244,6 +254,17 @@ export const PathIntegrityDiagnosticModal: React.FC<PathIntegrityDiagnosticModal
             >
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span>Healthy ({healthyCount})</span>
+            </button>
+            <button
+              onClick={() => setFilterStatus('orphans')}
+              className={`px-3 py-1.5 rounded-xl font-semibold transition cursor-pointer border flex items-center gap-1.5 ${
+                filterStatus === 'orphans'
+                  ? 'bg-rose-950 text-rose-200 border-rose-500/50'
+                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:bg-slate-800'
+              }`}
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+              <span>Orphans ({orphans.length})</span>
             </button>
           </div>
 

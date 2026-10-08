@@ -380,44 +380,58 @@ function App() {
   }, [transcodeConfig]);
 
   useEffect(() => {
-    let isMounted = true;
+    let hasCompleted = false;
+
+    // Hard safety timeout: unconditionally dismiss the splash screen within 800ms
+    // so the app can never freeze or lock the user out regardless of network/IPC delays.
+    const safetyTimer = setTimeout(() => {
+      if (!hasCompleted) {
+        hasCompleted = true;
+        setIsInitializing(false);
+      }
+    }, 800);
+
+    // Run cache purge in the background without blocking the UI
+    if (isTauriEnvironment()) {
+      import('./utils/tauriBridge')
+        .then(({ purgeTranscodeCache }) => purgeTranscodeCache(transcodeConfig?.maxCacheSizeGb || 50))
+        .catch((err) => console.warn('Background cache purge skipped:', err));
+    }
+
     const initApp = async () => {
       try {
         setInitStatusText('Checking transcode cache limits...');
-        setInitProgress(15);
-
-        // Trigger cache purge on startup if in Tauri environment
-        if (isTauriEnvironment()) {
-          const { purgeTranscodeCache } = await import('./utils/tauriBridge');
-          await purgeTranscodeCache(transcodeConfig?.maxCacheSizeGb || 50);
-        }
-
-        if (!isMounted) return;
-        setInitStatusText('Loading media vault and SQLite cache in chunks...');
-        setInitProgress(35);
-        await new Promise((resolve) => setTimeout(resolve, 60));
-
-        if (!isMounted) return;
-        setInitStatusText('Reconciling filesystem indexes...');
-        setInitProgress(65);
-        await new Promise((resolve) => setTimeout(resolve, 60));
-
-        if (!isMounted) return;
-        setInitStatusText('Finalizing library state...');
-        setInitProgress(100);
+        setInitProgress(30);
         await new Promise((resolve) => setTimeout(resolve, 40));
 
-        if (isMounted) {
+        setInitStatusText('Loading media vault and SQLite cache...');
+        setInitProgress(70);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+
+        setInitStatusText('Finalizing library state...');
+        setInitProgress(100);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        if (!hasCompleted) {
+          hasCompleted = true;
+          clearTimeout(safetyTimer);
           setIsInitializing(false);
         }
       } catch (e) {
         console.error('Initialization error:', e);
-        if (isMounted) setIsInitializing(false);
+        if (!hasCompleted) {
+          hasCompleted = true;
+          clearTimeout(safetyTimer);
+          setIsInitializing(false);
+        }
       }
     };
+
     initApp();
+
     return () => {
-      isMounted = false;
+      hasCompleted = true;
+      clearTimeout(safetyTimer);
     };
   }, []);
 
@@ -3128,6 +3142,17 @@ function App() {
               <span>SambaVault v{APP_VERSION}</span>
               <span className="text-indigo-400 font-bold">{initProgress}%</span>
             </div>
+          </div>
+
+          <div className="pt-2">
+            <button
+              type="button"
+              id="btn-skip-init"
+              onClick={() => setIsInitializing(false)}
+              className="px-4 py-2 rounded-xl bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold border border-indigo-500/40 transition shadow cursor-pointer inline-flex items-center gap-1.5"
+            >
+              <span>Continue to Media Library &rarr;</span>
+            </button>
           </div>
         </div>
       </div>

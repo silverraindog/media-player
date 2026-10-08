@@ -118,20 +118,29 @@ export interface WatchHistoryLogDb {
 
 let persistTimer: NodeJS.Timeout | null = null;
 
+export function persistDbToDiskSync() {
+  if (!dbInstance) return;
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const binaryArray = dbInstance.export();
+    const buffer = Buffer.from(binaryArray);
+    fs.writeFileSync(DB_PATH, buffer);
+  } catch (err) {
+    console.error('Error synchronously persisting SQLite database to disk:', err);
+  }
+}
+
 function persistDbToDisk() {
   if (!dbInstance) return;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      const binaryArray = dbInstance!.export();
-      const buffer = Buffer.from(binaryArray);
-      fs.writeFileSync(DB_PATH, buffer);
-    } catch (err) {
-      console.error('Error persisting SQLite database to disk:', err);
-    }
+    persistDbToDiskSync();
   }, 250);
 }
 
@@ -2104,6 +2113,39 @@ export function getVaultStateFromDisk(): PersistentVaultState | null {
 let vaultStatePersistTimer: NodeJS.Timeout | null = null;
 let pendingVaultState: PersistentVaultState | null = null;
 
+export function saveVaultStateToDiskSync(state: Partial<PersistentVaultState>): PersistentVaultState {
+  const existing = getVaultStateFromDisk() || {
+    version: 1,
+    lastSavedAt: new Date().toISOString(),
+  };
+
+  const updated: PersistentVaultState = {
+    ...existing,
+    ...state,
+    version: 1,
+    lastSavedAt: new Date().toISOString(),
+  };
+
+  pendingVaultState = updated;
+  if (vaultStatePersistTimer) {
+    clearTimeout(vaultStatePersistTimer);
+    vaultStatePersistTimer = null;
+  }
+
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const tempPath = `${VAULT_STATE_FILE}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
+    fs.renameSync(tempPath, VAULT_STATE_FILE);
+  } catch (e) {
+    console.error('[SambaVault Storage] Failed saving vault_state.json synchronously to disk:', e);
+  }
+
+  return updated;
+}
+
 export function saveVaultStateToDisk(state: Partial<PersistentVaultState>): PersistentVaultState {
   const existing = getVaultStateFromDisk() || {
     version: 1,
@@ -2337,14 +2379,14 @@ export async function resetDatabaseInDb(): Promise<void> {
     if (vaultState) {
       vaultState.sambaTree = [];
       vaultState.mediaLibrary = [];
-      saveVaultStateToDisk(vaultState);
+      saveVaultStateToDiskSync(vaultState);
     } else {
-      saveVaultStateToDisk({ mediaLibrary: [], sambaTree: [] });
+      saveVaultStateToDiskSync({ mediaLibrary: [], sambaTree: [] });
     }
   } catch (e) {
     console.error('Error clearing vault state during reset:', e);
   }
 
-  persistDbToDisk();
+  persistDbToDiskSync();
 }
 

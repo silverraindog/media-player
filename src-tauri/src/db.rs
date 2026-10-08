@@ -403,6 +403,12 @@ pub fn reset_database(app_handle: AppHandle) -> Result<(), String> {
          DELETE FROM user_watchlist;"
     ).map_err(|e| e.to_string())?;
 
+    // Also wipe vault_state.json in data_dir
+    let state_file = get_data_dir(&app_handle).join("vault_state.json");
+    if state_file.exists() {
+        let _ = fs::write(&state_file, "{\"mediaLibrary\":[],\"sambaTree\":[],\"version\":1}");
+    }
+
     Ok(())
 }
 

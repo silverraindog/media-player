@@ -47,6 +47,9 @@ import { PermissionDiagnostics } from './PermissionDiagnostics';
 import { PermissionHelpModal } from './PermissionHelpModal';
 import { logger } from '../utils/loggerService';
 import { permissionsManager, FullDiskAccessStatus } from '../utils/permissionsManager';
+import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
+import { localDbFallback } from '../utils/localDatabaseFallback';
+import { FfmpegHardwareDiagnosticsCard } from './FfmpegHardwareDiagnosticsCard';
 
 interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
@@ -86,26 +89,92 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
   // SQLite Database Reset State
   const [isConfirmingReset, setIsConfirmingReset] = useState(false);
+  const [confirmDeleteText, setConfirmDeleteText] = useState('');
   const [isResetting, setIsResetting] = useState(false);
 
   const handleDatabaseReset = async () => {
+    if (confirmDeleteText !== 'DELETE') return;
     setIsResetting(true);
-    logger.info('User initiated global SQLite database reset.', 'Database');
+    logger.info('User initiated global SQLite database reset with typed confirmation.', 'Database');
     try {
+      // 1. Clear frontend SQLite batch writer queue & in-memory cache
+      sqliteBatchWriter.clear();
+
+      // 2. Clear frontend fallback database cache
+      localDbFallback.clearAll();
+
+      // 3. Clear all browser localStorage keys associated with media, trees, and vault states
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const keysToRemove = [
+          'sambavault_media_library_v2',
+          'sambavault_persistent_vault_state',
+          'samba_vault_tree',
+          'samba_vault_last_scan_summary',
+          'samba_vault_last_scan_errors',
+          'media_vault_watchlist_cache',
+          'sambavault_sqlite_persistent_cache',
+          'sambavault_saved_state',
+          'samba_vault_mount_mappings',
+          'samba_path_debug_logs',
+        ];
+        keysToRemove.forEach((k) => {
+          try {
+            localStorage.removeItem(k);
+          } catch {}
+        });
+      }
+
+      // 4. Clear all IndexedDB databases across the app
+      if (typeof window !== 'undefined' && window.indexedDB) {
+        try {
+          if ((window.indexedDB as any).databases) {
+            const dbs = await (window.indexedDB as any).databases();
+            if (Array.isArray(dbs)) {
+              dbs.forEach((db: any) => {
+                if (db.name) {
+                  try { window.indexedDB.deleteDatabase(db.name); } catch {}
+                }
+              });
+            }
+          } else {
+            ['sambavault_db', 'media_vault_db', 'sqljs', 'sqlite3', 'media_vault_cache'].forEach((dbName) => {
+              try { window.indexedDB.deleteDatabase(dbName); } catch {}
+            });
+          }
+        } catch {}
+      }
+
+      // 5. Send backend reset command (both Tauri native IPC and Node/Express server DELETE endpoint)
       const isTauri = typeof window !== 'undefined' && '__TAURI_IPC__' in window;
       if (isTauri) {
-        const { invoke } = await import('@tauri-apps/api/tauri');
-        await invoke('reset_database');
-      } else {
-        const response = await fetch('/api/db/reset', {
-          method: 'POST',
-        });
-        if (!response.ok) {
-          throw new Error('Server API failed to reset database.');
+        try {
+          const { invoke } = await import('@tauri-apps/api/tauri');
+          await invoke('reset_database');
+          await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
+        } catch (e) {
+          console.warn('Tauri reset invoke error:', e);
         }
       }
+
+      // Call dedicated DELETE endpoint on Express backend
+      try {
+        const response = await fetch('/api/db/reset', {
+          method: 'DELETE',
+        });
+        if (!response.ok && !isTauri) {
+          // Fallback to POST if DELETE not supported
+          const fallbackRes = await fetch('/api/db/reset', { method: 'POST' });
+          if (!fallbackRes.ok && !isTauri) {
+            throw new Error('Server API failed to reset database.');
+          }
+        }
+      } catch (err) {
+        if (!isTauri) throw err;
+      }
+
       logger.info('Database reset completed successfully. Reloading state...', 'Database');
       setIsConfirmingReset(false);
+      setConfirmDeleteText('');
       
       // Reload app state to clean up local React memory/UI
       setTimeout(() => {
@@ -1230,40 +1299,55 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             {!isConfirmingReset ? (
               <button
                 type="button"
-                onClick={() => setIsConfirmingReset(true)}
+                onClick={() => { setIsConfirmingReset(true); setConfirmDeleteText(''); }}
                 className="w-full px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-rose-200 text-xs font-bold rounded-lg transition cursor-pointer flex items-center justify-center gap-2 shadow"
               >
                 <Database className="w-3.5 h-3.5 text-rose-400" />
                 <span>Reset Database</span>
               </button>
             ) : (
-              <div className="flex gap-1.5 w-full">
-                <button
-                  type="button"
-                  onClick={handleDatabaseReset}
-                  disabled={isResetting}
-                  className="flex-1 px-2.5 py-2 bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center justify-center gap-1 shadow"
-                >
-                  {isResetting ? (
-                    <RefreshCw className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-3 h-3" />
-                  )}
-                  <span>{isResetting ? 'Resetting...' : 'Confirm Reset'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsConfirmingReset(false)}
-                  disabled={isResetting}
-                  className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-lg transition cursor-pointer"
-                >
-                  Cancel
-                </button>
+              <div className="space-y-2 w-full">
+                <p className="text-[11px] text-rose-300 font-semibold">
+                  Type <span className="font-mono bg-rose-950 px-1 py-0.5 rounded text-rose-200">DELETE</span> to confirm wipe:
+                </p>
+                <input
+                  type="text"
+                  value={confirmDeleteText}
+                  onChange={(e) => setConfirmDeleteText(e.target.value)}
+                  placeholder="Type DELETE here"
+                  className="w-full px-2.5 py-1.5 bg-slate-900 border border-rose-800/60 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 font-mono"
+                />
+                <div className="flex gap-1.5 w-full">
+                  <button
+                    type="button"
+                    onClick={handleDatabaseReset}
+                    disabled={isResetting || confirmDeleteText !== 'DELETE'}
+                    className="flex-1 px-2.5 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center justify-center gap-1 shadow"
+                  >
+                    {isResetting ? (
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3 h-3" />
+                    )}
+                    <span>{isResetting ? 'Resetting...' : 'Confirm Reset'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setIsConfirmingReset(false); setConfirmDeleteText(''); }}
+                    disabled={isResetting}
+                    className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-lg transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* SECTION 4.5: HARDWARE & FFPEG SYSTEM DIAGNOSTICS */}
+      <FfmpegHardwareDiagnosticsCard />
 
       {/* SECTION 5: RELEASE VERSION TRACKER & BUILD INCREMENTS */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">

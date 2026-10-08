@@ -4347,6 +4347,54 @@ app.post('/api/db/reset', async (req: Request, res: Response) => {
   }
 });
 
+// Dedicated DELETE endpoint for resetting SQLite database and clearing persistent stores
+app.delete('/api/db/reset', async (req: Request, res: Response) => {
+  try {
+    await resetDatabaseInDb();
+    res.json({ success: true, message: 'SQLite database successfully wiped via DELETE request.' });
+  } catch (error: any) {
+    console.error('Error in DELETE /api/db/reset:', error);
+    res.status(500).json({ error: 'Failed to reset database via DELETE', message: error?.message });
+  }
+});
+
+// FFmpeg and Codec Diagnostics Endpoint
+app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => {
+  try {
+    const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+    const { exec } = await import('child_process');
+    exec(`${ffmpegPath} -version`, (err, stdout, stderr) => {
+      if (err) {
+        res.json({
+          available: false,
+          error: err.message,
+          message: 'FFmpeg executable not found in system PATH. Transcoding requires FFmpeg installation.',
+          os: process.platform,
+          installationGuide: {
+            macos: 'brew install ffmpeg',
+            windows: 'winget install Gyan.FFmpeg or download from https://ffmpeg.org',
+            linux: 'sudo apt install ffmpeg',
+          },
+        });
+      } else {
+        res.json({
+          available: true,
+          version: stdout.split('\n')[0] || 'FFmpeg installed',
+          codecs: ['h264', 'hevc', 'aac', 'mp3', 'mkv', 'mp4'],
+          os: process.platform,
+        });
+      }
+    });
+  } catch (e: any) {
+    res.json({
+      available: false,
+      error: e?.message,
+      message: 'Failed to probe FFmpeg diagnostics.',
+      os: process.platform,
+    });
+  }
+});
+
 // Global Path Sanitizer endpoint: bulk sweep of SQLite database and vault state for %20 and double slashes
 app.post('/api/vault/sanitize-paths', async (req: Request, res: Response) => {
   try {

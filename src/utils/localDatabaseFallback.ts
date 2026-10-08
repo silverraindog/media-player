@@ -128,6 +128,13 @@ class LocalDatabaseFallbackService {
     return true;
   }
 
+  public clearAll(): void {
+    this.setJson(STORAGE_KEYS.WATCH_HISTORY, []);
+    this.setJson(STORAGE_KEYS.WATCHLIST, []);
+    this.setJson(STORAGE_KEYS.MEDIA_ITEMS, []);
+    this.setJson(STORAGE_KEYS.PROGRESS, []);
+  }
+
   public syncWatchHistoryFromApi(items: any[]): void {
     if (Array.isArray(items) && items.length > 0) {
       this.setJson(STORAGE_KEYS.WATCH_HISTORY, items);
@@ -271,6 +278,28 @@ class LocalDatabaseFallbackService {
         this.removeWatchlist(mediaId);
         return new Response(
           JSON.stringify({ success: true, message: 'Removed from watchlist (local cache)' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (path === '/api/db/reset' && method === 'POST') {
+        this.clearAll();
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            localStorage.removeItem('sambavault_media_library_v2');
+            localStorage.removeItem('sambavault_persistent_vault_state');
+            localStorage.removeItem('samba_vault_tree');
+            localStorage.removeItem('samba_vault_last_scan_summary');
+            localStorage.removeItem('samba_vault_last_scan_errors');
+            localStorage.removeItem('media_vault_watchlist_cache');
+            localStorage.removeItem('sambavault_sqlite_persistent_cache');
+            localStorage.removeItem('sambavault_saved_state');
+            localStorage.removeItem('samba_vault_mount_mappings');
+            localStorage.removeItem('samba_path_debug_logs');
+          }
+        } catch {}
+        return new Response(
+          JSON.stringify({ success: true, message: 'Database and local cache completely reset.' }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
       }

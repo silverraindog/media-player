@@ -99,6 +99,22 @@ class SqliteBatchWriterService {
   }
 
   /**
+   * Completely clear memory cache, pending queue, and persistent disk cache
+   */
+  public clear(): void {
+    this.cache.clear();
+    this.queue.clear();
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(CACHE_STORAGE_KEY);
+      } catch (e) {
+        console.warn('Failed clearing SQLite cache from localStorage:', e);
+      }
+    }
+    this.notifySubscribers();
+  }
+
+  /**
    * Enqueue a single media item for the 30-second SQLite batch write
    */
   public enqueue(media: MediaMetadata): void {

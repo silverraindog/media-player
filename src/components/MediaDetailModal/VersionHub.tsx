@@ -38,6 +38,22 @@ export const VersionHub: React.FC<VersionHubProps> = ({ media, handleSelectVersi
         </div>
       </div>
 
+      {/* Side-by-Side Comparison Visualization */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-4 border-t border-slate-800">
+        {media.versions.map((ver) => (
+          <div key={`compare-${ver.id}`} className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+            <div className="flex justify-between items-center text-[10px] font-mono text-slate-400">
+              <span>{ver.branchName || ver.title}</span>
+              <span className="text-indigo-400 font-bold">{ver.resolution || 'N/A'}</span>
+            </div>
+            <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+               <div className={`h-full ${ver.id === (media.selectedVersionId || media.id) ? 'bg-indigo-500' : 'bg-slate-600'}`} style={{width: '100%'}} />
+            </div>
+            <div className="text-[10px] text-slate-500 truncate">{ver.format || 'Unknown Format'}</div>
+          </div>
+        ))}
+      </div>
+
       {/* Version selector cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-1">
         {media.versions.map((ver) => {

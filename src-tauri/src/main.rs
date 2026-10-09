@@ -136,20 +136,27 @@ pub mod macos_permissions {
     pub async fn check_full_disk_access() -> Result<FullDiskAccessResult, String> {
         #[cfg(target_os = "macos")]
         {
-            // Probe 1: Attempt to read TCC database (standard system FDA indicator)
-            let tcc_path = "/Library/Application Support/com.apple.TCC/TCC.db";
-            let tcc_readable = std::fs::metadata(tcc_path).is_ok();
-
-            // Probe 2: Attempt to read user's Documents folder
             let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/Shared".to_string());
+            let safari_path = std::path::PathBuf::from(&home).join("Library/Safari");
+            let safari_readable = std::fs::read_dir(&safari_path).is_ok();
+
+            let user_tcc_path = std::path::PathBuf::from(&home).join("Library/Application Support/com.apple.TCC/TCC.db");
+            let user_tcc_readable = std::fs::metadata(&user_tcc_path).is_ok();
+
+            let volumes_readable = std::fs::read_dir("/Volumes").is_ok();
+
             let docs_path = std::path::PathBuf::from(&home).join("Documents");
             let docs_readable = std::fs::read_dir(&docs_path).is_ok();
 
-            let has_access = tcc_readable || docs_readable;
-            let checked_path = if tcc_readable {
-                tcc_path.to_string()
-            } else {
+            let has_access = safari_readable || user_tcc_readable || volumes_readable || docs_readable;
+            let checked_path = if safari_readable {
+                safari_path.to_string_lossy().to_string()
+            } else if volumes_readable {
+                "/Volumes".to_string()
+            } else if docs_readable {
                 docs_path.to_string_lossy().to_string()
+            } else {
+                user_tcc_path.to_string_lossy().to_string()
             };
 
             Ok(FullDiskAccessResult {
@@ -177,6 +184,12 @@ pub mod macos_permissions {
                 system_settings_path: "".to_string(),
             })
         }
+    }
+
+    /// Pre-flight system check verifying macOS Full Disk Access status upon application startup
+    #[tauri::command]
+    pub async fn verify_full_disk_access_preflight() -> Result<FullDiskAccessResult, String> {
+        check_full_disk_access().await
     }
 
     /// Triggers macOS System Settings to directly open Privacy & Security > Full Disk Access pane.
@@ -1658,6 +1671,7 @@ fn main() {
             fix_path_permissions,
             run_samba_diagnostic,
             macos_permissions::check_full_disk_access,
+            macos_permissions::verify_full_disk_access_preflight,
             macos_permissions::open_macos_security_privacy,
             macos_permissions::request_full_disk_access_and_register,
             db::get_all_media,

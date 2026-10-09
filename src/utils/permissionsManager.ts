@@ -9,6 +9,8 @@
  * to infer if permissions are missing or granted.
  */
 
+import { isTauriEnvironment, checkFullDiskAccessPreflight, openMacosSecurityPrivacy } from './tauriBridge';
+
 export interface FullDiskAccessStatus {
   isMacOS: boolean;
   hasFullDiskAccess: boolean;
@@ -113,13 +115,8 @@ export class PermissionsManager {
       return { path: targetPath, exists: false, readable: false, statAvailable: false, message: 'Empty path provided' };
     }
 
-    let isTauri = false;
-    try {
-      isTauri = Boolean((window as any).__TAURI__ || (window as any).__TAURI_METADATA__);
-    } catch (_) {}
-
     // 1. Try Tauri native check_path_exists stat inspection
-    if (isTauri) {
+    if (isTauriEnvironment()) {
       try {
         const { invoke } = await import('@tauri-apps/api/tauri');
         const res = await invoke<any>('check_path_exists', { path: cleanPath });
@@ -185,31 +182,44 @@ export class PermissionsManager {
     this.checkingPromise = (async () => {
       const isClientMac = this.isClientMacOS();
       const isSimulated = this.isSimulatedMacOS();
+      const isSimulatedMissing = typeof window !== 'undefined' && localStorage.getItem('sambavault_fda_simulate_missing') === 'true';
 
-      let isTauri = false;
-      try {
-        isTauri = Boolean((window as any).__TAURI__ || (window as any).__TAURI_METADATA__);
-      } catch (_) {}
+      // Simulation mode for testing missing permissions
+      if (isSimulated && isSimulatedMissing) {
+        const simStatus: FullDiskAccessStatus = {
+          isMacOS: true,
+          hasFullDiskAccess: false,
+          platform: 'macos-simulated',
+          checkedPath: '/Volumes',
+          details: 'Simulated macOS Full Disk Access missing for pre-flight test.',
+          systemSettingsPath: 'System Settings > Privacy & Security > Full Disk Access',
+          lastChecked: Date.now(),
+          isSimulated: true,
+        };
+        this.updateStatus(simStatus);
+        return simStatus;
+      }
 
-      // 1. Try Tauri native command first
-      if (isTauri) {
+      // 1. Try Tauri native pre-flight command first
+      if (isTauriEnvironment()) {
         try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          const result = await invoke<any>('check_full_disk_access');
-          const status: FullDiskAccessStatus = {
-            isMacOS: Boolean(result?.is_macos ?? result?.isMacOS ?? isClientMac),
-            hasFullDiskAccess: Boolean(result?.has_full_disk_access ?? result?.hasFullDiskAccess),
-            platform: result?.platform || (isClientMac ? 'macos' : 'unknown'),
-            checkedPath: result?.checked_path || result?.checkedPath || '/Volumes',
-            details: result?.details || 'Tauri native TCC permission probe completed.',
-            systemSettingsPath: result?.system_settings_path || 'System Settings > Privacy & Security > Full Disk Access',
-            lastChecked: Date.now(),
-            isSimulated,
-          };
-          this.updateStatus(status);
-          return status;
+          const tauriResult = await checkFullDiskAccessPreflight();
+          if (tauriResult) {
+            const status: FullDiskAccessStatus = {
+              isMacOS: Boolean(tauriResult.is_macos ?? isClientMac),
+              hasFullDiskAccess: Boolean(tauriResult.has_full_disk_access),
+              platform: tauriResult.platform || (isClientMac ? 'macos' : 'tauri'),
+              checkedPath: tauriResult.checked_path || '/Volumes',
+              details: tauriResult.details || 'Tauri pre-flight system check completed.',
+              systemSettingsPath: tauriResult.system_settings_path || 'System Settings > Privacy & Security > Full Disk Access',
+              lastChecked: Date.now(),
+              isSimulated,
+            };
+            this.updateStatus(status);
+            return status;
+          }
         } catch (tauriErr) {
-          console.warn('[PermissionsManager] Tauri check_full_disk_access error:', tauriErr);
+          console.warn('[PermissionsManager] Tauri checkFullDiskAccessPreflight error:', tauriErr);
         }
       }
 
@@ -269,19 +279,13 @@ export class PermissionsManager {
    * Opens the macOS Security & Privacy pane directly to the Full Disk Access section.
    */
   public async openSecurityAndPrivacy(): Promise<{ success: boolean; message: string }> {
-    let isTauri = false;
-    try {
-      isTauri = Boolean((window as any).__TAURI__ || (window as any).__TAURI_METADATA__);
-    } catch (_) {}
-
     // 1. Try Tauri native invocation
-    if (isTauri) {
+    if (isTauriEnvironment()) {
       try {
-        const { invoke } = await import('@tauri-apps/api/tauri');
-        const res = await invoke<string>('open_macos_security_privacy');
+        const res = await openMacosSecurityPrivacy();
         return { success: true, message: res || 'Opened macOS Security & Privacy pane' };
       } catch (err: any) {
-        console.warn('[PermissionsManager] Tauri open_macos_security_privacy error:', err);
+        console.warn('[PermissionsManager] Tauri openMacosSecurityPrivacy error:', err);
       }
     }
 
@@ -296,19 +300,29 @@ export class PermissionsManager {
       console.warn('[PermissionsManager] HTTP open-security-privacy error:', httpErr);
     }
 
-    // 3. Try web browser custom protocol URL
-    try {
-      window.location.href = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles';
-      return {
-        success: true,
-        message: 'Launched macOS System Settings url handler (x-apple.systempreferences:).',
-      };
-    } catch (e: any) {
-      return {
-        success: false,
-        message: 'Could not open System Settings automatically. Please open  > System Settings > Privacy & Security > Full Disk Access manually.',
-      };
+    // 3. For macOS browser clients, attempt safe custom scheme trigger without navigating away
+    if (typeof window !== 'undefined' && this.isClientMacOS()) {
+      try {
+        const a = document.createElement('a');
+        a.href = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles';
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return {
+          success: true,
+          message: 'Launched macOS System Settings url handler (x-apple.systempreferences:).',
+        };
+      } catch (e: any) {
+        // Fallback
+      }
     }
+
+    return {
+      success: false,
+      message: 'Could not open System Settings automatically. Please open  > System Settings > Privacy & Security > Full Disk Access manually.',
+    };
   }
 
   /**

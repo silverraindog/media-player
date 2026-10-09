@@ -18,12 +18,14 @@ interface PermissionHelpModalProps {
   isOpen: boolean;
   onClose: () => void;
   diagnosticError?: string | null;
+  onOpenSettings?: () => void;
 }
 
 export const PermissionHelpModal: React.FC<PermissionHelpModalProps> = ({
   isOpen,
   onClose,
   diagnosticError,
+  onOpenSettings,
 }) => {
   const [copiedCli, setCopiedCli] = useState(false);
   const [isOpeningSettings, setIsOpeningSettings] = useState(false);
@@ -41,7 +43,9 @@ export const PermissionHelpModal: React.FC<PermissionHelpModalProps> = ({
   const handleOpenSettings = async () => {
     setIsOpeningSettings(true);
     try {
-      if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+      if (onOpenSettings) {
+        onOpenSettings();
+      } else if (typeof window !== 'undefined' && (window as any).__TAURI__) {
         await invoke('open_macos_security_privacy');
       } else {
         // Fallback for browser

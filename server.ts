@@ -638,7 +638,7 @@ app.get('/api/health', (req: Request, res: Response) => {
 
 // System Version & Build Info
 app.get('/api/system/version', (req: Request, res: Response) => {
-  const versionPath = path.join(__dirname, 'public', 'version.json');
+  const versionPath = path.join(process.cwd(), 'public', 'version.json');
   let buildInfo = { version: APP_RELEASE_TAG, commit: 'unknown', buildDate: new Date().toISOString() };
 
   if (fs.existsSync(versionPath)) {

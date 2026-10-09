@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import './index.css';
 import './lib/firebase'; // Ensure Firebase is initialized
+import { ErrorBoundary } from './components/ErrorBoundary';
 import VConsole from 'vconsole';
 
 if (typeof window !== 'undefined') {
@@ -18,7 +19,9 @@ const rootElement = document.getElementById('root');
 if (rootElement) {
   createRoot(rootElement).render(
     <StrictMode>
-      <App />
+      <ErrorBoundary tabName="SambaVault Application">
+        <App />
+      </ErrorBoundary>
     </StrictMode>
   );
 }

@@ -1860,6 +1860,54 @@ export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostic
   }
 };
 
+export interface TauriFullDiskAccessResult {
+  is_macos: boolean;
+  has_full_disk_access: boolean;
+  platform: string;
+  checked_path: string;
+  details: string;
+  system_settings_path: string;
+}
+
+/**
+ * Pre-flight system check using Tauri native command to explicitly verify macOS Full Disk Access status upon startup.
+ */
+export const checkFullDiskAccessPreflight = async (): Promise<TauriFullDiskAccessResult | null> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      try {
+        const res = await invoke<TauriFullDiskAccessResult>('verify_full_disk_access_preflight');
+        return res;
+      } catch {
+        const fallback = await invoke<TauriFullDiskAccessResult>('check_full_disk_access');
+        return fallback;
+      }
+    } catch (e) {
+      console.warn('[TauriBridge] Pre-flight FDA check error:', e);
+      return null;
+    }
+  }
+  return null;
+};
+
+/**
+ * Direct deep-link trigger to macOS System Settings Privacy & Security > Full Disk Access pane.
+ */
+export const openMacosSecurityPrivacy = async (): Promise<string> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const res = await invoke<string>('open_macos_security_privacy');
+      return res || 'Opened macOS Security & Privacy pane';
+    } catch (e: any) {
+      console.warn('[TauriBridge] Native open_macos_security_privacy failed:', e);
+      throw e;
+    }
+  }
+  throw new Error('Not running inside desktop Tauri runtime');
+};
+
 
 
 

@@ -25,9 +25,11 @@ import { SettingsTab } from './components/SettingsTab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
 import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar';
+import { PermissionHelpModal } from './components/PermissionHelpModal';
+import { FullDiskAccessOverlay } from './components/FullDiskAccessOverlay';
 import { logger } from './utils/loggerService';
 import { syncScheduler } from './utils/syncScheduler';
-import { Bug } from 'lucide-react';
+import { Bug, ShieldAlert, X, ExternalLink } from 'lucide-react';
 import { APP_VERSION, APP_RELEASE_TAG, BUILD_INCREMENTS, ReleaseIncrement } from './version';
 import { getPrioritizedScanPaths } from './utils/customMountUtils';
 import {
@@ -75,7 +77,7 @@ import { thumbnailStorage } from './utils/thumbnailStorage';
 import { detectDuplicatesAndVersionBranches } from './utils/duplicateDetector';
 import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { sendDesktopNotification, requestNotificationPermission } from './utils/notifications';
-import { permissionsManager } from './utils/permissionsManager';
+import { permissionsManager, FullDiskAccessStatus } from './utils/permissionsManager';
 import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl, diagnoseSambaPath } from './utils/pathSanitizer';
 import { categorizeMediaWithRetry } from './utils/metadataCategorizer';
 import { localDbFallback } from './utils/localDatabaseFallback';
@@ -361,9 +363,11 @@ const INITIAL_TRANSCODE_CONFIG: TranscodeConfig = {
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('search');
   const [watchlistCount, setWatchlistCount] = useState<number>(0);
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [initProgress, setInitProgress] = useState(0);
-  const [initStatusText, setInitStatusText] = useState('Loading SambaVault configuration...');
+  // macOS Full Disk Access Pre-Flight Check & Overlay State
+  const [isFdaOverlayOpen, setIsFdaOverlayOpen] = useState(false);
+  const [isFdaNoticeOpen, setIsFdaNoticeOpen] = useState(false);
+  const [isFdaHelpModalOpen, setIsFdaHelpModalOpen] = useState(false);
+  const [fdaStatus, setFdaStatus] = useState<FullDiskAccessStatus | null>(null);
 
   const [transcodeConfig, setTranscodeConfig] = useState<TranscodeConfig>(() => {
     try {
@@ -380,59 +384,12 @@ function App() {
   }, [transcodeConfig]);
 
   useEffect(() => {
-    let hasCompleted = false;
-
-    // Hard safety timeout: unconditionally dismiss the splash screen within 800ms
-    // so the app can never freeze or lock the user out regardless of network/IPC delays.
-    const safetyTimer = setTimeout(() => {
-      if (!hasCompleted) {
-        hasCompleted = true;
-        setIsInitializing(false);
-      }
-    }, 800);
-
     // Run cache purge in the background without blocking the UI
     if (isTauriEnvironment()) {
       import('./utils/tauriBridge')
         .then(({ purgeTranscodeCache }) => purgeTranscodeCache(transcodeConfig?.maxCacheSizeGb || 50))
         .catch((err) => console.warn('Background cache purge skipped:', err));
     }
-
-    const initApp = async () => {
-      try {
-        setInitStatusText('Checking transcode cache limits...');
-        setInitProgress(30);
-        await new Promise((resolve) => setTimeout(resolve, 40));
-
-        setInitStatusText('Loading media vault and SQLite cache...');
-        setInitProgress(70);
-        await new Promise((resolve) => setTimeout(resolve, 40));
-
-        setInitStatusText('Finalizing library state...');
-        setInitProgress(100);
-        await new Promise((resolve) => setTimeout(resolve, 30));
-
-        if (!hasCompleted) {
-          hasCompleted = true;
-          clearTimeout(safetyTimer);
-          setIsInitializing(false);
-        }
-      } catch (e) {
-        console.error('Initialization error:', e);
-        if (!hasCompleted) {
-          hasCompleted = true;
-          clearTimeout(safetyTimer);
-          setIsInitializing(false);
-        }
-      }
-    };
-
-    initApp();
-
-    return () => {
-      hasCompleted = true;
-      clearTimeout(safetyTimer);
-    };
   }, []);
 
   // Sync watchlist count from SQLite
@@ -598,12 +555,42 @@ function App() {
   const [selectedMediaType, setSelectedMediaType] = useState<'all' | MediaType>('all');
   const [serverVersionInfo, setServerVersionInfo] = useState<any>(null);
 
-  // Check for new version and register TCC probe on mount
+  // Pre-flight system check using Tauri native command verifying macOS Full Disk Access status upon application startup
   useEffect(() => {
-    try {
-      permissionsManager.requestAndRegisterFullDiskAccess().catch(() => {});
-    } catch (_) {}
+    let isMounted = true;
 
+    // 1. Listen for real-time permission state changes
+    const unsubscribe = permissionsManager.subscribe((status) => {
+      if (!isMounted) return;
+      setFdaStatus(status);
+      if (status.isMacOS && !status.hasFullDiskAccess) {
+        setIsFdaNoticeOpen(true);
+      } else if (status.hasFullDiskAccess) {
+        setIsFdaOverlayOpen(false);
+        setIsFdaNoticeOpen(false);
+      }
+    });
+
+    // 2. Perform pre-flight system check immediately on startup
+    permissionsManager.checkFullDiskAccess().then((status) => {
+      if (!isMounted) return;
+      setFdaStatus(status);
+      if (status.isMacOS && !status.hasFullDiskAccess) {
+        // Explicitly trigger persistent but dismissible overlay upon startup
+        setIsFdaOverlayOpen(true);
+        setIsFdaNoticeOpen(true);
+      }
+    }).catch((err) => {
+      console.warn('[Permissions] Pre-flight system check error:', err);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     const checkVersion = async () => {
       try {
         // 1. Fetch build-time metadata from public/version.json
@@ -3116,49 +3103,6 @@ function App() {
     setActiveTab('nfo-studio');
   };
 
-  if (isInitializing) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-white p-6 font-sans select-none">
-        <div className="max-w-md w-full bg-slate-900/90 border border-slate-800 rounded-2xl p-8 shadow-2xl backdrop-blur-xl space-y-6 text-center">
-          <div className="w-16 h-16 mx-auto rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shadow-lg shadow-indigo-500/20 animate-pulse">
-            <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-            </svg>
-          </div>
-
-          <div className="space-y-1.5">
-            <h2 className="text-xl font-black text-white tracking-tight">Initializing Media Library</h2>
-            <p className="text-xs text-slate-400 font-mono">{initStatusText}</p>
-          </div>
-
-          <div className="space-y-2">
-            <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5 shadow-inner">
-              <div
-                className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-teal-400 rounded-full transition-all duration-300 ease-out shadow-sm shadow-indigo-500/50"
-                style={{ width: `${initProgress}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-[11px] font-mono text-slate-500">
-              <span>SambaVault v{APP_VERSION}</span>
-              <span className="text-indigo-400 font-bold">{initProgress}%</span>
-            </div>
-          </div>
-
-          <div className="pt-2">
-            <button
-              type="button"
-              id="btn-skip-init"
-              onClick={() => setIsInitializing(false)}
-              className="px-4 py-2 rounded-xl bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold border border-indigo-500/40 transition shadow cursor-pointer inline-flex items-center gap-1.5"
-            >
-              <span>Continue to Media Library &rarr;</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
       {/* Toast Notification */}
@@ -3171,6 +3115,117 @@ function App() {
           <span>{toastMessage}</span>
         </div>
       )}
+
+      {/* macOS Full Disk Access Persistent but Dismissible Pre-Flight Overlay */}
+      <FullDiskAccessOverlay
+        isOpen={isFdaOverlayOpen}
+        onClose={() => setIsFdaOverlayOpen(false)}
+        status={fdaStatus}
+        onRecheck={async () => {
+          const freshStatus = await permissionsManager.checkFullDiskAccess(true);
+          setFdaStatus(freshStatus);
+          if (freshStatus.hasFullDiskAccess) {
+            setIsFdaOverlayOpen(false);
+            setIsFdaNoticeOpen(false);
+            showToast('✓ Full Disk Access successfully verified!');
+            return true;
+          }
+          return false;
+        }}
+        onOpenSettings={async () => {
+          const res = await permissionsManager.requestAndRegisterFullDiskAccess();
+          showToast(res.message);
+          setTimeout(async () => {
+            const s = await permissionsManager.checkFullDiskAccess(true);
+            setFdaStatus(s);
+            if (s.hasFullDiskAccess) {
+              setIsFdaOverlayOpen(false);
+              setIsFdaNoticeOpen(false);
+              showToast('✓ Full Disk Access successfully verified!');
+            }
+          }, 2500);
+        }}
+      />
+
+      {/* macOS Full Disk Access Notice Banner: Persistent top banner when overlay is dismissed */}
+      {isFdaNoticeOpen && !isFdaOverlayOpen && (
+        <div
+          id="fda-permission-warning-banner"
+          className="bg-amber-950/95 border-b border-amber-500/40 text-amber-200 px-4 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2 z-40 backdrop-blur-md shadow-lg"
+        >
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>macOS Full Disk Access Required:</strong> SambaVault needs Full Disk Access in macOS System Settings to scan network shares in <code className="bg-black/40 px-1 py-0.5 rounded text-amber-300 font-mono">/Volumes</code> without permission blocks.
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              id="btn-open-system-settings"
+              onClick={async () => {
+                const res = await permissionsManager.requestAndRegisterFullDiskAccess();
+                showToast(res.message);
+                setTimeout(async () => {
+                  const s = await permissionsManager.checkFullDiskAccess(true);
+                  setFdaStatus(s);
+                  if (s.hasFullDiskAccess) {
+                    setIsFdaNoticeOpen(false);
+                    showToast('✓ Full Disk Access successfully verified!');
+                  }
+                }, 2000);
+              }}
+              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1 shadow"
+            >
+              <ExternalLink className="w-3 h-3" />
+              <span>Open System Settings</span>
+            </button>
+            <button
+              type="button"
+              id="btn-reopen-fda-overlay"
+              onClick={() => setIsFdaOverlayOpen(true)}
+              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-lg text-[11px] transition cursor-pointer"
+            >
+              Review Pre-Flight Check
+            </button>
+            <button
+              type="button"
+              id="btn-fda-help-guide"
+              onClick={() => setIsFdaHelpModalOpen(true)}
+              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-lg text-[11px] transition cursor-pointer"
+            >
+              Step-by-Step Guide
+            </button>
+            <button
+              type="button"
+              id="btn-dismiss-fda-banner"
+              onClick={() => setIsFdaNoticeOpen(false)}
+              className="p-1 text-slate-400 hover:text-white transition cursor-pointer"
+              title="Dismiss banner"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Permission Help Modal for Full Disk Access */}
+      <PermissionHelpModal
+        isOpen={isFdaHelpModalOpen}
+        onClose={() => setIsFdaHelpModalOpen(false)}
+        onOpenSettings={async () => {
+          const res = await permissionsManager.requestAndRegisterFullDiskAccess();
+          showToast(res.message);
+          setTimeout(async () => {
+            const s = await permissionsManager.checkFullDiskAccess(true);
+            setFdaStatus(s);
+            if (s.hasFullDiskAccess) {
+              setIsFdaNoticeOpen(false);
+              showToast('✓ Full Disk Access successfully verified!');
+            }
+          }, 2000);
+        }}
+      />
 
       {/* Desktop App Menu Bar (File, Edit, View, Help) */}
       <MenuBar
@@ -3298,47 +3353,49 @@ function App() {
         )}
 
         {activeTab === 'search' && (
-          <MediaSearch
-            mediaLibrary={mediaLibrary}
-            sambaTree={sambaTree}
-            onPushToSamba={handlePushToSamba}
-            onOpenDetails={(media) => setDetailModalMedia(media)}
-            onOpenInNfoStudio={handleOpenInNfoStudio}
-            onPlayMedia={handlePlayMedia}
-            sambaConfig={sambaConfig}
-            scanRootPath={resolveLocalMountPath(
-              activeScanPath || getPrioritizedScanPaths(sambaConfig).primaryPath,
-              sambaConfig.share || 'media'
-            )}
-            onImportFiles={handleImportFilesDirectly}
-            onSyncFromSamba={() => handleSyncSamba()}
-            onOpenManualMatch={handleOpenManualMatch}
-            onSaveCategorizedMedia={(media) => {
-              setMediaLibrary((prev) => {
-                const idx = prev.findIndex(
-                  (m) => m.id === media.id || m.title.toLowerCase() === media.title.toLowerCase()
-                );
-                if (idx >= 0) {
-                  const copy = [...prev];
-                  copy[idx] = { ...copy[idx], ...media };
-                  return copy;
-                }
-                return [media, ...prev];
-              });
-              // Persist to SQLite
-              fetch('/api/db/media', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(media),
-              }).catch(() => {});
-              showToast(`Categorized "${media.title}" (${(media.genres || []).join(', ')})`);
-            }}
-            isSyncing={isSyncingShare}
-            selectedMediaType={selectedMediaType}
-            onSelectMediaType={setSelectedMediaType}
-            onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
-            onOpenClassifierModal={() => setIsClassifierModalOpen(true)}
-          />
+          <ErrorBoundary tabName="Library Search">
+            <MediaSearch
+              mediaLibrary={mediaLibrary}
+              sambaTree={sambaTree}
+              onPushToSamba={handlePushToSamba}
+              onOpenDetails={(media) => setDetailModalMedia(media)}
+              onOpenInNfoStudio={handleOpenInNfoStudio}
+              onPlayMedia={handlePlayMedia}
+              sambaConfig={sambaConfig}
+              scanRootPath={resolveLocalMountPath(
+                activeScanPath || getPrioritizedScanPaths(sambaConfig).primaryPath,
+                sambaConfig.share || 'media'
+              )}
+              onImportFiles={handleImportFilesDirectly}
+              onSyncFromSamba={() => handleSyncSamba()}
+              onOpenManualMatch={handleOpenManualMatch}
+              onSaveCategorizedMedia={(media) => {
+                setMediaLibrary((prev) => {
+                  const idx = prev.findIndex(
+                    (m) => m.id === media.id || m.title.toLowerCase() === media.title.toLowerCase()
+                  );
+                  if (idx >= 0) {
+                    const copy = [...prev];
+                    copy[idx] = { ...copy[idx], ...media };
+                    return copy;
+                  }
+                  return [media, ...prev];
+                });
+                // Persist to SQLite
+                fetch('/api/db/media', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(media),
+                }).catch(() => {});
+                showToast(`Categorized "${media.title}" (${(media.genres || []).join(', ')})`);
+              }}
+              isSyncing={isSyncingShare}
+              selectedMediaType={selectedMediaType}
+              onSelectMediaType={setSelectedMediaType}
+              onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+              onOpenClassifierModal={() => setIsClassifierModalOpen(true)}
+            />
+          </ErrorBoundary>
         )}
 
         {activeTab === 'sqlite-vault' && (

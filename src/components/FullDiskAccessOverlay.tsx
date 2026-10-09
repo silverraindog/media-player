@@ -103,6 +103,11 @@ export const FullDiskAccessOverlay: React.FC<FullDiskAccessOverlayProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="fda-overlay-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
     >
       <div className="relative bg-slate-900 border border-amber-500/50 rounded-2xl shadow-2xl max-w-xl w-full p-6 sm:p-7 space-y-5 text-slate-100 ring-1 ring-amber-500/20 my-auto">
         {/* Top Header */}

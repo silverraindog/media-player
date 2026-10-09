@@ -576,8 +576,7 @@ function App() {
       if (!isMounted) return;
       setFdaStatus(status);
       if (status.isMacOS && !status.hasFullDiskAccess) {
-        // Explicitly trigger persistent but dismissible overlay upon startup
-        setIsFdaOverlayOpen(true);
+        // Show persistent warning banner on startup, keeping overlay closed so app remains fully interactive
         setIsFdaNoticeOpen(true);
       }
     }).catch((err) => {

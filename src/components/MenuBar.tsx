@@ -142,7 +142,11 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onScanSamba, setActiveTab, onSelectViewMediaType]);
 
-  const handleMenuClick = (menu: 'file' | 'edit' | 'view' | 'help') => {
+  const handleMenuClick = (menu: 'file' | 'edit' | 'view' | 'help', e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    console.log('[MenuBar] handleMenuClick verified event propagation for menu:', menu);
     setOpenMenu(openMenu === menu ? null : menu);
   };
 
@@ -153,6 +157,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   };
 
   const executeAction = (action: () => void) => {
+    console.log('[MenuBar] executeAction called');
     setOpenMenu(null);
     action();
   };
@@ -171,7 +176,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             <div className="relative">
               <button
                 id="menu-bar-file-btn"
-                onClick={() => handleMenuClick('file')}
+                onClick={(e) => handleMenuClick('file', e)}
                 onMouseEnter={() => handleMenuHover('file')}
                 className={`px-2.5 py-1 rounded transition-colors text-xs ${
                   openMenu === 'file'
@@ -320,7 +325,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             <div className="relative">
               <button
                 id="menu-bar-edit-btn"
-                onClick={() => handleMenuClick('edit')}
+                onClick={(e) => handleMenuClick('edit', e)}
                 onMouseEnter={() => handleMenuHover('edit')}
                 className={`px-2.5 py-1 rounded transition-colors text-xs ${
                   openMenu === 'edit'
@@ -398,7 +403,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             <div className="relative">
               <button
                 id="menu-bar-view-btn"
-                onClick={() => handleMenuClick('view')}
+                onClick={(e) => handleMenuClick('view', e)}
                 onMouseEnter={() => handleMenuHover('view')}
                 className={`px-2.5 py-1 rounded transition-colors text-xs font-semibold ${
                   openMenu === 'view'
@@ -678,7 +683,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             <div className="relative">
               <button
                 id="menu-bar-help-btn"
-                onClick={() => handleMenuClick('help')}
+                onClick={(e) => handleMenuClick('help', e)}
                 onMouseEnter={() => handleMenuHover('help')}
                 className={`px-2.5 py-1 rounded transition-colors text-xs ${
                   openMenu === 'help'

@@ -68,7 +68,10 @@ export const Header: React.FC<HeaderProps> = ({
                   Media & Metadata
                 </span>
                 <button
-                  onClick={() => setActiveTab('settings')}
+                  onClick={() => {
+                    console.log('[Header] Settings / version badge clicked');
+                    setActiveTab('settings');
+                  }}
                   title={serverVersionInfo ? `Server Version: ${serverVersionInfo.releaseTag}\nCommit: ${serverVersionInfo.commit?.substring(0, 7)}\nBuild Date: ${new Date(serverVersionInfo.buildDate).toLocaleString()}` : `Release Tag: ${APP_RELEASE_TAG} (Next push: ${getNextReleaseTag(APP_RELEASE_TAG)}) - Click to view release info`}
                   className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded-md transition-colors flex items-center gap-1 shadow-xs cursor-pointer ${
                     serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG
@@ -100,7 +103,10 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
               <button
                 id="header-platform-all"
-                onClick={() => setSambaConfig((prev) => ({ ...prev, targetPlatform: 'all' }))}
+                onClick={() => {
+                  console.log('[Header] Platform button clicked: all');
+                  setSambaConfig((prev) => ({ ...prev, targetPlatform: 'all' }));
+                }}
                 className={`px-2.5 py-1 rounded transition-colors ${
                   sambaConfig.targetPlatform === 'all'
                     ? 'bg-indigo-600 text-white font-medium shadow-sm'
@@ -111,7 +117,10 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
               <button
                 id="header-platform-mac"
-                onClick={() => setSambaConfig((prev) => ({ ...prev, targetPlatform: 'macos' }))}
+                onClick={() => {
+                  console.log('[Header] Platform button clicked: macos');
+                  setSambaConfig((prev) => ({ ...prev, targetPlatform: 'macos' }));
+                }}
                 className={`px-2.5 py-1 rounded transition-colors ${
                   sambaConfig.targetPlatform === 'macos'
                     ? 'bg-indigo-600 text-white font-medium shadow-sm'
@@ -122,7 +131,10 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
               <button
                 id="header-platform-linux"
-                onClick={() => setSambaConfig((prev) => ({ ...prev, targetPlatform: 'linux' }))}
+                onClick={() => {
+                  console.log('[Header] Platform button clicked: linux');
+                  setSambaConfig((prev) => ({ ...prev, targetPlatform: 'linux' }));
+                }}
                 className={`px-2.5 py-1 rounded transition-colors ${
                   sambaConfig.targetPlatform === 'linux'
                     ? 'bg-indigo-600 text-white font-medium shadow-sm'
@@ -133,7 +145,10 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
               <button
                 id="header-platform-win"
-                onClick={() => setSambaConfig((prev) => ({ ...prev, targetPlatform: 'windows' }))}
+                onClick={() => {
+                  console.log('[Header] Platform button clicked: windows');
+                  setSambaConfig((prev) => ({ ...prev, targetPlatform: 'windows' }));
+                }}
                 className={`px-2.5 py-1 rounded transition-colors ${
                   sambaConfig.targetPlatform === 'windows'
                     ? 'bg-indigo-600 text-white font-medium shadow-sm'
@@ -152,7 +167,10 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
               <button
                 id="header-samba-toggle-on"
-                onClick={() => setSambaConfig((prev) => ({ ...prev, enabled: true }))}
+                onClick={() => {
+                  console.log('[Header] Samba toggle ON clicked');
+                  setSambaConfig((prev) => ({ ...prev, enabled: true }));
+                }}
                 className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
                   sambaConfig.enabled !== false
                     ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 text-white shadow-xs'
@@ -164,11 +182,14 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
               <button
                 id="header-samba-toggle-off"
-                onClick={() => setSambaConfig((prev) => ({
-                  ...prev,
-                  enabled: false,
-                  hostPath: prev.hostPath || prev.mountPath || '/Volumes/media'
-                }))}
+                onClick={() => {
+                  console.log('[Header] Samba toggle OFF clicked');
+                  setSambaConfig((prev) => ({
+                    ...prev,
+                    enabled: false,
+                    hostPath: prev.hostPath || prev.mountPath || '/Volumes/media'
+                  }));
+                }}
                 className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
                   sambaConfig.enabled === false
                     ? 'bg-amber-600 text-white shadow-xs'

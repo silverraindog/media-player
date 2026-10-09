@@ -35,8 +35,6 @@ export const FullDiskAccessOverlay: React.FC<FullDiskAccessOverlayProps> = ({
   const [copiedCli, setCopiedCli] = useState(false);
   const [isOpeningSettings, setIsOpeningSettings] = useState(false);
 
-  if (!isOpen) return null;
-
   const cliCommand = 'open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"';
 
   const handleCopyCli = () => {
@@ -99,7 +97,9 @@ export const FullDiskAccessOverlay: React.FC<FullDiskAccessOverlayProps> = ({
   return (
     <div
       id="fda-preflight-overlay"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-200"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-200 transition-all border-4 border-amber-500/80 ring-4 ring-amber-500/40 ${
+        isOpen ? 'pointer-events-auto opacity-100 flex' : 'pointer-events-none opacity-0 hidden'
+      }`}
       role="dialog"
       aria-modal="true"
       aria-labelledby="fda-overlay-title"

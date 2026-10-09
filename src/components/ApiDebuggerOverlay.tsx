@@ -196,12 +196,17 @@ export const ApiDebuggerOverlay: React.FC<ApiDebuggerOverlayProps> = ({ isOpen, 
     downloadAnchor.remove();
   };
 
-  if (!isOpen) return null;
-
   return (
     <div
       id="api-debugger-overlay-root"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-hidden"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-hidden transition-all border-4 border-cyan-500/80 ring-4 ring-cyan-500/40 ${
+        isOpen ? 'pointer-events-auto opacity-100 flex' : 'pointer-events-none opacity-0 hidden'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
     >
       <div
         className={`bg-slate-900 border border-slate-700 shadow-2xl rounded-xl flex flex-col transition-all duration-200 overflow-hidden ${

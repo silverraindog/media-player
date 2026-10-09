@@ -589,6 +589,31 @@ function App() {
     };
   }, []);
 
+  // Comprehensive window-level click event listener logging event.target and its computed z-index
+  useEffect(() => {
+    const handleWindowClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const computedStyle = window.getComputedStyle(target);
+      const zIndex = computedStyle.zIndex;
+      const position = computedStyle.position;
+      const className = target.className || '';
+      const id = target.id || '';
+      console.log('[ClickDebugger] Click detected on element:', {
+        tagName: target.tagName,
+        id,
+        className: typeof className === 'string' ? className.substring(0, 80) : '',
+        zIndex,
+        position,
+        target,
+      });
+    };
+    window.addEventListener('click', handleWindowClick, { capture: true });
+    return () => {
+      window.removeEventListener('click', handleWindowClick, { capture: true });
+    };
+  }, []);
+
   useEffect(() => {
     const checkVersion = async () => {
       try {

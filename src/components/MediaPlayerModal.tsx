@@ -70,13 +70,6 @@ const SAMPLE_VIDEO_STREAMS: StreamOption[] = [
     type: 'video',
   },
   {
-    id: 'local-vault-stream',
-    name: 'Vault Direct Stream (HD Server Feed)',
-    url: '/api/media/sample-video',
-    badge: '1080p Direct',
-    type: 'video',
-  },
-  {
     id: 'mdn-cc0',
     name: 'Cinematic Showcase (HD CC0)',
     url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
@@ -484,16 +477,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const isNearEnd = duration > 0 && currentTime >= duration - 30;
 
   // Selected stream source preset - default to clean 1080p stream
-  const [selectedStreamId, setSelectedStreamId] = useState<string>(
-    isAudio ? SAMPLE_AUDIO_STREAMS[0].id : SAMPLE_VIDEO_STREAMS[0].id
-  );
+  const [selectedStreamId, setSelectedStreamId] = useState<string>('');
 
   // Calculate default fallback stream URL
   const selectedStreamObj = isAudio
-    ? (SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId) || SAMPLE_AUDIO_STREAMS[0])
-    : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId) || SAMPLE_VIDEO_STREAMS[0]);
+    ? (SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId) || null)
+    : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId) || null);
 
-  const defaultStreamUrl = selectedStreamObj.url;
+  const defaultStreamUrl = selectedStreamObj ? selectedStreamObj.url : '';
 
   // Implement resolveStreamableUri using Tauri's convertFileSrc for local file protocol access
   const resolveStreamableUri = async (pathCandidate: string): Promise<string> => {
@@ -1036,21 +1027,29 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   }, [isAudio, selectedStreamId, customLocalBlobUrl, startPlayback]);
 
   const handleMediaDecodeError = useCallback(async () => {
-    if (transcodeAttemptedRef.current || isTranscoding) {
-      console.warn('[MediaPlayerModal] Transcoding already attempted or failed. Seamlessly activating HD Vault stream fallback.');
-      setIsTranscoding(false);
-      setTranscodingProgress(0);
-      setIsPlaying(false);
-      // Automatically switch to HD Vault feed fallback so playback continues smoothly
-      setSelectedStreamId('local-vault-stream');
+    // Attempt to automatically switch to the next available stream
+    const streams = isAudio ? SAMPLE_AUDIO_STREAMS : SAMPLE_VIDEO_STREAMS;
+    const currentIndex = streams.findIndex((s) => s.id === selectedStreamId);
+    
+    if (currentIndex !== -1 && currentIndex < streams.length - 1) {
+      console.warn(`[MediaPlayerModal] Stream failed: ${selectedStreamId}. Retrying with next stream: ${streams[currentIndex + 1].id}`);
+      setSelectedStreamId(streams[currentIndex + 1].id);
       setIsManualStreamOverride(true);
       setPlaybackError(null);
-      setTimeout(() => {
-        startPlayback();
-      }, 150);
+      setTimeout(startPlayback, 150);
       return;
     }
 
+    // If all streams failed, fallback to transcoded (existing logic)
+    if (transcodeAttemptedRef.current || isTranscoding) {
+      console.warn('[MediaPlayerModal] All streams failed. Transcoding already attempted or failed.');
+      setIsTranscoding(false);
+      setTranscodingProgress(0);
+      setIsPlaying(false);
+      setPlaybackError('Playback failed after all attempts.');
+      return;
+    }
+    
     transcodeAttemptedRef.current = true;
     setIsTranscoding(true);
     setPlaybackError(null);
@@ -2470,7 +2469,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     </div>
 
                     {(isAudio ? SAMPLE_AUDIO_STREAMS : SAMPLE_VIDEO_STREAMS).map((stream) => (
-                      <button
+                        <button
                         key={stream.id}
                         onClick={() => {
                           resetTranscodedPlayback();
@@ -2492,8 +2491,15 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                             : 'text-slate-300 hover:bg-slate-800'
                         }`}
                       >
-                        <span className="truncate">{stream.name}</span>
-                        <span className="text-[10px] opacity-75 font-mono ml-2 shrink-0">
+                        <div className="flex flex-col">
+                          <span className="truncate font-semibold">{stream.name}</span>
+                          <span className="text-[9px] opacity-60 font-mono">{stream.type === 'video' ? 'Video Stream' : 'Audio Stream'}</span>
+                        </div>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          selectedStreamId === stream.id && !customLocalBlobUrl
+                            ? 'bg-white/20 text-white'
+                            : 'bg-slate-800 text-indigo-300'
+                        }`}>
                           {stream.badge}
                         </span>
                       </button>

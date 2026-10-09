@@ -122,7 +122,7 @@ export function isMediaFile(
 
 // Sample streaming URLs for in-app video & audio player (HD Live Cinema feeds)
 export const SAMPLE_VIDEO_STREAMS = {
-  movie: '/api/media/sample-video',
+  movie: 'https://vjs.zencdn.net/v/oceans.mp4',
   scifi: 'https://vjs.zencdn.net/v/oceans.mp4',
   series: 'https://vjs.zencdn.net/v/oceans.mp4',
   action: 'https://vjs.zencdn.net/v/oceans.mp4',

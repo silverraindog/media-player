@@ -774,9 +774,46 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onDismissLastScanSummary,
 }) => {
   const [currentDepthLimit, setCurrentDepthLimit] = useState<number>(depthLimit || sambaConfig.depthLimit || 30);
-  const [isPathInspectorOpen, setIsPathInspectorOpen] = useState(false);
-  const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
-  const [isSanitizationHistoryOpen, setIsSanitizationHistoryOpen] = useState(false);
+  // --- New Scan Errors Panel Logic ---
+  const [scanErrors, setScanErrors] = useState<string[]>([]);
+  useEffect(() => {
+    const loadErrors = () => {
+      try {
+        const saved = localStorage.getItem('samba_vault_last_scan_errors');
+        if (saved) setScanErrors(JSON.parse(saved));
+      } catch {}
+    };
+    loadErrors();
+    window.addEventListener('storage', loadErrors);
+    return () => window.removeEventListener('storage', loadErrors);
+  }, []);
+
+  const handleCopyScanErrorPath = (error: string) => {
+    navigator.clipboard.writeText(error);
+    setCopyToast('Path copied to clipboard!');
+    setTimeout(() => setCopyToast(null), 2000);
+  };
+
+  const handleClearResolved = async () => {
+    const saved = localStorage.getItem('samba_vault_last_scan_errors');
+    if (!saved) return;
+    const errors: string[] = JSON.parse(saved);
+
+    const stillFailing: string[] = [];
+    for (const errPath of errors) {
+      // Check if path is still unavailable/erroring
+      const isAvailable = await checkLocalFileAvailability(errPath);
+      if (!isAvailable) {
+        stillFailing.push(errPath);
+      }
+    }
+
+    localStorage.setItem('samba_vault_last_scan_errors', JSON.stringify(stillFailing));
+    setScanErrors(stillFailing);
+    setCopyToast('Resolved errors cleared!');
+    setTimeout(() => setCopyToast(null), 2000);
+  };
+  // ------------------------------------
 
   // Last Scan Summary State (persists across sync operations)
   const [internalLastScanSummary, setInternalLastScanSummary] = useState<LastScanSummary | null>(() => {
@@ -3209,6 +3246,32 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     <div className="space-y-6 flex-1 flex flex-col min-h-0 w-full">
       {/* Top Banner */}
       <div className="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        {/* Scan Errors Panel */}
+        {scanErrors.length > 0 && (
+          <div className="mb-6 p-4 rounded-xl bg-rose-950/30 border border-rose-900/50">
+            <div className="flex items-center gap-2 text-rose-300 font-semibold mb-3">
+              <AlertTriangle className="w-4 h-4" />
+              <span>Scan Errors ({scanErrors.length})</span>
+              <button 
+                onClick={handleClearResolved}
+                className="ml-auto text-[10px] bg-rose-900/50 hover:bg-rose-800 text-rose-200 px-2 py-1 rounded border border-rose-700/50 transition-colors"
+              >
+                Clear All Resolved
+              </button>
+            </div>
+            <div className="space-y-2 max-h-40 overflow-y-auto pr-2">
+              {scanErrors.map((err, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-950/50 border border-rose-900/30 text-xs font-mono">
+                  <span className="truncate text-rose-200/80">{err}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => handleCopyScanErrorPath(err)} className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white" title="Copy Path"><Copy className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => onSyncSamba(err)} className="p-1.5 rounded hover:bg-rose-900 text-rose-400 hover:text-white" title="Retry Sync"><RefreshCw className="w-3.5 h-3.5" /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-medium mb-3">

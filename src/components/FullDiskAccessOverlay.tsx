@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ShieldAlert,
   ExternalLink,
@@ -94,20 +95,22 @@ export const FullDiskAccessOverlay: React.FC<FullDiskAccessOverlayProps> = ({
     }
   };
 
-  return (
+  return createPortal(
     <div
       id="fda-preflight-overlay"
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-200 transition-all border-4 border-amber-500/80 ring-4 ring-amber-500/40 ${
-        isOpen ? 'pointer-events-auto opacity-100 flex' : 'pointer-events-none opacity-0 hidden'
+      className={`fixed inset-0 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-200 transition-all ${
+        isOpen ? 'z-[9999] pointer-events-auto opacity-100 flex border-2 border-red-500 diagnostic-outline' : 'z-[-1] pointer-events-none opacity-0 hidden invisible'
       }`}
       role="dialog"
       aria-modal="true"
       aria-labelledby="fda-overlay-title"
       onClick={(e) => {
+        e.stopPropagation();
         if (e.target === e.currentTarget) {
           onClose();
         }
       }}
+      onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="relative bg-slate-900 border border-amber-500/50 rounded-2xl shadow-2xl max-w-xl w-full p-6 sm:p-7 space-y-5 text-slate-100 ring-1 ring-amber-500/20 my-auto">
         {/* Top Header */}
@@ -265,6 +268,7 @@ export const FullDiskAccessOverlay: React.FC<FullDiskAccessOverlayProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

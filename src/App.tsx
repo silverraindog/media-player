@@ -582,37 +582,13 @@ function App() {
     }).catch((err) => {
       console.warn('[Permissions] Pre-flight system check error:', err);
     });
-
-    return () => {
-      isMounted = false;
-      unsubscribe();
-    };
   }, []);
 
-  // Comprehensive window-level click event listener logging event.target and its computed z-index
-  useEffect(() => {
-    const handleWindowClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
-      const computedStyle = window.getComputedStyle(target);
-      const zIndex = computedStyle.zIndex;
-      const position = computedStyle.position;
-      const className = target.className || '';
-      const id = target.id || '';
-      console.log('[ClickDebugger] Click detected on element:', {
-        tagName: target.tagName,
-        id,
-        className: typeof className === 'string' ? className.substring(0, 80) : '',
-        zIndex,
-        position,
-        target,
-      });
-    };
-    window.addEventListener('click', handleWindowClick, { capture: true });
-    return () => {
-      window.removeEventListener('click', handleWindowClick, { capture: true });
-    };
-  }, []);
+
+
+
+
+
 
   useEffect(() => {
     const checkVersion = async () => {
@@ -691,6 +667,18 @@ function App() {
       localStorage.setItem('samba_vault_extensions', JSON.stringify(mediaExtensionConfig));
     } catch {}
   }, [mediaExtensionConfig]);
+
+  // Temporarily add pointer-events-none class to #root for 500ms after major state updates to force event loop refresh
+  useEffect(() => {
+    const rootEl = document.getElementById('root');
+    if (rootEl) {
+      rootEl.classList.add('pointer-events-none');
+      const timer = setTimeout(() => {
+        rootEl.classList.remove('pointer-events-none');
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isFdaOverlayOpen, isApiDebuggerOpen, activeTab]);
 
   const [isImportingShare, setIsImportingShare] = useState(false);
 
@@ -3128,7 +3116,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white relative z-[10]">
       {/* Toast Notification */}
       {toastMessage && (
         <div
@@ -3298,49 +3286,51 @@ function App() {
         serverVersionInfo={serverVersionInfo}
       />
 
-      {/* Real-time Samba Sync & Batch Processing Progress Bar */}
-      <SyncProgressBar
-        progress={
-          syncProgress.isActive
-            ? syncProgress
-            : isQuickSyncing || isImportingShare || isSyncingShare
-            ? {
-                isActive: true,
-                phase: isQuickSyncing ? 'scanning' : isImportingShare ? 'indexing' : 'scanning',
-                currentStep: 1,
-                totalSteps: 100,
-                currentPath: syncCurrentPath || 'Scanning Samba shared directories...',
-                processedCount: 0,
-                totalCount: 0,
-                phaseDescription: isQuickSyncing
-                  ? 'QuickSync: Initializing shallow scan...'
-                  : isImportingShare
-                  ? 'Importing classified folders...'
-                  : 'Deep scanning Samba share with Rust walkdir...',
-              }
-            : syncProgress
-        }
-        onCancel={() => {
-          abortCurrentSync();
-          setIsSyncingShare(false);
-          setIsQuickSyncing(false);
-          setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
-          showToast('Samba synchronization paused/cancelled by user.');
-        }}
-        onDismiss={() => {
-          setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
-        }}
-        onRetry={() => {
-          console.log('[SambaSync] User requested manual retry...');
-          handleSyncSamba(activeScanPath);
-        }}
-        onForceSkip={handleForceSkip}
-        isSafeScan={isSafeScan}
-        onToggleSafeScan={handleToggleSafeScan}
-      />
+      {/* Container wrapping main content and progress bar with defined z-index: 1 */}
+      <div className="relative z-[1] flex-1 flex flex-col">
+        {/* Real-time Samba Sync & Batch Processing Progress Bar */}
+        <SyncProgressBar
+          progress={
+            syncProgress.isActive
+              ? syncProgress
+              : isQuickSyncing || isImportingShare || isSyncingShare
+              ? {
+                  isActive: true,
+                  phase: isQuickSyncing ? 'scanning' : isImportingShare ? 'indexing' : 'scanning',
+                  currentStep: 1,
+                  totalSteps: 100,
+                  currentPath: syncCurrentPath || 'Scanning Samba shared directories...',
+                  processedCount: 0,
+                  totalCount: 0,
+                  phaseDescription: isQuickSyncing
+                    ? 'QuickSync: Initializing shallow scan...'
+                    : isImportingShare
+                    ? 'Importing classified folders...'
+                    : 'Deep scanning Samba share with Rust walkdir...',
+                }
+              : syncProgress
+          }
+          onCancel={() => {
+            abortCurrentSync();
+            setIsSyncingShare(false);
+            setIsQuickSyncing(false);
+            setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
+            showToast('Samba synchronization paused/cancelled by user.');
+          }}
+          onDismiss={() => {
+            setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
+          }}
+          onRetry={() => {
+            console.log('[SambaSync] User requested manual retry...');
+            handleSyncSamba(activeScanPath);
+          }}
+          onForceSkip={handleForceSkip}
+          isSafeScan={isSafeScan}
+          onToggleSafeScan={handleToggleSafeScan}
+        />
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Main Content Area */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeTab === 'music' && (
           <ErrorBoundary tabName="Music Hub">
             <MusicTab
@@ -3540,7 +3530,8 @@ function App() {
             serverVersionInfo={serverVersionInfo}
           />
         )}
-      </main>
+        </main>
+      </div>
 
       {/* Detail Modal */}
       {detailModalMedia && (
@@ -3627,6 +3618,7 @@ function App() {
             <div className="flex flex-col items-center sm:items-end gap-1">
               <span className="font-mono text-slate-600">Kodi • Jellyfin • Plex • Emby NFO Ready</span>
               <div className="flex items-center gap-2">
+
                 <span className="text-[10px] uppercase tracking-widest text-slate-700 font-bold">Build Release</span>
                 <span
                   className={`px-2 py-0.5 rounded border font-mono font-bold transition-colors ${

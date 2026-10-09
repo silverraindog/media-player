@@ -52,6 +52,8 @@ export const FolderClassifierModal: React.FC<FolderClassifierModalProps> = ({
   sambaConfig,
   customScanPath,
 }) => {
+  if (!isOpen) return null;
+
   const [classifications, setClassifications] = useState<FolderScanClassification[]>(initialClassifications);
   const [activeTab, setActiveTab] = useState<'review' | 'rules' | 'categories'>('review');
   const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({});

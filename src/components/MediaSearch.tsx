@@ -239,6 +239,37 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const [displayedCount, setDisplayedCount] = useState(20);
+  const observerTarget = useRef<HTMLDivElement>(null);
+  const [sortedAndFilteredMedia, setSortedAndFilteredMedia] = useState<MediaMetadata[]>([]);
+
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setDisplayedCount((prev) => Math.min(prev + 20, sortedAndFilteredMedia.length));
+        }
+      },
+      { threshold: 1.0 }
+    );
+
+    if (observerTarget.current) {
+      observer.observe(observerTarget.current);
+    }
+
+    return () => {
+      if (observerTarget.current) {
+        observer.unobserve(observerTarget.current);
+      }
+    };
+  }, [sortedAndFilteredMedia.length]);
+
+  // Reset displayedCount when search filter changes
+  useEffect(() => {
+    setDisplayedCount(20);
+  }, [sortedAndFilteredMedia.length]);
+
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [genreSearchInput, setGenreSearchInput] = useState<string>('');
@@ -403,7 +434,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const fetchRecentMedia = async () => {
     setIsRecentLoading(true);
     try {
-      const res = await fetch('/api/db/media/recent?limit=10');
+      const res = await fetch('/api/db/media/recent?limit=50');
       const data = await res.json();
       if (data.success && Array.isArray(data.items)) {
         // Map SQLite db rows to MediaMetadata
@@ -952,7 +983,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   }, [mediaLibrary, selectedType, originFilter, activeCategory, selectedGenres, yearRange, debouncedSearchQuery]);
 
   // Apply Sort to Filtered Media (prioritizing Genre Affinity when active)
-  const sortedAndFilteredMedia = useMemo(() => {
+  useEffect(() => {
     const list = [...filteredMedia];
 
     list.sort((a, b) => {
@@ -1005,7 +1036,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       return 0;
     });
 
-    return list;
+    setSortedAndFilteredMedia(list);
   }, [filteredMedia, sortBy, genreAffinityMap, maxPossibleAffinityScore, topAffinityGenres]);
 
   const handleSaveToSqlite = async (media: MediaMetadata) => {
@@ -2878,7 +2909,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
           {/* Media Results Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-            {sortedAndFilteredMedia.map((media) => {
+            {sortedAndFilteredMedia.slice(0, displayedCount).map((media) => {
               const isPushed = pushedIds[media.id];
               const isCopied = copiedNfoId === media.id;
               const isSavedWatchlist = watchlistIds.has(media.id);
@@ -3400,6 +3431,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                 </motion.div>
               );
             })}
+            <div ref={observerTarget} className="h-10" />
           </div>
         </main>
       </div>

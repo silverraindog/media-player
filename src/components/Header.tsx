@@ -37,6 +37,7 @@ interface HeaderProps {
   watchlistCount?: number;
   onOpenApiDebugger?: () => void;
   serverVersionInfo?: any;
+  syncProgress?: SyncProgressState;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -51,6 +52,7 @@ export const Header: React.FC<HeaderProps> = ({
   watchlistCount = 0,
   onOpenApiDebugger,
   serverVersionInfo,
+  syncProgress,
 }) => {
   return (
     <header className="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800 shadow-md">
@@ -255,7 +257,7 @@ export const Header: React.FC<HeaderProps> = ({
                 id="header-quicksync-btn"
                 onClick={onQuickSync}
                 disabled={isQuickSyncing}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-md transition-all cursor-pointer select-none ${
+                className={`relative flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-md transition-all cursor-pointer select-none ${
                   isQuickSyncing
                     ? 'bg-amber-950/80 border-amber-500/50 text-amber-300 shadow-amber-950/40 cursor-wait'
                     : 'bg-gradient-to-r from-emerald-600/90 to-teal-600/90 hover:from-emerald-500 hover:to-teal-500 text-white border-emerald-500/40 shadow-emerald-950/40 active:scale-95'
@@ -268,6 +270,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300 shrink-0" />
                 )}
                 <span>{isQuickSyncing ? 'QuickSyncing...' : 'QuickSync'}</span>
+                {isQuickSyncing && syncProgress && syncProgress.totalCount > 0 && (
+                  <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-emerald-500" style={{ width: `${Math.min(100, (syncProgress.processedCount / syncProgress.totalCount) * 100)}%` }} />
+                )}
               </button>
             )}
 

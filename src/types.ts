@@ -591,5 +591,28 @@ export interface LastScanSummary {
   retriesEncountered?: number;
 }
 
+export interface SyncProgressState {
+  isActive: boolean;
+  phase: 'idle' | 'scanning' | 'classifying' | 'enriching' | 'verifying' | 'indexing' | 'completed' | 'error';
+  currentStep: number;
+  totalSteps: number;
+  currentPath: string;
+  processedCount: number;
+  totalCount: number;
+  batchIndex?: number;
+  totalBatches?: number;
+  chunkSize?: number;
+  errorMessage?: string;
+  retryCount?: number;
+  maxRetries?: number;
+  retryDelayRemaining?: number;
+  phaseDescription?: string;
+  etaSeconds?: number | null;
+  averageBatchTimeMs?: number;
+  auditProgress?: any;
+  batchStats?: any[];
+  failedFilePaths?: any[];
+}
+
 
 

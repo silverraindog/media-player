@@ -742,6 +742,36 @@ function App() {
     } catch {}
   }, [mediaExtensionConfig]);
 
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // ⌘K or Ctrl+K -> Samba Mount Hub
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setActiveTab('samba-mount');
+        showToast('Navigating to Samba Mount Hub');
+      }
+      // ⌘F or Ctrl+F -> Focus Search
+      else if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setActiveTab('search');
+        showToast('Focusing search bar');
+        setTimeout(() => {
+          const searchInput = document.querySelector('input[placeholder*="Search"]') as HTMLInputElement;
+          if (searchInput) searchInput.focus();
+        }, 100);
+      }
+      // ⌘S or Ctrl+S -> Sync
+      else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        handleSyncSamba();
+        showToast('Manual sync triggered');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [setActiveTab]);
+
   // Temporarily add pointer-events-none class to #root for 500ms after major state updates to force event loop refresh
   useEffect(() => {
     const rootEl = document.getElementById('root');
@@ -3356,6 +3386,7 @@ function App() {
         onOpenQuickMount={() => setActiveTab('samba-mount')}
         onQuickSync={handleQuickSyncSamba}
         isQuickSyncing={isQuickSyncing}
+        syncProgress={syncProgress}
         onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
         serverVersionInfo={serverVersionInfo}
       />

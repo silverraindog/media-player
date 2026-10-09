@@ -590,6 +590,80 @@ function App() {
 
 
 
+  // Diagnostic Mode and Click Debugger
+  useEffect(() => {
+    // 1. High-priority, window-level click listener
+    const handleGlobalClick = (e: MouseEvent) => {
+      const path = e.composedPath();
+      const target = e.target as HTMLElement;
+      
+      // Determine if click was blocked by something with higher z-index
+      let wasBlocked = false;
+      const blockingElements: string[] = [];
+
+      console.group('[Click Debugger]');
+      console.log('Target:', target);
+      path.forEach((el, index) => {
+        if (el instanceof HTMLElement) {
+          const style = window.getComputedStyle(el);
+          const zIndex = parseInt(style.zIndex) || 0;
+          const tagName = el.tagName.toLowerCase();
+          const id = el.id ? '#' + el.id : '';
+          
+          console.log(`[${index}] ${tagName}${id} (z-index: ${zIndex})`);
+          
+          // Basic heuristic: if an overlay parent has higher z-index than target, it's a blocker
+          if (zIndex > 0 && tagName !== 'body' && tagName !== 'html') {
+             wasBlocked = true;
+             blockingElements.push(`${tagName}${id} (z: ${zIndex})`);
+          }
+        }
+      });
+      
+      if (wasBlocked) {
+        console.warn('⚠️ Click may have been blocked by layers:', blockingElements);
+      }
+      
+      console.groupEnd();
+    };
+
+    window.addEventListener('click', handleGlobalClick, true);
+
+    // 2. Diagnostic Mode
+    (window as any).toggleDiagnosticMode = () => {
+      const elements = document.querySelectorAll('*');
+      elements.forEach(el => {
+        if (el instanceof HTMLElement) {
+          const style = window.getComputedStyle(el);
+          if (parseInt(style.zIndex) > 0) {
+            el.style.outline = '2px solid rgba(255, 0, 0, 0.5)';
+          } else {
+            el.style.outline = '';
+          }
+        }
+      });
+    };
+    
+    // 3. Global UI Reset
+    (window as any).resetGlobalUI = () => {
+      console.log('[Global UI Reset] Resetting overlays...');
+      const overlayIds = ['fda-preflight-overlay', 'api-debugger-overlay-root'];
+      overlayIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.style.pointerEvents = 'none';
+          el.style.zIndex = '-9999';
+        }
+      });
+    };
+
+    return () => {
+      window.removeEventListener('click', handleGlobalClick, true);
+      delete (window as any).toggleDiagnosticMode;
+      delete (window as any).resetGlobalUI;
+    };
+  }, []);
+
   useEffect(() => {
     const checkVersion = async () => {
       try {

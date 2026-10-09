@@ -35,6 +35,11 @@ interface ApiDebuggerOverlayProps {
   onClose: () => void;
 }
 
+const Z_INDEX = {
+  OPEN: 'z-[9999]',
+  CLOSED: 'z-[-1]',
+};
+
 export const ApiDebuggerOverlay: React.FC<ApiDebuggerOverlayProps> = ({ isOpen, onClose }) => {
   const [logs, setLogs] = useState<ApiLogEntry[]>([]);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
@@ -201,7 +206,7 @@ export const ApiDebuggerOverlay: React.FC<ApiDebuggerOverlayProps> = ({ isOpen, 
     <div
       id="api-debugger-overlay-root"
       className={`fixed inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm p-2 sm:p-4 overflow-hidden transition-all ${
-        isOpen ? 'z-[9999] pointer-events-auto opacity-100 flex border-2 border-red-500 diagnostic-outline' : 'z-[-1] pointer-events-none opacity-0 hidden invisible'
+        isOpen ? `${Z_INDEX.OPEN} pointer-events-auto opacity-100 flex border-2 border-red-500 diagnostic-outline` : `${Z_INDEX.CLOSED} pointer-events-none opacity-0 invisible`
       }`}
       onClick={(e) => {
         e.stopPropagation();

@@ -1758,6 +1758,7 @@ export type { FullDiskAccessStatus, PermissionInstructions } from './permissions
 export interface FfmpegCodecDiagnostics {
   available: boolean;
   version: string;
+  path?: string;
   hasH264: boolean;
   hasHevc: boolean;
   codecs: string[];
@@ -1768,10 +1769,139 @@ export interface FfmpegCodecDiagnostics {
 }
 
 /**
+ * Standard system paths where FFmpeg binaries typically reside
+ */
+export const STANDARD_SYSTEM_FFMPEG_PATHS = [
+  '/opt/homebrew/bin/ffmpeg',
+  '/usr/local/bin/ffmpeg',
+  '/usr/bin/ffmpeg',
+  '/bin/ffmpeg',
+  'C:\\ffmpeg\\bin\\ffmpeg.exe',
+  'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+];
+
+// App-level state for verified absolute FFmpeg path
+let appStateVerifiedFFmpegPath: string | null = null;
+const verifiedFFmpegPathListeners = new Set<(path: string | null) => void>();
+
+export const getVerifiedFFmpegPath = (): string | null => {
+  if (appStateVerifiedFFmpegPath) return appStateVerifiedFFmpegPath;
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('sambavault_verified_ffmpeg_path');
+  }
+  return null;
+};
+
+export const setVerifiedFFmpegPath = (path: string | null) => {
+  appStateVerifiedFFmpegPath = path;
+  if (typeof window !== 'undefined') {
+    if (path) {
+      localStorage.setItem('sambavault_verified_ffmpeg_path', path);
+    } else {
+      localStorage.removeItem('sambavault_verified_ffmpeg_path');
+    }
+  }
+  verifiedFFmpegPathListeners.forEach((listener) => {
+    try {
+      listener(path);
+    } catch (e) {
+      console.error('[tauriBridge] verifiedFFmpegPath listener error:', e);
+    }
+  });
+};
+
+export const subscribeVerifiedFFmpegPath = (listener: (path: string | null) => void): (() => void) => {
+  verifiedFFmpegPathListeners.add(listener);
+  return () => {
+    verifiedFFmpegPathListeners.delete(listener);
+  };
+};
+
+/**
+ * Explicitly checks standard system paths (/usr/local/bin, /opt/homebrew/bin, /usr/bin)
+ * and returns the verified path to the app state so ffmpeg calls are absolute rather
+ * than reliant on shell PATH.
+ */
+export const detectFFmpegPath = async (forceRecheck = false): Promise<string | null> => {
+  if (!forceRecheck) {
+    const cached = getVerifiedFFmpegPath();
+    if (cached) return cached;
+  }
+
+  const isTauri = isTauriEnvironment();
+  let verifiedPath: string | null = null;
+
+  // 1. In Tauri: Query native backend detected binary path first
+  if (isTauri) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const detected = await invoke<string>('get_detected_ffmpeg_path');
+      if (detected && typeof detected === 'string' && detected.trim()) {
+        const cleanDetected = detected.trim();
+        const check = await checkPathExists(cleanDetected);
+        if (check.exists) {
+          verifiedPath = cleanDetected;
+        }
+      }
+    } catch (e) {
+      console.warn('[detectFFmpegPath] get_detected_ffmpeg_path failed, testing system paths:', e);
+    }
+  }
+
+  // 2. Explicitly test standard system paths (/usr/local/bin, /opt/homebrew/bin, /usr/bin)
+  if (!verifiedPath) {
+    for (const candidate of STANDARD_SYSTEM_FFMPEG_PATHS) {
+      try {
+        const check = await checkPathExists(candidate);
+        if (check.exists) {
+          verifiedPath = candidate;
+          break;
+        }
+      } catch (err) {
+        // try next candidate
+      }
+    }
+  }
+
+  // 3. Fallback: Query backend API diagnostics endpoint (/api/media/diagnostics/ffmpeg)
+  if (!verifiedPath) {
+    try {
+      const res = await fetch('/api/media/diagnostics/ffmpeg');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.available && data.path && typeof data.path === 'string') {
+          verifiedPath = data.path;
+        }
+      }
+    } catch (e) {
+      console.warn('[detectFFmpegPath] Backend diagnostics query failed:', e);
+    }
+  }
+
+  // 4. If in Tauri and path is verified, notify native backend so it uses absolute path
+  if (verifiedPath && isTauri) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      await invoke('set_custom_ffmpeg_path', { path: verifiedPath });
+    } catch (e) {
+      console.warn('[detectFFmpegPath] set_custom_ffmpeg_path failed:', e);
+    }
+  }
+
+  // 5. Update app state
+  setVerifiedFFmpegPath(verifiedPath);
+  console.info(`[detectFFmpegPath] Verified absolute FFmpeg path:`, verifiedPath || 'None found');
+  return verifiedPath;
+};
+
+/**
  * Checks if FFmpeg and specifically H.264 / HEVC codecs are available locally
  * via Tauri bridge (native IPC or Tauri Shell Command) with graceful backend API fallback.
  */
 export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostics> => {
+  // Ensure we check and cache the verified absolute path
+  const verifiedAbsolute = await detectFFmpegPath();
+
   if (isTauriEnvironment()) {
     // 1. Try dedicated check_ffmpeg_codecs Tauri IPC command
     try {
@@ -1781,6 +1911,7 @@ export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostic
         return {
           available: Boolean(res.available),
           version: res.version || 'FFmpeg (Tauri Bridge)',
+          path: verifiedAbsolute || 'Native Rust Binary',
           hasH264: Boolean(res.has_h264),
           hasHevc: Boolean(res.has_hevc),
           codecs: Array.isArray(res.codecs) ? res.codecs : ['h264', 'hevc', 'aac'],
@@ -1798,7 +1929,7 @@ export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostic
       const { Command } = await import('@tauri-apps/api/shell');
       let versionOutput: any = null;
       let matchedCmdName = 'ffmpeg';
-      for (const cmdName of ['ffmpeg', 'homebrew-ffmpeg', 'usr-ffmpeg']) {
+      for (const cmdName of ['homebrew-ffmpeg', 'usr-local-ffmpeg', 'usr-bin-ffmpeg', 'ffmpeg']) {
         try {
           const testCmd = new Command(cmdName, ['-version']);
           const out = await testCmd.execute();
@@ -1829,6 +1960,7 @@ export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostic
         return {
           available: true,
           version: firstLine,
+          path: verifiedAbsolute || matchedCmdName,
           hasH264,
           hasHevc,
           codecs: codecsList,
@@ -1848,6 +1980,7 @@ export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostic
     return {
       available: Boolean(data.available),
       version: data.version || 'FFmpeg API check',
+      path: verifiedAbsolute || data.path || 'Server Environment',
       hasH264: Boolean(data.hasH264 ?? true),
       hasHevc: Boolean(data.hasHevc ?? true),
       codecs: Array.isArray(data.codecs) ? data.codecs : ['h264', 'hevc', 'aac'],

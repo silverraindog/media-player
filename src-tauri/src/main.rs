@@ -1403,10 +1403,42 @@ async fn run_samba_diagnostic(host: String, share: String) -> Result<String, Str
 }
 
 static NEXT_TRANSCODE_ID: AtomicU64 = AtomicU64::new(0);
+static CUSTOM_FFMPEG_PATH: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+#[tauri::command]
+async fn set_custom_ffmpeg_path(path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if p.exists() {
+        if let Ok(mut lock) = CUSTOM_FFMPEG_PATH.write() {
+            *lock = Some(p.clone());
+        }
+        Ok(p.to_string_lossy().to_string())
+    } else {
+        Err(format!("FFmpeg binary does not exist at path: {}", path))
+    }
+}
+
+#[tauri::command]
+async fn get_detected_ffmpeg_path() -> Result<String, String> {
+    let locator = locate_ffmpeg()?;
+    Ok(locator.ffmpeg().to_string_lossy().to_string())
+}
 
 fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
     let ffmpeg_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     let ffprobe_name = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
+
+    if let Ok(lock) = CUSTOM_FFMPEG_PATH.read() {
+        if let Some(custom) = lock.as_ref() {
+            if custom.exists() {
+                let probe = custom.parent().unwrap_or_else(|| Path::new(".")).join(ffprobe_name);
+                let actual_probe = if probe.exists() { probe } else { custom.clone() };
+                if let Ok(loc) = FfmpegLocator::with_paths(custom.clone(), actual_probe) {
+                    return Ok(loc);
+                }
+            }
+        }
+    }
 
     if let Some(ffmpeg_path) = std::env::var_os("FFMPEG_PATH").map(PathBuf::from) {
         let ffprobe_path = ffmpeg_path
@@ -1426,10 +1458,16 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
     search_dirs.extend([
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
         PathBuf::from("/opt/local/bin"),
     ]);
     #[cfg(target_os = "linux")]
-    search_dirs.extend([PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]);
+    search_dirs.extend([
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/bin"),
+    ]);
 
     if let Some(path_var) = std::env::var_os("PATH") {
         search_dirs.extend(std::env::split_paths(&path_var));
@@ -1698,6 +1736,8 @@ fn main() {
             transcode_media_file,
             probe_media_file,
             check_ffmpeg_codecs,
+            set_custom_ffmpeg_path,
+            get_detected_ffmpeg_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

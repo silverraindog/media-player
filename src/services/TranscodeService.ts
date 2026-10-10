@@ -1,4 +1,4 @@
-import { isTauriEnvironment } from '../utils/tauriBridge';
+import { isTauriEnvironment, detectFFmpegPath } from '../utils/tauriBridge';
 
 export interface MediaInfo {
   format: {
@@ -55,6 +55,7 @@ class TranscodeService {
   public async probe(path: string): Promise<MediaInfo> {
     if (isTauriEnvironment()) {
       try {
+        await detectFFmpegPath();
         const { invoke } = await import('@tauri-apps/api/tauri');
         const result = await invoke<string>('probe_media_file', { sourcePath: path });
         return JSON.parse(result);
@@ -96,6 +97,7 @@ class TranscodeService {
 
     if (isTauriEnvironment()) {
       try {
+        await detectFFmpegPath();
         const { invoke } = await import('@tauri-apps/api/tauri');
         const res = await invoke<string>('transcode_media_file', { sourcePath: path, mediaType });
         this.setStatus(path, {

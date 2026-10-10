@@ -15,7 +15,17 @@
       "all": true,
       "fs": {
         "all": true,
-        "scope": ["/Volumes/**", "$HOME/**", "$TEMP/**", "**"]
+        "scope": [
+          "/Volumes/**",
+          "$HOME/**",
+          "$TEMP/**",
+          "/opt/homebrew/**",
+          "/usr/local/**",
+          "/usr/bin/**",
+          "/bin/**",
+          "/opt/**",
+          "**"
+        ]
       },
       "shell": {
         "all": false,
@@ -27,8 +37,12 @@
           { "name": "ffprobe", "cmd": "ffprobe", "args": true },
           { "name": "homebrew-ffmpeg", "cmd": "/opt/homebrew/bin/ffmpeg", "args": true },
           { "name": "homebrew-ffprobe", "cmd": "/opt/homebrew/bin/ffprobe", "args": true },
-          { "name": "usr-ffmpeg", "cmd": "/usr/local/bin/ffmpeg", "args": true },
-          { "name": "usr-ffprobe", "cmd": "/usr/local/bin/ffprobe", "args": true }
+          { "name": "usr-local-ffmpeg", "cmd": "/usr/local/bin/ffmpeg", "args": true },
+          { "name": "usr-local-ffprobe", "cmd": "/usr/local/bin/ffprobe", "args": true },
+          { "name": "usr-bin-ffmpeg", "cmd": "/usr/bin/ffmpeg", "args": true },
+          { "name": "usr-bin-ffprobe", "cmd": "/usr/bin/ffprobe", "args": true },
+          { "name": "bin-ffmpeg", "cmd": "/bin/ffmpeg", "args": true },
+          { "name": "bin-ffprobe", "cmd": "/bin/ffprobe", "args": true }
         ]
       }
     },

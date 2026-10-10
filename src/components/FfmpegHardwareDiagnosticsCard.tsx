@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Terminal, Cpu, CheckCircle2, AlertTriangle, RefreshCw, HardDrive, ShieldCheck, ExternalLink } from 'lucide-react';
-import { isTauriEnvironment } from '../utils/tauriBridge';
+import { isTauriEnvironment, detectFFmpegPath } from '../utils/tauriBridge';
 
 export const FfmpegHardwareDiagnosticsCard: React.FC = () => {
   const [isChecking, setIsChecking] = useState(false);
@@ -16,9 +16,14 @@ export const FfmpegHardwareDiagnosticsCard: React.FC = () => {
 
   const runFfmpegCheck = async () => {
     setIsChecking(true);
-    setShellLogs('Executing system shell check for ffmpeg...');
+    setShellLogs('Executing system check for FFmpeg across standard system paths (/usr/local/bin, /opt/homebrew/bin, /usr/bin)...');
 
-    let resultData: any = { available: false, codecs: ['h264', 'aac', 'mp3'] };
+    const verifiedSystemPath = await detectFFmpegPath(true);
+    let resultData: any = {
+      available: false,
+      path: verifiedSystemPath || undefined,
+      codecs: ['h264', 'aac', 'mp3'],
+    };
 
     if (isTauriEnvironment()) {
       try {
@@ -28,11 +33,11 @@ export const FfmpegHardwareDiagnosticsCard: React.FC = () => {
           resultData = {
             available: true,
             version: res.version || 'FFmpeg (Tauri Native)',
-            path: 'System Binary (Tauri Native IPC)',
+            path: verifiedSystemPath || 'System Binary (Tauri Native IPC)',
             codecs: Array.isArray(res.codecs) ? res.codecs : ['h264', 'hevc', 'aac', 'mp3'],
             os: res.os || navigator.platform,
           };
-          setShellLogs(`[Tauri Native IPC Success]\n${res.version}\nCodecs: ${(res.codecs || []).join(', ')}`);
+          setShellLogs(`[Tauri Native IPC Success]\nPath: ${verifiedSystemPath || 'System Binary'}\n${res.version}\nCodecs: ${(res.codecs || []).join(', ')}`);
         }
       } catch (ipcErr: any) {
         console.warn('[FfmpegHardwareDiagnosticsCard] Tauri IPC check failed:', ipcErr);
@@ -42,12 +47,14 @@ export const FfmpegHardwareDiagnosticsCard: React.FC = () => {
         try {
           const { Command } = await import('@tauri-apps/api/shell');
           let output: any = null;
-          for (const cmdName of ['ffmpeg', 'homebrew-ffmpeg', 'usr-ffmpeg']) {
+          let executedCmd = 'ffmpeg';
+          for (const cmdName of ['homebrew-ffmpeg', 'usr-local-ffmpeg', 'usr-bin-ffmpeg', 'ffmpeg']) {
             try {
               const cmd = new Command(cmdName, ['-version']);
               const res = await cmd.execute();
               if (res.code === 0 || res.stdout) {
                 output = res;
+                executedCmd = cmdName;
                 break;
               }
             } catch {}
@@ -57,11 +64,11 @@ export const FfmpegHardwareDiagnosticsCard: React.FC = () => {
             resultData = {
               available: true,
               version: firstLine,
-              path: 'System PATH (Tauri Shell)',
+              path: verifiedSystemPath || executedCmd,
               codecs: ['h264', 'hevc', 'aac', 'vp9', 'av1', 'mp3', 'flac'],
               os: navigator.platform,
             };
-            setShellLogs(`[Tauri Shell Success]\n${output.stdout.slice(0, 1500)}`);
+            setShellLogs(`[Tauri Shell Success]\nPath: ${verifiedSystemPath || executedCmd}\n${output.stdout.slice(0, 1500)}`);
           } else {
             throw new Error(output?.stderr || 'Command returned non-zero exit code.');
           }
@@ -79,15 +86,16 @@ export const FfmpegHardwareDiagnosticsCard: React.FC = () => {
         resultData = {
           available: data.available,
           version: data.version || 'FFmpeg API check',
-          path: data.path || 'Server Environment',
+          path: verifiedSystemPath || data.path || 'Server Environment',
           codecs: data.codecs || ['h264', 'hevc', 'aac', 'mp3'],
           error: data.error,
           os: data.os || navigator.platform,
         };
-        setShellLogs(data.available ? `[API Check Success]\n${data.version}` : `[API Check Error]\n${data.error || data.message || 'FFmpeg unavailable'}`);
+        setShellLogs(data.available ? `[API Check Success]\nPath: ${verifiedSystemPath || data.path}\n${data.version}` : `[API Check Error]\n${data.error || data.message || 'FFmpeg unavailable'}`);
       } catch (apiErr: any) {
         resultData = {
           available: false,
+          path: verifiedSystemPath || undefined,
           error: apiErr?.message || 'Network error probing FFmpeg',
           os: navigator.platform,
         };

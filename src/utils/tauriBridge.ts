@@ -1796,15 +1796,26 @@ export const checkFfmpegCodecsViaTauri = async (): Promise<FfmpegCodecDiagnostic
     // 2. Try Tauri Shell Command ('ffmpeg', ['-version'] and ['-codecs'])
     try {
       const { Command } = await import('@tauri-apps/api/shell');
-      const versionCmd = new Command('ffmpeg', ['-version']);
-      const versionOutput = await versionCmd.execute();
-      if (versionOutput.code === 0 || versionOutput.stdout) {
+      let versionOutput: any = null;
+      let matchedCmdName = 'ffmpeg';
+      for (const cmdName of ['ffmpeg', 'homebrew-ffmpeg', 'usr-ffmpeg']) {
+        try {
+          const testCmd = new Command(cmdName, ['-version']);
+          const out = await testCmd.execute();
+          if (out.code === 0 || out.stdout) {
+            versionOutput = out;
+            matchedCmdName = cmdName;
+            break;
+          }
+        } catch {}
+      }
+      if (versionOutput && (versionOutput.code === 0 || versionOutput.stdout)) {
         const firstLine = versionOutput.stdout.split('\n')[0] || 'FFmpeg system binary';
         let hasH264 = true;
         let hasHevc = true;
 
         try {
-          const codecsCmd = new Command('ffmpeg', ['-codecs']);
+          const codecsCmd = new Command(matchedCmdName, ['-codecs']);
           const codecsOutput = await codecsCmd.execute();
           const lower = (codecsOutput.stdout || '').toLowerCase();
           hasH264 = lower.includes('h264') || lower.includes('264');

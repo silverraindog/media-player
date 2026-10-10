@@ -120,16 +120,12 @@ export function isMediaFile(
   return !!config.enabledCategories[cat];
 }
 
-// Sample streaming URLs for in-app video & audio player (HD Live Cinema feeds)
-export const SAMPLE_VIDEO_STREAMS = {
-  movie: 'https://vjs.zencdn.net/v/oceans.mp4',
-  scifi: 'https://vjs.zencdn.net/v/oceans.mp4',
-  series: 'https://vjs.zencdn.net/v/oceans.mp4',
-  action: 'https://vjs.zencdn.net/v/oceans.mp4',
-  nature: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-};
-
-export const SAMPLE_AUDIO_STREAM = 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
+// Direct streaming endpoint generator for local Samba files
+export function getDirectPlaybackUrl(path?: string): string | undefined {
+  if (!path) return undefined;
+  const clean = path.replace(/^[/\\]+/, '');
+  return `/api/samba/stream?path=${encodeURIComponent(clean)}`;
+}
 
 // Robust Season and Extras Directory Checker (e.g., 'Season 1', 'S01', 'Season_02', 'Extras', 'Specials', 'Bonus', 'Featurettes', 'Disc 1', '4', '5', etc.)
 export function isSeasonDirectory(folderName: string): boolean {
@@ -340,7 +336,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
       path: fullPath,
       recommendedFolderStructure: fullPath,
       matchedFilename: node.type === 'file' ? node.name : node.matchedMedia.matchedFilename,
-      playbackUrl: node.matchedMedia.playbackUrl || (node.matchedMedia.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie),
+      playbackUrl: node.matchedMedia.playbackUrl || getDirectPlaybackUrl(fullPath),
     };
   }
 
@@ -387,7 +383,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     }
   }
 
-  // Real user files should use their actual disk path and stream proxy, not fake curated sample media
+  // Real media files resolve to their actual disk path and stream proxy
   const actualPlaybackUrl = `/api/samba/stream?path=${encodeURIComponent(node.path || fullPath)}`;
 
   // Posters based on type
@@ -575,7 +571,7 @@ export function extractAllMediaFromSambaTree(
           folderPath: fullPath,
           path: fullPath,
           recommendedFolderStructure: fullPath,
-          playbackUrl: node.matchedMedia.playbackUrl || (node.matchedMedia.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie),
+          playbackUrl: node.matchedMedia.playbackUrl || getDirectPlaybackUrl(fullPath),
         });
       } else if (node.type === 'folder') {
         const hasMediaChildren = node.children?.some(c =>
@@ -690,7 +686,7 @@ export async function extractAllMediaFromSambaTreeAsync(
         recommendedFolderStructure: fullPath,
         playbackUrl:
           node.matchedMedia.playbackUrl ||
-          (node.matchedMedia.type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie),
+          getDirectPlaybackUrl(fullPath),
       });
     } else if (node.type === 'folder') {
       const hasMediaChildren = node.children?.some(
@@ -763,14 +759,14 @@ export async function extractAllMediaFromSambaTreeAsync(
 export function parsedFileToMediaMetadata(item: ParsedFileInfo): MediaMetadata {
   const type = item.detectedType || 'movie';
   let posterUrl = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80';
-  let defaultPlayback = SAMPLE_VIDEO_STREAMS.movie;
+  let defaultPlayback = getDirectPlaybackUrl(item.cleanFolderPath || item.cleanFormattedFilename);
 
   if (type === 'series') {
     posterUrl = 'https://images.unsplash.com/photo-1522869635100-9f4c5e86aa37?w=800&auto=format&fit=crop&q=80';
-    defaultPlayback = SAMPLE_VIDEO_STREAMS.series;
+    defaultPlayback = getDirectPlaybackUrl(item.cleanFolderPath || item.cleanFormattedFilename);
   } else if (type === 'album') {
     posterUrl = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80';
-    defaultPlayback = SAMPLE_AUDIO_STREAM;
+    defaultPlayback = getDirectPlaybackUrl(item.cleanFolderPath || item.cleanFormattedFilename);
   }
 
   return {
@@ -798,7 +794,7 @@ export function parsedFileToMediaMetadata(item: ParsedFileInfo): MediaMetadata {
             title: item.detectedTitle,
             plot: `Episode from file: ${item.originalFilename}`,
             rating: 8.5,
-            playbackUrl: SAMPLE_VIDEO_STREAMS.series,
+            playbackUrl: getDirectPlaybackUrl(`${item.cleanFolderPath}/${item.cleanFormattedFilename}`),
           }
         ]
       }
@@ -809,7 +805,7 @@ export function parsedFileToMediaMetadata(item: ParsedFileInfo): MediaMetadata {
         title: item.detectedTitle,
         duration: '3:30',
         artist: item.detectedArtist || 'Imported Artist',
-        playbackUrl: SAMPLE_AUDIO_STREAM,
+        playbackUrl: getDirectPlaybackUrl(`${item.cleanFolderPath}/${item.cleanFormattedFilename}`),
       }
     ] : undefined,
     source: 'curated-database',
@@ -889,7 +885,7 @@ export async function fetchSecondaryMetadata(
               plot: stripHtmlTags(ep.summary) || `Episode ${epNum} of ${showTitle}.`,
               rating: ep.rating?.average || rating,
               thumbUrl: ep.image?.original || ep.image?.medium,
-              playbackUrl: SAMPLE_VIDEO_STREAMS.series,
+              playbackUrl: getDirectPlaybackUrl(showTitle),
             });
           });
 
@@ -931,7 +927,7 @@ export async function fetchSecondaryMetadata(
               'tvshow.nfo',
               'poster.jpg',
             ],
-            playbackUrl: SAMPLE_VIDEO_STREAMS.series,
+            playbackUrl: getDirectPlaybackUrl(showTitle),
           };
 
           return resolvedMetadata;
@@ -972,7 +968,7 @@ export async function fetchSecondaryMetadata(
           source: 'secondary-itunes-fallback',
           recommendedFolderStructure: `Movies/${itemTitle} (${itemYear})/`,
           recommendedFilenames: [`${itemTitle} (${itemYear}) [1080p].mkv`, 'movie.nfo', 'poster.jpg'],
-          playbackUrl: type === 'album' ? SAMPLE_AUDIO_STREAM : SAMPLE_VIDEO_STREAMS.movie,
+          playbackUrl: getDirectPlaybackUrl(itemTitle),
         };
       }
     }

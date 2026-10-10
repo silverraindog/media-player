@@ -22,26 +22,53 @@ export const FfmpegHardwareDiagnosticsCard: React.FC = () => {
 
     if (isTauriEnvironment()) {
       try {
-        const { Command } = await import('@tauri-apps/api/shell');
-        // Execute ffmpeg -version via Tauri shell Command
-        const cmd = new Command('ffmpeg', ['-version']);
-        const output = await cmd.execute();
-        if (output.code === 0 || output.stdout) {
-          const firstLine = output.stdout.split('\n')[0] || 'FFmpeg system binary';
+        const { invoke } = await import('@tauri-apps/api/tauri');
+        const res = await invoke<any>('check_ffmpeg_codecs');
+        if (res && res.available) {
           resultData = {
             available: true,
-            version: firstLine,
-            path: 'System PATH (Tauri Shell)',
-            codecs: ['h264', 'hevc', 'aac', 'vp9', 'av1', 'mp3', 'flac'],
-            os: navigator.platform,
+            version: res.version || 'FFmpeg (Tauri Native)',
+            path: 'System Binary (Tauri Native IPC)',
+            codecs: Array.isArray(res.codecs) ? res.codecs : ['h264', 'hevc', 'aac', 'mp3'],
+            os: res.os || navigator.platform,
           };
-          setShellLogs(`[Tauri Shell Success]\n${output.stdout.slice(0, 1500)}`);
-        } else {
-          throw new Error(output.stderr || 'Command returned non-zero exit code.');
+          setShellLogs(`[Tauri Native IPC Success]\n${res.version}\nCodecs: ${(res.codecs || []).join(', ')}`);
         }
-      } catch (err: any) {
-        console.warn('[FfmpegHardwareDiagnosticsCard] Tauri shell check failed, falling back to server API:', err);
-        setShellLogs(`[Tauri Shell Fallback] ${err?.message || err}. Querying backend API...`);
+      } catch (ipcErr: any) {
+        console.warn('[FfmpegHardwareDiagnosticsCard] Tauri IPC check failed:', ipcErr);
+      }
+
+      if (!resultData.available) {
+        try {
+          const { Command } = await import('@tauri-apps/api/shell');
+          let output: any = null;
+          for (const cmdName of ['ffmpeg', 'homebrew-ffmpeg', 'usr-ffmpeg']) {
+            try {
+              const cmd = new Command(cmdName, ['-version']);
+              const res = await cmd.execute();
+              if (res.code === 0 || res.stdout) {
+                output = res;
+                break;
+              }
+            } catch {}
+          }
+          if (output && (output.code === 0 || output.stdout)) {
+            const firstLine = output.stdout.split('\n')[0] || 'FFmpeg system binary';
+            resultData = {
+              available: true,
+              version: firstLine,
+              path: 'System PATH (Tauri Shell)',
+              codecs: ['h264', 'hevc', 'aac', 'vp9', 'av1', 'mp3', 'flac'],
+              os: navigator.platform,
+            };
+            setShellLogs(`[Tauri Shell Success]\n${output.stdout.slice(0, 1500)}`);
+          } else {
+            throw new Error(output?.stderr || 'Command returned non-zero exit code.');
+          }
+        } catch (err: any) {
+          console.warn('[FfmpegHardwareDiagnosticsCard] Tauri shell check failed, falling back to server API:', err);
+          setShellLogs(`[Tauri Shell Fallback] ${err?.message || err}. Querying backend API...`);
+        }
       }
     }
 

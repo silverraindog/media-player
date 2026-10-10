@@ -1413,19 +1413,15 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(ffprobe_name);
-        if ffmpeg_path.is_file() && ffprobe_path.is_file() {
-            return FfmpegLocator::with_paths(ffmpeg_path, ffprobe_path)
-                .map_err(|error| error.to_string());
+        if ffmpeg_path.exists() {
+            let actual_probe = if ffprobe_path.exists() { ffprobe_path } else { ffmpeg_path.clone() };
+            if let Ok(loc) = FfmpegLocator::with_paths(ffmpeg_path, actual_probe) {
+                return Ok(loc);
+            }
         }
     }
 
-    if let Ok(locator) = FfmpegLocator::system() {
-        return Ok(locator);
-    }
-
-    let mut search_dirs = std::env::var_os("PATH")
-        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let mut search_dirs = Vec::new();
     #[cfg(target_os = "macos")]
     search_dirs.extend([
         PathBuf::from("/opt/homebrew/bin"),
@@ -1435,16 +1431,26 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
     #[cfg(target_os = "linux")]
     search_dirs.extend([PathBuf::from("/usr/bin"), PathBuf::from("/usr/local/bin")]);
 
-    for directory in search_dirs {
+    if let Some(path_var) = std::env::var_os("PATH") {
+        search_dirs.extend(std::env::split_paths(&path_var));
+    }
+
+    for directory in &search_dirs {
         let ffmpeg_path = directory.join(ffmpeg_name);
         let ffprobe_path = directory.join(ffprobe_name);
-        if ffmpeg_path.is_file() && ffprobe_path.is_file() {
-            return FfmpegLocator::with_paths(ffmpeg_path, ffprobe_path)
-                .map_err(|error| error.to_string());
+        if ffmpeg_path.exists() {
+            let actual_probe = if ffprobe_path.exists() { ffprobe_path } else { ffmpeg_path.clone() };
+            if let Ok(locator) = FfmpegLocator::with_paths(ffmpeg_path, actual_probe) {
+                return Ok(locator);
+            }
         }
     }
 
-    Err("FFmpeg and ffprobe were not found. Install FFmpeg or configure FFMPEG_PATH.".to_string())
+    if let Ok(locator) = FfmpegLocator::system() {
+        return Ok(locator);
+    }
+
+    Err("FFmpeg was not found. Install FFmpeg or configure FFMPEG_PATH.".to_string())
 }
 
 #[tauri::command]

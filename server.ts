@@ -55,6 +55,35 @@ import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 
 dotenv.config();
 
+// Ensure common binary search directories (such as Apple Silicon Homebrew /opt/homebrew/bin) are included in PATH
+const extraBinaryDirs = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/opt/local/bin', '/usr/bin'];
+const currentPath = process.env.PATH || '';
+const dirsToAdd = extraBinaryDirs.filter((d) => !currentPath.includes(d) && fs.existsSync(d));
+if (dirsToAdd.length > 0) {
+  process.env.PATH = `${dirsToAdd.join(':')}:${currentPath}`;
+}
+
+export function resolveFfmpegBinary(): string {
+  if (process.env.FFMPEG_PATH && fs.existsSync(process.env.FFMPEG_PATH)) {
+    return process.env.FFMPEG_PATH;
+  }
+  const candidates = [
+    '/opt/homebrew/bin/ffmpeg',
+    '/usr/local/bin/ffmpeg',
+    '/opt/local/bin/ffmpeg',
+    '/usr/bin/ffmpeg',
+    '/bin/ffmpeg',
+  ];
+  for (const cand of candidates) {
+    try {
+      if (fs.existsSync(cand)) {
+        return cand;
+      }
+    } catch {}
+  }
+  return process.env.FFMPEG_PATH || 'ffmpeg';
+}
+
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -4361,14 +4390,15 @@ app.delete('/api/db/reset', async (req: Request, res: Response) => {
 // FFmpeg and Codec Diagnostics Endpoint
 app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => {
   try {
-    const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+    const ffmpegPath = resolveFfmpegBinary();
     const { exec } = await import('child_process');
-    exec(`${ffmpegPath} -version`, (err, stdout, stderr) => {
+    exec(`"${ffmpegPath}" -version`, (err, stdout, stderr) => {
       if (err) {
         res.json({
           available: false,
           error: err.message,
           message: 'FFmpeg executable not found in system PATH. Transcoding requires FFmpeg installation.',
+          path: ffmpegPath,
           os: process.platform,
           hasH264: false,
           hasHevc: false,
@@ -4382,7 +4412,7 @@ app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => 
         });
       } else {
         const firstLine = stdout.split('\n')[0] || 'FFmpeg installed';
-        exec(`${ffmpegPath} -codecs`, (cErr, cStdout) => {
+        exec(`"${ffmpegPath}" -codecs`, (cErr, cStdout) => {
           const rawCodecs = (cStdout || '').toLowerCase();
           const hasH264 = rawCodecs.includes('h264') || rawCodecs.includes('264') || true;
           const hasHevc = rawCodecs.includes('hevc') || rawCodecs.includes('265') || true;
@@ -4393,6 +4423,7 @@ app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => 
           res.json({
             available: true,
             version: firstLine,
+            path: ffmpegPath,
             hasH264,
             hasHevc,
             codecs: detectedCodecs,
@@ -4893,7 +4924,7 @@ app.get('/api/thumbnails/stats', async (req: Request, res: Response) => {
   }
 });
 
-// Serve public static assets (including local sample videos)
+// Serve public static assets
 app.use(express.static(path.join(process.cwd(), 'public')));
 
 // Dedicated Samba Network Share video/audio streaming endpoint with full HTTP 206 Partial Content / Range support
@@ -5051,8 +5082,13 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
     }
 
     if (!fullPath || !fs.existsSync(fullPath)) {
-      console.warn(`[Samba Stream Proxy] File not found or mounted for: ${rawPath}. Gracefully falling back to local high-performance sample-video.mp4.`);
-      fullPath = path.join(process.cwd(), 'public', 'sample-video.mp4');
+      const searchedRoots = candidateRoots.slice(0, 4).map((p) => `"${p}"`).join(', ');
+      console.warn(`[Samba Stream Proxy] File not found or mounted for: "${rawPath}". Searched candidate roots: ${searchedRoots}`);
+      return res.status(404).json({
+        error: `Media file not found or storage volume is not mounted: "${rawPath}". Searched candidate paths: ${searchedRoots}. Ensure the Samba share is mounted or provide an accessible local path.`,
+        requestedPath: rawPath,
+        searchedLocations: candidateRoots.slice(0, 4),
+      });
     }
 
     const stat = fs.statSync(fullPath);
@@ -5136,8 +5172,6 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
   const sourceUrl = req.body?.sourceUrl;
   const sourcePath = req.body?.sourcePath;
 
-  const sampleVideoFallback = path.join(process.cwd(), 'public', 'sample-video.mp4');
-
   // Helper to check if a file path is a valid non-dummy file
   const isValidMediaFile = (filePath: string): boolean => {
     try {
@@ -5157,7 +5191,6 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
       path.resolve(clean),
       path.resolve(process.cwd(), clean.replace(/^[/\\]+/, '')),
       path.resolve(SAMBA_SHARE_ROOT, clean.replace(/^[/\\]+/, '')),
-      path.resolve(process.cwd(), 'public', clean.replace(/^[/\\]+/, '')),
       resolveSambaFullPath(clean),
     ];
 
@@ -5194,18 +5227,6 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
             }
           }
         }
-
-        // If file is not locally mounted for Samba stream, gracefully use local sample-video.mp4
-        if (fs.existsSync(sampleVideoFallback)) {
-          return res.json({ token: saveTranscodeJob({ inputPath: sampleVideoFallback }) });
-        }
-      }
-
-      // If pointing to sample video endpoint directly
-      if (parsedUrl.pathname === '/api/media/sample-video' || parsedUrl.pathname === '/sample-video.mp4') {
-        if (fs.existsSync(sampleVideoFallback)) {
-          return res.json({ token: saveTranscodeJob({ inputPath: sampleVideoFallback }) });
-        }
       }
 
       // If it's a remote HTTP/HTTPS stream, transcode URL directly
@@ -5217,12 +5238,9 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
     } catch {}
   }
 
-  // 3. Graceful fallback for demo/unmounted media
-  if (fs.existsSync(sampleVideoFallback)) {
-    return res.json({ token: saveTranscodeJob({ inputPath: sampleVideoFallback }) });
-  }
-
-  return res.status(400).json({ error: 'Transcoding source is unavailable.' });
+  return res.status(404).json({
+    error: `Cannot transcode media: File not found or storage volume is unmounted for source "${sourcePath || sourceUrl || 'unknown'}". Please ensure the file is present in the mounted Samba share.`,
+  });
 });
 
 app.post('/api/media/transcode/upload', (req: Request, res: Response) => {
@@ -5249,14 +5267,13 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   if (!job) return res.status(404).json({ error: 'Transcode session expired. Retry playback to create a new one.' });
 
   const mediaType = req.query.type === 'audio' ? 'audio' : 'video';
-  const sampleVideoFallback = path.join(process.cwd(), 'public', 'sample-video.mp4');
   let input = job.inputPath || job.inputUrl;
 
-  // Verify input file exists or fallback to sample
+  // Verify input file exists
   if (job.inputPath && (!fs.existsSync(job.inputPath) || fs.statSync(job.inputPath).size < 256)) {
-    if (fs.existsSync(sampleVideoFallback)) {
-      input = sampleVideoFallback;
-    }
+    return res.status(404).json({
+      error: `Transcoding source file does not exist or is unreadable: "${job.inputPath}".`,
+    });
   }
 
   if (!input) return res.status(400).json({ error: 'Transcode source is unavailable.' });
@@ -5274,7 +5291,8 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     '-f', 'mp4', 'pipe:1'
   );
 
-  const ffmpeg = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const ffmpegBin = resolveFfmpegBinary();
+  const ffmpeg = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '';
   ffmpeg.stderr.on('data', (chunk: Buffer) => {
     stderr = `${stderr}${chunk.toString()}`.slice(-4000);
@@ -5289,7 +5307,7 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   ffmpeg.on('error', (error) => {
     if (!res.headersSent) {
       const message = (error as any).code === 'ENOENT'
-        ? 'FFmpeg is not installed or FFMPEG_PATH is not configured.'
+        ? 'FFmpeg is not installed or FFMPEG_PATH is not configured in system PATH.'
         : `Could not start FFmpeg: ${error.message}`;
       res.status(503).json({ error: message });
     } else {
@@ -5298,14 +5316,9 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   });
   ffmpeg.on('close', (code) => {
     if (code && !res.headersSent) {
-      // If transcode failed before any bytes were sent, stream sample video directly
-      if (fs.existsSync(sampleVideoFallback)) {
-        res.status(200).setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Cache-Control', 'no-store');
-        fs.createReadStream(sampleVideoFallback).pipe(res);
-      } else {
-        res.status(422).json({ error: stderr.trim() || 'FFmpeg could not decode this media file.' });
-      }
+      res.status(422).json({
+        error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media.`,
+      });
     } else if (!res.writableEnded) {
       res.end();
     }
@@ -5313,28 +5326,6 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   res.on('close', () => {
     if (!res.writableEnded) ffmpeg.kill('SIGTERM');
   });
-});
-
-// Dedicated local sample video streaming endpoint with full HTTP 206 Partial Content / Range support
-app.get('/api/media/sample-video', (req: Request, res: Response) => {
-  const filePath = path.join(process.cwd(), 'public', 'sample-video.mp4');
-  if (fs.existsSync(filePath)) {
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-    return res.sendFile(filePath);
-  }
-  res.redirect('https://vjs.zencdn.net/v/oceans.mp4');
-});
-
-// High definition live cinematic stream endpoint
-app.get('/api/media/sintel-trailer', (req: Request, res: Response) => {
-  const filePath = path.join(process.cwd(), 'public', 'sample-video.mp4');
-  if (fs.existsSync(filePath)) {
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-    return res.sendFile(filePath);
-  }
-  res.redirect('https://vjs.zencdn.net/v/oceans.mp4');
 });
 
 // Batch processing endpoint to enrich multiple media items with missing metadata/artwork

@@ -16,6 +16,20 @@
       "fs": {
         "all": true,
         "scope": ["/Volumes/**", "$HOME/**", "$TEMP/**", "**"]
+      },
+      "shell": {
+        "all": false,
+        "execute": true,
+        "sidecar": false,
+        "open": true,
+        "scope": [
+          { "name": "ffmpeg", "cmd": "ffmpeg", "args": true },
+          { "name": "ffprobe", "cmd": "ffprobe", "args": true },
+          { "name": "homebrew-ffmpeg", "cmd": "/opt/homebrew/bin/ffmpeg", "args": true },
+          { "name": "homebrew-ffprobe", "cmd": "/opt/homebrew/bin/ffprobe", "args": true },
+          { "name": "usr-ffmpeg", "cmd": "/usr/local/bin/ffmpeg", "args": true },
+          { "name": "usr-ffprobe", "cmd": "/usr/local/bin/ffprobe", "args": true }
+        ]
       }
     },
     "bundle": {

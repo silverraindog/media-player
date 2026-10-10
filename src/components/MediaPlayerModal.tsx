@@ -61,40 +61,6 @@ interface StreamOption {
   type: 'video' | 'audio';
 }
 
-const SAMPLE_VIDEO_STREAMS: StreamOption[] = [
-  {
-    id: 'oceans-vjs',
-    name: 'Oceans High-Definition Cinema',
-    url: 'https://vjs.zencdn.net/v/oceans.mp4',
-    badge: '1080p Cinema',
-    type: 'video',
-  },
-  {
-    id: 'mdn-cc0',
-    name: 'Cinematic Showcase (HD CC0)',
-    url: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-    badge: 'Mozilla CDN',
-    type: 'video',
-  },
-];
-
-const SAMPLE_AUDIO_STREAMS: StreamOption[] = [
-  {
-    id: 'soundhelix-1',
-    name: 'SoundHelix Acoustic Master (Lossless)',
-    url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-    badge: '320kbps MP3',
-    type: 'audio',
-  },
-  {
-    id: 'soundhelix-2',
-    name: 'SoundHelix Electronic Ambient',
-    url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
-    badge: 'Lossless Audio',
-    type: 'audio',
-  },
-];
-
 // Helper to filter out deprecated external buckets that return 403 Forbidden
 function sanitizeStreamUrl(url?: string | null): string | null {
   if (!url) return null;
@@ -476,17 +442,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const nextEpInfo = media?.type === 'series' ? getNextEpisode() : null;
   const isNearEnd = duration > 0 && currentTime >= duration - 30;
 
-  // Selected stream source preset - default to clean 1080p stream
-  const [selectedStreamId, setSelectedStreamId] = useState<string>(() =>
-    isAudio ? SAMPLE_AUDIO_STREAMS[0]?.id || '' : SAMPLE_VIDEO_STREAMS[0]?.id || ''
-  );
-
-  // Calculate default fallback stream URL
-  const selectedStreamObj = isAudio
-    ? (SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId) || SAMPLE_AUDIO_STREAMS[0] || null)
-    : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId) || SAMPLE_VIDEO_STREAMS[0] || null);
-
-  const defaultStreamUrl = selectedStreamObj ? selectedStreamObj.url : '';
+  // Selected stream source preset - defaults to direct Samba network stream
+  const [selectedStreamId, setSelectedStreamId] = useState<string>('direct-stream');
 
   // Implement resolveStreamableUri using Tauri's convertFileSrc for local file protocol access
   const resolveStreamableUri = async (pathCandidate: string): Promise<string> => {
@@ -786,14 +743,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const currentStreamUrl =
     transcodedPlaybackUrl ||
     customLocalBlobUrl ||
-    (isManualStreamOverride
-      ? defaultStreamUrl
-      : sanitizeStreamUrl(media?.localBlobUrl) ||
-        sambaStreamUrl ||
-        sanitizeStreamUrl(selectedEpisode?.playbackUrl) ||
-        sanitizeStreamUrl(selectedTrack?.playbackUrl) ||
-        sanitizeStreamUrl(media?.playbackUrl) ||
-        defaultStreamUrl);
+    sanitizeStreamUrl(media?.localBlobUrl) ||
+    sambaStreamUrl ||
+    sanitizeStreamUrl(selectedEpisode?.playbackUrl) ||
+    sanitizeStreamUrl(selectedTrack?.playbackUrl) ||
+    sanitizeStreamUrl(media?.playbackUrl) ||
+    '';
 
   const validatedPlaybackPath = useMemo(() => {
     const res = validateSambaPlaybackPath(currentStreamUrl, sambaConfig);
@@ -1008,47 +963,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
   };
 
-  // Cycle to next available stream
-  const handleCycleNextStream = useCallback(() => {
-    const list = isAudio ? SAMPLE_AUDIO_STREAMS : SAMPLE_VIDEO_STREAMS;
-    const currentIndex = list.findIndex((s) => s.id === selectedStreamId);
-    const nextIndex = (currentIndex + 1) % list.length;
-    const nextStream = list[nextIndex];
-    resetTranscodedPlayback();
-    if (customLocalBlobUrl) {
-      URL.revokeObjectURL(customLocalBlobUrl);
-      setCustomLocalBlobUrl(null);
-      setLocalVideoFile(null);
-    }
-    setSelectedStreamId(nextStream.id);
-    setIsManualStreamOverride(true);
-    setPlaybackError(null);
-    setTimeout(() => {
-      startPlayback();
-    }, 120);
-  }, [isAudio, selectedStreamId, customLocalBlobUrl, startPlayback]);
-
-  const handleMediaDecodeError = useCallback(async () => {
-    // Attempt to automatically switch to the next available stream
-    const streams = isAudio ? SAMPLE_AUDIO_STREAMS : SAMPLE_VIDEO_STREAMS;
-    const currentIndex = streams.findIndex((s) => s.id === selectedStreamId);
-    
-    if (currentIndex !== -1 && currentIndex < streams.length - 1) {
-      console.warn(`[MediaPlayerModal] Stream failed: ${selectedStreamId}. Retrying with next stream: ${streams[currentIndex + 1].id}`);
-      setSelectedStreamId(streams[currentIndex + 1].id);
-      setIsManualStreamOverride(true);
-      setPlaybackError(null);
-      setTimeout(startPlayback, 150);
-      return;
-    }
-
-    // If all streams failed, fallback to transcoded (existing logic)
+  const handleMediaDecodeError = useCallback(async (initialReason?: string) => {
+    // If all transcode attempts failed, report the explicit error
     if (transcodeAttemptedRef.current || isTranscoding) {
-      console.warn('[MediaPlayerModal] All streams failed. Transcoding already attempted or failed.');
+      console.warn('[MediaPlayerModal] Transcoding already attempted or failed.');
       setIsTranscoding(false);
       setTranscodingProgress(0);
       setIsPlaying(false);
-      setPlaybackError('Playback failed after all attempts.');
+      const detail = initialReason || (
+        `Unable to play "${media?.title || 'media'}": The browser cannot decode this file format (such as MKV container, HEVC/H.265 video, or DTS/AC3 audio) and transcoding is not active. ` +
+        `Please open this file directly in VLC or IINA, or check system FFmpeg codecs in Diagnostics.`
+      );
+      setPlaybackError(detail);
       return;
     }
     
@@ -1071,11 +997,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           setTranscodedFilePath(outputPath);
           const { convertFileSrc } = await import('@tauri-apps/api/tauri');
           setTranscodedPlaybackUrl(convertFileSrc(outputPath));
-        } catch (tauriErr) {
-          console.warn('[MediaPlayerModal] Native desktop transcode failed, falling back to direct stream:', tauriErr);
-          setSelectedStreamId('local-vault-stream');
-          setIsManualStreamOverride(true);
-          setTimeout(startPlayback, 120);
+        } catch (tauriErr: any) {
+          console.warn('[MediaPlayerModal] Native desktop transcode failed:', tauriErr);
+          setPlaybackError(
+            `Desktop FFmpeg Transcoding Failed: ${tauriErr?.message || tauriErr}. ` +
+            `Ensure FFmpeg is installed in your system PATH or launch in VLC/IINA.`
+          );
+          setIsPlaying(false);
         }
       } else if (localVideoFile) {
         const response = await fetch('/api/media/transcode/upload', {
@@ -1107,23 +1035,86 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         setTranscodedPlaybackUrl(`/api/media/transcode/${result.token}?type=${isAudio ? 'audio' : 'video'}`);
       }
     } catch (error: any) {
-      console.warn('[MediaPlayerModal] Transcoding initialization error, switching to direct HD stream:', error);
-      // Seamlessly fallback to the HD Vault direct stream rather than blocking playback
-      setSelectedStreamId('local-vault-stream');
-      setIsManualStreamOverride(true);
-      setPlaybackError(null);
-      setTimeout(() => {
-        startPlayback();
-      }, 150);
+      console.warn('[MediaPlayerModal] Transcoding initialization error:', error);
+      setIsTranscoding(false);
+      setPlaybackError(
+        `Playback Error: ${error?.message || initialReason || 'Could not play or transcode this media file.'}`
+      );
+      setIsPlaying(false);
     } finally {
       setIsTranscoding(false);
     }
-  }, [currentStreamUrl, customLocalBlobUrl, isAudio, isManualStreamOverride, isTranscoding, localVideoFile, nativeTranscodeSourcePath, resolvedLocalFilePath, resolvedStreamUrl, startPlayback, validatedPlaybackPath.resolvedPath]);
+  }, [currentStreamUrl, customLocalBlobUrl, isAudio, isManualStreamOverride, isTranscoding, localVideoFile, media, nativeTranscodeSourcePath, resolvedLocalFilePath, resolvedStreamUrl, validatedPlaybackPath.resolvedPath]);
 
-  const handleMediaElementError = useCallback(() => {
-    console.warn('Media failed to load; attempting browser-compatible transcoding:', currentStreamUrl);
-    void handleMediaDecodeError();
-  }, [currentStreamUrl, handleMediaDecodeError]);
+  const handleMediaElementError = useCallback(async () => {
+    const el = isAudio ? audioRef.current : videoRef.current;
+    const mediaError = el?.error;
+    let detailMessage = 'HTML5 media element failed to load or decode the file.';
+
+    // Check if the server stream returned an explicit error response (e.g. 404 with JSON details)
+    let serverReportedError: string | null = null;
+    if (currentStreamUrl && !currentStreamUrl.startsWith('blob:') && !currentStreamUrl.startsWith('data:')) {
+      try {
+        const testRes = await fetch(currentStreamUrl, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-100' },
+        });
+        if (!testRes.ok) {
+          const contentType = testRes.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const errJson = await testRes.json();
+            if (errJson?.error) {
+              serverReportedError = errJson.error;
+            }
+          } else {
+            const text = await testRes.text();
+            if (text && text.length < 250 && !text.includes('<!DOCTYPE')) {
+              serverReportedError = text;
+            } else {
+              serverReportedError = `Stream endpoint returned HTTP ${testRes.status} (${testRes.statusText}).`;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('[MediaPlayerModal] Stream probe network error:', err);
+      }
+    }
+
+    if (serverReportedError) {
+      console.warn('[MediaPlayerModal] Server reported error:', serverReportedError);
+      setPlaybackError(serverReportedError);
+      setIsPlaying(false);
+      return;
+    }
+
+    if (mediaError) {
+      switch (mediaError.code) {
+        case 1:
+          detailMessage = 'Playback was aborted by user or browser.';
+          break;
+        case 2:
+          detailMessage = `Network error fetching stream from Samba server (${sambaConfig.server || 'host'}:${sambaConfig.port || 445}/${sambaConfig.share || 'share'}). Check network connection and server reachability.`;
+          break;
+        case 3:
+          detailMessage = `Browser decoding error: The container format or codec is not supported natively by your browser (common with MKV, HEVC/H.265, DTS, AC3 audio). Transcoding is required.`;
+          break;
+        case 4:
+          detailMessage = `Media source format not supported by browser HTML5 player (${currentStreamUrl ? currentStreamUrl.split('.').pop()?.toUpperCase() : 'Unknown format'}).`;
+          break;
+        default:
+          detailMessage = mediaError.message || `Media playback error (code ${mediaError.code}).`;
+      }
+    }
+
+    console.warn('[MediaPlayerModal] Playback error encountered:', detailMessage, currentStreamUrl);
+
+    if (!transcodeAttemptedRef.current && !isTranscoding && (resolvedLocalFilePath || localVideoFile || currentStreamUrl)) {
+      void handleMediaDecodeError(detailMessage);
+    } else {
+      setPlaybackError(detailMessage);
+      setIsPlaying(false);
+    }
+  }, [currentStreamUrl, handleMediaDecodeError, isAudio, isTranscoding, localVideoFile, resolvedLocalFilePath, sambaConfig]);
 
   // Skip seconds
   const handleSkip = (seconds: number) => {
@@ -1895,7 +1886,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       </span>
                     ) : (
                       <span className="hidden sm:inline-flex items-center gap-1 text-indigo-300 text-[10px] font-mono bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-800/40">
-                        🎬 {selectedStreamObj?.name || 'HD Vault Stream'}
+                        🎬 Direct Stream
                       </span>
                     )}
                   </div>
@@ -2078,39 +2069,32 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 </div>
               )}
 
-              {/* Error banner with fallback options */}
+              {/* Error banner with detailed diagnostics & recovery actions */}
               {playbackError && (
-                <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-6 text-center space-y-3.5 z-20 animate-in fade-in duration-200">
-                  <AlertCircle className="w-10 h-10 text-amber-400 animate-pulse" />
-                  <div className="space-y-1">
-                    <h4 className="text-base font-bold text-white">Stream Source Notice</h4>
-                    <p className="text-xs text-slate-300 max-w-md mx-auto">{playbackError}</p>
-                    <p className="text-[11px] text-slate-400 max-w-md mx-auto">
-                      Network share media might be unmounted on this machine, or requires browser-compatible transcoding. You can start the direct HD Vault sample stream below, select a local media file, or open via VLC / IINA.
+                <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-6 text-center space-y-4 z-20 animate-in fade-in duration-200">
+                  <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/30">
+                    <AlertCircle className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div className="space-y-2 max-w-lg mx-auto">
+                    <h4 className="text-base font-bold text-white">Playback Error</h4>
+                    <p className="text-xs text-rose-300 font-medium bg-rose-950/50 p-3 rounded-xl border border-rose-900/60 text-left font-mono break-words">
+                      {playbackError}
                     </p>
+                    <div className="text-[11px] text-slate-400 space-y-1 pt-1 text-left bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                      <div><strong className="text-slate-300">Target File:</strong> <span className="font-mono text-cyan-300">{media?.title}</span></div>
+                      <div><strong className="text-slate-300">Resolved Path:</strong> <span className="font-mono text-emerald-300">{validatedPlaybackPath.resolvedPath || 'Unresolved'}</span></div>
+                      <div><strong className="text-slate-300">Network Share:</strong> <span className="font-mono text-indigo-300">//{sambaConfig.server || 'nas.local'}/{sambaConfig.share || 'media'}</span></div>
+                      <div><strong className="text-slate-300">Codecs Status:</strong> <span className="font-mono text-amber-300">{transcodeReadinessStatus.message}</span></div>
+                    </div>
                   </div>
                   <div className="flex flex-wrap items-center justify-center gap-2 pt-1 max-w-xl">
-                    <button
-                      onClick={() => {
-                        resetTranscodedPlayback();
-                        setSelectedStreamId('local-vault-stream');
-                        setIsManualStreamOverride(true);
-                        setPlaybackError(null);
-                        setTimeout(startPlayback, 120);
-                      }}
-                      className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-600/25 transition"
-                      title="Play built-in high-definition direct sample feed"
-                    >
-                      <Play className="w-4 h-4 fill-white" />
-                      <span>Play HD Vault Feed</span>
-                    </button>
                     <button
                       onClick={handleLaunchExternalVlc}
                       className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-amber-500/20 transition"
                       title="Launch VLC media player with this stream or file"
                     >
                       <ExternalLink className="w-4 h-4" />
-                      <span>Launch in VLC</span>
+                      <span>Play in VLC</span>
                     </button>
                     <button
                       onClick={handleLaunchExternalIina}
@@ -2118,58 +2102,51 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       title="Launch IINA player on macOS"
                     >
                       <ExternalLink className="w-4 h-4" />
-                      <span>Launch in IINA</span>
+                      <span>Play in IINA</span>
                     </button>
                     {sambaStreamUrl && (
                       <button
                         onClick={() => {
                           setCustomLocalBlobUrl(null);
                           resetTranscodedPlayback();
-                          setIsManualStreamOverride(false);
                           setPlaybackError(null);
                           setTimeout(startPlayback, 100);
                         }}
-                        className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition border border-slate-700"
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition border border-slate-700"
                         title="Retry direct Samba stream from server"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Retry Samba Stream</span>
+                        <span>Retry Stream</span>
                       </button>
                     )}
                     <button
                       onClick={() => void handleOpenLocalFile()}
-                      className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition"
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition"
                       title="Select and play video file directly from your disk"
                     >
                       <FolderOpen className="w-3.5 h-3.5" />
-                      <span>Select File from Disk</span>
+                      <span>Select Local File</span>
                     </button>
                     <button
-                      onClick={handleCycleNextStream}
-                      className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition border border-slate-700"
-                      title="Switch to backup CDN sample stream"
+                      onClick={() => {
+                        setIsDiagnosticsModalOpen(true);
+                        runFfmpegDiagnostics();
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition border border-slate-700"
+                      title="View FFmpeg diagnostics and codec readiness"
                     >
-                      <Layers className="w-3.5 h-3.5" />
-                      <span>Switch to Backup Stream</span>
+                      <Activity className="w-3.5 h-3.5" />
+                      <span>FFmpeg Diagnostics</span>
                     </button>
                     <button
                       onClick={handleProbeSambaStream}
                       disabled={isProbeRunning}
-                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition shadow-md shadow-indigo-600/20 border border-indigo-400/40"
+                      className="px-3.5 py-2 rounded-xl bg-indigo-950/80 hover:bg-indigo-900/80 disabled:opacity-50 text-indigo-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition border border-indigo-700/60"
                       title="Probe Samba Stream: read first 1MB chunk to verify read access"
                     >
                       <Sparkles className={`w-3.5 h-3.5 ${isProbeRunning ? 'animate-spin' : ''}`} />
-                      <span>{isProbeRunning ? 'Probing (1MB)...' : 'Probe Samba Stream'}</span>
+                      <span>{isProbeRunning ? 'Probing...' : 'Probe Share (1MB)'}</span>
                     </button>
-                    {probeResult && (
-                      <div className={`w-full text-xs px-3 py-2 rounded-lg border flex items-center justify-between gap-3 my-1 ${probeResult.success ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300' : 'bg-red-950/60 border-red-500/40 text-red-300'}`}>
-                        <div className="flex items-center gap-2 truncate">
-                          <AlertCircle className="w-4 h-4 shrink-0" />
-                          <span className="font-mono truncate">{probeResult.message}</span>
-                        </div>
-                        <button onClick={() => setProbeResult(null)} className="text-[10px] uppercase font-bold underline cursor-pointer shrink-0">Dismiss</button>
-                      </div>
-                    )}
                     {suggestTestConnection && (
                       <button
                         onClick={() => {
@@ -2188,22 +2165,28 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                               .catch(err => alert(`Test connection error: ${err.message}`));
                           }
                         }}
-                        className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-600/30 transition border border-cyan-400 animate-bounce"
+                        className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-600/30 transition border border-cyan-400"
                         title="Run Test Connection utility to diagnose network mount issues"
                       >
                         <HardDrive className="w-4 h-4" />
-                        <span>Run Test Connection Utility</span>
+                        <span>Run Connection Test</span>
                       </button>
                     )}
                   </div>
+                  {probeResult && (
+                    <div className={`w-full max-w-lg text-xs px-3 py-2 rounded-lg border flex items-center justify-between gap-3 my-1 ${probeResult.success ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300' : 'bg-red-950/60 border-red-500/40 text-red-300'}`}>
+                      <div className="flex items-center gap-2 truncate">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span className="font-mono truncate">{probeResult.message}</span>
+                      </div>
+                      <button onClick={() => setProbeResult(null)} className="text-[10px] uppercase font-bold underline cursor-pointer shrink-0">Dismiss</button>
+                    </div>
+                  )}
                   {externalPlayerStatus && (
                     <div className="text-xs font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-3 py-1 rounded-lg">
                       {externalPlayerStatus}
                     </div>
                   )}
-                  <p className="text-[11px] text-slate-400 max-w-lg pt-1">
-                    Note: High-bitrate MKV video or DTS/AC3 audio files can be played smoothly by clicking <strong className="text-amber-300">Launch in VLC</strong> or <strong className="text-indigo-300">Launch in IINA</strong>, or by choosing the file directly.
-                  </p>
                 </div>
               )}
 
@@ -2396,9 +2379,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <span className="font-semibold truncate max-w-[100px]">
                     {customLocalBlobUrl
                       ? 'Local File'
-                      : isAudio
-                      ? SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId)?.name || 'Audio'
-                      : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId)?.name || 'CDN Stream').split(' ')[0]}
+                      : transcodedPlaybackUrl
+                      ? 'Transcoded'
+                      : 'Samba Stream'}
                   </span>
                 </button>
 
@@ -2465,47 +2448,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       </span>
                       <span className="text-[10px] px-1 bg-indigo-900/60 rounded font-mono">Custom</span>
                     </button>
-
-                    <div className="px-2 pt-1 pb-0.5 text-[9px] font-bold text-slate-500 uppercase tracking-wider border-t border-slate-800">
-                      Standard Quality Presets
-                    </div>
-
-                    {(isAudio ? SAMPLE_AUDIO_STREAMS : SAMPLE_VIDEO_STREAMS).map((stream) => (
-                        <button
-                        key={stream.id}
-                        onClick={() => {
-                          resetTranscodedPlayback();
-                          if (customLocalBlobUrl) {
-                            URL.revokeObjectURL(customLocalBlobUrl);
-                            setCustomLocalBlobUrl(null);
-                            setLocalVideoFile(null);
-                          }
-                          setSelectedStreamId(stream.id);
-                          setIsManualStreamOverride(true);
-                          setActiveSourceMenu(false);
-                          setCurrentTime(0);
-                          setPlaybackError(null);
-                          setTimeout(startPlayback, 100);
-                        }}
-                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition cursor-pointer ${
-                          selectedStreamId === stream.id && !customLocalBlobUrl
-                            ? 'bg-indigo-600 text-white font-bold'
-                            : 'text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <div className="flex flex-col">
-                          <span className="truncate font-semibold">{stream.name}</span>
-                          <span className="text-[9px] opacity-60 font-mono">{stream.type === 'video' ? 'Video Stream' : 'Audio Stream'}</span>
-                        </div>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                          selectedStreamId === stream.id && !customLocalBlobUrl
-                            ? 'bg-white/20 text-white'
-                            : 'bg-slate-800 text-indigo-300'
-                        }`}>
-                          {stream.badge}
-                        </span>
-                      </button>
-                    ))}
                   </div>
                 )}
               </div>

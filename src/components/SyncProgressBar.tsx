@@ -25,6 +25,8 @@ import {
   Wifi,
 } from 'lucide-react';
 
+export type { SyncProgressState } from '../types';
+
 export interface RecursiveAuditProgress {
   isAuditing: boolean;
   currentDepth: number;

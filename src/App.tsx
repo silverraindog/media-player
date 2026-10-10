@@ -2840,6 +2840,14 @@ function App() {
           slowestStepName: 'Metadata Resolution',
           slowestStepMs: p3TimeMs,
           bottlenecks: uniqueBottlenecks,
+          mediaDiscovered: discoveredMedia.length,
+          newMediaDiscovered: discoveredMedia.length,
+          depthLimit: effectiveDepthLimit,
+          maxDepthReached: Math.max(...Object.keys(depthHistogram).map(Number), 1),
+          classifierRuleHits: classifications.length,
+          discoveryRatio: discoveredRelativePaths.length > 0
+            ? Number(((discoveredMedia.length / discoveredRelativePaths.length) * 100).toFixed(1))
+            : 0,
           steps: [
             {
               stepName: 'Directory Traversal',

@@ -774,6 +774,9 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   onDismissLastScanSummary,
 }) => {
   const [currentDepthLimit, setCurrentDepthLimit] = useState<number>(depthLimit || sambaConfig.depthLimit || 30);
+  const [isPathInspectorOpen, setIsPathInspectorOpen] = useState(false);
+  const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
+  const [isSanitizationHistoryOpen, setIsSanitizationHistoryOpen] = useState(false);
   // --- New Scan Errors Panel Logic ---
   const [scanErrors, setScanErrors] = useState<string[]>([]);
   useEffect(() => {

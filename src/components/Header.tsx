@@ -22,7 +22,7 @@ import {
   Bug,
   Settings,
 } from 'lucide-react';
-import { SambaConfig, AppTab } from '../types';
+import { SambaConfig, AppTab, SyncProgressState } from '../types';
 import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag } from '../version';
 
 interface HeaderProps {

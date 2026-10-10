@@ -77,8 +77,8 @@ export const EpisodeInspector: React.FC<EpisodeInspectorProps> = ({
       {/* Seasons and Extras Selector Tabs */}
       <div className="flex flex-wrap items-center gap-1.5 pb-2 border-b border-slate-800">
         {media.seasons?.map((season) => {
-          const isExtras = season.seasonNumber === 0 || /extras?|specials?|bonus/i.test(season.name);
-          const isSelected = activeSeasonTab === season.seasonNumber;
+          const isExtras = season?.seasonNumber === 0 || /extras?|specials?|bonus/i.test(season?.name || '');
+          const isSelected = activeSeasonTab === season?.seasonNumber;
           return (
             <button
               key={season.seasonNumber}

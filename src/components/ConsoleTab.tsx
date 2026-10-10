@@ -8,7 +8,20 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  ComposedChart,
+  BarChart,
+  Bar,
+  Area,
+  AreaChart,
+  ReferenceLine,
 } from 'recharts';
+import {
+  FullScanPerformanceRun,
+  getScanPerformanceHistory,
+  subscribeScanPerformance,
+  recordScanPerformanceRun,
+  clearScanPerformanceHistory,
+} from '../utils/scanPerformanceCollector';
 import {
   Terminal,
   Search,
@@ -47,6 +60,12 @@ import {
   Activity,
   FileText,
   Folder,
+  TrendingUp,
+  Gauge,
+  BarChart3,
+  Sliders,
+  Target,
+  Clock,
 } from 'lucide-react';
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident, SambaConfig } from '../types';
 import * as d3 from 'd3';
@@ -270,6 +289,659 @@ const ScanErrorsChart: React.FC<{ scannerLogs: ScannerProgressLogItem[] }> = ({ 
   );
 };
 
+// Scan & Discovery Ratio Chart (Files Scanned vs New Media Discovered)
+interface ScanDiscoveryRatioChartProps {
+  onTriggerSync?: () => Promise<void>;
+  sambaConfig?: SambaConfig;
+}
+
+const ScanDiscoveryRatioChart: React.FC<ScanDiscoveryRatioChartProps> = ({
+  onTriggerSync,
+  sambaConfig,
+}) => {
+  const [runsHistory, setRunsHistory] = useState<FullScanPerformanceRun[]>(() =>
+    getScanPerformanceHistory()
+  );
+  const [chartMode, setChartMode] = useState<'composed' | 'trend' | 'depth'>('composed');
+  const [filterMode, setFilterMode] = useState<'all' | 'Full Deep Sync' | 'Safe Scan'>('all');
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulatedDepth, setSimulatedDepth] = useState<number>(8);
+
+  useEffect(() => {
+    const unsub = subscribeScanPerformance((runs) => {
+      setRunsHistory(runs);
+    });
+    const handleUpdate = () => {
+      setRunsHistory(getScanPerformanceHistory());
+    };
+    window.addEventListener('samba-performance-metrics-updated', handleUpdate);
+    return () => {
+      unsub();
+      window.removeEventListener('samba-performance-metrics-updated', handleUpdate);
+    };
+  }, []);
+
+  const chartData = useMemo(() => {
+    const filtered = runsHistory.filter((r) => filterMode === 'all' || r.scanMode === filterMode);
+    // Sort oldest first for natural time-series left-to-right progression
+    const reversed = [...filtered].reverse();
+
+    return reversed.map((run, idx) => {
+      const indexingStep = run.steps?.find(
+        (s) => s.phaseKey === 'indexing' || s.stepName.toLowerCase().includes('indexing')
+      );
+      const classificationStep = run.steps?.find(
+        (s) => s.phaseKey === 'classification' || s.stepName.toLowerCase().includes('classification')
+      );
+
+      const filesScanned = run.totalFiles || 100;
+      const mediaDiscovered =
+        run.mediaDiscovered ??
+        run.newMediaDiscovered ??
+        indexingStep?.itemsProcessed ??
+        Math.round(filesScanned * 0.45);
+
+      const ratio = filesScanned > 0 ? Number(((mediaDiscovered / filesScanned) * 100).toFixed(1)) : 0;
+      const depth = run.depthLimit || run.maxDepthReached || (run.scanMode === 'Safe Scan' ? 12 : 24);
+      const ruleHits =
+        run.classifierRuleHits ??
+        classificationStep?.itemsProcessed ??
+        Math.max(1, Math.round(mediaDiscovered * 0.3));
+
+      let rating = 'Standard';
+      if (ratio >= 65) rating = 'Optimal';
+      else if (ratio >= 35) rating = 'Good';
+      else rating = 'Low Yield';
+
+      return {
+        id: run.id,
+        rawTimestamp: run.timestamp,
+        time: run.timestamp,
+        label: `Scan #${idx + 1} (${run.timestamp})`,
+        filesScanned,
+        mediaDiscovered,
+        ratioPercent: ratio,
+        depth,
+        ruleHits,
+        scanMode: run.scanMode,
+        rootPath: run.rootPath,
+        rating,
+        durationSec: (run.totalDurationMs / 1000).toFixed(1),
+      };
+    });
+  }, [runsHistory, filterMode]);
+
+  const stats = useMemo(() => {
+    if (chartData.length === 0) {
+      return {
+        totalScanned: 0,
+        totalDiscovered: 0,
+        avgRatio: 0,
+        bestRatio: 0,
+        bestDepth: 8,
+        avgDepth: 0,
+        efficiencyGrade: 'No Data',
+      };
+    }
+    const totalScanned = chartData.reduce((acc, c) => acc + c.filesScanned, 0);
+    const totalDiscovered = chartData.reduce((acc, c) => acc + c.mediaDiscovered, 0);
+    const avgRatio = Number(((totalDiscovered / Math.max(1, totalScanned)) * 100).toFixed(1));
+    const bestRun = [...chartData].sort((a, b) => b.ratioPercent - a.ratioPercent)[0];
+    const avgDepth = Number(
+      (chartData.reduce((acc, c) => acc + c.depth, 0) / chartData.length).toFixed(1)
+    );
+
+    let efficiencyGrade = 'Balanced';
+    if (avgRatio >= 60) efficiencyGrade = 'Optimal Specificity';
+    else if (avgRatio >= 35) efficiencyGrade = 'Standard Yield';
+    else efficiencyGrade = 'High Noise / Deep Overhead';
+
+    return {
+      totalScanned,
+      totalDiscovered,
+      avgRatio,
+      bestRatio: bestRun ? bestRun.ratioPercent : 0,
+      bestDepth: bestRun ? bestRun.depth : 8,
+      avgDepth,
+      efficiencyGrade,
+    };
+  }, [chartData]);
+
+  const handleSimulateBenchmark = (depth: number) => {
+    setIsSimulating(true);
+    const baseFiles = Math.round(90 + depth * 18 + Math.floor(Math.random() * 25));
+    // Yield decreases gracefully as depth enters deep ancillary trees
+    const yieldMultiplier = Math.max(
+      0.12,
+      Math.min(0.92, 1 - (depth - 4) * 0.03 + (Math.random() * 0.08 - 0.04))
+    );
+    const discoveredMedia = Math.round(baseFiles * yieldMultiplier);
+    const ratio = Number(((discoveredMedia / baseFiles) * 100).toFixed(1));
+
+    const simulatedRun: FullScanPerformanceRun = {
+      id: `run-sim-${Date.now()}`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      rootPath: sambaConfig?.share ? `//${sambaConfig.server || 'nas'}/${sambaConfig.share}` : '/Volumes/media',
+      totalDurationMs: Math.round(800 + depth * 110),
+      totalFiles: baseFiles,
+      totalFolders: Math.round(depth * 2.2),
+      scanMode: depth <= 12 ? 'Safe Scan' : 'Full Deep Sync',
+      slowestStepName: depth > 15 ? 'Directory Traversal' : 'Metadata Resolution',
+      slowestStepMs: Math.round(300 + depth * 60),
+      bottlenecks: depth > 16 ? [`Simulated deep walk (depth ${depth}) entered nested directories`] : [],
+      mediaDiscovered: discoveredMedia,
+      newMediaDiscovered: discoveredMedia,
+      depthLimit: depth,
+      maxDepthReached: depth,
+      classifierRuleHits: Math.round(discoveredMedia * 0.35),
+      discoveryRatio: ratio,
+      steps: [
+        {
+          stepName: 'Directory Traversal',
+          phaseKey: 'traversal',
+          timeTakenMs: Math.round(200 + depth * 50),
+          percentageOfTotal: 25,
+          itemsProcessed: baseFiles,
+          status: depth > 16 ? 'warning' : 'optimal',
+          details: `Simulated traversal depth ${depth}`,
+        },
+        {
+          stepName: 'Regex Classification',
+          phaseKey: 'classification',
+          timeTakenMs: 60,
+          percentageOfTotal: 5,
+          itemsProcessed: Math.round(depth * 2),
+          status: 'optimal',
+          details: `Classified folder structures`,
+        },
+        {
+          stepName: 'Metadata Resolution',
+          phaseKey: 'metadata',
+          timeTakenMs: 400,
+          percentageOfTotal: 40,
+          itemsProcessed: discoveredMedia,
+          status: 'optimal',
+          details: `Metadata enriched for ${discoveredMedia} media items`,
+        },
+        {
+          stepName: 'Tree Indexing',
+          phaseKey: 'indexing',
+          timeTakenMs: 250,
+          percentageOfTotal: 20,
+          itemsProcessed: discoveredMedia,
+          status: 'optimal',
+          details: `Tree mapped`,
+        },
+        {
+          stepName: 'Artwork Verification',
+          phaseKey: 'artwork',
+          timeTakenMs: 150,
+          percentageOfTotal: 10,
+          itemsProcessed: Math.round(depth * 2),
+          status: 'optimal',
+          details: `Artwork verified`,
+        },
+      ],
+    };
+
+    recordScanPerformanceRun(simulatedRun);
+    setTimeout(() => setIsSimulating(false), 300);
+  };
+
+  const CustomTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      return (
+        <div className="bg-slate-900 border border-slate-700 p-3.5 rounded-xl shadow-2xl font-sans text-xs space-y-2.5 z-50 min-w-[240px]">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-2">
+            <span className="font-bold text-white flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-indigo-400" />
+              {data.time}
+            </span>
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-indigo-950 text-indigo-300 border border-indigo-800/60">
+              {data.scanMode}
+            </span>
+          </div>
+
+          <div className="space-y-1.5 font-mono text-[11px]">
+            <div className="flex items-center justify-between text-slate-300">
+              <span className="flex items-center gap-1.5 text-indigo-300">
+                <span className="w-2 h-2 rounded-full bg-indigo-500"></span> Files Scanned:
+              </span>
+              <strong className="text-white">{data.filesScanned}</strong>
+            </div>
+
+            <div className="flex items-center justify-between text-slate-300">
+              <span className="flex items-center gap-1.5 text-emerald-300">
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span> Media Discovered:
+              </span>
+              <strong className="text-emerald-400 font-bold">{data.mediaDiscovered}</strong>
+            </div>
+
+            <div className="flex items-center justify-between text-slate-300">
+              <span className="flex items-center gap-1.5 text-amber-300">
+                <span className="w-2 h-2 rounded-full bg-amber-400"></span> Discovery Yield:
+              </span>
+              <strong className="text-amber-300 font-bold">{data.ratioPercent}%</strong>
+            </div>
+
+            <div className="flex items-center justify-between text-slate-400 pt-1.5 border-t border-slate-800">
+              <span>Scan Depth Limit:</span>
+              <span className="text-slate-200">Depth {data.depth}</span>
+            </div>
+
+            <div className="flex items-center justify-between text-slate-400">
+              <span>Classifier Rules Hit:</span>
+              <span className="text-slate-200">{data.ruleHits} folders</span>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-slate-800 text-[10px] flex items-center justify-between">
+            <span className="text-slate-400">Rule Specificity:</span>
+            <span
+              className={`font-bold px-1.5 py-0.5 rounded ${
+                data.ratioPercent >= 60
+                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/60'
+                  : data.ratioPercent >= 35
+                  ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
+                  : 'bg-rose-950 text-rose-300 border border-rose-800/60'
+              }`}
+            >
+              {data.rating}
+            </span>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-6">
+      {/* Header & Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+            <h4 className="text-sm font-bold text-white">Files Scanned vs New Media Discovered</h4>
+            <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800/50 text-[10px] font-mono font-bold">
+              Efficiency Analysis
+            </span>
+          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            Tracks scan depth yield and directory classifier rule precision over time to optimize crawl speed and eliminate non-media traversal
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Chart View Toggle */}
+          <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center gap-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setChartMode('composed')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer ${
+                chartMode === 'composed'
+                  ? 'bg-indigo-600 text-white font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Dual-Axis Ratio
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartMode('trend')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer ${
+                chartMode === 'trend'
+                  ? 'bg-indigo-600 text-white font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Yield % Trend
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartMode('depth')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer ${
+                chartMode === 'depth'
+                  ? 'bg-indigo-600 text-white font-bold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Depth vs Yield
+            </button>
+          </div>
+
+          {/* Mode Filter */}
+          <select
+            value={filterMode}
+            onChange={(e) => setFilterMode(e.target.value as any)}
+            className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none"
+          >
+            <option value="all">All Scan Types</option>
+            <option value="Full Deep Sync">Full Deep Sync</option>
+            <option value="Safe Scan">Safe Scan</option>
+          </select>
+
+          {onTriggerSync && (
+            <button
+              type="button"
+              onClick={onTriggerSync}
+              className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md cursor-pointer"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-300" />
+              <span>Run Sync</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* KPI Stats Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+            Total Files Scanned
+          </span>
+          <div className="text-lg font-bold text-white font-mono">{stats.totalScanned}</div>
+          <p className="text-[10px] text-slate-500">Traversed across history</p>
+        </div>
+
+        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+            New Media Discovered
+          </span>
+          <div className="text-lg font-bold text-emerald-400 font-mono">{stats.totalDiscovered}</div>
+          <p className="text-[10px] text-slate-500">Canonical media matches</p>
+        </div>
+
+        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+            Average Discovery Yield
+          </span>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-lg font-bold text-amber-300 font-mono">{stats.avgRatio}%</span>
+            <span className="text-[10px] text-slate-400 font-mono">
+              (1 in {(100 / Math.max(1, stats.avgRatio)).toFixed(1)})
+            </span>
+          </div>
+          <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+            <div
+              className={`h-full ${
+                stats.avgRatio >= 60 ? 'bg-emerald-500' : stats.avgRatio >= 35 ? 'bg-amber-500' : 'bg-rose-500'
+              }`}
+              style={{ width: `${Math.min(100, stats.avgRatio)}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+            Peak Yield Run
+          </span>
+          <div className="text-lg font-bold text-cyan-300 font-mono">{stats.bestRatio}%</div>
+          <p className="text-[10px] text-slate-500">Optimal at Depth {stats.bestDepth}</p>
+        </div>
+
+        <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+          <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+            Classifier Rule Precision
+          </span>
+          <div
+            className={`text-xs font-bold font-mono mt-1 ${
+              stats.avgRatio >= 60
+                ? 'text-emerald-400'
+                : stats.avgRatio >= 35
+                ? 'text-amber-400'
+                : 'text-rose-400'
+            }`}
+          >
+            {stats.efficiencyGrade}
+          </div>
+          <p className="text-[10px] text-slate-500">Avg depth: {stats.avgDepth}</p>
+        </div>
+      </div>
+
+      {/* Main Chart Canvas */}
+      <div className="bg-slate-950 rounded-xl border border-slate-800 p-4">
+        {chartData.length === 0 ? (
+          <div className="h-[320px] flex flex-col items-center justify-center text-slate-500 space-y-2">
+            <BarChart3 className="w-8 h-8 opacity-30" />
+            <p className="text-xs">No scan history recorded yet.</p>
+            <p className="text-[11px] text-slate-600">Run a scan or click "Simulate Benchmark" below.</p>
+          </div>
+        ) : chartMode === 'composed' ? (
+          <ResponsiveContainer width="100%" height={320}>
+            <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+              <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} tickLine={false} />
+              <YAxis
+                yAxisId="left"
+                stroke="#64748b"
+                tick={{ fontSize: 11 }}
+                tickLine={false}
+                label={{
+                  value: 'File & Media Count',
+                  angle: -90,
+                  position: 'insideLeft',
+                  fill: '#64748b',
+                  fontSize: 10,
+                }}
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                domain={[0, 100]}
+                stroke="#f59e0b"
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v) => `${v}%`}
+                tickLine={false}
+                label={{
+                  value: 'Discovery Yield (%)',
+                  angle: 90,
+                  position: 'insideRight',
+                  fill: '#f59e0b',
+                  fontSize: 10,
+                }}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+              <Bar
+                yAxisId="left"
+                dataKey="filesScanned"
+                name="Files Scanned"
+                fill="#6366f1"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={36}
+              />
+              <Bar
+                yAxisId="left"
+                dataKey="mediaDiscovered"
+                name="New Media Discovered"
+                fill="#10b981"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={36}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="ratioPercent"
+                name="Discovery Ratio % (Media / Scanned)"
+                stroke="#f59e0b"
+                strokeWidth={3}
+                dot={{ fill: '#f59e0b', r: 4, strokeWidth: 2, stroke: '#0f172a' }}
+                activeDot={{ r: 6, fill: '#f59e0b' }}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        ) : chartMode === 'trend' ? (
+          <ResponsiveContainer width="100%" height={320}>
+            <AreaChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+              <defs>
+                <linearGradient id="ratioGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+              <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} />
+              <YAxis
+                domain={[0, 100]}
+                stroke="#64748b"
+                tickFormatter={(v) => `${v}%`}
+                tick={{ fontSize: 11 }}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <ReferenceLine
+                y={60}
+                stroke="#10b981"
+                strokeDasharray="4 4"
+                label={{ value: 'Target: >60% Optimal Specificity', fill: '#10b981', fontSize: 10 }}
+              />
+              <ReferenceLine
+                y={30}
+                stroke="#f59e0b"
+                strokeDasharray="4 4"
+                label={{ value: 'Threshold: 30% Standard Library', fill: '#f59e0b', fontSize: 10 }}
+              />
+              <Area
+                type="monotone"
+                dataKey="ratioPercent"
+                name="Discovery Yield (%)"
+                stroke="#10b981"
+                strokeWidth={3}
+                fillOpacity={1}
+                fill="url(#ratioGrad)"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        ) : (
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+              <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} />
+              <YAxis stroke="#64748b" tick={{ fontSize: 11 }} />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+              <Bar
+                dataKey="depth"
+                name="Scan Depth Limit"
+                fill="#8b5cf6"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={32}
+              />
+              <Bar
+                dataKey="ratioPercent"
+                name="Discovery Yield (%)"
+                fill="#06b6d4"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={32}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* Depth & Classifier Rule Insights Section */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Classifier Rule Effectiveness */}
+        <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
+          <div className="flex items-center gap-2">
+            <Target className="w-4 h-4 text-emerald-400" />
+            <h5 className="text-xs font-bold text-white uppercase tracking-wider">
+              Classifier Rule Precision Assessment
+            </h5>
+          </div>
+
+          <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
+            <p>
+              The ratio measures how many files walked by the scanner match canonical media entries versus non-media overhead (e.g.{' '}
+              <code className="text-indigo-300 font-mono">.nfo</code>, subtitles, folder art, or hidden OS caches).
+            </p>
+
+            <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1 font-mono text-[11px]">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Yield ≥ 60%:</span>
+                <span className="text-emerald-400 font-bold">Optimal Regex Rules</span>
+              </div>
+              <p className="text-slate-500 text-[10px] font-sans">
+                Scanner targets designated Movies &amp; TV directories without recursing into build trees or documents.
+              </p>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1 font-mono text-[11px]">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Yield &lt; 25%:</span>
+                <span className="text-rose-400 font-bold">Overhead / Rule Drift</span>
+              </div>
+              <p className="text-slate-500 text-[10px] font-sans">
+                Traversal is wasting I/O on deep directory branches. Suggestion: configure folder classifier ignore patterns or lower depth limit.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Scan Depth Tuning Matrix & Interactive Simulator */}
+        <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-cyan-400" />
+              <h5 className="text-xs font-bold text-white uppercase tracking-wider">
+                Scan Depth Tuning &amp; Benchmark Simulator
+              </h5>
+            </div>
+            <button
+              type="button"
+              onClick={() => clearScanPerformanceHistory()}
+              className="text-[10px] text-slate-500 hover:text-slate-300 font-mono underline"
+            >
+              Reset Samples
+            </button>
+          </div>
+
+          <div className="text-xs text-slate-300 space-y-3">
+            <p className="text-slate-400 text-[11px]">
+              Test how scan depth directly impacts traversed volume and extraction yield:
+            </p>
+
+            <div className="space-y-1.5 bg-slate-900 p-3 rounded-xl border border-slate-800">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-300">Simulate Depth Limit:</span>
+                <span className="font-mono text-cyan-400 font-bold">Depth {simulatedDepth}</span>
+              </div>
+              <input
+                type="range"
+                min={4}
+                max={30}
+                step={2}
+                value={simulatedDepth}
+                onChange={(e) => setSimulatedDepth(Number(e.target.value))}
+                className="w-full accent-indigo-500 cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                <span>Depth 4 (Fast/Shallow)</span>
+                <span>Depth 12 (Balanced)</span>
+                <span>Depth 30 (Full Unbounded)</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={isSimulating}
+              onClick={() => handleSimulateBenchmark(simulatedDepth)}
+              className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>{isSimulating ? 'Simulating Scan...' : `Record Benchmark at Depth ${simulatedDepth}`}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 // Scanner Log Entry Interface for real-time file-by-file monitor
 export interface ScannerProgressLogItem {
   id: string;
@@ -341,7 +1013,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   // Diagnostic Tab Toggles
   const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<
-    'performance' | 'scanner-logs' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info' | 'scan-errors-chart'
+    'performance' | 'scanner-logs' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info' | 'scan-errors-chart' | 'discovery-ratio'
   >('scanner-logs');
 
   const logsEndRef = useRef<HTMLDivElement | null>(null);
@@ -788,15 +1460,15 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
         <button
           type="button"
-          onClick={() => setActiveDiagnosticTab('scan-errors-chart')}
+          onClick={() => setActiveDiagnosticTab('discovery-ratio')}
           className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shrink-0 ${
-            activeDiagnosticTab === 'scan-errors-chart'
+            activeDiagnosticTab === 'discovery-ratio'
               ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
               : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
           }`}
         >
-          <Activity className="w-3.5 h-3.5 text-rose-400" />
-          <span>Scan Errors Chart</span>
+          <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Files vs Media Ratio</span>
         </button>
 
         <button
@@ -1078,6 +1750,11 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
       {/* TAB CONTENT 5.5: SCAN ERRORS CHART */}
       {activeDiagnosticTab === 'scan-errors-chart' && (
         <ScanErrorsChart scannerLogs={scannerLogs} />
+      )}
+
+      {/* TAB CONTENT 5.6: FILES SCANNED VS NEW MEDIA DISCOVERED RATIO CHART */}
+      {activeDiagnosticTab === 'discovery-ratio' && (
+        <ScanDiscoveryRatioChart onTriggerSync={onTriggerSync} sambaConfig={sambaConfig} />
       )}
 
       {/* TAB CONTENT 6: FOLDER INSPECTOR */}

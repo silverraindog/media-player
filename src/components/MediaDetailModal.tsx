@@ -954,8 +954,8 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                     <div className="flex flex-wrap gap-x-6 gap-y-3">
                       {media.cast.slice(0, 8).map((member, idx) => (
                         <div key={idx} className="flex flex-col min-w-[80px]">
-                          <span className="text-slate-200 font-medium text-[12px]">{member.name}</span>
-                          <span className="text-slate-500 text-[10px]">{member.role}</span>
+                          <span className="text-slate-200 font-medium text-[12px]">{member?.name || 'Cast Member'}</span>
+                          <span className="text-slate-500 text-[10px]">{member?.role || ''}</span>
                         </div>
                       ))}
                     </div>
@@ -1051,11 +1051,11 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                   {((omdbCastData?.castMembers && omdbCastData.castMembers.filter((c: any) => c.role === 'Actor')) || media.cast || []).map((member: any, idx: number) => (
                     <div key={idx} className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between space-y-2 shadow-sm">
                       <div className="w-10 h-10 rounded-full bg-indigo-950 border border-indigo-800/60 flex items-center justify-center text-indigo-300 font-bold text-sm">
-                        {member.name.charAt(0)}
+                        {member?.name ? member.name.charAt(0) : '?'}
                       </div>
                       <div>
-                        <span className="text-slate-100 font-semibold text-xs block truncate">{member.name}</span>
-                        <span className="text-slate-400 text-[11px] block truncate">{member.role || 'Actor'}</span>
+                        <span className="text-slate-100 font-semibold text-xs block truncate">{member?.name || 'Actor'}</span>
+                        <span className="text-slate-400 text-[11px] block truncate">{member?.role || 'Actor'}</span>
                       </div>
                     </div>
                   ))}

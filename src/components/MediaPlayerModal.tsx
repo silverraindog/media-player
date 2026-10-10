@@ -477,12 +477,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const isNearEnd = duration > 0 && currentTime >= duration - 30;
 
   // Selected stream source preset - default to clean 1080p stream
-  const [selectedStreamId, setSelectedStreamId] = useState<string>('');
+  const [selectedStreamId, setSelectedStreamId] = useState<string>(() =>
+    isAudio ? SAMPLE_AUDIO_STREAMS[0]?.id || '' : SAMPLE_VIDEO_STREAMS[0]?.id || ''
+  );
 
   // Calculate default fallback stream URL
   const selectedStreamObj = isAudio
-    ? (SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId) || null)
-    : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId) || null);
+    ? (SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId) || SAMPLE_AUDIO_STREAMS[0] || null)
+    : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId) || SAMPLE_VIDEO_STREAMS[0] || null);
 
   const defaultStreamUrl = selectedStreamObj ? selectedStreamObj.url : '';
 
@@ -1893,7 +1895,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       </span>
                     ) : (
                       <span className="hidden sm:inline-flex items-center gap-1 text-indigo-300 text-[10px] font-mono bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-800/40">
-                        🎬 {selectedStreamObj.name}
+                        🎬 {selectedStreamObj?.name || 'HD Vault Stream'}
                       </span>
                     )}
                   </div>
@@ -1968,7 +1970,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     kind="subtitles"
                     src={subtitleTracks[activeSubtitleIndex].url}
                     srcLang={subtitleTracks[activeSubtitleIndex].lang}
-                    label={subtitleTracks[activeSubtitleIndex].name}
+                    label={subtitleTracks[activeSubtitleIndex]?.name || 'Subtitles'}
                     default
                   />
                 )}
@@ -2350,7 +2352,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
                   <span className="hidden sm:inline">Audio:</span>
                   <span className="font-semibold truncate max-w-[90px]">
-                    {audioTracks.find((t) => t.id === activeAudioTrackId)?.name.split(' ')[0] || 'Audio'}
+                    {audioTracks.find((t) => t.id === activeAudioTrackId)?.name?.split(' ')[0] || 'Audio'}
                   </span>
                 </button>
 
@@ -2365,7 +2367,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                         onClick={() => {
                           setActiveAudioTrackId(trk.id);
                           setActiveAudioMenu(false);
-                          showAudioToast(`Switched active audio track to ${trk.name} (${trk.codec})`);
+                          showAudioToast(`Switched active audio track to ${trk.name || 'Track'} (${trk.codec || 'Audio'})`);
                         }}
                         className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition cursor-pointer ${
                           activeAudioTrackId === trk.id
@@ -2373,7 +2375,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                             : 'text-slate-300 hover:bg-slate-800'
                         }`}
                       >
-                        <span className="truncate">{trk.name}</span>
+                        <span className="truncate">{trk.name || 'Audio Track'}</span>
                         <span className="text-[10px] font-mono opacity-80">{trk.codec}</span>
                       </button>
                     ))}
@@ -2396,7 +2398,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       ? 'Local File'
                       : isAudio
                       ? SAMPLE_AUDIO_STREAMS.find((s) => s.id === selectedStreamId)?.name || 'Audio'
-                      : SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId)?.name.split(' ')[0] || 'CDN'}
+                      : (SAMPLE_VIDEO_STREAMS.find((s) => s.id === selectedStreamId)?.name || 'CDN Stream').split(' ')[0]}
                   </span>
                 </button>
 

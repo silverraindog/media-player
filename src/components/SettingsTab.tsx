@@ -400,6 +400,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     setScheduleConfig(updated);
   };
 
+  const handleToggleAutoRefresh = (enabled: boolean) => {
+    // Enable schedule, set to 30 mins interval
+    const presetKey = '30m';
+    const preset = CRON_PRESETS[presetKey];
+    const updated = syncScheduler.saveConfig({
+      enabled,
+      intervalPreset: presetKey,
+      cronExpression: preset.cron,
+    });
+    setScheduleConfig(updated);
+  };
+
   const handleSelectPreset = (presetKey: SyncScheduleConfig['intervalPreset']) => {
     const preset = CRON_PRESETS[presetKey];
     const cron = presetKey === 'custom' ? customCronInput : preset.cron;
@@ -561,18 +573,32 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           </div>
 
           {/* Schedule Enable Switch */}
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={scheduleConfig.enabled}
-              onChange={(e) => handleToggleSchedule(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-            <span className="ml-3 text-xs font-bold text-slate-200">
-              {scheduleConfig.enabled ? 'Schedule Active' : 'Schedule Disabled'}
-            </span>
-          </label>
+          <div className="flex flex-col gap-2">
+             <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={scheduleConfig.enabled}
+                onChange={(e) => handleToggleSchedule(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+              <span className="ml-3 text-xs font-bold text-slate-200">
+                {scheduleConfig.enabled ? 'Schedule Active' : 'Schedule Disabled'}
+              </span>
+            </label>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={scheduleConfig.enabled && scheduleConfig.intervalPreset === '30m'}
+                onChange={(e) => handleToggleAutoRefresh(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              <span className="ml-3 text-xs font-bold text-emerald-300">
+                QuickSync (Auto-Refresh 30m)
+              </span>
+            </label>
+          </div>
         </div>
 
         {/* Status Dashboard Box */}

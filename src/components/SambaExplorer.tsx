@@ -794,6 +794,13 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     setTimeout(() => setCopyToast(null), 2000);
   };
 
+  const handleResolveAll = () => {
+    if (scanErrors.length === 0) return;
+    scanErrors.forEach((path) => onSyncSamba(path));
+    setCopyToast(`Triggered sync for ${scanErrors.length} errors.`);
+    setTimeout(() => setCopyToast(null), 2000);
+  };
+
   const handleClearResolved = async () => {
     const saved = localStorage.getItem('samba_vault_last_scan_errors');
     if (!saved) return;
@@ -813,6 +820,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     setCopyToast('Resolved errors cleared!');
     setTimeout(() => setCopyToast(null), 2000);
   };
+
   // ------------------------------------
 
   // Last Scan Summary State (persists across sync operations)
@@ -3257,6 +3265,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 className="ml-auto text-[10px] bg-rose-900/50 hover:bg-rose-800 text-rose-200 px-2 py-1 rounded border border-rose-700/50 transition-colors"
               >
                 Clear All Resolved
+              </button>
+              <button 
+                onClick={handleResolveAll}
+                className="text-[10px] bg-rose-700 hover:bg-rose-600 text-white px-2 py-1 rounded border border-rose-500/50 transition-colors"
+              >
+                Resolve All
               </button>
             </div>
             <div className="space-y-2 max-h-40 overflow-y-auto pr-2">

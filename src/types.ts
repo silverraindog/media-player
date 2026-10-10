@@ -555,13 +555,14 @@ export interface ConsoleLogEntry {
 
 export interface SyncScheduleConfig {
   enabled: boolean;
-  intervalPreset: '15m' | '1h' | '6h' | 'daily_3am' | 'daily_12pm' | 'weekly_sun' | 'custom';
+  intervalPreset: '15m' | '30m' | '1h' | '6h' | 'daily_3am' | 'daily_12pm' | 'weekly_sun' | 'custom';
   cronExpression: string; // 5-field cron syntax
   lastRunAt?: string;
   lastRunStatus?: 'success' | 'error' | 'warning' | 'idle';
   lastRunSummary?: string;
   nextRunAt?: string;
   showToastOnRun?: boolean;
+  consecutiveFailures?: number;
 }
 
 export interface SyncIncident {

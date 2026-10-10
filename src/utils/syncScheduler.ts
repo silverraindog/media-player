@@ -10,6 +10,7 @@ export const DEFAULT_SYNC_SCHEDULE_CONFIG: SyncScheduleConfig = {
   lastRunSummary: 'No scheduled sync executed yet.',
   nextRunAt: undefined,
   showToastOnRun: true,
+  consecutiveFailures: 0,
 };
 
 export const CRON_PRESETS: Record<SyncScheduleConfig['intervalPreset'], { label: string; cron: string; description: string }> = {
@@ -17,6 +18,11 @@ export const CRON_PRESETS: Record<SyncScheduleConfig['intervalPreset'], { label:
     label: 'Every 15 Minutes',
     cron: '*/15 * * * *',
     description: 'Runs automatically every 15 minutes',
+  },
+  '30m': {
+    label: 'Every 30 Minutes',
+    cron: '*/30 * * * *',
+    description: 'Runs automatically every 30 minutes',
   },
   '1h': {
     label: 'Every Hour',
@@ -235,12 +241,12 @@ export class SyncSchedulerEngine {
     return this.config;
   }
 
-  public saveConfig(newConfig: Partial<SyncScheduleConfig>): SyncScheduleConfig {
+  public saveConfig(newConfig: Partial<SyncScheduleConfig>, skipRecalculate?: boolean): SyncScheduleConfig {
     const updated = { ...this.config, ...newConfig };
-    if (updated.enabled && updated.cronExpression) {
+    if (!skipRecalculate && updated.enabled && updated.cronExpression) {
       const nextDate = calculateNextRunDate(updated.cronExpression);
       updated.nextRunAt = nextDate.toISOString();
-    } else {
+    } else if (!skipRecalculate) {
       updated.nextRunAt = undefined;
     }
 
@@ -335,18 +341,24 @@ export class SyncSchedulerEngine {
         lastRunStatus: 'success',
         lastRunSummary: summary,
         nextRunAt: nextDate.toISOString(),
+        consecutiveFailures: 0,
       });
     } catch (err: any) {
       const summary = `Sync failed: ${err?.message || err}`;
       logger.error(`Scheduled Background Sync Error: ${summary}`, 'Scheduler');
 
-      const nextDate = calculateNextRunDate(this.config.cronExpression);
+      const nextFailures = (this.config.consecutiveFailures || 0) + 1;
+      // Exponential backoff: retry in 5, 10, 20, 40 minutes...
+      const backoffMinutes = Math.min(5 * Math.pow(2, nextFailures - 1), 60);
+      const nextRunAt = new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
+
       this.saveConfig({
         lastRunAt: new Date().toISOString(),
         lastRunStatus: 'error',
         lastRunSummary: summary,
-        nextRunAt: nextDate.toISOString(),
-      });
+        nextRunAt,
+        consecutiveFailures: nextFailures,
+      }, true);
       throw err;
     }
   }

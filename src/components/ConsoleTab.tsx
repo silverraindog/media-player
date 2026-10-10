@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from 'recharts';
+import {
   Terminal,
   Search,
   Trash2,
@@ -212,10 +222,59 @@ const D3SambaTreeVisualizer: React.FC<D3SambaTreeVisualizerProps> = ({ data, sca
   );
 };
 
+const ScanErrorsChart: React.FC<{ scannerLogs: ScannerProgressLogItem[] }> = ({ scannerLogs }) => {
+  const data = useMemo(() => {
+    const errorLogs = scannerLogs.filter(l => l.status === 'permission_denied' || l.status === 'access_barrier' || l.systemErrorCode);
+    
+    const grouped: Record<number, Record<string, number>> = {};
+    errorLogs.forEach(log => {
+      const minute = Math.floor(log.createdAt / 60000) * 60000;
+      if (!grouped[minute]) grouped[minute] = {};
+      const errorCode = log.systemErrorCode || 'Unknown';
+      grouped[minute][errorCode] = (grouped[minute][errorCode] || 0) + 1;
+    });
+
+    return Object.entries(grouped).map(([time, errors]) => ({
+      time: parseInt(time),
+      ...errors
+    })).sort((a, b) => a.time - b.time);
+  }, [scannerLogs]);
+
+  const errorTypes = useMemo(() => {
+    const types = new Set<string>();
+    data.forEach(d => Object.keys(d).filter(k => k !== 'time').forEach(k => types.add(k)));
+    return Array.from(types);
+  }, [data]);
+
+  return (
+    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div>
+          <h4 className="text-sm font-bold text-white">Scan Error Distribution</h4>
+          <p className="text-xs text-slate-400">Time-series distribution of errors encountered during scans</p>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={300}>
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+          <XAxis dataKey="time" tickFormatter={(t) => new Date(t).toLocaleTimeString()} stroke="#94a3b8" />
+          <YAxis stroke="#94a3b8" />
+          <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
+          <Legend />
+          {errorTypes.map((type, i) => (
+            <Line key={type} type="monotone" dataKey={type} stroke={`hsl(${(i * 40) % 360}, 70%, 60%)`} />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
 // Scanner Log Entry Interface for real-time file-by-file monitor
 export interface ScannerProgressLogItem {
   id: string;
   timestamp: string;
+  createdAt: number;
   itemNumber: number;
   rawPath: string;
   sanitizedPath: string;
@@ -282,7 +341,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   // Diagnostic Tab Toggles
   const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<
-    'performance' | 'scanner-logs' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info'
+    'performance' | 'scanner-logs' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info' | 'scan-errors-chart'
   >('scanner-logs');
 
   const logsEndRef = useRef<HTMLDivElement | null>(null);
@@ -355,9 +414,11 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
       const errorCode = isBarrier ? parseLogTextForError(cleanPath) || 'os error 13' : undefined;
 
+      const now = Date.now();
       const newEntry: ScannerProgressLogItem = {
-        id: `scan-log-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-        timestamp: new Date().toLocaleTimeString(),
+        id: `scan-log-${now}-${Math.random().toString(36).substr(2, 6)}`,
+        timestamp: new Date(now).toLocaleTimeString(),
+        createdAt: now,
         itemNumber: count || (scannerLogs.length + 1),
         rawPath: rawPath || cleanPath,
         sanitizedPath: cleanPath,
@@ -714,6 +775,32 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
         <button
           type="button"
+          onClick={() => setActiveDiagnosticTab('scan-errors-chart')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shrink-0 ${
+            activeDiagnosticTab === 'scan-errors-chart'
+              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
+              : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
+          }`}
+        >
+          <Activity className="w-3.5 h-3.5 text-rose-400" />
+          <span>Scan Errors Chart</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveDiagnosticTab('scan-errors-chart')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shrink-0 ${
+            activeDiagnosticTab === 'scan-errors-chart'
+              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
+              : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
+          }`}
+        >
+          <Activity className="w-3.5 h-3.5 text-rose-400" />
+          <span>Scan Errors Chart</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveDiagnosticTab('folder-inspector')}
           className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shrink-0 ${
             activeDiagnosticTab === 'folder-inspector'
@@ -986,6 +1073,11 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* TAB CONTENT 5.5: SCAN ERRORS CHART */}
+      {activeDiagnosticTab === 'scan-errors-chart' && (
+        <ScanErrorsChart scannerLogs={scannerLogs} />
       )}
 
       {/* TAB CONTENT 6: FOLDER INSPECTOR */}

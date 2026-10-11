@@ -1267,13 +1267,17 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   if (!isOpen || !media) return null;
 
-  // Build direct Samba full path
-  const fullNetworkPath = `smb://${sambaConfig.server}/${sambaConfig.share}/${media.recommendedFolderStructure}`;
+  // Build direct Samba full path, filtering out hardcoded sample URL
+  const fullNetworkPath = media.recommendedFolderStructure?.includes('vjs.zencdn.net')
+    ? ''
+    : `smb://${sambaConfig.server}/${sambaConfig.share}/${media.recommendedFolderStructure}`;
 
   const handleCopyPath = () => {
-    navigator.clipboard.writeText(fullNetworkPath);
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 2500);
+    if (fullNetworkPath) {
+        navigator.clipboard.writeText(fullNetworkPath);
+        setCopiedUrl(true);
+        setTimeout(() => setCopiedUrl(false), 2500);
+    }
   };
 
   return (

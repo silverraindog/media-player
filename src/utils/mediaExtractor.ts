@@ -123,7 +123,12 @@ export function isMediaFile(
 // Direct streaming endpoint generator for local Samba files
 export function getDirectPlaybackUrl(path?: string): string | undefined {
   if (!path) return undefined;
-  const clean = path.replace(/^[/\\]+/, '');
+  const trimmed = path.trim();
+  if (/^(https?|blob|data):/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
+    const match = trimmed.match(/https?:\/\/.+/i) || trimmed.match(/https?:.+/i);
+    return match ? match[0].replace(/^(https?):\/+([^\/])/i, '$1://$2') : trimmed;
+  }
+  const clean = trimmed.replace(/^[/\\]+/, '');
   return `/api/samba/stream?path=${encodeURIComponent(clean)}`;
 }
 

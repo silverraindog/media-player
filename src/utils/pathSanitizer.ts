@@ -70,6 +70,13 @@ export function normalizeLeadingSlashes(inputPath: string): string {
  */
 export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsolutePrefix?: boolean }): string {
   if (!rawPath) return '';
+  const trimmed = rawPath.trim();
+
+  // If already an HTTP/HTTPS stream URL or blob/data URI, return preserved URL
+  if (/^(https?|blob|data):/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
+    const match = trimmed.match(/https?:\/\/.+/i) || trimmed.match(/https?:.+/i);
+    return match ? match[0].replace(/^(https?):\/+([^\/])/i, '$1://$2') : trimmed;
+  }
 
   // 1. Globally replace any leading double-slashes with a single slash & normalize backslashes
   let normalized = normalizeLeadingSlashes(rawPath);
@@ -104,8 +111,17 @@ export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsoluteP
 }
 
 export function getMountedDisplayPath(rawPath: string, mountRootPath: string, shareName = 'media'): string {
+  if (!rawPath) return '';
+  const trimmed = rawPath.trim();
+
+  // Web stream URLs should be displayed as URLs, not combined with /Volumes/<share>
+  if (/^(https?|blob|data):/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
+    const match = trimmed.match(/https?:\/\/.+/i) || trimmed.match(/https?:.+/i);
+    return match ? match[0].replace(/^(https?):\/+([^\/])/i, '$1://$2') : trimmed;
+  }
+
   const share = (shareName || 'media').replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'media';
-  let normalized = (rawPath || '').trim().replace(/\\/g, '/').replace(/^smb:\/\//i, '//');
+  let normalized = trimmed.replace(/\\/g, '/').replace(/^smb:\/\//i, '//');
   const mountRoot = normalizeLeadingSlashes(mountRootPath.trim()).replace(/\/+$/g, '') || `/Volumes/${share}`;
 
   const uncMatch = normalized.match(/^\/{2,}[^/]+\/[^/]+(?:\/(.*))?$/);

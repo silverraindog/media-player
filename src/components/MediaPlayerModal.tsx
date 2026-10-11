@@ -448,6 +448,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Implement resolveStreamableUri using Tauri's convertFileSrc for local file protocol access
   const resolveStreamableUri = async (pathCandidate: string): Promise<string> => {
     if (!pathCandidate) return '';
+    if (pathCandidate.startsWith('http://') || pathCandidate.startsWith('https://') || pathCandidate.startsWith('blob:') || pathCandidate.startsWith('data:')) {
+      return pathCandidate;
+    }
     let cleanPath = pathCandidate.replace(/^file:\/\//, '');
 
     // Strip legacy UNC prefix if present

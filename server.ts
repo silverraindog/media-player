@@ -5174,6 +5174,7 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
 
   // Helper to check if a file path is a valid non-dummy file
   const isValidMediaFile = (filePath: string): boolean => {
+    if (filePath.startsWith('http://') || filePath.startsWith('https://')) return false;
     try {
       if (fs.existsSync(filePath)) {
         const stat = fs.statSync(filePath);

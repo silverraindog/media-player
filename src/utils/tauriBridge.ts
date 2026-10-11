@@ -602,6 +602,33 @@ export function resolveLocalMountPath(inputPath: string, shareName = 'media'): s
   const raw = (inputPath || '').trim();
   if (!raw) return `/Volumes/${shareName}`;
 
+  // 0. If it's already an HTTP, HTTPS, blob, or data URL, return it as-is without mounting
+  if (/^(https?|blob|data):/i.test(raw)) {
+    return raw;
+  }
+
+  // If path contains an embedded URL (e.g. from previous proxying or slash normalization)
+  if (raw.includes('https:/') || raw.includes('http:/')) {
+    const match = raw.match(/https?:\/\/.+/i) || raw.match(/https?:.+/i);
+    if (match) {
+      return match[0].replace(/^(https?):\/+/i, '$1://');
+    }
+  }
+
+  // If it points to the Samba stream proxy API endpoint, extract the underlying path
+  if (raw.includes('/api/samba/stream')) {
+    try {
+      const qIndex = raw.indexOf('?');
+      if (qIndex !== -1) {
+        const searchParams = new URLSearchParams(raw.substring(qIndex));
+        const innerPath = searchParams.get('path') || searchParams.get('file');
+        if (innerPath) {
+          return resolveLocalMountPath(decodeURIComponent(innerPath), shareName);
+        }
+      }
+    } catch {}
+  }
+
   let normalized = normalizeLeadingSlashes(raw);
 
   // 1. Strip leading smb: protocol if present

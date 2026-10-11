@@ -466,6 +466,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       window.location.origin.includes('tauri.localhost')
     );
 
+    // Only use convertFileSrc if not intended for browser playback (e.g., if we were opening it in native player)
+    // For browser playback (video tag), the stream proxy is more reliable across platforms.
+    /*
     if (isTauriEnv && (cleanPath.startsWith('/') || cleanPath.match(/^[a-zA-Z]:\\/))) {
       try {
         const { convertFileSrc } = await import('@tauri-apps/api/tauri');
@@ -474,6 +477,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         console.warn('[MediaPlayerModal] convertFileSrc failed, falling back to stream proxy:', e);
       }
     }
+    */
 
     const params = new URLSearchParams();
     params.set('path', cleanPath);

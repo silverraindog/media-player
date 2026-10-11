@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MenuBar } from './components/MenuBar';
 import {
   Header,
@@ -29,6 +29,7 @@ import { PermissionHelpModal } from './components/PermissionHelpModal';
 import { FullDiskAccessOverlay } from './components/FullDiskAccessOverlay';
 import { logger } from './utils/loggerService';
 import { syncScheduler } from './utils/syncScheduler';
+import { usePathSanitizer } from './hooks/usePathSanitizer';
 import { Bug, ShieldAlert, X, ExternalLink } from 'lucide-react';
 import { APP_VERSION, APP_RELEASE_TAG, BUILD_INCREMENTS, ReleaseIncrement } from './version';
 import { getPrioritizedScanPaths } from './utils/customMountUtils';
@@ -546,11 +547,24 @@ function App() {
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
   const [detailModalMedia, setDetailModalMedia] = useState<MediaMetadata | null>(null);
   const [nfoStudioMedia, setNfoStudioMedia] = useState<MediaMetadata | null>(null);
+  const { sanitizePath } = usePathSanitizer();
   const [playerMediaState, setPlayerMediaState] = useState<{
     media: MediaMetadata;
     episode?: EpisodeMetadata;
     track?: TrackMetadata;
   } | null>(null);
+
+  const sanitizedMedia = useMemo(() => {
+    if (!playerMediaState?.media) return null;
+    const m = playerMediaState.media;
+    return {
+      ...m,
+      path: m.path ? sanitizePath(m.path) : undefined,
+      folderPath: m.folderPath ? sanitizePath(m.folderPath) : undefined,
+      recommendedFolderStructure: m.recommendedFolderStructure ? sanitizePath(m.recommendedFolderStructure) : '',
+      playbackUrl: m.playbackUrl ? sanitizePath(m.playbackUrl) : undefined,
+    };
+  }, [playerMediaState?.media, sanitizePath]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [selectedMediaType, setSelectedMediaType] = useState<'all' | MediaType>('all');
   const [serverVersionInfo, setServerVersionInfo] = useState<any>(null);
@@ -3661,10 +3675,10 @@ function App() {
       )}
 
       {/* Media Player Modal */}
-      {playerMediaState && playerMediaState.media && (
+      {playerMediaState && playerMediaState.media && sanitizedMedia && (
         <MediaPlayerModal
           isOpen={Boolean(playerMediaState)}
-          media={playerMediaState.media}
+          media={sanitizedMedia}
           initialEpisode={playerMediaState.episode}
           initialTrack={playerMediaState.track}
           onClose={() => setPlayerMediaState(null)}

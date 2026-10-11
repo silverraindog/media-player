@@ -5212,6 +5212,11 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
       if (parsedUrl.pathname === '/api/samba/stream') {
         const qPath = parsedUrl.searchParams.get('path') || parsedUrl.searchParams.get('file') || '';
         if (qPath) {
+          // If it's a URL, handle it directly
+          if (/^(https?|blob|data):/i.test(qPath)) {
+            return res.json({ token: saveTranscodeJob({ inputUrl: qPath }) });
+          }
+
           const cleanRaw = qPath.replace(/\\/g, '/');
           const candidateRoots = [
             cleanRaw,

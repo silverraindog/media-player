@@ -696,7 +696,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           }
 
           // Add general mappings
-          if (pathCandidate) {
+          if (pathCandidate && !/^(https?|blob|data):/i.test(pathCandidate)) {
             const cleanRel = pathCandidate.replace(/^[/\\]+/, '').replace(/^TV Shows\//i, 'series/');
             const cleanRelDirect = pathCandidate.replace(/^[/\\]+/, '').replace(/^TV Shows\//i, '');
             for (const vol of vols) {
@@ -730,6 +730,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       }
 
       const uri = await resolveStreamableUri(finalPathToResolve);
+      
+      // Verify final path is not a directory
+      const finalCheck = await checkPathExists(finalPathToResolve);
+      if (finalCheck.exists && finalCheck.isDirectory) {
+        setPlaybackError(`Cannot play media: "${media?.title || 'media'}" resolved to a directory, not a file. Please ensure a valid media file is selected.`);
+        return;
+      }
+
       if (isMounted) {
         setResolvedLocalFilePath(finalPathToResolve || null);
         setResolvedStreamUrl(uri);

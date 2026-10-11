@@ -5092,6 +5092,9 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
     }
 
     const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      return res.status(404).json({ error: 'Resolved path is a directory, not a media file' });
+    }
     const fileSize = stat.size;
     const range = req.headers.range;
 

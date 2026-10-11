@@ -35,7 +35,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
-import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics } from '../utils/tauriBridge';
+import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics, detectFFmpegPath } from '../utils/tauriBridge';
 import { apiCall } from '../lib/api';
 import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
 import { transcodeService } from '../services/TranscodeService';
@@ -989,11 +989,26 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       return;
     }
     
+    const performFfmpegPreflight = async () => {
+      const ffmpegPath = await detectFFmpegPath();
+      if (!ffmpegPath) {
+        throw new Error('FFmpeg binary not found in standard system paths. Please install FFmpeg.');
+      }
+      const exists = await checkPathExists(ffmpegPath);
+      if (!exists.exists || !exists.readable) {
+        throw new Error(`FFmpeg binary at "${ffmpegPath}" is inaccessible. Check system permissions.`);
+      }
+      return ffmpegPath;
+    };
+
     transcodeAttemptedRef.current = true;
     setIsTranscoding(true);
     setPlaybackError(null);
 
     try {
+      // Pre-flight check
+      await performFfmpegPreflight();
+
       if (isTauriPlaybackEnvironment()) {
         const isResolvedSource = !isManualStreamOverride &&
           (!customLocalBlobUrl || customLocalBlobUrl === resolvedStreamUrl);
@@ -1028,9 +1043,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         }
         setTranscodedPlaybackUrl(`/api/media/transcode/${result.token}?type=${isAudio ? 'audio' : 'video'}`);
       } else {
+        // Detect if the media source is a network URL
+        const isNetworkUrl = /^(https?|blob|data):/i.test(currentStreamUrl || '');
+        
         const payload = {
-          sourceUrl: currentStreamUrl,
-          sourcePath: resolvedLocalFilePath || validatedPlaybackPath.resolvedPath || media?.path || media?.folderPath || media?.recommendedFolderStructure || '',
+          sourceUrl: isNetworkUrl ? currentStreamUrl : '',
+          sourcePath: isNetworkUrl ? '' : (resolvedLocalFilePath || validatedPlaybackPath.resolvedPath || media?.path || media?.folderPath || media?.recommendedFolderStructure || ''),
           mediaTitle: media?.title || '',
           mediaType: isAudio ? 'audio' : 'video',
         };

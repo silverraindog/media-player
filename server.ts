@@ -5276,10 +5276,13 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   let input = job.inputPath || job.inputUrl;
 
   // Verify input file exists
-  if (job.inputPath && (!fs.existsSync(job.inputPath) || fs.statSync(job.inputPath).size < 256)) {
-    return res.status(404).json({
-      error: `Transcoding source file does not exist or is unreadable: "${job.inputPath}".`,
-    });
+  if (job.inputPath) {
+    const stats = fs.existsSync(job.inputPath) ? fs.statSync(job.inputPath) : null;
+    if (!stats || stats.isDirectory() || stats.size < 256) {
+      return res.status(404).json({
+        error: `Transcoding source file does not exist, is a directory, or is unreadable: "${job.inputPath}".`,
+      });
+    }
   }
 
   if (!input) return res.status(400).json({ error: 'Transcode source is unavailable.' });

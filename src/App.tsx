@@ -565,6 +565,16 @@ function App() {
       playbackUrl: m.playbackUrl ? sanitizePath(m.playbackUrl) : undefined,
     };
   }, [playerMediaState?.media, sanitizePath]);
+
+  const sanitizedEpisode = useMemo(() => {
+    if (!playerMediaState?.episode) return undefined;
+    const ep = playerMediaState.episode;
+    return {
+      ...ep,
+      filePath: ep.filePath ? sanitizePath(ep.filePath) : undefined,
+      playbackUrl: ep.playbackUrl ? sanitizePath(ep.playbackUrl) : undefined,
+    };
+  }, [playerMediaState?.episode, sanitizePath]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [selectedMediaType, setSelectedMediaType] = useState<'all' | MediaType>('all');
   const [serverVersionInfo, setServerVersionInfo] = useState<any>(null);
@@ -3679,7 +3689,7 @@ function App() {
         <MediaPlayerModal
           isOpen={Boolean(playerMediaState)}
           media={sanitizedMedia}
-          initialEpisode={playerMediaState.episode}
+          initialEpisode={sanitizedEpisode}
           initialTrack={playerMediaState.track}
           onClose={() => setPlayerMediaState(null)}
           sambaConfig={sambaConfig}

@@ -162,7 +162,8 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
       };
 
       const primarySeriesTitle = knownInfo.defaultSeries;
-      const primarySeriesPath = `${franchiseFolder.path}/${primarySeriesTitle}`;
+      // Use the actual physical folder on disk for filesystem operations and streaming
+      const primarySeriesPath = franchiseFolder.path;
 
       // Group children into organized seasons & extras
       const seasonsMap = new Map<string, SambaShareNode>();

@@ -5,6 +5,8 @@ import {
   calculatePathCleanlinessScore,
   normalizeLeadingSlashes,
   getMountedDisplayPath,
+  stripVirtualFranchiseSuffix,
+  sanitizeMediaSourcePath,
 } from './pathSanitizer';
 
 /**
@@ -348,6 +350,40 @@ export function runPathSanitizerTests(): {
         }
         if (dirtyScore > 50) {
           throw new Error(`Dirty score should be <= 50, got ${dirtyScore}`);
+        }
+      },
+    },
+
+    // ---------------------------------------------------------
+    // 8. Virtual Franchise Suffix Stripping & Media Source Sanitization
+    // ---------------------------------------------------------
+    {
+      name: 'stripVirtualFranchiseSuffix: Strips (Main Series) and duplicate franchise titles',
+      fn: () => {
+        const r1 = stripVirtualFranchiseSuffix('/Volumes/media/Franchises/Glee/Glee (Main Series)');
+        if (r1 !== '/Volumes/media/Franchises/Glee') {
+          throw new Error(`Expected '/Volumes/media/Franchises/Glee', got '${r1}'`);
+        }
+        const r2 = stripVirtualFranchiseSuffix('/Volumes/media/Franchises/Dr Who/Dr Who (Main Series)');
+        if (r2 !== '/Volumes/media/Franchises/Dr Who') {
+          throw new Error(`Expected '/Volumes/media/Franchises/Dr Who', got '${r2}'`);
+        }
+        const r3 = stripVirtualFranchiseSuffix('/Volumes/media/Franchises/Battlestar Galactica/Battlestar Galactica (2004)');
+        if (r3 !== '/Volumes/media/Franchises/Battlestar Galactica') {
+          throw new Error(`Expected '/Volumes/media/Franchises/Battlestar Galactica', got '${r3}'`);
+        }
+      },
+    },
+    {
+      name: 'sanitizeMediaSourcePath: Strips asset:// and decodes URL components',
+      fn: () => {
+        const r1 = sanitizeMediaSourcePath('ASSET://LOCALHOST/%2FVOLUMES%2FMEDIA%2FFRANCHISES%2FBATTLESTAR%20GALACTICA%2FBATTLESTAR%20GALACTICA%20(2004)');
+        if (r1 !== '/Volumes/media/Franchises/Battlestar Galactica') {
+          throw new Error(`Expected '/Volumes/media/Franchises/Battlestar Galactica', got '${r1}'`);
+        }
+        const r2 = sanitizeMediaSourcePath('/api/samba/stream?path=%2FVolumes%2Fmedia%2FFranchises%2FGlee%2FGlee%20(Main%20Series)&season=1');
+        if (r2 !== '/api/samba/stream?path=%2FVolumes%2Fmedia%2FFranchises%2FGlee&season=1') {
+          throw new Error(`Expected '/api/samba/stream?path=%2FVolumes%2Fmedia%2FFranchises%2FGlee&season=1', got '${r2}'`);
         }
       },
     },

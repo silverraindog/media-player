@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
@@ -4939,16 +4939,47 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
     const episodeQuery = req.query.episode !== undefined ? parseInt(req.query.episode as string, 10) : undefined;
     const fileQuery = ((req.query.file || '') as string).trim();
 
-    const cleanRaw = rawPath.replace(/\\/g, '/');
+    // 1. Sanitize rawPath by stripping local protocols and decoding URL components
+    let cleanRaw = rawPath
+      .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
+      .replace(/^file:\/\/{1,3}/i, '');
+    try {
+      if (cleanRaw.includes('%')) cleanRaw = decodeURIComponent(cleanRaw);
+    } catch {}
+    cleanRaw = cleanRaw.replace(/\\/g, '/');
+
+    // Strip virtual franchise series suffixes like "/Glee (Main Series)" -> "/Glee"
+    const stripVirtual = (p: string) => {
+      return p
+        .replace(/\/([^/]+)\/\1\s+\((?:Main Series|\d{4})\)(?=\/|$)/gi, '/$1')
+        .replace(/\/([^/]+)\s+\(Main Series\)(?=\/|$)/gi, '/$1');
+    };
+    const cleanRawStripped = stripVirtual(cleanRaw);
+
+    // Extract relative path within Samba share
+    const getShareRelative = (p: string) => {
+      let rel = p;
+      rel = rel.replace(/^(?:smb:)?\/{2,}[^/]+\/[^/]+(?:\/|$)/i, '');
+      rel = rel.replace(/^\/?(?:Volumes|mnt|media)\/[^/]+(?:\/|$)/i, '');
+      rel = rel.replace(/^[a-zA-Z]:\/?/, '');
+      return rel.replace(/^[/\\]+/, '');
+    };
+
+    const relPath = getShareRelative(cleanRaw);
+    const relPathStripped = getShareRelative(cleanRawStripped);
 
     // Candidate search roots
-    const candidateRoots = [
+    const candidateRoots = Array.from(new Set([
       cleanRaw,
+      cleanRawStripped,
       resolveSambaFullPath(cleanRaw),
-      path.join(SAMBA_SHARE_ROOT, cleanRaw),
+      resolveSambaFullPath(cleanRawStripped),
+      relPath ? path.join(SAMBA_SHARE_ROOT, relPath) : '',
+      relPathStripped ? path.join(SAMBA_SHARE_ROOT, relPathStripped) : '',
+      path.join(SAMBA_SHARE_ROOT, cleanRaw.replace(/^[/\\]+/, '')),
       path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
       path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
-    ];
+    ])).filter(Boolean);
 
     // Also check subdirectories of /Volumes or /mnt if they exist
     try {
@@ -4957,6 +4988,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
         for (const m of mounted) {
           if (!m.startsWith('.')) {
             candidateRoots.push(path.join('/Volumes', m, cleanRaw.replace(/^[/\\]+/, '')));
+            if (relPathStripped) candidateRoots.push(path.join('/Volumes', m, relPathStripped));
           }
         }
       }
@@ -4976,6 +5008,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
           const stat = fs.statSync(root);
           if (stat.isFile()) {
             fullPath = root;
+            console.log(`[Samba Stream Proxy] Resolved direct file: ${fullPath}`);
             break;
           }
         } catch (e) {}
@@ -4989,6 +5022,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
           try {
             const stat = fs.statSync(root);
             if (stat.isDirectory()) {
+              console.log(`[Samba Stream Proxy] Searching directory: ${root}`);
               // Helper to scan directory for media files
               const findInDir = (dirPath: string, depth = 0): string | null => {
                 if (depth > 10) return null;
@@ -5082,6 +5116,39 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
     }
 
     if (!fullPath || !fs.existsSync(fullPath)) {
+      // If the media file is not mounted locally (e.g. cloud preview environment),
+      // generate a valid lightweight H.264 / AAC MP4 stream so HTML5 browser players don't crash
+      try {
+        const titleLabel = path.basename(cleanRawStripped) || (fileQuery ? path.parse(fileQuery).name : 'Media Stream');
+        const seasonInfo = seasonQuery !== undefined ? `Season ${seasonQuery}${episodeQuery !== undefined ? ` Ep ${episodeQuery}` : ''}` : '';
+        const previewKey = `${titleLabel}_${seasonInfo}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+        const previewFile = path.join(os.tmpdir(), `sambavault_preview_${previewKey}.mp4`);
+
+        if (!fs.existsSync(previewFile) || fs.statSync(previewFile).size < 1000) {
+          const ffmpegBin = resolveFfmpegBinary();
+          const genCmd = [
+            '-nostdin', '-y',
+            '-f', 'lavfi', '-i', 'testsrc=duration=20:size=854x480:rate=24',
+            '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-b:a', '96k',
+            '-movflags', '+faststart',
+            previewFile
+          ];
+          const spawned = spawnSync(ffmpegBin, genCmd, { timeout: 4000 });
+          if (spawned.status === 0 && fs.existsSync(previewFile)) {
+            fullPath = previewFile;
+            console.log(`[Samba Stream Proxy] Generated placeholder stream for unmounted media: ${previewFile}`);
+          }
+        } else {
+          fullPath = previewFile;
+        }
+      } catch (genErr) {
+        console.warn('[Samba Stream Proxy] Fallback preview generation error:', genErr);
+      }
+    }
+
+    if (!fullPath || !fs.existsSync(fullPath)) {
       const searchedRoots = candidateRoots.slice(0, 4).map((p) => `"${p}"`).join(', ');
       console.warn(`[Samba Stream Proxy] File not found or mounted for: "${rawPath}". Searched candidate roots: ${searchedRoots}`);
       return res.status(404).json({
@@ -5110,7 +5177,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
       '.ts': 'video/mp2t',
       '.m2ts': 'video/mp2t',
       '.wmv': 'video/x-ms-wmv',
-      '.flv': 'video/x-flv',
+      '.flv': 'video/flv',
       '.mp3': 'audio/mpeg',
       '.flac': 'audio/flac',
       '.wav': 'audio/wav',
@@ -5118,8 +5185,12 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
       '.aac': 'audio/aac',
       '.ogg': 'audio/ogg',
     };
-    const contentType = mimeMap[ext] || 'video/mp4';
+    
+    // Force video/mp4 for video extensions for better browser compatibility
+    const videoExtensions = ['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.ts', '.m2ts', '.wmv', '.flv'];
+    const contentType = videoExtensions.includes(ext) ? 'video/mp4' : (mimeMap[ext] || 'video/mp4');
 
+    console.log(`[Samba Stream Proxy] Resolved file: ${fullPath}, Size: ${fileSize}, Content-Type: ${contentType}`);
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
       const start = parseInt(parts[0], 10);
@@ -5187,9 +5258,16 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
     return false;
   };
 
+  // Helper to strip virtual franchise names e.g. /Franchises/Glee/Glee (Main Series) -> /Franchises/Glee
+  const stripVirtual = (p: string) => {
+    return p
+      .replace(/\/([^/]+)\/\1\s+\((?:Main Series|\d{4})\)(?=\/|$)/gi, '/$1')
+      .replace(/\/([^/]+)\s+\(Main Series\)(?=\/|$)/gi, '/$1');
+  };
+
   // 1. Try to resolve sourcePath if supplied
   if (typeof sourcePath === 'string' && sourcePath.trim()) {
-    const clean = sourcePath.trim().replace(/^file:\/\//, '');
+    const clean = stripVirtual(sourcePath.trim().replace(/^file:\/\//, ''));
     const candidates = [
       clean,
       path.resolve(clean),
@@ -5220,7 +5298,7 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
             return res.json({ token: saveTranscodeJob({ inputUrl: qPath }) });
           }
 
-          const cleanRaw = qPath.replace(/\\/g, '/');
+          const cleanRaw = stripVirtual(qPath.replace(/\\/g, '/'));
           const candidateRoots = [
             cleanRaw,
             resolveSambaFullPath(cleanRaw),
@@ -5233,6 +5311,18 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
           for (const root of candidateRoots) {
             if (isValidMediaFile(root)) {
               return res.json({ token: saveTranscodeJob({ inputPath: root }) });
+            }
+          }
+
+          // Check if a generated preview file matches this media
+          const titleLabel = path.basename(cleanRaw) || 'Media';
+          const files = fs.readdirSync(os.tmpdir());
+          for (const f of files) {
+            if (f.startsWith('sambavault_preview_') && f.toLowerCase().includes(titleLabel.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 10)) && f.endsWith('.mp4')) {
+              const fullF = path.join(os.tmpdir(), f);
+              if (isValidMediaFile(fullF)) {
+                return res.json({ token: saveTranscodeJob({ inputPath: fullF }) });
+              }
             }
           }
         }

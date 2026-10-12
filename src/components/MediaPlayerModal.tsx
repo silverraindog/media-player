@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
 import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics, detectFFmpegPath } from '../utils/tauriBridge';
+import { sanitizeMediaSourcePath, stripVirtualFranchiseSuffix } from '../utils/pathSanitizer';
 import { apiCall } from '../lib/api';
 import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
 import { transcodeService } from '../services/TranscodeService';
@@ -448,16 +449,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Implement resolveStreamableUri using Tauri's convertFileSrc for local file protocol access
   const resolveStreamableUri = async (pathCandidate: string): Promise<string> => {
     if (!pathCandidate) return '';
-    if (pathCandidate.startsWith('http://') || pathCandidate.startsWith('https://') || pathCandidate.startsWith('blob:') || pathCandidate.startsWith('data:')) {
-      return pathCandidate;
+    const sanitizedCandidate = sanitizeMediaSourcePath(pathCandidate, { preserveAbsolutePrefix: true });
+    if (sanitizedCandidate.startsWith('http://') || sanitizedCandidate.startsWith('https://') || sanitizedCandidate.startsWith('blob:') || sanitizedCandidate.startsWith('data:')) {
+      return sanitizedCandidate;
     }
-    let cleanPath = pathCandidate.replace(/^file:\/\//, '');
+    let cleanPath = stripVirtualFranchiseSuffix(sanitizedCandidate.replace(/^file:\/\//, ''));
 
     // Strip legacy UNC prefix if present
     const shareName = sambaConfig.share || 'media';
     if (cleanPath.startsWith('//') || cleanPath.startsWith('smb://')) {
       cleanPath = resolveLocalMountPath(cleanPath, shareName);
     }
+    cleanPath = stripVirtualFranchiseSuffix(cleanPath);
 
     const isTauriEnv = typeof window !== 'undefined' && (
       Boolean((window as any).__TAURI_IPC__) ||
@@ -465,19 +468,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       window.location.protocol === 'tauri:' ||
       window.location.origin.includes('tauri.localhost')
     );
-
-    // Only use convertFileSrc if not intended for browser playback (e.g., if we were opening it in native player)
-    // For browser playback (video tag), the stream proxy is more reliable across platforms.
-    /*
-    if (isTauriEnv && (cleanPath.startsWith('/') || cleanPath.match(/^[a-zA-Z]:\\/))) {
-      try {
-        const { convertFileSrc } = await import('@tauri-apps/api/tauri');
-        return convertFileSrc(cleanPath);
-      } catch (e) {
-        console.warn('[MediaPlayerModal] convertFileSrc failed, falling back to stream proxy:', e);
-      }
-    }
-    */
 
     const params = new URLSearchParams();
     params.set('path', cleanPath);
@@ -755,7 +745,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const sambaStreamUrl = resolvedStreamUrl;
 
   // Determine active streaming/playback source safely (prioritizing direct Samba/HDD stream)
-  const currentStreamUrl =
+  const rawStreamUrl =
     transcodedPlaybackUrl ||
     customLocalBlobUrl ||
     sanitizeStreamUrl(media?.localBlobUrl) ||
@@ -764,6 +754,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     sanitizeStreamUrl(selectedTrack?.playbackUrl) ||
     sanitizeStreamUrl(media?.playbackUrl) ||
     '';
+
+  const currentStreamUrl = useMemo(() => {
+    return sanitizeMediaSourcePath(rawStreamUrl, { preserveAbsolutePrefix: true });
+  }, [rawStreamUrl]);
 
   const validatedPlaybackPath = useMemo(() => {
     const res = validateSambaPlaybackPath(currentStreamUrl, sambaConfig);
@@ -1048,11 +1042,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         setTranscodedPlaybackUrl(`/api/media/transcode/${result.token}?type=${isAudio ? 'audio' : 'video'}`);
       } else {
         // Detect if the media source is a network URL
-        const isNetworkUrl = /^(https?|blob|data):/i.test(currentStreamUrl || '');
+        const isNetworkUrl = /^(https?|blob|data):/i.test(currentStreamUrl || '') || currentStreamUrl.startsWith('/api/');
         
         const payload = {
           sourceUrl: isNetworkUrl ? currentStreamUrl : '',
-          sourcePath: isNetworkUrl ? '' : (resolvedLocalFilePath || validatedPlaybackPath.resolvedPath || media?.path || media?.folderPath || media?.recommendedFolderStructure || ''),
+          sourcePath: isNetworkUrl ? '' : sanitizeMediaSourcePath(resolvedLocalFilePath || validatedPlaybackPath.resolvedPath || media?.path || media?.folderPath || media?.recommendedFolderStructure || ''),
           mediaTitle: media?.title || '',
           mediaType: isAudio ? 'audio' : 'video',
         };
@@ -1131,9 +1125,28 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         case 3:
           detailMessage = `Browser decoding error: The container format or codec is not supported natively by your browser (common with MKV, HEVC/H.265, DTS, AC3 audio). Transcoding is required.`;
           break;
-        case 4:
-          detailMessage = `Media source format not supported by browser HTML5 player (${currentStreamUrl ? currentStreamUrl.split('.').pop()?.toUpperCase() : 'Unknown format'}).`;
+        case 4: {
+          let formatExt = 'Unknown format';
+          if (currentStreamUrl) {
+            try {
+              const urlObj = new URL(currentStreamUrl, window.location.origin);
+              const target = urlObj.searchParams.get('file') || urlObj.searchParams.get('path') || urlObj.pathname;
+              const rawExt = target.split('?')[0].split('.').pop()?.toUpperCase();
+              if (rawExt && rawExt.length <= 5 && !rawExt.includes('/') && !rawExt.includes('=')) {
+                formatExt = rawExt;
+              } else {
+                formatExt = 'Stream / Network Proxy';
+              }
+            } catch {
+              const rawExt = currentStreamUrl.split('?')[0].split('.').pop()?.toUpperCase();
+              if (rawExt && rawExt.length <= 5 && !rawExt.includes('/') && !rawExt.includes('=')) {
+                formatExt = rawExt;
+              }
+            }
+          }
+          detailMessage = `Media source format not supported by browser HTML5 player (${formatExt}).`;
           break;
+        }
         default:
           detailMessage = mediaError.message || `Media playback error (code ${mediaError.code}).`;
       }

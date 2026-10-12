@@ -1267,6 +1267,18 @@ export const validateSambaPlaybackPath = (
     };
   }
 
+  // If local /api/ proxy stream URL
+  if (rawPathOrUrl.startsWith('/api/')) {
+    return {
+      resolvedPath: rawPathOrUrl,
+      protocol: 'http',
+      platform,
+      isAbsolute: true,
+      valid: true,
+      message: 'Streaming via local HTTP proxy endpoint',
+    };
+  }
+
   // If SMB protocol URL
   if (rawPathOrUrl.startsWith('smb://') || rawPathOrUrl.startsWith('smb:\\')) {
     return {
@@ -1279,34 +1291,39 @@ export const validateSambaPlaybackPath = (
     };
   }
 
-  // If file protocol URL
-  if (rawPathOrUrl.startsWith('file://')) {
-    return {
-      resolvedPath: rawPathOrUrl,
-      protocol: 'file',
-      platform,
-      isAbsolute: true,
-      valid: true,
-      message: 'Local file URI protocol',
-    };
-  }
+  // Strip unsupported local/tauri schemes (case-insensitive)
+  let cleanInput = rawPathOrUrl
+    .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
+    .replace(/^file:\/\/{1,3}/i, '');
+  try {
+    if (cleanInput.includes('%')) cleanInput = decodeURIComponent(cleanInput);
+  } catch {}
 
   const server = sambaConfig.server || 'nas.local';
   const share = sambaConfig.share || 'media';
-  const cleanPath = rawPathOrUrl.replace(/^[/\\]+/, '');
+  const cleanPath = cleanInput.replace(/^[/\\]+/, '');
 
-  let resolvedPath = rawPathOrUrl;
+  let resolvedPath = cleanInput;
   let isAbsolute = false;
 
   if (isMac) {
-    resolvedPath = sambaConfig.mountPath || `/Volumes/${share}/${cleanPath}`;
+    if (cleanInput.startsWith('/Volumes/')) {
+      resolvedPath = cleanInput;
+    } else {
+      const base = sambaConfig.mountPath ? sambaConfig.mountPath.replace(/\/+$/, '') : `/Volumes/${share}`;
+      resolvedPath = cleanPath ? `${base}/${cleanPath}` : base;
+    }
     isAbsolute = resolvedPath.startsWith('/');
   } else if (isWin) {
     const uncShare = `\\\\${server}\\${share}`;
-    resolvedPath = `${uncShare}\\${cleanPath.replace(/\//g, '\\')}`;
+    resolvedPath = cleanPath ? `${uncShare}\\${cleanPath.replace(/\//g, '\\')}` : uncShare;
     isAbsolute = resolvedPath.startsWith('\\\\');
   } else {
-    resolvedPath = `/mnt/samba/${share}/${cleanPath}`;
+    if (cleanInput.startsWith('/mnt/') || cleanInput.startsWith('/media/')) {
+      resolvedPath = cleanInput;
+    } else {
+      resolvedPath = `/mnt/samba/${share}/${cleanPath}`;
+    }
     isAbsolute = resolvedPath.startsWith('/');
   }
 

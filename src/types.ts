@@ -85,6 +85,7 @@ export interface MediaMetadata {
   selectedVersionId?: string;
   isMultiVersion?: boolean;
   status?: 'categorized' | 'pending' | 'draft' | string;
+  resolution?: string;
 }
 
 export interface MediaVersionBranch {

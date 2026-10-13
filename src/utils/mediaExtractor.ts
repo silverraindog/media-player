@@ -1022,3 +1022,26 @@ export async function fetchMediaMetadataWithFallback(
   };
 }
 
+/**
+ * Inspects filename patterns for quality keywords (e.g., '1080p', '4K', 'HEVC')
+ * and returns the detected resolution/quality string.
+ */
+export function extractResolution(filename: string): string | undefined {
+  if (!filename) return undefined;
+  
+  const patterns = [
+    { regex: /\b(2160p|4k|uhd)\b/i, label: '4K' },
+    { regex: /\b(1080p|fhd)\b/i, label: '1080p' },
+    { regex: /\b(720p|hd)\b/i, label: '720p' },
+    { regex: /\b(480p|sd)\b/i, label: '480p' },
+    { regex: /\b(hevc|x265)\b/i, label: 'HEVC' },
+    { regex: /\b(x264|h264)\b/i, label: 'H.264' }
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.regex.test(filename)) {
+      return pattern.label;
+    }
+  }
+  return undefined;
+}

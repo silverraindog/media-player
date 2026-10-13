@@ -328,6 +328,24 @@ export function runPathSanitizerTests(): {
       },
     },
     {
+      name: 'Sanitize Filename: Preserve non-English and special Unicode characters',
+      fn: () => {
+        const res = sanitizeFilename('Dune - Part Two (2024) - 듄.파트.투.mp4');
+        if (res !== 'Dune - Part Two (2024) - 듄.파트.투.mp4') {
+          throw new Error(`Expected 'Dune - Part Two (2024) - 듄.파트.투.mp4', got '${res}'`);
+        }
+      },
+    },
+    {
+      name: 'Sanitize Filename: Handle special filesystem-safe symbols',
+      fn: () => {
+        const res = sanitizeFilename('Show - (2023) [!@#$%^&()].mkv');
+        if (res !== 'Show - (2023) [!@#$%^&()].mkv') {
+          throw new Error(`Expected 'Show - (2023) [!@#$%^&()].mkv', got '${res}'`);
+        }
+      },
+    },
+    {
       name: 'Sanitize Filename: Strip illegal Windows/Samba characters (< > " ? *)',
       fn: () => {
         const res = sanitizeFilename('Movie<?>*"Special".mp4');

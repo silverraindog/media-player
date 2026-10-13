@@ -15,6 +15,7 @@ export function sanitizeFilename(name: string): string {
   if (!name) return '';
 
   let cleaned = name
+    .normalize('NFC')
     .trim()
     // Replace colon with spaced hyphen (e.g. "Dune: Part Two" -> "Dune - Part Two")
     .replace(/:/g, ' - ')
@@ -181,7 +182,7 @@ export function sanitizeMediaSourcePath(rawPath: string, options?: { preserveAbs
  */
 export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsolutePrefix?: boolean }): string {
   if (!rawPath) return '';
-  let trimmed = rawPath.trim();
+  let trimmed = rawPath.normalize('NFC').trim();
 
   // If already an HTTP/HTTPS stream URL or blob/data URI, return preserved URL
   if (/^(https?|blob|data):/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {

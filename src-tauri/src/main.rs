@@ -13,6 +13,7 @@ use tauri::AppHandle;
 
 mod ai;
 mod db;
+pub mod scanner;
 
 #[tauri::command]
 fn vault_purge_transcode_cache(app_handle: AppHandle, limit_gb: u64) -> Result<(), String> {
@@ -375,7 +376,7 @@ pub fn sanitize_samba_path(raw_path: &str) -> String {
 pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return PathBuf::from("/Volumes/media");
+        return Path::new("/Volumes").join("media");
     }
 
     let normalized = trimmed.replace('\\', "/");
@@ -391,32 +392,39 @@ pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
         } else {
             "media"
         };
-        let subpath = if parts.len() > 2 { parts[2..].join("/") } else { String::new() };
+        let subpath: PathBuf = if parts.len() > 2 {
+            let mut sub = PathBuf::new();
+            for part in &parts[2..] {
+                sub.push(part);
+            }
+            sub
+        } else {
+            PathBuf::new()
+        };
 
         let mut candidates = vec![
-            format!("/Volumes/{}", share_name),
-            format!("/mnt/{}", share_name),
-            format!("/media/{}", share_name),
+            Path::new("/Volumes").join(share_name),
+            Path::new("/mnt").join(share_name),
+            Path::new("/media").join(share_name),
         ];
         if let Ok(home) = std::env::var("HOME") {
-            candidates.push(format!("{}/media", home));
+            candidates.push(Path::new(&home).join("media"));
         }
 
         for cand in candidates {
-            let p = PathBuf::from(&cand);
-            if p.exists() {
-                return if subpath.is_empty() { p } else { p.join(&subpath) };
+            if cand.exists() {
+                return if subpath.as_os_str().is_empty() { cand } else { cand.join(&subpath) };
             }
         }
 
         #[cfg(target_os = "macos")]
-        let default_mount = PathBuf::from(format!("/Volumes/{}", share_name));
+        let default_mount = Path::new("/Volumes").join(share_name);
         #[cfg(target_os = "windows")]
-        let default_mount = PathBuf::from(format!("//192.168.1.25/{}", share_name));
+        let default_mount = PathBuf::from("//192.168.1.25").join(share_name);
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let default_mount = PathBuf::from(format!("/mnt/{}", share_name));
+        let default_mount = Path::new("/mnt").join(share_name);
 
-        return if subpath.is_empty() { default_mount } else { default_mount.join(&subpath) };
+        return if subpath.as_os_str().is_empty() { default_mount } else { default_mount.join(&subpath) };
     }
 
     // Windows drive path check (e.g. C:/media or D:\media)
@@ -436,12 +444,12 @@ pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
         return p;
     }
 
-    let volumes_candidate = PathBuf::from("/Volumes").join(&normalized);
+    let volumes_candidate = Path::new("/Volumes").join(&normalized);
     if volumes_candidate.exists() {
         return volumes_candidate;
     }
 
-    let mnt_candidate = PathBuf::from("/mnt").join(&normalized);
+    let mnt_candidate = Path::new("/mnt").join(&normalized);
     if mnt_candidate.exists() {
         return mnt_candidate;
     }
@@ -712,11 +720,7 @@ async fn check_volume_mounted(
     shareName: Option<String>,
 ) -> Result<VolumeMountInfo, String> {
     let target_share = share_name.or(shareName).unwrap_or_default();
-    let candidate_paths = vec![
-        PathBuf::from(format!("/Volumes/{}", target_share)),
-        PathBuf::from(format!("/mnt/{}", target_share)),
-        PathBuf::from(format!("/media/{}", target_share)),
-    ];
+    let candidate_paths = scanner::get_candidate_mount_paths(&target_share);
 
     for path in candidate_paths {
         if path.exists() {
@@ -730,7 +734,7 @@ async fn check_volume_mounted(
 
                     return Ok(VolumeMountInfo {
                         is_mounted: true,
-                        mount_path: path.to_string_lossy().to_string(),
+                        mount_path: path.display().to_string(),
                         files,
                         permission_denied: false,
                         error_details: None,
@@ -740,23 +744,24 @@ async fn check_volume_mounted(
                     let is_perm = err.kind() == std::io::ErrorKind::PermissionDenied;
                     return Ok(VolumeMountInfo {
                         is_mounted: true,
-                        mount_path: path.to_string_lossy().to_string(),
+                        mount_path: path.display().to_string(),
                         files: Vec::new(),
                         permission_denied: is_perm,
-                        error_details: Some(err.to_string()),
+                        error_details: Some(format!("Permission denied reading {}: {}", path.display(), err)),
                     });
                 }
             }
         }
     }
 
+    let default_mount = Path::new("/Volumes").join(&target_share);
     Ok(VolumeMountInfo {
         is_mounted: false,
-        mount_path: format!("/Volumes/{}", target_share),
+        mount_path: default_mount.display().to_string(),
         files: Vec::new(),
         permission_denied: false,
         error_details: Some(format!(
-            "Share '{}' is not currently mounted in /Volumes or /mnt",
+            "Share '{}' is not currently mounted in /Volumes, /mnt, or /media",
             target_share
         )),
     })
@@ -920,14 +925,17 @@ async fn scan_samba_volume(
     maxDepth: Option<usize>,
 ) -> Result<ScanVolumeResult, String> {
     let target_share = share_name.or(shareName).unwrap_or_default();
-    let default_mount = format!("/Volumes/{}", target_share);
-    let resolved_raw = custom_path.or(customPath).unwrap_or(default_mount);
-    let resolved_path = resolve_absolute_samba_path(&resolved_raw);
+    let default_mount = Path::new("/Volumes").join(&target_share);
+    let resolved_path = if let Some(custom) = custom_path.or(customPath) {
+        resolve_absolute_samba_path(&custom)
+    } else {
+        default_mount
+    };
 
     if !resolved_path.exists() {
         return Ok(ScanVolumeResult {
             success: false,
-            mount_path: resolved_path.to_string_lossy().to_string(),
+            mount_path: resolved_path.display().to_string(),
             items: Vec::new(),
             total_scanned: 0,
             error: Some(format!("Volume or path is not mounted: {}", resolved_path.display())),

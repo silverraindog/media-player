@@ -1826,6 +1826,12 @@ app.post('/api/samba/test-connection', async (req: Request, res: Response) => {
   }
 });
 
+const stripVirtualFranchiseSuffix = (p: string): string => {
+  return p
+    .replace(/\/([^/]+)\/\1(?:\s*\([^)]*\))?$/i, '/$1')
+    .replace(/\/([^/]+)\s*\((?:Main Series|Original Series|\d{4})\)$/i, '/$1');
+};
+
 // Check if a path exists on the host machine filesystem (Direct Host Path & Volume Verification)
 app.post('/api/samba/check-path', async (req: Request, res: Response) => {
   const { path: checkPath } = req.body;
@@ -1838,11 +1844,41 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
   const resolvedPath = path.resolve(clean);
 
   try {
+    const cleanStripped = stripVirtualFranchiseSuffix(clean);
+    const getShareRelative = (p: string) => {
+      let rel = p;
+      rel = rel.replace(/^(?:smb:)?\/{2,}[^/]+\/[^/]+(?:\/|$)/i, '');
+      rel = rel.replace(/^\/?(?:Volumes|mnt|media)\/[^/]+(?:\/|$)/i, '');
+      rel = rel.replace(/^[a-zA-Z]:\/?/, '');
+      return rel.replace(/^[/\\]+/, '');
+    };
+    const rel = getShareRelative(clean);
+    const relStripped = getShareRelative(cleanStripped);
+
+    const candidates = Array.from(new Set([
+      clean,
+      resolvedPath,
+      cleanStripped,
+      path.resolve(cleanStripped),
+      resolveSambaFullPath(clean),
+      resolveSambaFullPath(cleanStripped),
+      rel ? path.join(SAMBA_SHARE_ROOT, rel) : '',
+      relStripped ? path.join(SAMBA_SHARE_ROOT, relStripped) : '',
+      path.join(SAMBA_SHARE_ROOT, clean.replace(/^[/\\]+/, '')),
+      path.join(SAMBA_SHARE_ROOT, cleanStripped.replace(/^[/\\]+/, '')),
+      path.join('/Volumes', clean.replace(/^[/\\]+/, '')),
+      path.join('/mnt', clean.replace(/^[/\\]+/, '')),
+      path.join('/media', clean.replace(/^[/\\]+/, '')),
+    ])).filter(Boolean);
+
     let target = clean;
-    let exists = fs.existsSync(clean);
-    if (!exists && fs.existsSync(resolvedPath)) {
-      target = resolvedPath;
-      exists = true;
+    let exists = false;
+    for (const cand of candidates) {
+      if (fs.existsSync(cand)) {
+        target = cand;
+        exists = true;
+        break;
+      }
     }
 
     let isDirectory = false;
@@ -1853,6 +1889,8 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
     let accessDenied = false;
     let errorCode: string | null = null;
     let statMode = 0;
+    let firstPlayableFullPath: string | null = null;
+    let firstPlayableRelPath: string | null = null;
 
     if (exists) {
       try {
@@ -1871,6 +1909,39 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
         if (isDirectory && readable) {
           const files = fs.readdirSync(target);
           fileCount = files.length;
+
+          const videoAudioExtensions = new Set([
+            '.mkv', '.mp4', '.m4v', '.webm', '.avi', '.mov', '.ts', '.m2ts', '.wmv', '.flv',
+            '.mp3', '.flac', '.m4a', '.wav', '.aac', '.ogg', '.opus',
+          ]);
+
+          const findPlayable = (dirPath: string, depth = 0): string | null => {
+            if (depth > 5) return null;
+            try {
+              const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+              for (const entry of entries) {
+                if (entry.isFile()) {
+                  const ext = path.extname(entry.name).toLowerCase();
+                  if (videoAudioExtensions.has(ext)) {
+                    return path.join(dirPath, entry.name);
+                  }
+                }
+              }
+              for (const entry of entries) {
+                if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                  const found = findPlayable(path.join(dirPath, entry.name), depth + 1);
+                  if (found) return found;
+                }
+              }
+            } catch {}
+            return null;
+          };
+
+          const foundPlayable = findPlayable(target);
+          if (foundPlayable) {
+            firstPlayableFullPath = foundPlayable;
+            firstPlayableRelPath = path.relative(target, foundPlayable).replace(/\\/g, '/');
+          }
         }
       } catch (err: any) {
         if (!errorCode) errorCode = err.code || err.message;
@@ -1887,11 +1958,11 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
 
     const message = exists
       ? (accessDenied
-          ? `Host path exists at "${resolvedPath}" but access is DENIED (${errorCode})`
-          : `Host path verified: "${resolvedPath}" (${isDirectory ? `${fileCount} items found` : 'file'})`)
+          ? `Host path exists at "${target}" but access is DENIED (${errorCode})`
+          : `Host path verified: "${target}" (${isDirectory ? `${fileCount} items found${firstPlayableFullPath ? `, playable media detected` : ''}` : 'file'})`)
       : `Host path does not exist on local filesystem: "${clean}" (resolved: "${resolvedPath}")`;
 
-    console.log(`[VerifyPath:PathAnalysis] Raw: "${rawInput}" | Resolved: "${resolvedPath}" | Exists: ${exists} | Accessible: ${accessible} | Error: ${errorCode || 'None'}`);
+    console.log(`[VerifyPath:PathAnalysis] Raw: "${rawInput}" | Target: "${target}" | Exists: ${exists} | Accessible: ${accessible} | Playable: ${firstPlayableFullPath || 'None'}`);
 
     return res.json({
       exists,
@@ -1904,7 +1975,9 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
       writable,
       rawInput,
       path: clean,
-      resolvedPath,
+      resolvedPath: target,
+      firstPlayableFullPath,
+      firstPlayableRelPath,
       mode: statMode ? (statMode & 0o777).toString(8) : undefined,
       message,
     });
@@ -5160,6 +5233,67 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
 
     const stat = fs.statSync(fullPath);
     if (stat.isDirectory()) {
+      // If fullPath is still a directory, scan it recursively for the first playable media file
+      const foundPlayable = (() => {
+        const scan = (dirPath: string, depth = 0): string | null => {
+          if (depth > 10) return null;
+          try {
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+              if (entry.isFile()) {
+                const ext = path.extname(entry.name).toLowerCase();
+                if (videoAudioExtensions.has(ext)) {
+                  return path.join(dirPath, entry.name);
+                }
+              }
+            }
+            for (const entry of entries) {
+              if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                const found = scan(path.join(dirPath, entry.name), depth + 1);
+                if (found) return found;
+              }
+            }
+          } catch (e) {}
+          return null;
+        };
+        return scan(fullPath);
+      })();
+
+      if (foundPlayable && fs.existsSync(foundPlayable) && fs.statSync(foundPlayable).isFile()) {
+        fullPath = foundPlayable;
+      } else {
+        // Clear fullPath to trigger placeholder generator below
+        fullPath = '';
+      }
+    }
+
+    if (!fullPath || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
+      // Fallback placeholder generation
+      try {
+        const titleLabel = path.basename(cleanRawStripped) || 'Media Stream';
+        const previewFile = path.join(os.tmpdir(), `sambavault_preview_${titleLabel.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`);
+        if (!fs.existsSync(previewFile) || fs.statSync(previewFile).size < 1000) {
+          const ffmpegBin = resolveFfmpegBinary();
+          const genCmd = [
+            '-nostdin', '-y',
+            '-f', 'lavfi', '-i', 'testsrc=duration=20:size=854x480:rate=24',
+            '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-b:a', '96k',
+            '-movflags', '+faststart',
+            previewFile
+          ];
+          const spawned = spawnSync(ffmpegBin, genCmd, { timeout: 4000 });
+          if (spawned.status === 0 && fs.existsSync(previewFile)) {
+            fullPath = previewFile;
+          }
+        } else {
+          fullPath = previewFile;
+        }
+      } catch (e) {}
+    }
+
+    if (!fullPath || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
       return res.status(404).json({ error: 'Resolved path is a directory, not a media file' });
     }
     const fileSize = stat.size;

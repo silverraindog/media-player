@@ -1366,6 +1366,8 @@ export interface PathExistsResult {
   path: string;
   rawInput?: string;
   resolvedPath?: string;
+  firstPlayableFullPath?: string | null;
+  firstPlayableRelPath?: string | null;
   mode?: string;
   message?: string;
   error?: string | null;
@@ -1573,6 +1575,8 @@ const fetchBackendCheckPath = async (cleanPath: string, rawInput: string): Promi
         ...data,
         rawInput,
         resolvedPath: data.resolvedPath || cleanPath,
+        firstPlayableFullPath: data.firstPlayableFullPath || null,
+        firstPlayableRelPath: data.firstPlayableRelPath || null,
       };
     }
   } catch (err: any) {

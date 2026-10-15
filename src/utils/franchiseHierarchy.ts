@@ -91,6 +91,11 @@ export const KNOWN_FRANCHISES_MAP: Record<string, { franchiseName: string; defau
     defaultSeries: '24 (2001)',
     overview: 'The real-time Counter Terrorist Unit saga following Jack Bauer across 9 seasons and event miniseries.',
   },
+  'farscape': {
+    franchiseName: 'Farscape',
+    defaultSeries: 'Farscape (Main Series)',
+    overview: 'Astronaut John Crichton is accidentally flung through a wormhole into deep space, finding refuge aboard Moya, a living biomechanical ship.',
+  },
 };
 
 /**
@@ -281,6 +286,62 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
           franchiseLower.includes(m.title.toLowerCase())
       );
 
+      // Synthesize rich SeasonMetadata array from sorted seasons
+      const synthesizedSeasons: SeasonMetadata[] = sortedSeasons.map((sNode, idx) => {
+        const seasonNumMatch = sNode.name.match(/(?:season|s)[\s._-]?(\d+)/i);
+        const sNum = seasonNumMatch ? parseInt(seasonNumMatch[1], 10) : (idx + 1);
+        const epChildren = (sNode.children || []).filter(c => c.type === 'file' || /\.(mp4|mkv|m4v|avi|mov|webm|flv|ts)$/i.test(c.name));
+        const episodes: EpisodeMetadata[] = epChildren.length > 0
+          ? epChildren.map((epNode, epIdx) => {
+              const epNumMatch = epNode.name.match(/(?:e|ep|episode)[\s._-]?(\d+)/i) || epNode.name.match(/(\d+)/);
+              const epNum = epNumMatch ? parseInt(epNumMatch[1], 10) : (epIdx + 1);
+              return {
+                episodeNumber: epNum,
+                seasonNumber: sNum,
+                title: epNode.name.replace(/\.[^/.]+$/, ''),
+                filename: epNode.name,
+                filePath: epNode.path,
+                playbackUrl: `/api/samba/stream?path=${encodeURIComponent(epNode.path)}`,
+              };
+            })
+          : [
+              {
+                episodeNumber: 1,
+                seasonNumber: sNum,
+                title: `${primarySeriesTitle} - S${String(sNum).padStart(2, '0')}E01`,
+                filename: `${primarySeriesTitle} - S${String(sNum).padStart(2, '0')}E01.mkv`,
+                filePath: `${sNode.path}/${primarySeriesTitle} - S${String(sNum).padStart(2, '0')}E01.mkv`,
+                playbackUrl: `/api/samba/stream?path=${encodeURIComponent(primarySeriesPath)}&season=${sNum}&episode=1`,
+              }
+            ];
+
+        return {
+          seasonNumber: sNum,
+          name: sNode.name,
+          episodeCount: episodes.length,
+          episodes,
+        };
+      });
+
+      const baseMedia = matchedMedia || {
+        id: `franchise-media-${franchiseLower}`,
+        title: primarySeriesTitle,
+        type: 'series' as const,
+        year: 2004,
+        genres: ['Sci-Fi', 'Action', 'Drama'],
+        overview: knownInfo.overview,
+        rating: 8.7,
+        posterUrl: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop&q=80',
+        recommendedFolderStructure: primarySeriesPath,
+        recommendedFilenames: ['tvshow.nfo', 'poster.jpg', 'fanart.jpg'],
+        source: 'curated-database',
+      };
+
+      const consolidatedMedia: MediaMetadata = {
+        ...baseMedia,
+        seasons: (baseMedia.seasons && baseMedia.seasons.length > 0) ? baseMedia.seasons : synthesizedSeasons,
+      };
+
       // Create Primary Series Node
       const primarySeriesNode: SambaShareNode = {
         id: `series-${franchiseLower}-primary`,
@@ -290,19 +351,7 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
         mediaType: 'series',
         hasNfo: true,
         hasPoster: true,
-        matchedMedia: matchedMedia || {
-          id: `franchise-media-${franchiseLower}`,
-          title: primarySeriesTitle,
-          type: 'series',
-          year: 2004,
-          genres: ['Sci-Fi', 'Action', 'Drama'],
-          overview: knownInfo.overview,
-          rating: 8.7,
-          posterUrl: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop&q=80',
-          recommendedFolderStructure: primarySeriesPath,
-          recommendedFilenames: ['tvshow.nfo', 'poster.jpg', 'fanart.jpg'],
-          source: 'curated-database',
-        },
+        matchedMedia: consolidatedMedia,
         children: sortedSeasons,
       };
 

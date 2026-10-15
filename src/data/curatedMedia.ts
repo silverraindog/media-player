@@ -60,6 +60,51 @@ export const CURATED_MEDIA_DATABASE: MediaMetadata[] = [
     source: 'curated-database'
   },
   {
+    id: 'series-farscape',
+    type: 'series',
+    title: 'Farscape',
+    originalTitle: 'Farscape',
+    year: 1999,
+    premiered: '1999-03-19',
+    overview: 'Astronaut John Crichton is accidentally flung through a wormhole across the galaxy into the middle of an alien war, finding refuge on Moya, a living biomechanical spacecraft carrying escaped alien prisoners.',
+    tagline: 'Life is like an alien wormhole: unpredictable.',
+    genres: ['Sci-Fi', 'Adventure', 'Drama'],
+    rating: 8.3,
+    votes: 42000,
+    runtime: '45 min/ep',
+    directors: ['Rockne S. O\'Bannon', 'Rowan Woods', 'Andrew Prowse'],
+    studio: 'The Jim Henson Company / Hallmark Entertainment',
+    certification: 'TV-14',
+    country: 'Australia / United States',
+    language: 'English',
+    imdbId: 'tt0187636',
+    tmdbId: '4271',
+    posterUrl: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop&q=80',
+    fanartUrl: 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?w=1600&auto=format&fit=crop&q=80',
+    recommendedFolderStructure: 'Franchises/Farscape/Season 01/',
+    recommendedFilenames: [
+      'Farscape - S01E01 - Premiere.mkv',
+      'Farscape - S01E02 - I, E.T..mkv',
+      'Farscape - S01E03 - Exodus from Genesis.mkv',
+      'tvshow.nfo',
+      'poster.jpg',
+      'fanart.jpg'
+    ],
+    seasons: [
+      {
+        seasonNumber: 1,
+        name: 'Season 1',
+        episodeCount: 22,
+        episodes: [
+          { episodeNumber: 1, seasonNumber: 1, title: 'Premiere', airDate: '1999-03-19', plot: 'Earth astronaut John Crichton tests his experimental Farscape 1 module and is sucked through a wormhole into deep space.', rating: 8.1, filename: 'Farscape - S01E01 - Premiere.mp4', filePath: 'Franchises/Farscape/Season 01/Farscape - S01E01 - Premiere.mp4', playbackUrl: '/api/samba/stream?path=Franchises%2FFarscape&season=1&episode=1' },
+          { episodeNumber: 2, seasonNumber: 1, title: 'I, E.T.', airDate: '1999-03-26', plot: 'Moya lands on a bog planet to cool her engines, and Crichton becomes the alien intruder to the local inhabitants.', rating: 7.9, filename: 'Farscape - S01E02 - I, E.T..mp4', filePath: 'Franchises/Farscape/Season 01/Farscape - S01E02 - I, E.T..mp4', playbackUrl: '/api/samba/stream?path=Franchises%2FFarscape&season=1&episode=2' },
+          { episodeNumber: 3, seasonNumber: 1, title: 'Exodus from Genesis', airDate: '1999-04-02', plot: 'Space bugs invade Moya and begin increasing the internal temperature, threatening the crew.', rating: 8.0, filename: 'Farscape - S01E03 - Exodus from Genesis.mp4', filePath: 'Franchises/Farscape/Season 01/Farscape - S01E03 - Exodus from Genesis.mp4', playbackUrl: '/api/samba/stream?path=Franchises%2FFarscape&season=1&episode=3' }
+        ]
+      }
+    ],
+    source: 'curated-database'
+  },
+  {
     id: 'series-the-walking-dead',
     type: 'series',
     title: 'The Walking Dead',

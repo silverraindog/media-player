@@ -578,15 +578,45 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           if (check.exists) {
             let foundPath = check.resolvedPath || mappedCandidate;
             if (check.isDirectory) {
-              const fname = media?.matchedFilename || parsedDbMedia?.matchedFilename;
-              if (fname) {
-                const subCandidate = `${foundPath}/${fname}`;
-                const subCheck = await checkPathExists(subCandidate);
-                if (subCheck.exists) foundPath = subCheck.resolvedPath || subCandidate;
-              } else if (media?.seasons?.[0]?.episodes?.[0]?.filename) {
-                const epCandidate = `${foundPath}/${media.seasons[0].episodes[0].filename}`;
-                const epCheck = await checkPathExists(epCandidate);
-                if (epCheck.exists) foundPath = epCheck.resolvedPath || epCandidate;
+              if (check.firstPlayableFullPath) {
+                foundPath = check.firstPlayableFullPath;
+              } else {
+                const fname = media?.matchedFilename || parsedDbMedia?.matchedFilename;
+                if (fname) {
+                  const subCandidate = `${foundPath}/${fname}`;
+                  const subCheck = await checkPathExists(subCandidate);
+                  if (subCheck.exists) foundPath = subCheck.resolvedPath || subCandidate;
+                } else if (media?.seasons && media.seasons.length > 0) {
+                  const activeSeason = media.seasons.find((s) => s.seasonNumber === (selectedSeasonNum || 1)) || media.seasons[0];
+                  const firstEp = activeSeason?.episodes?.find((e) => e.episodeNumber === (selectedEpisode?.episodeNumber || 1)) || activeSeason?.episodes?.[0];
+                  if (firstEp) {
+                    if (!selectedEpisode && isMounted) {
+                      setSelectedEpisode(firstEp);
+                    }
+                    if (firstEp.filePath) {
+                      const epCheck = await checkPathExists(firstEp.filePath);
+                      if (epCheck.exists && !epCheck.isDirectory) {
+                        foundPath = epCheck.resolvedPath || firstEp.filePath;
+                      }
+                    }
+                    if (firstEp.filename) {
+                      const sPad = String(activeSeason?.seasonNumber || 1).padStart(2, '0');
+                      const epCandidates = [
+                        `${foundPath}/Season ${sPad}/${firstEp.filename}`,
+                        `${foundPath}/Season ${activeSeason?.seasonNumber || 1}/${firstEp.filename}`,
+                        `${foundPath}/${activeSeason?.name || 'Season 01'}/${firstEp.filename}`,
+                        `${foundPath}/${firstEp.filename}`,
+                      ];
+                      for (const epCand of epCandidates) {
+                        const epCheck = await checkPathExists(epCand);
+                        if (epCheck.exists && !epCheck.isDirectory) {
+                          foundPath = epCheck.resolvedPath || epCand;
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
             finalPathToResolve = foundPath;
@@ -723,18 +753,44 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         }
       }
 
-      const uri = await resolveStreamableUri(finalPathToResolve);
+      let resolvedUri = await resolveStreamableUri(finalPathToResolve);
       
-      // Verify final path is not a directory
+      // Verify final path - if it's a directory, dynamically locate a playable episode or stream via proxy
       const finalCheck = await checkPathExists(finalPathToResolve);
       if (finalCheck.exists && finalCheck.isDirectory) {
-        setPlaybackError(`Cannot play media: "${media?.title || 'media'}" resolved to a directory, not a file. Please ensure a valid media file is selected.`);
+        if (finalCheck.firstPlayableFullPath) {
+          finalPathToResolve = finalCheck.firstPlayableFullPath;
+          resolvedUri = await resolveStreamableUri(finalPathToResolve);
+        } else if (media?.seasons && media.seasons.length > 0) {
+          const activeSeason = media.seasons.find((s) => s.seasonNumber === (selectedSeasonNum || 1)) || media.seasons[0];
+          const firstEp = activeSeason?.episodes?.find((e) => e.episodeNumber === (selectedEpisode?.episodeNumber || 1)) || activeSeason?.episodes?.[0];
+          if (firstEp) {
+            if (!selectedEpisode && isMounted) setSelectedEpisode(firstEp);
+            if (firstEp.filePath) {
+              const epCheck = await checkPathExists(firstEp.filePath);
+              if (epCheck.exists && !epCheck.isDirectory) {
+                finalPathToResolve = epCheck.resolvedPath || firstEp.filePath;
+                resolvedUri = await resolveStreamableUri(finalPathToResolve);
+              }
+            }
+          }
+        }
+
+        // Even if local filesystem only exposes directory container (e.g. SMB share root or cloud sandbox),
+        // the Samba stream proxy handles directory targets by streaming the matching season/episode.
+        console.info(`[MediaPlayerModal] Routing directory "${finalPathToResolve}" to Samba streaming proxy:`, resolvedUri);
+        if (isMounted) {
+          setResolvedLocalFilePath(finalPathToResolve);
+          setResolvedStreamUrl(resolvedUri);
+          setPlaybackError(null);
+        }
         return;
       }
 
       if (isMounted) {
         setResolvedLocalFilePath(finalPathToResolve || null);
-        setResolvedStreamUrl(uri);
+        setResolvedStreamUrl(resolvedUri);
+        setPlaybackError(null);
       }
     };
 

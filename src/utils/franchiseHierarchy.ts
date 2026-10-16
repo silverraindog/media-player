@@ -48,13 +48,18 @@ export function isFranchisePath(pathOrName: string): boolean {
 export const KNOWN_FRANCHISES_MAP: Record<string, { franchiseName: string; defaultSeries: string; overview: string }> = {
   'battlestar galactica': {
     franchiseName: 'Battlestar Galactica',
-    defaultSeries: 'Battlestar Galactica (2004)',
+    defaultSeries: 'Battlestar Galactica',
     overview: 'The complete Battlestar Galactica universe including the 2004 reimagined series, 1978 original series, and Caprica prequel.',
   },
   'bsg': {
     franchiseName: 'Battlestar Galactica',
-    defaultSeries: 'Battlestar Galactica (2004)',
+    defaultSeries: 'Battlestar Galactica',
     overview: 'The complete Battlestar Galactica universe.',
+  },
+  'farscape': {
+    franchiseName: 'Farscape',
+    defaultSeries: 'Farscape',
+    overview: 'Astronaut John Crichton is accidentally flung through a wormhole across the galaxy into the middle of an alien war, finding refuge on Moya.',
   },
   'star wars': {
     franchiseName: 'Star Wars Saga',
@@ -90,11 +95,6 @@ export const KNOWN_FRANCHISES_MAP: Record<string, { franchiseName: string; defau
     franchiseName: '24 Franchise',
     defaultSeries: '24 (2001)',
     overview: 'The real-time Counter Terrorist Unit saga following Jack Bauer across 9 seasons and event miniseries.',
-  },
-  'farscape': {
-    franchiseName: 'Farscape',
-    defaultSeries: 'Farscape (Main Series)',
-    overview: 'Astronaut John Crichton is accidentally flung through a wormhole into deep space, finding refuge aboard Moya, a living biomechanical ship.',
   },
 };
 

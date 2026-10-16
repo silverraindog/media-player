@@ -1482,11 +1482,23 @@ export const verifyPath = async (targetPath: string): Promise<PathExistsResult> 
         .catch(() => invoke<any>('checkPathExists', { path: cleanPath }));
 
       const exists = typeof res === 'boolean' ? res : Boolean(res?.exists ?? res?.is_mounted ?? res?.isMounted);
-      const isDirectory = res?.is_directory ?? res?.isDirectory ?? true;
+      const isDirectory = res?.is_directory ?? res?.isDirectory ?? false;
       const fileCount = res?.file_count ?? res?.fileCount ?? (res?.files?.length || 0);
       const readable = res?.readable ?? exists;
       const writable = res?.writable ?? false;
       const resolved = res?.resolved_path || res?.resolvedPath || cleanPath;
+      let firstPlayableFullPath = res?.first_playable_full_path || res?.firstPlayableFullPath || null;
+      let firstPlayableRelPath = res?.first_playable_rel_path || res?.firstPlayableRelPath || null;
+
+      if (isDirectory && !firstPlayableFullPath) {
+        try {
+          const backendCheck = await fetchBackendCheckPath(cleanPath, rawInput);
+          if (backendCheck.firstPlayableFullPath) {
+            firstPlayableFullPath = backendCheck.firstPlayableFullPath;
+            firstPlayableRelPath = backendCheck.firstPlayableRelPath;
+          }
+        } catch {}
+      }
 
       result = {
         exists,
@@ -1500,6 +1512,8 @@ export const verifyPath = async (targetPath: string): Promise<PathExistsResult> 
         path: cleanPath,
         resolvedPath: resolved,
         errorCode: res?.error_code || null,
+        firstPlayableFullPath,
+        firstPlayableRelPath,
         message: exists
           ? `Host path "${resolved}" exists on system (${isDirectory ? `${fileCount} items found` : 'file'})`
           : `Host path "${cleanPath}" does not exist on local filesystem (resolved: "${resolved}")`,

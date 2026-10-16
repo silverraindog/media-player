@@ -444,9 +444,28 @@ pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
         return p;
     }
 
+    let volumes_media = Path::new("/Volumes/media").join(&normalized);
+    if volumes_media.exists() {
+        return volumes_media;
+    }
+
+    if let Ok(entries) = fs::read_dir("/Volumes") {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let candidate = entry.path().join(&normalized);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+
     let volumes_candidate = Path::new("/Volumes").join(&normalized);
     if volumes_candidate.exists() {
         return volumes_candidate;
+    }
+
+    let mnt_media = Path::new("/mnt/media").join(&normalized);
+    if mnt_media.exists() {
+        return mnt_media;
     }
 
     let mnt_candidate = Path::new("/mnt").join(&normalized);
@@ -455,10 +474,35 @@ pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        return cwd.join(&normalized);
+        let share_candidate = cwd.join("samba_share").join(&normalized);
+        if share_candidate.exists() {
+            return share_candidate;
+        }
+        let cwd_candidate = cwd.join(&normalized);
+        if cwd_candidate.exists() {
+            return cwd_candidate;
+        }
     }
 
     PathBuf::from(&normalized)
+}
+
+pub fn find_first_playable_media_file(dir_path: &Path) -> Option<PathBuf> {
+    let video_audio_exts = [
+        "mp4", "mkv", "m4v", "webm", "avi", "mov", "ts", "m2ts", "wmv", "flv",
+        "mp3", "flac", "m4a", "wav", "aac", "ogg", "opus",
+    ];
+    for entry in WalkDir::new(dir_path).max_depth(6).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+                let ext_lower = ext.to_lowercase();
+                if video_audio_exts.contains(&ext_lower.as_str()) {
+                    return Some(entry.path().to_path_buf());
+                }
+            }
+        }
+    }
+    None
 }
 
 use std::collections::hash_map::DefaultHasher;
@@ -1178,6 +1222,8 @@ struct PathCheckResult {
     writable: bool,
     resolved_path: String,
     error_code: Option<String>,
+    first_playable_full_path: Option<String>,
+    first_playable_rel_path: Option<String>,
 }
 
 #[tauri::command]
@@ -1189,6 +1235,8 @@ async fn check_path_exists(path: String) -> Result<PathCheckResult, String> {
     let mut readable = false;
     let mut writable = false;
     let mut error_code = None;
+    let mut first_playable_full_path = None;
+    let mut first_playable_rel_path = None;
 
     if exists {
         is_directory = p.is_dir();
@@ -1211,6 +1259,16 @@ async fn check_path_exists(path: String) -> Result<PathCheckResult, String> {
                 }
                 Err(e) => {
                     error_code = Some(e.to_string());
+                }
+            }
+        }
+
+        // Find first playable media file if target is a directory
+        if is_directory && readable {
+            if let Some(playable) = find_first_playable_media_file(&p) {
+                first_playable_full_path = Some(playable.to_string_lossy().to_string());
+                if let Ok(rel) = playable.strip_prefix(&p) {
+                    first_playable_rel_path = Some(rel.to_string_lossy().replace('\\', "/"));
                 }
             }
         }
@@ -1249,6 +1307,8 @@ async fn check_path_exists(path: String) -> Result<PathCheckResult, String> {
         writable,
         resolved_path: p.to_string_lossy().to_string(),
         error_code,
+        first_playable_full_path,
+        first_playable_rel_path,
     })
 }
 
@@ -1501,11 +1561,20 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
 
 #[tauri::command]
 async fn probe_media_file(source_path: String) -> Result<String, String> {
-    let source_path = PathBuf::from(&source_path)
-        .canonicalize()
-        .map_err(|error| format!("Could not access the media file: {}", error))?;
-    if !source_path.is_file() {
-        return Err("The selected media source is not a file.".to_string());
+    let p = resolve_absolute_samba_path(&source_path);
+    let resolved_path = if p.is_file() {
+        p
+    } else if p.is_dir() {
+        find_first_playable_media_file(&p)
+            .ok_or_else(|| format!("Directory \"{}\" contains no playable media files.", source_path))?
+    } else {
+        PathBuf::from(&source_path)
+            .canonicalize()
+            .map_err(|error| format!("Could not access the media file: {}", error))?
+    };
+
+    if !resolved_path.is_file() {
+        return Err(format!("The selected media source \"{}\" is a directory or not a file.", source_path));
     }
 
     let locator = locate_ffmpeg()?;
@@ -1517,7 +1586,7 @@ async fn probe_media_file(source_path: String) -> Result<String, String> {
             "-show_format",
             "-show_streams",
             "-of", "json",
-            &source_path.to_string_lossy()
+            &resolved_path.to_string_lossy()
         ])
         .output()
         .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
@@ -1599,12 +1668,20 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
     let resolved_source = if is_url {
         source_path.clone()
     } else {
-        let p = PathBuf::from(&source_path);
+        let p = resolve_absolute_samba_path(&source_path);
         if p.is_file() {
             p.to_string_lossy().to_string()
+        } else if p.is_dir() {
+            let playable = find_first_playable_media_file(&p)
+                .ok_or_else(|| format!("Directory \"{}\" contains no playable media files.", source_path))?;
+            playable.to_string_lossy().to_string()
         } else if let Ok(canon) = p.canonicalize() {
             if canon.is_file() {
                 canon.to_string_lossy().to_string()
+            } else if canon.is_dir() {
+                let playable = find_first_playable_media_file(&canon)
+                    .ok_or_else(|| format!("Directory \"{}\" contains no playable media files.", source_path))?;
+                playable.to_string_lossy().to_string()
             } else {
                 source_path.clone()
             }
@@ -1613,15 +1690,27 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
             let cwd_path = std::env::current_dir().unwrap_or_default().join(&source_path);
             if cwd_path.is_file() {
                 cwd_path.to_string_lossy().to_string()
+            } else if cwd_path.is_dir() {
+                let playable = find_first_playable_media_file(&cwd_path)
+                    .ok_or_else(|| format!("Directory \"{}\" contains no playable media files.", source_path))?;
+                playable.to_string_lossy().to_string()
             } else {
                 let share_path = std::env::current_dir().unwrap_or_default().join("samba_share").join(&source_path);
                 if share_path.is_file() {
                     share_path.to_string_lossy().to_string()
+                } else if share_path.is_dir() {
+                    let playable = find_first_playable_media_file(&share_path)
+                        .ok_or_else(|| format!("Directory \"{}\" contains no playable media files.", source_path))?;
+                    playable.to_string_lossy().to_string()
                 } else if source_path.starts_with('/') {
                     let trimmed = source_path.trim_start_matches('/');
                     let share_path2 = std::env::current_dir().unwrap_or_default().join("samba_share").join(trimmed);
                     if share_path2.is_file() {
                         share_path2.to_string_lossy().to_string()
+                    } else if share_path2.is_dir() {
+                        let playable = find_first_playable_media_file(&share_path2)
+                            .ok_or_else(|| format!("Directory \"{}\" contains no playable media files.", source_path))?;
+                        playable.to_string_lossy().to_string()
                     } else {
                         source_path.clone()
                     }
@@ -1631,6 +1720,10 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
             }
         }
     };
+
+    if !is_url && Path::new(&resolved_source).is_dir() {
+        return Err(format!("Cannot transcode \"{}\": Path is a directory and contains no playable media files.", source_path));
+    }
 
     let is_audio = match media_type.as_str() {
         "audio" => true,

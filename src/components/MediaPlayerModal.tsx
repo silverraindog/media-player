@@ -469,6 +469,16 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       window.location.origin.includes('tauri.localhost')
     );
 
+    const isVideoAudioFile = /\.(mp4|mkv|m4v|webm|avi|mov|ts|m2ts|wmv|flv|mp3|flac|m4a|wav|aac|ogg|opus)$/i.test(cleanPath);
+    if (isTauriEnv && isVideoAudioFile && (cleanPath.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(cleanPath))) {
+      try {
+        const { convertFileSrc } = await import('@tauri-apps/api/tauri');
+        return convertFileSrc(cleanPath);
+      } catch (e) {
+        console.warn('[resolveStreamableUri] convertFileSrc fallback:', e);
+      }
+    }
+
     const params = new URLSearchParams();
     params.set('path', cleanPath);
     if (selectedSeasonNum !== undefined) {
@@ -756,39 +766,74 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       let resolvedUri = await resolveStreamableUri(finalPathToResolve);
       
       // Verify final path - if it's a directory, dynamically locate a playable episode or stream via proxy
-      const finalCheck = await checkPathExists(finalPathToResolve);
-      if (finalCheck.exists && finalCheck.isDirectory) {
-        if (finalCheck.firstPlayableFullPath) {
-          finalPathToResolve = finalCheck.firstPlayableFullPath;
+      let activeCheck = await checkPathExists(finalPathToResolve);
+      if (activeCheck.exists && activeCheck.isDirectory) {
+        if (activeCheck.firstPlayableFullPath) {
+          finalPathToResolve = activeCheck.firstPlayableFullPath;
           resolvedUri = await resolveStreamableUri(finalPathToResolve);
+          activeCheck = await checkPathExists(finalPathToResolve);
         } else if (media?.seasons && media.seasons.length > 0) {
-          const activeSeason = media.seasons.find((s) => s.seasonNumber === (selectedSeasonNum || 1)) || media.seasons[0];
-          const firstEp = activeSeason?.episodes?.find((e) => e.episodeNumber === (selectedEpisode?.episodeNumber || 1)) || activeSeason?.episodes?.[0];
-          if (firstEp) {
-            if (!selectedEpisode && isMounted) setSelectedEpisode(firstEp);
-            if (firstEp.filePath) {
-              const epCheck = await checkPathExists(firstEp.filePath);
-              if (epCheck.exists && !epCheck.isDirectory) {
-                finalPathToResolve = epCheck.resolvedPath || firstEp.filePath;
-                resolvedUri = await resolveStreamableUri(finalPathToResolve);
+          const seasonsToCheck = [
+            media.seasons.find((s) => s.seasonNumber === (selectedSeasonNum || 1)),
+            ...media.seasons,
+          ].filter(Boolean) as typeof media.seasons;
+
+          let foundEpFile: string | null = null;
+          for (const s of seasonsToCheck) {
+            const episodes = s.episodes || [];
+            for (const ep of episodes) {
+              if (ep.filePath) {
+                const epCheck = await checkPathExists(ep.filePath);
+                if (epCheck.exists && !epCheck.isDirectory) {
+                  foundEpFile = epCheck.resolvedPath || ep.filePath;
+                  if (!selectedEpisode && isMounted) setSelectedEpisode(ep);
+                  break;
+                }
+              }
+              if (ep.filename) {
+                const sPad = String(s.seasonNumber || 1).padStart(2, '0');
+                const epCandidates = [
+                  `${finalPathToResolve}/Season ${sPad}/${ep.filename}`,
+                  `${finalPathToResolve}/Season ${s.seasonNumber}/${ep.filename}`,
+                  `${finalPathToResolve}/Specials & Extras/${ep.filename}`,
+                  `${finalPathToResolve}/${s.name || 'Season 01'}/${ep.filename}`,
+                  `${finalPathToResolve}/${ep.filename}`,
+                ];
+                for (const epCand of epCandidates) {
+                  const epCheck = await checkPathExists(epCand);
+                  if (epCheck.exists && !epCheck.isDirectory) {
+                    foundEpFile = epCheck.resolvedPath || epCand;
+                    if (!selectedEpisode && isMounted) setSelectedEpisode(ep);
+                    break;
+                  }
+                }
+                if (foundEpFile) break;
               }
             }
+            if (foundEpFile) break;
+          }
+
+          if (foundEpFile) {
+            finalPathToResolve = foundEpFile;
+            resolvedUri = await resolveStreamableUri(finalPathToResolve);
+            activeCheck = await checkPathExists(finalPathToResolve);
           }
         }
 
-        // Even if local filesystem only exposes directory container (e.g. SMB share root or cloud sandbox),
-        // the Samba stream proxy handles directory targets by streaming the matching season/episode.
-        console.info(`[MediaPlayerModal] Routing directory "${finalPathToResolve}" to Samba streaming proxy:`, resolvedUri);
-        if (isMounted) {
-          setResolvedLocalFilePath(finalPathToResolve);
-          setResolvedStreamUrl(resolvedUri);
-          setPlaybackError(null);
+        // If target is still a directory container, stream via Samba proxy and never expose directory as local file
+        if (activeCheck.isDirectory) {
+          console.info(`[MediaPlayerModal] Routing directory container "${finalPathToResolve}" to Samba streaming proxy:`, resolvedUri);
+          if (isMounted) {
+            setResolvedLocalFilePath(null);
+            setResolvedStreamUrl(resolvedUri);
+            setPlaybackError(null);
+          }
+          return;
         }
-        return;
       }
 
       if (isMounted) {
-        setResolvedLocalFilePath(finalPathToResolve || null);
+        setResolvedLocalFilePath(activeCheck.isDirectory ? null : finalPathToResolve);
         setResolvedStreamUrl(resolvedUri);
         setPlaybackError(null);
       }
@@ -1066,10 +1111,28 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       if (isTauriPlaybackEnvironment()) {
         const isResolvedSource = !isManualStreamOverride &&
           (!customLocalBlobUrl || customLocalBlobUrl === resolvedStreamUrl);
-        const sourcePath = nativeTranscodeSourcePath || (isResolvedSource ? resolvedLocalFilePath : null) || currentStreamUrl;
+        let sourcePath = nativeTranscodeSourcePath || (isResolvedSource ? resolvedLocalFilePath : null) || currentStreamUrl;
         
         if (!sourcePath) {
           throw new Error('Transcoding in the desktop app requires a local media file or a valid stream.');
+        }
+
+        // Safety check: ensure sourcePath is never a directory (which causes FFmpeg code 235)
+        if (sourcePath && !sourcePath.startsWith('http://') && !sourcePath.startsWith('https://')) {
+          try {
+            const check = await checkPathExists(sourcePath);
+            if (check.exists && check.isDirectory) {
+              if (check.firstPlayableFullPath) {
+                sourcePath = check.firstPlayableFullPath;
+              } else {
+                throw new Error(`Cannot transcode "${media?.title || 'media'}": The resolved path "${sourcePath}" is a directory and does not contain any playable media files.`);
+              }
+            }
+          } catch (dirErr: any) {
+            if (dirErr?.message?.includes('Cannot transcode')) {
+              throw dirErr;
+            }
+          }
         }
         
         try {

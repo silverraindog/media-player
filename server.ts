@@ -5293,10 +5293,14 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
       } catch (e) {}
     }
 
-    if (!fullPath || !fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
+    if (!fullPath || !fs.existsSync(fullPath)) {
+      return res.status(404).json({ error: 'Resolved path is not an accessible media file' });
+    }
+    const activeFileStat = fs.statSync(fullPath);
+    if (activeFileStat.isDirectory()) {
       return res.status(404).json({ error: 'Resolved path is a directory, not a media file' });
     }
-    const fileSize = stat.size;
+    const fileSize = activeFileStat.size;
     const range = req.headers.range;
 
     const ext = path.extname(fullPath).toLowerCase();

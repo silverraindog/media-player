@@ -873,6 +873,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     const isMkv = /\.mkv(\?|$)/i.test(currentStreamUrl) || /\.mkv(\?|$)/i.test(resolvedLocalFilePath || '') || /\.mkv(\?|$)/i.test(selectedEpisode?.filePath || '');
     if (isMkv) {
       setShowMatroskaPlayer(true);
+    } else {
+      setShowMatroskaPlayer(false);
     }
   }, [currentStreamUrl, resolvedLocalFilePath, selectedEpisode]);
 
@@ -2137,7 +2139,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     streamUrl={currentStreamUrl}
                     title={media?.title || 'Media File'}
                     onClose={() => setShowMatroskaPlayer(false)}
-                    onFallbackToTranscode={() => setShowMatroskaPlayer(false)}
+                    onFallbackToTranscode={() => {
+                      setShowMatroskaPlayer(false);
+                      handleMediaDecodeError('Requested fallback from Matroska player to FFmpeg transcode engine.');
+                    }}
                   />
                 </div>
               ) : (

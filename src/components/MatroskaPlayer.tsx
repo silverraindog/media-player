@@ -28,8 +28,13 @@ export const MatroskaPlayer: React.FC<MatroskaPlayerProps> = ({
   const [loadingMetadata, setLoadingMetadata] = useState(true);
   const [mkvMeta, setMkvMeta] = useState<MatroskaMetadataInfo | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [videoPlaybackError, setVideoPlaybackError] = useState<string | null>(null);
   const [isPlayingDirect, setIsPlayingDirect] = useState(false);
   const [activeTab, setActiveTab] = useState<'player' | 'structure' | 'diagnostics'>('player');
+
+  useEffect(() => {
+    setVideoPlaybackError(null);
+  }, [streamUrl]);
 
   useEffect(() => {
     let isMounted = true;
@@ -144,20 +149,47 @@ export const MatroskaPlayer: React.FC<MatroskaPlayerProps> = ({
           <div className="flex-1 flex flex-col items-center justify-center relative p-6">
             <div className="w-full max-w-4xl aspect-video bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-2xl relative flex flex-col items-center justify-center group">
               <video
-                ref={(node) => {
-                  if (node && streamUrl && !node.src) {
-                    node.src = streamUrl;
-                  }
-                }}
+                src={streamUrl}
                 controls
                 autoPlay
+                playsInline
                 className="w-full h-full object-contain bg-black"
+                onLoadedMetadata={() => setVideoPlaybackError(null)}
                 onError={(e) => {
                   console.warn('[MatroskaPlayer] Native MKV playback error, fallback recommended:', e);
+                  setVideoPlaybackError(
+                    'Media source format not supported by browser HTML5 player. MKV files containing HEVC/H.265 video or DTS/AC3 audio require fast transcoding.'
+                  );
                 }}
               />
               
-              {loadingMetadata && (
+              {videoPlaybackError && (
+                <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20 space-y-4">
+                  <div className="p-3 bg-amber-500/20 text-amber-400 rounded-2xl border border-amber-500/30">
+                    <AlertCircle className="w-8 h-8" />
+                  </div>
+                  <div className="max-w-md space-y-1">
+                    <h4 className="text-base font-semibold text-white">Browser Playback Incompatibility</h4>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      {videoPlaybackError}
+                    </p>
+                    <p className="text-[11px] text-slate-400 font-mono mt-1">
+                      Matroska EBML metadata was successfully parsed. Use the bundled FFmpeg engine to transcode or remux on the fly.
+                    </p>
+                  </div>
+                  {onFallbackToTranscode && (
+                    <button
+                      onClick={onFallbackToTranscode}
+                      className="px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-900/30 transition-all flex items-center space-x-2 cursor-pointer"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>⚡ Switch to FFmpeg Transcode Engine</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {loadingMetadata && !videoPlaybackError && (
                 <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center space-y-3 z-10">
                   <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin" />
                   <p className="text-sm font-medium text-slate-300">Parsing Matroska container structure & index cues...</p>

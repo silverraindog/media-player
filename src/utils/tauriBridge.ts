@@ -1237,7 +1237,7 @@ export interface PathValidationResult {
 
 export const validateSambaPlaybackPath = (
   rawPathOrUrl: string,
-  sambaConfig: { server?: string; share?: string; mountPath?: string } = {}
+  sambaConfig: { server?: string; share?: string; mountPath?: string; enabled?: boolean; hostPath?: string } = {}
 ): PathValidationResult => {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
   const isWin = ua.includes('win');
@@ -1255,7 +1255,30 @@ export const validateSambaPlaybackPath = (
     };
   }
 
-  // If already an HTTP stream URL
+  // If local /api/samba/stream proxy URL, unwrap the real target path
+  if (rawPathOrUrl.startsWith('/api/samba/stream')) {
+    try {
+      const url = new URL(rawPathOrUrl, 'http://localhost');
+      const targetParam = url.searchParams.get('path') || url.searchParams.get('file');
+      if (targetParam) {
+        let decoded = decodeURIComponent(targetParam);
+        if (sambaConfig.enabled === false && !decoded.startsWith('/') && !/^[a-zA-Z]:[/\\]/.test(decoded)) {
+          const root = (sambaConfig.hostPath || '/Volumes/media').replace(/\/+$/, '');
+          decoded = `${root}/${decoded.replace(/^[/\\]+/, '')}`;
+        }
+        return {
+          resolvedPath: decoded,
+          protocol: decoded.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(decoded) ? 'file' : (sambaConfig.enabled === false ? 'file' : 'http'),
+          platform,
+          isAbsolute: decoded.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(decoded),
+          valid: true,
+          message: sambaConfig.enabled === false ? 'Direct Host Path Mode' : 'Streaming via local HTTP proxy endpoint',
+        };
+      }
+    } catch {}
+  }
+
+  // If remote HTTP stream URL
   if (rawPathOrUrl.startsWith('http://') || rawPathOrUrl.startsWith('https://')) {
     return {
       resolvedPath: rawPathOrUrl,
@@ -1267,7 +1290,7 @@ export const validateSambaPlaybackPath = (
     };
   }
 
-  // If local /api/ proxy stream URL
+  // If other local /api/ proxy stream URL
   if (rawPathOrUrl.startsWith('/api/')) {
     return {
       resolvedPath: rawPathOrUrl,

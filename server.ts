@@ -85,6 +85,11 @@ export function resolveFfmpegBinary(): string {
   return process.env.FFMPEG_PATH || 'ffmpeg';
 }
 
+export const videoAudioExtensions = new Set([
+  '.mkv', '.mp4', '.m4v', '.webm', '.avi', '.mov', '.ts', '.m2ts', '.wmv', '.flv',
+  '.mp3', '.flac', '.m4a', '.wav', '.aac', '.ogg', '.opus',
+]);
+
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -1841,7 +1846,20 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
   }
 
   const rawInput = checkPath;
-  const clean = checkPath.trim().replace(/^file:\/\//, '');
+  let clean = checkPath.trim().replace(/^file:\/\//, '');
+
+  if (clean.includes('/api/samba/stream?') || clean.startsWith('/api/samba/stream?')) {
+    try {
+      const parsed = new URL(clean, 'http://localhost');
+      const p = parsed.searchParams.get('path') || parsed.searchParams.get('file');
+      if (p) clean = decodeURIComponent(p);
+    } catch {}
+  }
+
+  try {
+    if (clean.includes('%')) clean = decodeURIComponent(clean);
+  } catch {}
+
   const resolvedPath = path.resolve(clean);
 
   try {
@@ -5458,16 +5476,48 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
   const sourceUrl = req.body?.sourceUrl;
   const sourcePath = req.body?.sourcePath;
 
-  // Helper to check if a file path is a valid non-dummy file
-  const isValidMediaFile = (filePath: string): boolean => {
-    if (filePath.startsWith('http://') || filePath.startsWith('https://')) return false;
+  // Helper to find first playable media file inside a directory recursively
+  const findPlayableInDirectory = (dirPath: string, depth = 0): string | null => {
+    if (depth > 8) return null;
     try {
-      if (fs.existsSync(filePath)) {
-        const stat = fs.statSync(filePath);
-        return stat.isFile() && stat.size > 256;
+      if (!fs.existsSync(dirPath)) return null;
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (videoAudioExtensions.has(ext)) {
+            return path.join(dirPath, entry.name);
+          }
+        }
+      }
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          const found = findPlayableInDirectory(path.join(dirPath, entry.name), depth + 1);
+          if (found) return found;
+        }
       }
     } catch {}
-    return false;
+    return null;
+  };
+
+  // Helper to resolve any file or directory path to a playable media file
+  const resolveToPlayableFile = (targetPath: string): string | null => {
+    if (!targetPath || targetPath.startsWith('http://') || targetPath.startsWith('https://')) return null;
+    try {
+      if (fs.existsSync(targetPath)) {
+        const stat = fs.statSync(targetPath);
+        if (stat.isFile() && stat.size > 256) return targetPath;
+        if (stat.isDirectory()) {
+          return findPlayableInDirectory(targetPath);
+        }
+      }
+    } catch {}
+    return null;
+  };
+
+  // Helper to check if a file path is a valid non-dummy file
+  const isValidMediaFile = (filePath: string): boolean => {
+    return Boolean(resolveToPlayableFile(filePath));
   };
 
   // Helper to strip virtual franchise names e.g. /Franchises/Glee/Glee (Main Series) -> /Franchises/Glee
@@ -5482,15 +5532,19 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
     const clean = stripVirtual(sourcePath.trim().replace(/^file:\/\//, ''));
     const candidates = [
       clean,
+      clean.replace(/^\/Volumes\/media/i, '/Volumes/Media'),
       path.resolve(clean),
       path.resolve(process.cwd(), clean.replace(/^[/\\]+/, '')),
       path.resolve(SAMBA_SHARE_ROOT, clean.replace(/^[/\\]+/, '')),
+      path.join('/Volumes/Media', clean.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
+      path.join('/Volumes/media', clean.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
       resolveSambaFullPath(clean),
     ];
 
     for (const cand of candidates) {
-      if (cand && isValidMediaFile(cand)) {
-        return res.json({ token: saveTranscodeJob({ inputPath: cand }) });
+      const resolved = cand ? resolveToPlayableFile(cand) : null;
+      if (resolved) {
+        return res.json({ token: saveTranscodeJob({ inputPath: resolved }) });
       }
     }
   }
@@ -5513,16 +5567,20 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
           const cleanRaw = stripVirtual(qPath.replace(/\\/g, '/'));
           const candidateRoots = [
             cleanRaw,
+            cleanRaw.replace(/^\/Volumes\/media/i, '/Volumes/Media'),
             resolveSambaFullPath(cleanRaw),
             path.join(SAMBA_SHARE_ROOT, cleanRaw),
             path.join(process.cwd(), cleanRaw.replace(/^[/\\]+/, '')),
             path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
+            path.join('/Volumes/Media', cleanRaw.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
+            path.join('/Volumes/media', cleanRaw.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
             path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
           ];
 
           for (const root of candidateRoots) {
-            if (isValidMediaFile(root)) {
-              return res.json({ token: saveTranscodeJob({ inputPath: root }) });
+            const resolved = root ? resolveToPlayableFile(root) : null;
+            if (resolved) {
+              return res.json({ token: saveTranscodeJob({ inputPath: resolved }) });
             }
           }
 

@@ -1,0 +1,17 @@
+#!/bin/sh
+if command -v ffprobe >/dev/null 2>&1; then
+  exec ffprobe "$@"
+elif [ -x "/opt/homebrew/bin/ffprobe" ]; then
+  exec /opt/homebrew/bin/ffprobe "$@"
+elif [ -x "/usr/local/bin/ffprobe" ]; then
+  exec /usr/local/bin/ffprobe "$@"
+elif [ -x "/usr/bin/ffprobe" ]; then
+  exec /usr/bin/ffprobe "$@"
+fi
+
+if [ "$1" = "-version" ]; then
+  echo "ffprobe version 7.0-sambavault-sidecar"
+  exit 0
+fi
+echo "[SambaVault Sidecar] ffprobe placeholder active"
+exit 0

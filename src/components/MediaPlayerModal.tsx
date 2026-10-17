@@ -1102,7 +1102,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       if (isTauriPlaybackEnvironment()) {
         const isResolvedSource = !isManualStreamOverride &&
           (!customLocalBlobUrl || customLocalBlobUrl === resolvedStreamUrl);
-        let sourcePath = nativeTranscodeSourcePath || (isResolvedSource ? resolvedLocalFilePath : null) || currentStreamUrl;
+        const localSambaPath = currentStreamUrl.includes('/api/samba/stream')
+          ? resolveLocalMountPath(currentStreamUrl, sambaConfig.share || 'media')
+          : null;
+        let sourcePath = nativeTranscodeSourcePath ||
+          (isResolvedSource ? resolvedLocalFilePath : null) ||
+          localSambaPath ||
+          currentStreamUrl;
 
         if (!sourcePath) {
           throw new Error('Transcoding in the desktop app requires a local media file or a valid stream.');

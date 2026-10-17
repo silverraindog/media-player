@@ -35,7 +35,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
-import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics, detectFFmpegPath } from '../utils/tauriBridge';
+import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics, detectFFmpegPath, isSidecarFFmpegPath } from '../utils/tauriBridge';
 import { sanitizeMediaSourcePath, stripVirtualFranchiseSuffix } from '../utils/pathSanitizer';
 import { apiCall } from '../lib/api';
 import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
@@ -156,6 +156,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [transcodeReadinessStatus, setTranscodeReadinessStatus] = useState<{
     checked: boolean;
     ready: boolean;
+    isSidecar?: boolean;
+    binaryPath?: string | null;
     message: string;
   }>({ checked: false, ready: true, message: 'Checking codecs...' });
 
@@ -165,11 +167,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       const data = await checkFfmpegCodecsViaTauri();
       setDiagnosticsData(data);
       const isReady = Boolean(data.available && (data.hasH264 || data.hasHevc));
+      const isSidecar = Boolean(data.isSidecar || isSidecarFFmpegPath(data.path || null));
       setTranscodeReadinessStatus({
         checked: true,
         ready: isReady,
+        isSidecar,
+        binaryPath: data.path || null,
         message: isReady
-          ? `Codecs OK (${[data.hasH264 && 'H.264', data.hasHevc && 'HEVC'].filter(Boolean).join('/')})`
+          ? (isSidecar ? '⚡ Sidecar FFmpeg (Native)' : `Codecs OK (${[data.hasH264 && 'H.264', data.hasHevc && 'HEVC'].filter(Boolean).join('/')})`)
           : 'FFmpeg misconfigured - Click to repair',
       });
       return data;
@@ -188,6 +193,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       setTranscodeReadinessStatus({
         checked: true,
         ready: false,
+        isSidecar: false,
+        binaryPath: null,
         message: 'FFmpeg missing - Click to repair',
       });
       return fallback;
@@ -1100,8 +1107,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     const performFfmpegPreflight = async () => {
       const ffmpegPath = await detectFFmpegPath();
       if (!ffmpegPath) {
-        throw new Error('FFmpeg binary not found in standard system paths. Please install FFmpeg.');
+        throw new Error('FFmpeg binary not found. Please ensure FFmpeg sidecar is bundled or installed.');
       }
+      const isSidecar = isSidecarFFmpegPath(ffmpegPath);
+      console.info(`[MediaPlayerModal] Active FFmpeg Engine (${isSidecar ? '⚡ Pre-compiled Sidecar' : 'System Binary'}): ${ffmpegPath}`);
       const exists = await checkPathExists(ffmpegPath);
       if (!exists.exists || !exists.readable) {
         throw new Error(`FFmpeg binary at "${ffmpegPath}" is inaccessible. Check system permissions.`);
@@ -2189,10 +2198,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   }}
                   className={`px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-md transition cursor-pointer shadow-lg ${
                     transcodeReadinessStatus.ready
-                      ? 'bg-slate-900/80 text-cyan-300 border border-cyan-800/60 hover:bg-slate-900'
+                      ? (transcodeReadinessStatus.isSidecar
+                          ? 'bg-indigo-950/90 text-indigo-300 border border-indigo-500/80 hover:bg-indigo-900 shadow-indigo-500/20'
+                          : 'bg-slate-900/80 text-cyan-300 border border-cyan-800/60 hover:bg-slate-900')
                       : 'bg-amber-950/90 text-amber-200 border border-amber-600 animate-pulse hover:bg-amber-900'
                   }`}
-                  title="Click to view FFmpeg diagnostics and repair transcode pipeline"
+                  title={transcodeReadinessStatus.binaryPath ? `FFmpeg Binary: ${transcodeReadinessStatus.binaryPath}` : "Click to view FFmpeg diagnostics"}
                 >
                   <Activity className="w-3 h-3 text-indigo-400" />
                   <span>Readiness: {transcodeReadinessStatus.message}</span>

@@ -1470,7 +1470,18 @@ export const verifyPath = async (targetPath: string): Promise<PathExistsResult> 
   }
 
   // Pre-normalize path for OS resolution
-  const cleanPath = rawInput.replace(/^file:\/\//, '');
+  let cleanPath = rawInput.replace(/^file:\/\//, '');
+
+  // If path is a Samba streaming proxy URL, extract the underlying target path parameter
+  if (cleanPath.includes('/api/samba/stream?') || cleanPath.startsWith('/api/samba/stream?')) {
+    try {
+      const url = new URL(cleanPath, 'http://localhost');
+      const param = url.searchParams.get('path') || url.searchParams.get('file');
+      if (param) {
+        cleanPath = decodeURIComponent(param);
+      }
+    } catch {}
+  }
 
   let result: PathExistsResult;
 
@@ -1821,6 +1832,7 @@ export interface FfmpegCodecDiagnostics {
   available: boolean;
   version: string;
   path?: string;
+  isSidecar?: boolean;
   hasH264: boolean;
   hasHevc: boolean;
   codecs: string[];
@@ -1829,6 +1841,14 @@ export interface FfmpegCodecDiagnostics {
   message?: string;
   source: 'tauri-bridge' | 'tauri-shell' | 'server-api' | 'fallback';
 }
+
+/**
+ * Checks if a verified FFmpeg path points to a bundled Tauri sidecar binary
+ */
+export const isSidecarFFmpegPath = (path: string | null): boolean => {
+  if (!path) return false;
+  return /binaries[/\\]ffmpeg|Resources[/\\]binaries|\.app[/\\]Contents[/\\](MacOS|Resources)|ffmpeg-[a-z0-9_]+-[a-z0-9_]+/i.test(path);
+};
 
 /**
  * Standard system paths where FFmpeg binaries typically reside
@@ -1893,7 +1913,7 @@ export const detectFFmpegPath = async (forceRecheck = false): Promise<string | n
   const isTauri = isTauriEnvironment();
   let verifiedPath: string | null = null;
 
-  // 1. In Tauri: Query native backend detected binary path first
+  // 1. In Tauri: Query native backend detected binary path first (including bundled sidecars)
   if (isTauri) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
@@ -1906,7 +1926,25 @@ export const detectFFmpegPath = async (forceRecheck = false): Promise<string | n
         }
       }
     } catch (e) {
-      console.warn('[detectFFmpegPath] get_detected_ffmpeg_path failed, testing system paths:', e);
+      console.warn('[detectFFmpegPath] get_detected_ffmpeg_path failed, testing sidecar & system paths:', e);
+    }
+
+    // Check Tauri resource directory for sidecar binaries
+    if (!verifiedPath) {
+      try {
+        const { resolveResource } = await import('@tauri-apps/api/path');
+        const sidecarCandidates = ['binaries/ffmpeg', 'resources/binaries/ffmpeg'];
+        for (const sc of sidecarCandidates) {
+          try {
+            const resPath = await resolveResource(sc);
+            const check = await checkPathExists(resPath);
+            if (check.exists) {
+              verifiedPath = resPath;
+              break;
+            }
+          } catch {}
+        }
+      } catch {}
     }
   }
 

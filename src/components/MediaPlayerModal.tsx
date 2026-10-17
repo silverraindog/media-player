@@ -116,24 +116,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [transcodedPlaybackUrl, setTranscodedPlaybackUrl] = useState<string | null>(null);
   const [transcodedFilePath, setTranscodedFilePath] = useState<string | null>(null);
   const [isTranscoding, setIsTranscoding] = useState(false);
-  const [transcodingProgress, setTranscodingProgress] = useState(0);
   const transcodeAttemptedRef = useRef(false);
   const [nativeTranscodeSourcePath, setNativeTranscodeSourcePath] = useState<string | null>(null);
-
-  useEffect(() => {
-    let interval: number;
-    if (isTranscoding) {
-      interval = setInterval(() => {
-        setTranscodingProgress(prev => (prev < 90 ? prev + Math.random() * 10 : prev));
-      }, 500) as any;
-    }
-    return () => clearInterval(interval);
-  }, [isTranscoding]);
   const resetTranscodedPlayback = () => {
     transcodeAttemptedRef.current = false;
     setTranscodedPlaybackUrl(null);
     setIsTranscoding(false);
-    setTranscodingProgress(0);
     setNativeTranscodeSourcePath(null);
   };
 
@@ -863,6 +851,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     return sanitizeMediaSourcePath(rawStreamUrl, { preserveAbsolutePrefix: true });
   }, [rawStreamUrl]);
 
+  const nativeMatroskaCandidate = nativeTranscodeSourcePath || (
+    customLocalBlobUrl && customLocalBlobUrl !== resolvedStreamUrl
+      ? currentStreamUrl
+      : resolvedLocalFilePath || currentStreamUrl
+  );
+  const isNativeMatroskaSource = isTauriPlaybackEnvironment() && /\.mkv(?:$|[?#])/i.test(nativeMatroskaCandidate);
+
   const validatedPlaybackPath = useMemo(() => {
     const res = validateSambaPlaybackPath(currentStreamUrl, sambaConfig);
     console.info(`[MediaPlayerEngine] Validated Samba Playback Path:`, res);
@@ -1075,7 +1070,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     if (transcodeAttemptedRef.current || isTranscoding) {
       console.warn('[MediaPlayerModal] Transcoding already attempted or failed.');
       setIsTranscoding(false);
-      setTranscodingProgress(0);
       setIsPlaying(false);
       const detail = initialReason || (
         `Unable to play "${media?.title || 'media'}": The browser cannot decode this file format (such as MKV container, HEVC/H.265 video, or DTS/AC3 audio) and transcoding is not active. ` +
@@ -1280,10 +1274,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || !resolvedStreamUrl) return;
-    const sourcePath = resolvedLocalFilePath || resolvedStreamUrl;
-    const isNativeMatroska = isTauriPlaybackEnvironment() && /\.mkv(?:$|[?#])/i.test(sourcePath);
     const timer = setTimeout(() => {
-      if (isNativeMatroska) {
+      if (isNativeMatroskaSource) {
         if (!transcodeAttemptedRef.current && !transcodedPlaybackUrl && !isTranscoding) {
           void handleMediaDecodeError('MKV playback requires FFmpeg transcoding in the desktop player.');
         }
@@ -1292,7 +1284,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       startPlayback();
     }, 150);
     return () => clearTimeout(timer);
-  }, [handleMediaDecodeError, isOpen, isTranscoding, resolvedLocalFilePath, resolvedStreamUrl, startPlayback, transcodedPlaybackUrl]);
+  }, [handleMediaDecodeError, isNativeMatroskaSource, isOpen, isTranscoding, resolvedStreamUrl, startPlayback, transcodedPlaybackUrl]);
 
   // Skip seconds
   const handleSkip = (seconds: number) => {
@@ -2120,7 +2112,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
               <video
                 ref={videoRef}
-                src={currentStreamUrl}
+                src={isNativeMatroskaSource && !transcodedPlaybackUrl ? undefined : currentStreamUrl}
                 playsInline
                 preload="metadata"
                 className="w-full max-h-[480px] object-contain bg-black"
@@ -2160,7 +2152,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 }`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${isTranscoding ? 'bg-amber-500 animate-pulse' : 'bg-current'}`} />
                   {isTranscoding
-                    ? `Transcoding: ${Math.round(transcodingProgress)}%`
+                    ? 'Transcoding...'
                     : transcodedPlaybackUrl
                       ? 'Stream Ready'
                       : 'Native Playback'}

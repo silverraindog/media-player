@@ -40,6 +40,7 @@ import { sanitizeMediaSourcePath, stripVirtualFranchiseSuffix } from '../utils/p
 import { apiCall } from '../lib/api';
 import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
 import { transcodeService } from '../services/TranscodeService';
+import { MatroskaPlayer } from './MatroskaPlayer';
 
 interface MediaPlayerModalProps {
   media: MediaMetadata | null;
@@ -146,6 +147,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [customLocalBlobUrl, setCustomLocalBlobUrl] = useState<string | null>(null);
   const [customStreamInputUrl, setCustomStreamInputUrl] = useState<string>('');
   const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
+  const [showMatroskaPlayer, setShowMatroskaPlayer] = useState(false);
   const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [diagnosticsData, setDiagnosticsData] = useState<FfmpegCodecDiagnostics | null>(null);
   const [isCheckingDiagnostics, setIsCheckingDiagnostics] = useState(false);
@@ -2093,6 +2095,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       <Link className="w-3 h-3 text-indigo-400" />
                       <span className="hidden md:inline">Custom URL</span>
                     </button>
+                    <button
+                      onClick={() => setShowMatroskaPlayer(true)}
+                      className="px-2 py-1 rounded bg-indigo-900/60 hover:bg-indigo-800 text-indigo-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition border border-indigo-700/50"
+                      title="Launch Matroska.js Direct Parser Engine"
+                    >
+                      <Film className="w-3 h-3 text-indigo-400" />
+                      <span className="hidden md:inline">Matroska Player</span>
+                    </button>
                   </div>
                 </div>
               )}
@@ -2105,36 +2115,47 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 </div>
               )}
 
-              <video
-                ref={videoRef}
-                src={currentStreamUrl}
-                playsInline
-                preload="metadata"
-                className="w-full max-h-[480px] object-contain bg-black"
-                onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                onLoadedMetadata={(e) => {
-                  setDuration(e.currentTarget.duration);
-                  setPlaybackError(null);
-                }}
-                onError={handleMediaElementError}
-                onEnded={() => setIsPlaying(false)}
-                onPlay={() => {
-                  setIsPlaying(true);
-                  setAutoplayBlocked(false);
-                }}
-                onPause={() => setIsPlaying(false)}
-                onClick={togglePlay}
-              >
-                {activeSubtitleIndex >= 0 && subtitleTracks[activeSubtitleIndex]?.url && (
-                  <track
-                    kind="subtitles"
-                    src={subtitleTracks[activeSubtitleIndex].url}
-                    srcLang={subtitleTracks[activeSubtitleIndex].lang}
-                    label={subtitleTracks[activeSubtitleIndex]?.name || 'Subtitles'}
-                    default
+              {showMatroskaPlayer ? (
+                <div className="w-full h-[480px]">
+                  <MatroskaPlayer
+                    streamUrl={currentStreamUrl}
+                    title={media?.title || 'Media File'}
+                    onClose={() => setShowMatroskaPlayer(false)}
+                    onFallbackToTranscode={() => setShowMatroskaPlayer(false)}
                   />
-                )}
-              </video>
+                </div>
+              ) : (
+                <video
+                  ref={videoRef}
+                  src={currentStreamUrl}
+                  playsInline
+                  preload="metadata"
+                  className="w-full max-h-[480px] object-contain bg-black"
+                  onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                  onLoadedMetadata={(e) => {
+                    setDuration(e.currentTarget.duration);
+                    setPlaybackError(null);
+                  }}
+                  onError={handleMediaElementError}
+                  onEnded={() => setIsPlaying(false)}
+                  onPlay={() => {
+                    setIsPlaying(true);
+                    setAutoplayBlocked(false);
+                  }}
+                  onPause={() => setIsPlaying(false)}
+                  onClick={togglePlay}
+                >
+                  {activeSubtitleIndex >= 0 && subtitleTracks[activeSubtitleIndex]?.url && (
+                    <track
+                      kind="subtitles"
+                      src={subtitleTracks[activeSubtitleIndex].url}
+                      srcLang={subtitleTracks[activeSubtitleIndex].lang}
+                      label={subtitleTracks[activeSubtitleIndex]?.name || 'Subtitles'}
+                      default
+                    />
+                  )}
+                </video>
+              )}
 
               {/* Transcode Status & Readiness Indicator */}
               <div className="absolute top-2 right-2 z-30 flex flex-col items-end gap-1.5">

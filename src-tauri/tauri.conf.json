@@ -30,7 +30,7 @@
       "shell": {
         "all": false,
         "execute": true,
-        "sidecar": false,
+        "sidecar": true,
         "open": true,
         "scope": [
           { "name": "ffmpeg", "cmd": "ffmpeg", "args": true },
@@ -53,7 +53,10 @@
       "deb": {
         "depends": []
       },
-      "externalBin": [],
+      "externalBin": [
+        "binaries/ffmpeg",
+        "binaries/ffprobe"
+      ],
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",

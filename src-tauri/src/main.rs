@@ -1522,6 +1522,23 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
     }
 
     let mut search_dirs = Vec::new();
+
+    // Add bundled sidecar / resource directories
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            search_dirs.push(exe_dir.to_path_buf());
+            search_dirs.push(exe_dir.join("resources"));
+            search_dirs.push(exe_dir.join("binaries"));
+            if let Some(parent) = exe_dir.parent() {
+                search_dirs.push(parent.join("Resources"));
+                search_dirs.push(parent.join("binaries"));
+            }
+        }
+    }
+    search_dirs.push(PathBuf::from("resources"));
+    search_dirs.push(PathBuf::from("binaries"));
+    search_dirs.push(PathBuf::from("src-tauri/binaries"));
+
     #[cfg(target_os = "macos")]
     search_dirs.extend([
         PathBuf::from("/opt/homebrew/bin"),

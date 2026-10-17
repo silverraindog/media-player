@@ -862,6 +862,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     return sanitizeMediaSourcePath(rawStreamUrl, { preserveAbsolutePrefix: true });
   }, [rawStreamUrl]);
 
+  useEffect(() => {
+    const isMkv = /\.mkv(\?|$)/i.test(currentStreamUrl) || /\.mkv(\?|$)/i.test(resolvedLocalFilePath || '') || /\.mkv(\?|$)/i.test(selectedEpisode?.filePath || '');
+    if (isMkv) {
+      setShowMatroskaPlayer(true);
+    }
+  }, [currentStreamUrl, resolvedLocalFilePath, selectedEpisode]);
+
   const validatedPlaybackPath = useMemo(() => {
     const res = validateSambaPlaybackPath(currentStreamUrl, sambaConfig);
     console.info(`[MediaPlayerEngine] Validated Samba Playback Path:`, res);

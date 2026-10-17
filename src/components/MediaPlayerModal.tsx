@@ -1971,7 +1971,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         {isTranscoding && (
           <div className="bg-amber-950/90 border-b border-amber-600/50 px-4 py-2 text-xs text-amber-200 flex items-center gap-2 shrink-0">
             <RefreshCw className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
-            <span>Converting media to H.264/AAC for in-app playback...</span>
+            <span>Preparing a browser-compatible MP4 for in-app playback...</span>
           </div>
         )}
 

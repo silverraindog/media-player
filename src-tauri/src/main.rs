@@ -1759,6 +1759,60 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
                 .extra_arg("0:a:0?")
                 .extra_arg("-vn");
         } else {
+            #[cfg(target_os = "macos")]
+            let is_hevc_source = Command::new(locator.ffprobe())
+                .args([
+                    "-v", "error", "-select_streams", "v:0", "-show_entries",
+                    "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1",
+                ])
+                .arg(&task_source_path)
+                .output()
+                .map(|output| {
+                    output.status.success()
+                        && String::from_utf8_lossy(&output.stdout)
+                            .trim()
+                            .eq_ignore_ascii_case("hevc")
+                })
+                .unwrap_or(false);
+            #[cfg(not(target_os = "macos"))]
+            let is_hevc_source = false;
+
+            let remux_succeeded = if is_hevc_source {
+                let output = Command::new(locator.ffmpeg())
+                    .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"])
+                    .arg(&task_source_path)
+                    .args([
+                        "-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "copy", "-tag:v",
+                        "hvc1", "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-sn", "-dn",
+                        "-movflags", "+faststart",
+                    ])
+                    .arg(&task_output_path)
+                    .output();
+
+                match output {
+                    Ok(result) if result.status.success() => true,
+                    Ok(result) => {
+                        let _ = fs::remove_file(&task_output_path);
+                        eprintln!(
+                            "[SambaVault] HEVC remux failed; falling back to H.264: {}",
+                            String::from_utf8_lossy(&result.stderr).trim()
+                        );
+                        false
+                    }
+                    Err(error) => {
+                        let _ = fs::remove_file(&task_output_path);
+                        eprintln!("[SambaVault] HEVC remux could not start: {}", error);
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+            if remux_succeeded {
+                return Ok(());
+            }
+
             builder = builder
                 .video_codec("libx264")
                 .preset("veryfast")

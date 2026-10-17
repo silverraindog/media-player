@@ -24,7 +24,7 @@ fn vault_purge_transcode_cache(app_handle: AppHandle, limit_gb: u64) -> Result<(
     }
 
     let limit_bytes = limit_gb * 1024 * 1024 * 1024;
-    
+
     let mut files: Vec<(PathBuf, std::fs::Metadata)> = fs::read_dir(&transcode_dir)
         .map_err(|e| e.to_string())?
         .filter_map(|entry| entry.ok())
@@ -51,7 +51,7 @@ fn vault_purge_transcode_cache(app_handle: AppHandle, limit_gb: u64) -> Result<(
             current_size -= meta.len();
         }
     }
-    
+
     Ok(())
 }
 
@@ -373,56 +373,13 @@ pub fn sanitize_samba_path(raw_path: &str) -> String {
     segments.join("/")
 }
 
-fn decode_uri_component(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '%' {
-            let h1 = chars.next();
-            let h2 = chars.next();
-            if let (Some(c1), Some(c2)) = (h1, h2) {
-                let hex_str = format!("{}{}", c1, c2);
-                if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
-                    result.push(byte as char);
-                    continue;
-                }
-                result.push('%');
-                result.push(c1);
-                result.push(c2);
-            } else {
-                result.push('%');
-                if let Some(c) = h1 { result.push(c); }
-            }
-        } else if ch == '+' {
-            result.push(' ');
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
-
 pub fn resolve_absolute_samba_path(input: &str) -> PathBuf {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Path::new("/Volumes").join("media");
     }
 
-    let mut normalized = trimmed.replace('\\', "/");
-
-    // Extract underlying media path if input is a stream proxy URL: /api/samba/stream?path=...
-    if normalized.contains("/api/samba/stream") && (normalized.contains("path=") || normalized.contains("file=")) {
-        let key = if normalized.contains("path=") { "path=" } else { "file=" };
-        if let Some(idx) = normalized.find(key) {
-            let query_val = &normalized[idx + key.len()..];
-            let end_idx = query_val.find('&').unwrap_or(query_val.len());
-            let extracted = &query_val[..end_idx];
-            let decoded = decode_uri_component(extracted);
-            if !decoded.is_empty() {
-                normalized = decoded.replace('\\', "/");
-            }
-        }
-    }
+    let normalized = trimmed.replace('\\', "/");
 
     // Handle UNC or smb:// URIs: //192.168.1.25/media or smb://192.168.1.25/media
     if normalized.starts_with("//") || normalized.to_lowercase().starts_with("smb://") {
@@ -615,6 +572,7 @@ async fn scan_and_import_volumes(
                 file_size_bytes: Some(entry.metadata().map(|m| m.len() as i64).unwrap_or(0)),
                 created_at: None,
                 updated_at: None,
+                file_path: Some(full_path.clone()),
             };
 
             if let Err(e) = db::save_media(app_handle.clone(), media_item) {
@@ -1565,23 +1523,6 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
     }
 
     let mut search_dirs = Vec::new();
-
-    // Add bundled sidecar / resource directories
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            search_dirs.push(exe_dir.to_path_buf());
-            search_dirs.push(exe_dir.join("resources"));
-            search_dirs.push(exe_dir.join("binaries"));
-            if let Some(parent) = exe_dir.parent() {
-                search_dirs.push(parent.join("Resources"));
-                search_dirs.push(parent.join("binaries"));
-            }
-        }
-    }
-    search_dirs.push(PathBuf::from("resources"));
-    search_dirs.push(PathBuf::from("binaries"));
-    search_dirs.push(PathBuf::from("src-tauri/binaries"));
-
     #[cfg(target_os = "macos")]
     search_dirs.extend([
         PathBuf::from("/opt/homebrew/bin"),
@@ -1601,51 +1542,6 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
         search_dirs.extend(std::env::split_paths(&path_var));
     }
 
-    // Determine target-triple sidecar names
-    let target_triple = if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") {
-            "aarch64-apple-darwin"
-        } else {
-            "x86_64-apple-darwin"
-        }
-    } else if cfg!(target_os = "windows") {
-        if cfg!(target_arch = "aarch64") {
-            "aarch64-pc-windows-msvc"
-        } else {
-            "x86_64-pc-windows-msvc"
-        }
-    } else if cfg!(target_os = "linux") {
-        if cfg!(target_arch = "aarch64") {
-            "aarch64-unknown-linux-gnu"
-        } else {
-            "x86_64-unknown-linux-gnu"
-        }
-    } else {
-        "unknown"
-    };
-
-    let ext = if cfg!(windows) { ".exe" } else { "" };
-    let sidecar_ffmpeg_name = format!("ffmpeg-{}{}", target_triple, ext);
-    let sidecar_ffprobe_name = format!("ffprobe-{}{}", target_triple, ext);
-
-    // 1. First prioritize bundled sidecar binaries
-    for directory in &search_dirs {
-        let sidecar_ffmpeg = directory.join(&sidecar_ffmpeg_name);
-        let sidecar_ffprobe = directory.join(&sidecar_ffprobe_name);
-        if sidecar_ffmpeg.exists() {
-            // Verify binary runs and is not an empty placeholder
-            if let Ok(output) = Command::new(&sidecar_ffmpeg).arg("-version").output() {
-                if output.status.success() {
-                    let actual_probe = if sidecar_ffprobe.exists() { sidecar_ffprobe } else { sidecar_ffmpeg.clone() };
-                    if let Ok(locator) = FfmpegLocator::with_paths(sidecar_ffmpeg, actual_probe) {
-                        return Ok(locator);
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Then check standard ffmpeg name in search directories
     for directory in &search_dirs {
         let ffmpeg_path = directory.join(ffmpeg_name);
         let ffprobe_path = directory.join(ffprobe_name);
@@ -1684,7 +1580,7 @@ async fn probe_media_file(source_path: String) -> Result<String, String> {
 
     let locator = locate_ffmpeg()?;
     let ffprobe_path = locator.ffprobe();
-    
+
     let output = Command::new(ffprobe_path)
         .args([
             "-v", "error",
@@ -1769,7 +1665,7 @@ async fn check_ffmpeg_codecs() -> Result<FfmpegDiagnosticsResult, String> {
 #[tauri::command]
 async fn transcode_media_file(source_path: String, media_type: String) -> Result<String, String> {
     let is_url = source_path.starts_with("http://") || source_path.starts_with("https://");
-    
+
     let resolved_source = if is_url {
         source_path.clone()
     } else {

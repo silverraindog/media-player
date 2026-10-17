@@ -48,6 +48,7 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
         genres: typeof m.genres === 'string' ? m.genres : JSON.stringify(m.genres || []),
         cast: typeof m.cast === 'string' ? m.cast : JSON.stringify(m.cast || []),
         recommended_folder: m.recommendedFolderStructure || m.recommended_folder || null,
+        file_path: m.path || m.file_path || null,
         raw_data: JSON.stringify(m),
         file_size_bytes: m.fileSizeBytes || null,
       }));

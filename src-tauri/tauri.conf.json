@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeBuildCommand": "npm run build && node scripts/download-ffmpeg.cjs",
+    "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
     "devPath": "http://localhost:3000",
     "distDir": "../dist-frontend",
@@ -30,7 +30,7 @@
       "shell": {
         "all": false,
         "execute": true,
-        "sidecar": true,
+        "sidecar": false,
         "open": true,
         "scope": [
           { "name": "ffmpeg", "cmd": "ffmpeg", "args": true },
@@ -53,10 +53,7 @@
       "deb": {
         "depends": []
       },
-      "externalBin": [
-        "binaries/ffmpeg",
-        "binaries/ffprobe"
-      ],
+      "externalBin": [],
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",

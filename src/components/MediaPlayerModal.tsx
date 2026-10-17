@@ -35,12 +35,11 @@ import {
   Activity,
 } from 'lucide-react';
 import { MediaMetadata, EpisodeMetadata, TrackMetadata, SambaConfig } from '../types';
-import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics, detectFFmpegPath, isSidecarFFmpegPath } from '../utils/tauriBridge';
+import { openInVlc, openInIina, openInSystemPlayer, validateSambaPlaybackPath, listMountedVolumes, checkPathExists, resolveLocalMountPath, checkFfmpegCodecsViaTauri, FfmpegCodecDiagnostics, detectFFmpegPath } from '../utils/tauriBridge';
 import { sanitizeMediaSourcePath, stripVirtualFranchiseSuffix } from '../utils/pathSanitizer';
 import { apiCall } from '../lib/api';
 import { useSambaErrorMonitor } from '../hooks/useSambaErrorMonitor';
 import { transcodeService } from '../services/TranscodeService';
-import { MatroskaPlayer } from './MatroskaPlayer';
 
 interface MediaPlayerModalProps {
   media: MediaMetadata | null;
@@ -83,6 +82,8 @@ function isTauriPlaybackEnvironment(): boolean {
     window.location.origin.includes('tauri.localhost')
   );
 }
+
+const PLAYABLE_FILE_PATH_PATTERN = /\.(mkv|mp4|m4v|avi|mov|wmv|webm|flv|f4v|ts|m2ts|mts|vob|ogv|3gp|rm|rmvb|divx|asf|flac|mp3|m4a|m4b|aac|ogg|oga|opus|wav|aiff|aif|alac|wma|ape|wv|dsf|dff|mid|midi)$/i;
 
 export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   media,
@@ -147,7 +148,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [customLocalBlobUrl, setCustomLocalBlobUrl] = useState<string | null>(null);
   const [customStreamInputUrl, setCustomStreamInputUrl] = useState<string>('');
   const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
-  const [showMatroskaPlayer, setShowMatroskaPlayer] = useState(false);
   const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [diagnosticsData, setDiagnosticsData] = useState<FfmpegCodecDiagnostics | null>(null);
   const [isCheckingDiagnostics, setIsCheckingDiagnostics] = useState(false);
@@ -156,8 +156,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [transcodeReadinessStatus, setTranscodeReadinessStatus] = useState<{
     checked: boolean;
     ready: boolean;
-    isSidecar?: boolean;
-    binaryPath?: string | null;
     message: string;
   }>({ checked: false, ready: true, message: 'Checking codecs...' });
 
@@ -167,14 +165,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       const data = await checkFfmpegCodecsViaTauri();
       setDiagnosticsData(data);
       const isReady = Boolean(data.available && (data.hasH264 || data.hasHevc));
-      const isSidecar = Boolean(data.isSidecar || isSidecarFFmpegPath(data.path || null));
       setTranscodeReadinessStatus({
         checked: true,
         ready: isReady,
-        isSidecar,
-        binaryPath: data.path || null,
         message: isReady
-          ? (isSidecar ? '⚡ Sidecar FFmpeg (Native)' : `Codecs OK (${[data.hasH264 && 'H.264', data.hasHevc && 'HEVC'].filter(Boolean).join('/')})`)
+          ? `Codecs OK (${[data.hasH264 && 'H.264', data.hasHevc && 'HEVC'].filter(Boolean).join('/')})`
           : 'FFmpeg misconfigured - Click to repair',
       });
       return data;
@@ -193,8 +188,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       setTranscodeReadinessStatus({
         checked: true,
         ready: false,
-        isSidecar: false,
-        binaryPath: null,
         message: 'FFmpeg missing - Click to repair',
       });
       return fallback;
@@ -545,10 +538,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       );
 
       // Direct file path (e.g. /Volumes/media/Movies/Movie.mkv)
-      const directFilePath = (media?.path && /\.(mp4|mkv|m4v|avi|mov|webm|flv|ts|mp3|flac|aac|wav|m4a)$/i.test(media.path))
-        ? media.path
-        : (parsedDbMedia?.path && /\.(mp4|mkv|m4v|avi|mov|webm|flv|ts|mp3|flac|aac|wav|m4a)$/i.test(parsedDbMedia.path))
-          ? parsedDbMedia.path
+      const persistedFilePath = dbRecord?.file_path || parsedDbMedia?.path;
+      const directFilePath = (persistedFilePath && PLAYABLE_FILE_PATH_PATTERN.test(persistedFilePath))
+        ? persistedFilePath
+        : (media?.path && PLAYABLE_FILE_PATH_PATTERN.test(media.path))
+          ? media.path
           : '';
 
       const matchedFileWithFolder = (media?.matchedFilename && activeFolder)
@@ -773,7 +767,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       }
 
       let resolvedUri = await resolveStreamableUri(finalPathToResolve);
-      
+
       // Verify final path - if it's a directory, dynamically locate a playable episode or stream via proxy
       let activeCheck = await checkPathExists(finalPathToResolve);
       if (activeCheck.exists && activeCheck.isDirectory) {
@@ -868,15 +862,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const currentStreamUrl = useMemo(() => {
     return sanitizeMediaSourcePath(rawStreamUrl, { preserveAbsolutePrefix: true });
   }, [rawStreamUrl]);
-
-  useEffect(() => {
-    const isMkv = /\.mkv(\?|$)/i.test(currentStreamUrl) || /\.mkv(\?|$)/i.test(resolvedLocalFilePath || '') || /\.mkv(\?|$)/i.test(selectedEpisode?.filePath || '');
-    if (isMkv) {
-      setShowMatroskaPlayer(true);
-    } else {
-      setShowMatroskaPlayer(false);
-    }
-  }, [currentStreamUrl, resolvedLocalFilePath, selectedEpisode]);
 
   const validatedPlaybackPath = useMemo(() => {
     const res = validateSambaPlaybackPath(currentStreamUrl, sambaConfig);
@@ -1105,14 +1090,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       setPlaybackError(detail);
       return;
     }
-    
+
     const performFfmpegPreflight = async () => {
       const ffmpegPath = await detectFFmpegPath();
       if (!ffmpegPath) {
-        throw new Error('FFmpeg binary not found. Please ensure FFmpeg sidecar is bundled or installed.');
+        throw new Error('FFmpeg binary not found in standard system paths. Please install FFmpeg.');
       }
-      const isSidecar = isSidecarFFmpegPath(ffmpegPath);
-      console.info(`[MediaPlayerModal] Active FFmpeg Engine (${isSidecar ? '⚡ Pre-compiled Sidecar' : 'System Binary'}): ${ffmpegPath}`);
       const exists = await checkPathExists(ffmpegPath);
       if (!exists.exists || !exists.readable) {
         throw new Error(`FFmpeg binary at "${ffmpegPath}" is inaccessible. Check system permissions.`);
@@ -1132,7 +1115,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         const isResolvedSource = !isManualStreamOverride &&
           (!customLocalBlobUrl || customLocalBlobUrl === resolvedStreamUrl);
         let sourcePath = nativeTranscodeSourcePath || (isResolvedSource ? resolvedLocalFilePath : null) || currentStreamUrl;
-        
+
         if (!sourcePath) {
           throw new Error('Transcoding in the desktop app requires a local media file or a valid stream.');
         }
@@ -1154,7 +1137,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             }
           }
         }
-        
+
         try {
           const outputPath = await transcodeService.transcode(sourcePath, isAudio ? 'audio' : 'video');
           setTranscodedFilePath(outputPath);
@@ -1182,7 +1165,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       } else {
         // Detect if the media source is a network URL
         const isNetworkUrl = /^(https?|blob|data):/i.test(currentStreamUrl || '') || currentStreamUrl.startsWith('/api/');
-        
+
         const payload = {
           sourceUrl: isNetworkUrl ? currentStreamUrl : '',
           sourcePath: isNetworkUrl ? '' : sanitizeMediaSourcePath(resolvedLocalFilePath || validatedPlaybackPath.resolvedPath || media?.path || media?.folderPath || media?.recommendedFolderStructure || ''),
@@ -2113,14 +2096,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       <Link className="w-3 h-3 text-indigo-400" />
                       <span className="hidden md:inline">Custom URL</span>
                     </button>
-                    <button
-                      onClick={() => setShowMatroskaPlayer(true)}
-                      className="px-2 py-1 rounded bg-indigo-900/60 hover:bg-indigo-800 text-indigo-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition border border-indigo-700/50"
-                      title="Launch Matroska.js Direct Parser Engine"
-                    >
-                      <Film className="w-3 h-3 text-indigo-400" />
-                      <span className="hidden md:inline">Matroska Player</span>
-                    </button>
                   </div>
                 </div>
               )}
@@ -2133,65 +2108,51 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 </div>
               )}
 
-              {showMatroskaPlayer ? (
-                <div className="w-full h-[480px]">
-                  <MatroskaPlayer
-                    streamUrl={currentStreamUrl}
-                    title={media?.title || 'Media File'}
-                    onClose={() => setShowMatroskaPlayer(false)}
-                    onFallbackToTranscode={() => {
-                      setShowMatroskaPlayer(false);
-                      handleMediaDecodeError('Requested fallback from Matroska player to FFmpeg transcode engine.');
-                    }}
+              <video
+                ref={videoRef}
+                src={currentStreamUrl}
+                playsInline
+                preload="metadata"
+                className="w-full max-h-[480px] object-contain bg-black"
+                onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                onLoadedMetadata={(e) => {
+                  setDuration(e.currentTarget.duration);
+                  setPlaybackError(null);
+                }}
+                onError={handleMediaElementError}
+                onEnded={() => setIsPlaying(false)}
+                onPlay={() => {
+                  setIsPlaying(true);
+                  setAutoplayBlocked(false);
+                }}
+                onPause={() => setIsPlaying(false)}
+                onClick={togglePlay}
+              >
+                {activeSubtitleIndex >= 0 && subtitleTracks[activeSubtitleIndex]?.url && (
+                  <track
+                    kind="subtitles"
+                    src={subtitleTracks[activeSubtitleIndex].url}
+                    srcLang={subtitleTracks[activeSubtitleIndex].lang}
+                    label={subtitleTracks[activeSubtitleIndex]?.name || 'Subtitles'}
+                    default
                   />
-                </div>
-              ) : (
-                <video
-                  ref={videoRef}
-                  src={currentStreamUrl}
-                  playsInline
-                  preload="metadata"
-                  className="w-full max-h-[480px] object-contain bg-black"
-                  onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                  onLoadedMetadata={(e) => {
-                    setDuration(e.currentTarget.duration);
-                    setPlaybackError(null);
-                  }}
-                  onError={handleMediaElementError}
-                  onEnded={() => setIsPlaying(false)}
-                  onPlay={() => {
-                    setIsPlaying(true);
-                    setAutoplayBlocked(false);
-                  }}
-                  onPause={() => setIsPlaying(false)}
-                  onClick={togglePlay}
-                >
-                  {activeSubtitleIndex >= 0 && subtitleTracks[activeSubtitleIndex]?.url && (
-                    <track
-                      kind="subtitles"
-                      src={subtitleTracks[activeSubtitleIndex].url}
-                      srcLang={subtitleTracks[activeSubtitleIndex].lang}
-                      label={subtitleTracks[activeSubtitleIndex]?.name || 'Subtitles'}
-                      default
-                    />
-                  )}
-                </video>
-              )}
+                )}
+              </video>
 
               {/* Transcode Status & Readiness Indicator */}
               <div className="absolute top-2 right-2 z-30 flex flex-col items-end gap-1.5">
                 <div className={`px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-md shadow-lg ${
-                  isTranscoding 
+                  isTranscoding
                     ? 'bg-amber-950/90 text-amber-300 border border-amber-800'
                     : transcodedPlaybackUrl
                       ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-800'
                       : 'bg-slate-900/90 text-slate-300 border border-slate-700'
                 }`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${isTranscoding ? 'bg-amber-500 animate-pulse' : 'bg-current'}`} />
-                  {isTranscoding 
-                    ? `Transcoding: ${Math.round(transcodingProgress)}%` 
-                    : transcodedPlaybackUrl 
-                      ? 'Stream Ready' 
+                  {isTranscoding
+                    ? `Transcoding: ${Math.round(transcodingProgress)}%`
+                    : transcodedPlaybackUrl
+                      ? 'Stream Ready'
                       : 'Native Playback'}
                 </div>
 
@@ -2203,12 +2164,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   }}
                   className={`px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-md transition cursor-pointer shadow-lg ${
                     transcodeReadinessStatus.ready
-                      ? (transcodeReadinessStatus.isSidecar
-                          ? 'bg-indigo-950/90 text-indigo-300 border border-indigo-500/80 hover:bg-indigo-900 shadow-indigo-500/20'
-                          : 'bg-slate-900/80 text-cyan-300 border border-cyan-800/60 hover:bg-slate-900')
+                      ? 'bg-slate-900/80 text-cyan-300 border border-cyan-800/60 hover:bg-slate-900'
                       : 'bg-amber-950/90 text-amber-200 border border-amber-600 animate-pulse hover:bg-amber-900'
                   }`}
-                  title={transcodeReadinessStatus.binaryPath ? `FFmpeg Binary: ${transcodeReadinessStatus.binaryPath}` : "Click to view FFmpeg diagnostics"}
+                  title="Click to view FFmpeg diagnostics and repair transcode pipeline"
                 >
                   <Activity className="w-3 h-3 text-indigo-400" />
                   <span>Readiness: {transcodeReadinessStatus.message}</span>

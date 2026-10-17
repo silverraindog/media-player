@@ -132,6 +132,16 @@ export function getDirectPlaybackUrl(path?: string): string | undefined {
   return `/api/samba/stream?path=${encodeURIComponent(clean)}`;
 }
 
+function findFirstMediaFilePath(node: SambaShareNode, parentPath: string = ''): string | undefined {
+  const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+  if (node.type === 'file' && isMediaFile(node.name)) return fullPath;
+  for (const child of node.children || []) {
+    const filePath = findFirstMediaFilePath(child, fullPath);
+    if (filePath) return filePath;
+  }
+  return undefined;
+}
+
 // Robust Season and Extras Directory Checker (e.g., 'Season 1', 'S01', 'Season_02', 'Extras', 'Specials', 'Bonus', 'Featurettes', 'Disc 1', '4', '5', etc.)
 export function isSeasonDirectory(folderName: string): boolean {
   const clean = folderName.trim().toLowerCase();
@@ -333,15 +343,16 @@ export function extractEpisodeInfoFromFilename(filename: string): {
 // Convert a Samba node or file path into a full MediaMetadata record
 export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = ''): MediaMetadata | null {
   const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+  const filePath = findFirstMediaFilePath(node, parentPath) || fullPath;
 
   if (node.matchedMedia) {
     return {
       ...node.matchedMedia,
       folderPath: fullPath,
-      path: fullPath,
+      path: filePath,
       recommendedFolderStructure: fullPath,
       matchedFilename: node.type === 'file' ? node.name : node.matchedMedia.matchedFilename,
-      playbackUrl: node.matchedMedia.playbackUrl || getDirectPlaybackUrl(fullPath),
+      playbackUrl: getDirectPlaybackUrl(filePath) || node.matchedMedia.playbackUrl,
     };
   }
 
@@ -389,7 +400,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   }
 
   // Real media files resolve to their actual disk path and stream proxy
-  const actualPlaybackUrl = `/api/samba/stream?path=${encodeURIComponent(node.path || fullPath)}`;
+  const actualPlaybackUrl = `/api/samba/stream?path=${encodeURIComponent(filePath)}`;
 
   // Posters based on type
   let posterUrl = 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&auto=format&fit=crop&q=80';
@@ -495,6 +506,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     rating: 8.4,
     posterUrl: posterUrl,
     playbackUrl: defaultPlayback,
+    path: filePath,
     recommendedFolderStructure: fullPath,
     recommendedFilenames: [node.name, mediaType === 'series' ? 'tvshow.nfo' : mediaType === 'album' ? 'album.nfo' : 'movie.nfo', 'poster.jpg'],
     matchedFilename: node.name,
@@ -571,13 +583,8 @@ export function extractAllMediaFromSambaTree(
       const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
 
       if (node.matchedMedia) {
-        mergeOrAdd({
-          ...node.matchedMedia,
-          folderPath: fullPath,
-          path: fullPath,
-          recommendedFolderStructure: fullPath,
-          playbackUrl: node.matchedMedia.playbackUrl || getDirectPlaybackUrl(fullPath),
-        });
+        const item = nodeToMediaMetadata(node, parentPath);
+        if (item) mergeOrAdd(item);
       } else if (node.type === 'folder') {
         const hasMediaChildren = node.children?.some(c =>
           c.type === 'file' && isMediaFile(c.name, config)
@@ -684,15 +691,8 @@ export async function extractAllMediaFromSambaTreeAsync(
     const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
 
     if (node.matchedMedia) {
-      mergeOrAdd({
-        ...node.matchedMedia,
-        folderPath: fullPath,
-        path: fullPath,
-        recommendedFolderStructure: fullPath,
-        playbackUrl:
-          node.matchedMedia.playbackUrl ||
-          getDirectPlaybackUrl(fullPath),
-      });
+      const item = nodeToMediaMetadata(node, parentPath);
+      if (item) mergeOrAdd(item);
     } else if (node.type === 'folder') {
       const hasMediaChildren = node.children?.some(
         (c) => c.type === 'file' && isMediaFile(c.name, config)
@@ -1028,7 +1028,7 @@ export async function fetchMediaMetadataWithFallback(
  */
 export function extractResolution(filename: string): string | undefined {
   if (!filename) return undefined;
-  
+
   const patterns = [
     { regex: /\b(2160p|4k|uhd)\b/i, label: '4K' },
     { regex: /\b(1080p|fhd)\b/i, label: '1080p' },

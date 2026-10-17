@@ -85,6 +85,7 @@ export interface MediaItemDb {
   genres?: string; // JSON array
   cast?: string; // JSON array
   recommended_folder?: string;
+  file_path?: string;
   raw_data?: string; // JSON string
   file_size_bytes?: number;
   created_at?: string;
@@ -178,7 +179,8 @@ export async function getDatabase(): Promise<Database> {
       recommended_folder TEXT,
       raw_data TEXT,
       created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      updated_at TEXT DEFAULT (datetime('now')),
+      file_path TEXT
     );
 
     CREATE TABLE IF NOT EXISTS series_watch_progress (
@@ -272,6 +274,12 @@ export async function getDatabase(): Promise<Database> {
   // Migration: ensure cast exists on media_items
   try {
     dbInstance.run(`ALTER TABLE media_items ADD COLUMN cast TEXT`);
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    dbInstance.run(`ALTER TABLE media_items ADD COLUMN file_path TEXT`);
   } catch {
     // Column already exists
   }
@@ -902,8 +910,8 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
     : calculateMediaSizeBytes(media);
 
   db.run(
-    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, file_path, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        media_type = excluded.media_type,
        title = excluded.title,
@@ -917,6 +925,7 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
        cast = excluded.cast,
        recommended_folder = excluded.recommended_folder,
        raw_data = excluded.raw_data,
+        file_path = excluded.file_path,
        file_size_bytes = excluded.file_size_bytes,
        updated_at = datetime('now')`,
     [
@@ -933,7 +942,8 @@ export async function saveMediaToDb(media: MediaItemDb): Promise<void> {
       media.cast || null,
       media.recommended_folder || null,
       media.raw_data || null,
-      calculatedSize
+      calculatedSize,
+      media.file_path || null
     ]
   );
   persistDbToDisk();
@@ -952,8 +962,8 @@ export async function batchSaveMediaToDb(items: MediaItemDb[]): Promise<number> 
         : calculateMediaSizeBytes(media);
 
       db.run(
-        `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, file_size_bytes, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, file_size_bytes, file_path, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET
            media_type = excluded.media_type,
            title = excluded.title,
@@ -966,6 +976,7 @@ export async function batchSaveMediaToDb(items: MediaItemDb[]): Promise<number> 
            genres = excluded.genres,
            recommended_folder = excluded.recommended_folder,
            raw_data = excluded.raw_data,
+           file_path = excluded.file_path,
            file_size_bytes = excluded.file_size_bytes,
            updated_at = datetime('now')`,
         [
@@ -981,7 +992,8 @@ export async function batchSaveMediaToDb(items: MediaItemDb[]): Promise<number> 
           media.genres || null,
           media.recommended_folder || null,
           media.raw_data || null,
-          calculatedSize
+          calculatedSize,
+          media.file_path || null
         ]
       );
     }
@@ -1028,7 +1040,7 @@ export async function renameVaultMediaFile(
   if (mediaId) {
     try {
       db.run(
-        `UPDATE media_items 
+        `UPDATE media_items
          SET title = COALESCE(NULLIF(?, ''), title),
              recommended_folder = REPLACE(COALESCE(recommended_folder, ''), ?, ?),
              updated_at = datetime('now')
@@ -1044,7 +1056,7 @@ export async function renameVaultMediaFile(
   // 2. Update media_items where recommended_folder contains oldPath or oldBaseName
   try {
     db.run(
-      `UPDATE media_items 
+      `UPDATE media_items
        SET recommended_folder = REPLACE(recommended_folder, ?, ?),
            updated_at = datetime('now')
        WHERE recommended_folder LIKE ? OR recommended_folder LIKE ?`,
@@ -1057,7 +1069,7 @@ export async function renameVaultMediaFile(
   // 3. Update thumbnail_metadata_cache for oldPath
   try {
     db.run(
-      `UPDATE thumbnail_metadata_cache 
+      `UPDATE thumbnail_metadata_cache
        SET media_path = ?, title = COALESCE(NULLIF(?, ''), title), last_accessed_at = ?
        WHERE media_path = ? OR media_path = ?`,
       [newPath, cleanTitle, Date.now(), oldPath, oldBaseName]
@@ -1102,7 +1114,7 @@ export async function renameVaultMediaFile(
 export async function getAllWatchProgress(): Promise<WatchProgressDb[]> {
   const db = await getDatabase();
   const res = db.exec(`
-    SELECT p.*, m.poster_url, m.rating, m.synopsis 
+    SELECT p.*, m.poster_url, m.rating, m.synopsis
     FROM series_watch_progress p
     LEFT JOIN media_items m ON p.series_id = m.id
     ORDER BY p.last_watched_at DESC
@@ -1331,7 +1343,7 @@ export async function recordWatchHistoryInDb(item: {
     : item.media_id
     ? `SELECT id FROM watch_history_log WHERE media_id = ? ORDER BY watched_at DESC LIMIT 1`
     : `SELECT id FROM watch_history_log WHERE title = ? ORDER BY watched_at DESC LIMIT 1`;
-  
+
   const checkParams = item.series_id && item.season_number && item.episode_number
     ? [item.series_id, item.season_number, item.episode_number]
     : item.media_id
@@ -1343,11 +1355,11 @@ export async function recordWatchHistoryInDb(item: {
 
   if (existingId) {
     db.run(
-      `UPDATE watch_history_log 
-       SET playback_position_seconds = ?, 
-           duration_seconds = ?, 
-           progress_percentage = ?, 
-           is_completed = ?, 
+      `UPDATE watch_history_log
+       SET playback_position_seconds = ?,
+           duration_seconds = ?,
+           progress_percentage = ?,
+           is_completed = ?,
            poster_url = COALESCE(?, poster_url),
            watched_at = datetime('now')
        WHERE id = ?`,
@@ -1356,8 +1368,8 @@ export async function recordWatchHistoryInDb(item: {
   } else {
     db.run(
       `INSERT INTO watch_history_log (
-        id, media_id, series_id, media_type, title, season_number, episode_number, 
-        episode_title, poster_url, duration_seconds, playback_position_seconds, 
+        id, media_id, series_id, media_type, title, season_number, episode_number,
+        episode_title, poster_url, duration_seconds, playback_position_seconds,
         progress_percentage, is_completed, watched_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       [
@@ -1422,7 +1434,7 @@ export async function getWatchHistoryStats(): Promise<{
 }> {
   const db = await getDatabase();
   const res = db.exec(`
-    SELECT 
+    SELECT
       COUNT(*) as total,
       SUM(CASE WHEN media_type = 'movie' THEN 1 ELSE 0 END) as movies,
       SUM(CASE WHEN media_type = 'series' THEN 1 ELSE 0 END) as series,
@@ -1967,8 +1979,8 @@ export async function batchSaveThumbnailsToDb(thumbs: ThumbnailDbRecord[]): Prom
 export async function incrementThumbnailHitInDb(mediaPathOrId: string): Promise<void> {
   const db = await getDatabase();
   db.run(
-    `UPDATE thumbnail_metadata_cache 
-     SET hit_count = hit_count + 1, last_accessed_at = ? 
+    `UPDATE thumbnail_metadata_cache
+     SET hit_count = hit_count + 1, last_accessed_at = ?
      WHERE media_path = ? OR id = ?`,
     [Date.now(), mediaPathOrId, mediaPathOrId]
   );
@@ -1993,8 +2005,8 @@ export async function getThumbnailCacheDbStats(): Promise<{
 }> {
   const db = await getDatabase();
   const res = db.exec(`
-    SELECT 
-      COUNT(*) as total, 
+    SELECT
+      COUNT(*) as total,
       COALESCE(SUM(hit_count), 0) as hits,
       COALESCE(MIN(cached_at), 0) as oldest,
       COALESCE(MAX(last_accessed_at), 0) as newest

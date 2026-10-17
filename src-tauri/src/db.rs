@@ -22,6 +22,7 @@ pub struct MediaItem {
     pub file_size_bytes: Option<i64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub file_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -89,7 +90,8 @@ pub fn init_db(app_handle: &AppHandle) -> Result<()> {
             raw_data TEXT,
             file_size_bytes INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
+            updated_at TEXT DEFAULT (datetime('now')),
+            file_path TEXT
         );
 
         CREATE TABLE IF NOT EXISTS series_watch_progress (
@@ -144,6 +146,12 @@ pub fn init_db(app_handle: &AppHandle) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_watch_progress_series ON series_watch_progress(series_id);"
     )?;
 
+    if let Err(error) = conn.execute("ALTER TABLE media_items ADD COLUMN file_path TEXT", []) {
+        if !error.to_string().contains("duplicate column name") {
+            return Err(error);
+        }
+    }
+
     Ok(())
 }
 
@@ -174,6 +182,7 @@ pub fn get_all_media(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
                 file_size_bytes: row.get(13)?,
                 created_at: row.get(14)?,
                 updated_at: row.get(15)?,
+                file_path: row.get("file_path")?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -212,6 +221,7 @@ pub fn get_movies(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
                 file_size_bytes: row.get(13)?,
                 created_at: row.get(14)?,
                 updated_at: row.get(15)?,
+                file_path: row.get("file_path")?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -250,6 +260,7 @@ pub fn get_series(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
                 file_size_bytes: row.get(13)?,
                 created_at: row.get(14)?,
                 updated_at: row.get(15)?,
+                file_path: row.get("file_path")?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -288,6 +299,7 @@ pub fn get_albums(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
                 file_size_bytes: row.get(13)?,
                 created_at: row.get(14)?,
                 updated_at: row.get(15)?,
+                file_path: row.get("file_path")?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -316,8 +328,8 @@ pub fn save_media(app_handle: AppHandle, media: MediaItem) -> Result<(), String>
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))
+        "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, file_path, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET
            media_type = excluded.media_type,
            title = excluded.title,
@@ -331,6 +343,7 @@ pub fn save_media(app_handle: AppHandle, media: MediaItem) -> Result<(), String>
            cast = excluded.cast,
            recommended_folder = excluded.recommended_folder,
            raw_data = excluded.raw_data,
+           file_path = excluded.file_path,
            file_size_bytes = excluded.file_size_bytes,
            updated_at = datetime('now')",
         params![
@@ -348,6 +361,7 @@ pub fn save_media(app_handle: AppHandle, media: MediaItem) -> Result<(), String>
             media.recommended_folder,
             media.raw_data,
             media.file_size_bytes,
+            media.file_path,
         ],
     ).map_err(|e| e.to_string())?;
 
@@ -420,8 +434,8 @@ pub fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> Result<
 
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))
+            "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, file_path, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))
              ON CONFLICT(id) DO UPDATE SET
                media_type = excluded.media_type,
                title = excluded.title,
@@ -435,6 +449,7 @@ pub fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> Result<
                cast = excluded.cast,
                recommended_folder = excluded.recommended_folder,
                raw_data = excluded.raw_data,
+               file_path = excluded.file_path,
                file_size_bytes = excluded.file_size_bytes,
                updated_at = datetime('now')"
         ).map_err(|e| e.to_string())?;
@@ -455,6 +470,7 @@ pub fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> Result<
                 media.recommended_folder,
                 media.raw_data,
                 media.file_size_bytes,
+                media.file_path,
             ]).map_err(|e| e.to_string())?;
         }
     }

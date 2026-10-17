@@ -6,7 +6,6 @@ import { spawn, spawnSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
-import * as matroska from 'matroska';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -84,11 +83,6 @@ export function resolveFfmpegBinary(): string {
   }
   return process.env.FFMPEG_PATH || 'ffmpeg';
 }
-
-export const videoAudioExtensions = new Set([
-  '.mkv', '.mp4', '.m4v', '.webm', '.avi', '.mov', '.ts', '.m2ts', '.wmv', '.flv',
-  '.mp3', '.flac', '.m4a', '.wav', '.aac', '.ogg', '.opus',
-]);
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -1846,20 +1840,7 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
   }
 
   const rawInput = checkPath;
-  let clean = checkPath.trim().replace(/^file:\/\//, '');
-
-  if (clean.includes('/api/samba/stream?') || clean.startsWith('/api/samba/stream?')) {
-    try {
-      const parsed = new URL(clean, 'http://localhost');
-      const p = parsed.searchParams.get('path') || parsed.searchParams.get('file');
-      if (p) clean = decodeURIComponent(p);
-    } catch {}
-  }
-
-  try {
-    if (clean.includes('%')) clean = decodeURIComponent(clean);
-  } catch {}
-
+  const clean = checkPath.trim().replace(/^file:\/\//, '');
   const resolvedPath = path.resolve(clean);
 
   try {
@@ -2635,7 +2616,7 @@ app.post('/api/samba/write-artwork', async (req: Request, res: Response) => {
         [posterFilename]: posterExists,
         [fanartFilename]: fanartExists,
       },
-      message: verified 
+      message: verified
         ? `Successfully saved and verified artwork in ${sanitizedRelPath}`
         : `Files attempted, verification incomplete`,
     });
@@ -2980,7 +2961,7 @@ app.all(['/api/samba/whoami', '/api/samba/who-am-i'], (req: Request, res: Respon
     const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'nobody', uid: 65534, gid: 65534, homedir: '/nonexistent', shell: '/usr/sbin/nologin' };
     const euid = typeof process.getuid === 'function' ? process.getuid() : -1;
     const egid = typeof process.getgid === 'function' ? process.getgid() : -1;
-    
+
     // Active mount path passed from request or default
     const targetMountPath = (req.body?.mountPath || req.query?.mountPath || req.body?.targetPath || req.body?.path || '/Volumes/media') as string;
     const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
@@ -3240,11 +3221,11 @@ app.all('/api/samba/user-info', (req: Request, res: Response) => {
     const userInfo = typeof os !== 'undefined' && os.userInfo ? os.userInfo() : { username: process.env.USER || 'nobody', uid: 65534, gid: 65534, homedir: '/nonexistent', shell: '/usr/sbin/nologin' };
     const euid = typeof process.getuid === 'function' ? process.getuid() : -1;
     const egid = typeof process.getgid === 'function' ? process.getgid() : -1;
-    
+
     // Check access on configured custom mounts
     const customMountsStatus: Record<string, any> = {};
     let mountsToCheck: string[] = [];
-    
+
     if (req.body && Array.isArray(req.body.paths) && req.body.paths.length > 0) {
       mountsToCheck = req.body.paths;
     } else {
@@ -3252,7 +3233,7 @@ app.all('/api/samba/user-info', (req: Request, res: Response) => {
         mountsToCheck.push(SAMBA_SHARE_ROOT);
       }
     }
-    
+
     mountsToCheck.forEach((m) => {
       const exists = fs.existsSync(m);
       let readable = false;
@@ -3281,7 +3262,7 @@ app.all('/api/samba/user-info', (req: Request, res: Response) => {
     if (activeUser === 'nobody' || !activeUser) {
       activeUser = 'sargus';
     }
-    
+
     const activeUid = (euid !== -1 && euid !== 0 && euid !== 65534) ? euid : (userInfo.uid !== -1 && userInfo.uid !== 65534 ? userInfo.uid : 501);
     const activeGid = (egid !== -1 && egid !== 0 && egid !== 65534) ? egid : (userInfo.gid !== -1 && userInfo.gid !== 65534 ? userInfo.gid : 20);
     const activeGroupName = activeGid === 20 ? 'staff' : 'staff';
@@ -3486,7 +3467,7 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
       const parts = rawPath.split('/').filter(Boolean);
       const fileName = parts[parts.length - 1] || rawPath;
       const topCategory = (parts[0] || '').toLowerCase();
-      
+
       let detectedType: 'movie' | 'series' | 'album' = 'movie';
       let detectedTitle = fileName.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ');
       let detectedYear: number | undefined;
@@ -3522,7 +3503,7 @@ app.post('/api/samba/sync-scan', async (req: Request, res: Response) => {
       const sMatch = fileName.match(/s(\d{1,2})e(\d{1,2})/i);
       const sFolderMatch = parts.find((p) => /season\s*(\d{1,2})|^s(\d{1,2})$/i.test(p));
       const isExtrasFolder = parts.some((p) => /specials?|extras?|bonus|featurettes?|behind\s*the\s*scenes/i.test(p));
-      
+
       if (sMatch) {
         detectedType = 'series';
         detectedSeason = parseInt(sMatch[1], 10);
@@ -3691,7 +3672,7 @@ app.post('/api/media/generate-fanart', async (req: Request, res: Response) => {
 
     if (ai) {
       try {
-        const prompt = `Create a high-quality, cinematic, wide-angle 16:9 fanart background banner for the ${type} "${title}". 
+        const prompt = `Create a high-quality, cinematic, wide-angle 16:9 fanart background banner for the ${type} "${title}".
 The style should be atmospheric, artistic, and capture the essence of the plot: ${plotText}.
 Do NOT include any text, logos, or titles in the image. High-contrast, vibrant lighting, professional movie production art style.`;
 
@@ -3974,7 +3955,7 @@ app.post('/api/samba/verify-paths', (req: Request, res: Response) => {
     if (!Array.isArray(paths)) {
       return res.status(400).json({ error: 'paths parameter must be an array of strings' });
     }
-    
+
     console.log(`[Samba Path Verifier] Verifying ${paths.length} candidate paths...`);
     for (const rawPath of paths) {
       if (!rawPath) continue;
@@ -3994,7 +3975,7 @@ app.post('/api/samba/verify-paths', (req: Request, res: Response) => {
         // Suppress individual stat errors
       }
     }
-    
+
     return res.json({
       success: true,
       exists: false,
@@ -4222,6 +4203,7 @@ app.post('/api/db/media', async (req: Request, res: Response) => {
       fanart_url: media.fanartUrl || media.fanart_url,
       genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres,
       recommended_folder: media.recommendedFolderStructure || media.recommended_folder,
+      file_path: media.path || media.file_path,
       raw_data: JSON.stringify(media),
     });
 
@@ -4252,6 +4234,7 @@ app.post('/api/db/media/batch', async (req: Request, res: Response) => {
       fanart_url: media.fanartUrl || media.fanart_url,
       genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres,
       recommended_folder: media.recommendedFolderStructure || media.recommended_folder,
+      file_path: media.path || media.file_path,
       raw_data: JSON.stringify(media),
     }));
 
@@ -4296,7 +4279,7 @@ app.get('/api/db/progress/:seriesId', async (req: Request, res: Response) => {
     const { seriesId } = req.params;
     const progress = await getSeriesProgress(seriesId);
     const allProgressList = await getAllProgressForSeries(seriesId);
-    
+
     // Map of "S{season}E{episode}" -> progress
     const episodeMap: Record<string, any> = {};
     allProgressList.forEach((p) => {
@@ -4804,7 +4787,7 @@ app.post('/api/samba/network-diagnostics', async (req: Request, res: Response) =
 
     const packetsSent = sampleCount;
     const packetLossPercent = packetsSent > 0 ? Math.round(((packetsSent - packetsReceived) / packetsSent) * 100 * 10) / 10 : 0;
-    
+
     // Fallback sample values if network socket failed or offline
     const validSamples = samples.length > 0 ? samples : (smbPortRes.open ? [Math.max(1, smbPortRes.latencyMs)] : [0]);
     const minLatencyMs = Math.min(...validSamples);
@@ -5019,79 +5002,6 @@ app.get('/api/thumbnails/stats', async (req: Request, res: Response) => {
 // Serve public static assets
 app.use(express.static(path.join(process.cwd(), 'public')));
 
-// Inspect Matroska (.mkv) container headers & metadata using node-matroska
-app.get('/api/samba/matroska-inspect', (req: Request, res: Response) => {
-  try {
-    const rawPath = ((req.query.path || req.query.file) as string || '').trim();
-    if (!rawPath) {
-      return res.status(400).json({ error: 'path query parameter is required' });
-    }
-    let cleanRaw = rawPath
-      .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
-      .replace(/^file:\/\/{1,3}/i, '');
-    try {
-      if (cleanRaw.includes('%')) cleanRaw = decodeURIComponent(cleanRaw);
-    } catch {}
-    cleanRaw = cleanRaw.replace(/\\/g, '/');
-
-    const candidateRoots = [
-      cleanRaw,
-      path.join('/Volumes', cleanRaw),
-      path.join('/Volumes/media', cleanRaw),
-      path.join('/mnt', cleanRaw),
-      path.join(process.cwd(), cleanRaw),
-      path.join(process.cwd(), 'samba_share', cleanRaw),
-    ];
-
-    let fullPath = '';
-    for (const cand of candidateRoots) {
-      if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
-        fullPath = cand;
-        break;
-      }
-    }
-
-    if (!fullPath) {
-      return res.json({
-        docType: 'matroska',
-        duration: 3600,
-        writingApp: 'mkvmerge v74.0.0',
-        muxingApp: 'libebml v1.4.4 + libmatroska v1.7.1',
-        tracksCount: 2,
-        tracks: [
-          { id: 1, type: 'video', codecId: 'V_MPEGH/ISO/HEVC' },
-          { id: 2, type: 'audio', codecId: 'A_AAC' }
-        ],
-        cuesCount: 180,
-        size: 154829104,
-      });
-    }
-
-    let fileSize = 154829104;
-    try {
-      if (fullPath && fs.existsSync(fullPath)) {
-        fileSize = fs.statSync(fullPath).size;
-      }
-    } catch {}
-
-    return res.json({
-      docType: 'matroska',
-      duration: 3600,
-      writingApp: 'mkvmerge v74.0.0 (Multiplexer)',
-      muxingApp: 'libebml v1.4.4 + libmatroska v1.7.1',
-      tracksCount: 2,
-      tracks: [
-        { id: 1, type: 'video', codecId: 'V_MPEGH/ISO/HEVC' },
-        { id: 2, type: 'audio', codecId: 'A_AAC' }
-      ],
-      cuesCount: 180,
-      size: fileSize,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Internal error inspecting matroska headers' });
-  }
-});
-
 // Dedicated Samba Network Share video/audio streaming endpoint with full HTTP 206 Partial Content / Range support
 app.get('/api/samba/stream', (req: Request, res: Response) => {
   try {
@@ -5192,7 +5102,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
               const findInDir = (dirPath: string, depth = 0): string | null => {
                 if (depth > 10) return null;
                 const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-                
+
                 // If specific filename requested
                 if (fileQuery) {
                   for (const entry of entries) {
@@ -5415,7 +5325,7 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
       '.aac': 'audio/aac',
       '.ogg': 'audio/ogg',
     };
-    
+
     // Force video/mp4 for video extensions for better browser compatibility
     const videoExtensions = ['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.ts', '.m2ts', '.wmv', '.flv'];
     const contentType = videoExtensions.includes(ext) ? 'video/mp4' : (mimeMap[ext] || 'video/mp4');
@@ -5476,48 +5386,16 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
   const sourceUrl = req.body?.sourceUrl;
   const sourcePath = req.body?.sourcePath;
 
-  // Helper to find first playable media file inside a directory recursively
-  const findPlayableInDirectory = (dirPath: string, depth = 0): string | null => {
-    if (depth > 8) return null;
-    try {
-      if (!fs.existsSync(dirPath)) return null;
-      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          if (videoAudioExtensions.has(ext)) {
-            return path.join(dirPath, entry.name);
-          }
-        }
-      }
-      for (const entry of entries) {
-        if (entry.isDirectory() && !entry.name.startsWith('.')) {
-          const found = findPlayableInDirectory(path.join(dirPath, entry.name), depth + 1);
-          if (found) return found;
-        }
-      }
-    } catch {}
-    return null;
-  };
-
-  // Helper to resolve any file or directory path to a playable media file
-  const resolveToPlayableFile = (targetPath: string): string | null => {
-    if (!targetPath || targetPath.startsWith('http://') || targetPath.startsWith('https://')) return null;
-    try {
-      if (fs.existsSync(targetPath)) {
-        const stat = fs.statSync(targetPath);
-        if (stat.isFile() && stat.size > 256) return targetPath;
-        if (stat.isDirectory()) {
-          return findPlayableInDirectory(targetPath);
-        }
-      }
-    } catch {}
-    return null;
-  };
-
   // Helper to check if a file path is a valid non-dummy file
   const isValidMediaFile = (filePath: string): boolean => {
-    return Boolean(resolveToPlayableFile(filePath));
+    if (filePath.startsWith('http://') || filePath.startsWith('https://')) return false;
+    try {
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath);
+        return stat.isFile() && stat.size > 256;
+      }
+    } catch {}
+    return false;
   };
 
   // Helper to strip virtual franchise names e.g. /Franchises/Glee/Glee (Main Series) -> /Franchises/Glee
@@ -5532,19 +5410,15 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
     const clean = stripVirtual(sourcePath.trim().replace(/^file:\/\//, ''));
     const candidates = [
       clean,
-      clean.replace(/^\/Volumes\/media/i, '/Volumes/Media'),
       path.resolve(clean),
       path.resolve(process.cwd(), clean.replace(/^[/\\]+/, '')),
       path.resolve(SAMBA_SHARE_ROOT, clean.replace(/^[/\\]+/, '')),
-      path.join('/Volumes/Media', clean.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
-      path.join('/Volumes/media', clean.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
       resolveSambaFullPath(clean),
     ];
 
     for (const cand of candidates) {
-      const resolved = cand ? resolveToPlayableFile(cand) : null;
-      if (resolved) {
-        return res.json({ token: saveTranscodeJob({ inputPath: resolved }) });
+      if (cand && isValidMediaFile(cand)) {
+        return res.json({ token: saveTranscodeJob({ inputPath: cand }) });
       }
     }
   }
@@ -5567,20 +5441,16 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
           const cleanRaw = stripVirtual(qPath.replace(/\\/g, '/'));
           const candidateRoots = [
             cleanRaw,
-            cleanRaw.replace(/^\/Volumes\/media/i, '/Volumes/Media'),
             resolveSambaFullPath(cleanRaw),
             path.join(SAMBA_SHARE_ROOT, cleanRaw),
             path.join(process.cwd(), cleanRaw.replace(/^[/\\]+/, '')),
             path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
-            path.join('/Volumes/Media', cleanRaw.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
-            path.join('/Volumes/media', cleanRaw.replace(/^[/\\]+/, '').replace(/^Franchises\//i, 'Franchises/')),
             path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
           ];
 
           for (const root of candidateRoots) {
-            const resolved = root ? resolveToPlayableFile(root) : null;
-            if (resolved) {
-              return res.json({ token: saveTranscodeJob({ inputPath: resolved }) });
+            if (isValidMediaFile(root)) {
+              return res.json({ token: saveTranscodeJob({ inputPath: root }) });
             }
           }
 

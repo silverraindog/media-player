@@ -1022,12 +1022,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   }, [media, initialEpisode, initialTrack, isOpen]);
 
   useEffect(() => {
-    if (!isOpen || !resolvedStreamUrl) return;
-    const timer = setTimeout(startPlayback, 150);
-    return () => clearTimeout(timer);
-  }, [isOpen, resolvedStreamUrl, startPlayback]);
-
-  useEffect(() => {
     transcodeAttemptedRef.current = false;
     setTranscodedPlaybackUrl(null);
     setIsTranscoding(false);
@@ -1283,6 +1277,22 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       setIsPlaying(false);
     }
   }, [currentStreamUrl, handleMediaDecodeError, isAudio, isTranscoding, localVideoFile, resolvedLocalFilePath, sambaConfig]);
+
+  useEffect(() => {
+    if (!isOpen || !resolvedStreamUrl) return;
+    const sourcePath = resolvedLocalFilePath || resolvedStreamUrl;
+    const isNativeMatroska = isTauriPlaybackEnvironment() && /\.mkv(?:$|[?#])/i.test(sourcePath);
+    const timer = setTimeout(() => {
+      if (isNativeMatroska) {
+        if (!transcodeAttemptedRef.current && !transcodedPlaybackUrl && !isTranscoding) {
+          void handleMediaDecodeError('MKV playback requires FFmpeg transcoding in the desktop player.');
+        }
+        return;
+      }
+      startPlayback();
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [handleMediaDecodeError, isOpen, isTranscoding, resolvedLocalFilePath, resolvedStreamUrl, startPlayback, transcodedPlaybackUrl]);
 
   // Skip seconds
   const handleSkip = (seconds: number) => {

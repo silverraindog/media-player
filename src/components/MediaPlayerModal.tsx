@@ -19,6 +19,8 @@ import {
   CheckCircle,
   Radio,
   FileVideo,
+  Cpu,
+  Zap,
 } from 'lucide-react';
 import {
   MediaMetadata,
@@ -82,6 +84,22 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const [hardwareAccel, setHardwareAccel] = useState(true);
+  const [lastPruneTime, setLastPruneTime] = useState(0);
+
+  const handleTimeUpdate = (time: number) => {
+    setCurrentTime(time);
+    // Sliding-window buffer strategy: every 30s of playback, prune consumed transcode segments from cache
+    if (Math.abs(time - lastPruneTime) > 30) {
+      setLastPruneTime(time);
+      fetch('/api/samba/transcode/prune', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentTime: time, keepPath: activeFilePath }),
+      }).catch(() => {});
+    }
+  };
 
   // Sync initial episode or track when props change
   useEffect(() => {
@@ -154,12 +172,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Build the playback URL (direct or transcoded output)
   const streamUrl = useMemo(() => {
     if (!activeFilePath) return '';
+    const hwParam = hardwareAccel ? '&hwaccel=true' : '';
     if (useTranscode || transcodeStatus.state === 'ready') {
       const targetPath = transcodeStatus.outputPath || activeFilePath;
-      return `/api/samba/transcode?path=${encodeURIComponent(targetPath)}`;
+      return `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
     }
     return getDirectMediaPlayUrl(activeFilePath, sambaConfig);
-  }, [activeFilePath, sambaConfig, useTranscode, transcodeStatus]);
+  }, [activeFilePath, sambaConfig, useTranscode, transcodeStatus, hardwareAccel]);
 
   // Reset playback errors when target file changes
   useEffect(() => {
@@ -331,6 +350,15 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 <span className="hidden md:inline">MKV Inspector</span>
               </button>
             )}
+
+            <button
+              onClick={() => setHardwareAccel(!hardwareAccel)}
+              className={`p-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${hardwareAccel ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              title="Toggle Hardware-Accelerated Decoding (GPU / HEVC)"
+            >
+              <Cpu className="w-4 h-4" />
+              <span className="hidden md:inline">HW Accel: {hardwareAccel ? 'ON' : 'OFF'}</span>
+            </button>
 
             <button
               onClick={handleStartTranscode}
@@ -675,6 +703,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             <span className="px-2 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-800 text-[11px] flex items-center gap-1 font-mono">
               <CheckCircle className="w-3 h-3 text-emerald-400" />
               Direct File Source (No API proxy)
+            </span>
+            <span className="px-2 py-0.5 rounded bg-cyan-950/70 text-cyan-300 border border-cyan-800 text-[11px] flex items-center gap-1 font-mono">
+              <Zap className="w-3 h-3 text-cyan-400" />
+              Sliding-Window Buffer (HW Accel: {hardwareAccel ? 'GPU' : 'CPU'})
             </span>
             {useTranscode && (
               <span className="px-2 py-0.5 rounded bg-amber-900/60 text-amber-300 border border-amber-800 text-[11px]">

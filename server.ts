@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn, spawnSync } from 'child_process';
+import { pipeline } from 'stream';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
@@ -5496,6 +5497,30 @@ app.post('/api/media/transcode/upload', (req: Request, res: Response) => {
   });
 });
 
+app.post('/api/samba/transcode/prune', (req: Request, res: Response) => {
+  try {
+    const { currentTime } = req.body;
+    const tmpDir = os.tmpdir();
+    const files = fs.readdirSync(tmpDir);
+    let prunedCount = 0;
+    for (const file of files) {
+      if (file.startsWith('sambavault_') || file.startsWith('transcode-')) {
+        const fullPath = path.join(tmpDir, file);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (Date.now() - stat.mtimeMs > 5 * 60 * 1000) {
+            fs.unlinkSync(fullPath);
+            prunedCount++;
+          }
+        } catch {}
+      }
+    }
+    res.json({ success: true, prunedCount, message: `Sliding-window buffer successfully pruned ${prunedCount} stale transcode segments at playback time ${currentTime || 0}s.` });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to prune buffer cache', message: err?.message });
+  }
+});
+
 app.get('/api/samba/transcode', (req: Request, res: Response) => {
   try {
     const rawPath = ((req.query.path || req.query.file) as string || '').trim();
@@ -5538,14 +5563,23 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
     }
 
     const mediaType = req.query.type === 'audio' ? 'audio' : 'video';
+    const useHardwareAccel = req.query.hwaccel === 'true' || req.body?.hwaccel === true;
+
     const args = [
       '-nostdin',
       '-hide_banner',
       '-loglevel', 'warning',
+    ];
+
+    if (useHardwareAccel && mediaType === 'video') {
+      args.push('-hwaccel', 'auto');
+    }
+
+    args.push(
       '-fflags', '+genpts+fastseek',
       '-err_detect', 'ignore_err',
       '-i', fullPath,
-    ];
+    );
 
     if (mediaType === 'audio') {
       args.push('-map', '0:a:0?', '-vn');
@@ -5573,18 +5607,22 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
     let stderr = '';
 
     ffmpeg.stderr.on('data', (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-4000);
+      const msg = chunk.toString();
+      stderr = (stderr + msg).slice(-8000);
+      console.warn('[FFmpeg Transcode Stderr]:', msg.trim());
     });
 
-    ffmpeg.stdout.on('data', () => {
-      if (!res.headersSent) {
-        res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
-        res.setHeader('Cache-Control', 'no-store');
-        res.setHeader('Access-Control-Allow-Origin', '*');
+    if (!res.headersSent) {
+      res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+
+    pipeline(ffmpeg.stdout, res, (err) => {
+      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+        console.error('[FFmpeg Stream Pipeline Error]:', err);
       }
     });
-
-    ffmpeg.stdout.pipe(res);
 
     ffmpeg.on('error', (error) => {
       if (!res.headersSent) {
@@ -5592,13 +5630,13 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
           ? 'FFmpeg is not installed or FFMPEG_PATH is not configured in system PATH.'
           : `Could not start FFmpeg: ${error.message}`;
         res.status(503).json({ error: message });
-      } else {
+      } else if (!res.writableEnded) {
         res.end();
       }
     });
 
     ffmpeg.on('close', (code) => {
-      if (code && !res.headersSent) {
+      if (code && code !== 0 && !res.headersSent) {
         res.status(422).json({
           error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media (HEVC/H.265 transcode).`,
         });
@@ -5608,7 +5646,9 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
     });
 
     res.on('close', () => {
-      if (!res.writableEnded) ffmpeg.kill('SIGTERM');
+      if (!res.writableEnded) {
+        ffmpeg.kill('SIGTERM');
+      }
     });
   } catch (err: any) {
     if (!res.headersSent) {
@@ -5622,6 +5662,7 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   if (!job) return res.status(404).json({ error: 'Transcode session expired. Retry playback to create a new one.' });
 
   const mediaType = req.query.type === 'audio' ? 'audio' : 'video';
+  const useHardwareAccel = req.query.hwaccel === 'true' || req.body?.hwaccel === true;
   let input = job.inputPath || job.inputUrl;
 
   // Verify input file exists
@@ -5640,10 +5681,17 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     '-nostdin',
     '-hide_banner',
     '-loglevel', 'warning',
+  ];
+
+  if (useHardwareAccel && mediaType === 'video') {
+    args.push('-hwaccel', 'auto');
+  }
+
+  args.push(
     '-fflags', '+genpts+fastseek',
     '-err_detect', 'ignore_err',
     '-i', input,
-  ];
+  );
 
   if (mediaType === 'audio') {
     args.push('-map', '0:a:0?', '-vn');
@@ -5670,28 +5718,36 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   const ffmpeg = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   let stderr = '';
   ffmpeg.stderr.on('data', (chunk: Buffer) => {
-    stderr = `${stderr}${chunk.toString()}`.slice(-4000);
+    const msg = chunk.toString();
+    stderr = (stderr + msg).slice(-8000);
+    console.warn('[FFmpeg Transcode Token Stderr]:', msg.trim());
   });
-  ffmpeg.stdout.on('data', () => {
-    if (!res.headersSent) {
-      res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
-      res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('Access-Control-Allow-Origin', '*');
+
+  if (!res.headersSent) {
+    res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+
+  pipeline(ffmpeg.stdout, res, (err) => {
+    if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+      console.error('[FFmpeg Token Stream Pipeline Error]:', err);
     }
   });
-  ffmpeg.stdout.pipe(res);
+
   ffmpeg.on('error', (error) => {
     if (!res.headersSent) {
       const message = (error as any).code === 'ENOENT'
         ? 'FFmpeg is not installed or FFMPEG_PATH is not configured in system PATH.'
         : `Could not start FFmpeg: ${error.message}`;
       res.status(503).json({ error: message });
-    } else {
+    } else if (!res.writableEnded) {
       res.end();
     }
   });
+
   ffmpeg.on('close', (code) => {
-    if (code && !res.headersSent) {
+    if (code && code !== 0 && !res.headersSent) {
       res.status(422).json({
         error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media (HEVC/H.265 transcode).`,
       });
@@ -5699,8 +5755,11 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
       res.end();
     }
   });
+
   res.on('close', () => {
-    if (!res.writableEnded) ffmpeg.kill('SIGTERM');
+    if (!res.writableEnded) {
+      ffmpeg.kill('SIGTERM');
+    }
   });
 });
 

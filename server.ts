@@ -5659,7 +5659,13 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist-frontend');
+    const candidateDirs = [
+      path.join(process.cwd(), 'dist-frontend'),
+      path.join(process.cwd(), 'dist'),
+      path.join(__dirname, '../dist-frontend'),
+      path.join(__dirname, '..'),
+    ];
+    const distPath = candidateDirs.find((d) => fs.existsSync(path.join(d, 'index.html'))) || path.join(process.cwd(), 'dist-frontend');
     app.use(express.static(distPath));
     app.get('*', (req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));

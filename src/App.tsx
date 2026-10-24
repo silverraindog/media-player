@@ -1049,7 +1049,7 @@ function App() {
         }
       }
     } catch {}
-    return [];
+    return CURATED_MEDIA_DATABASE;
   });
 
   useEffect(() => {
@@ -1065,11 +1065,16 @@ function App() {
           if (data.state.mediaLibrary && Array.isArray(data.state.mediaLibrary) && data.state.mediaLibrary.length > 0) {
             setMediaLibrary(data.state.mediaLibrary);
             sqliteBatchWriter.updateCache(data.state.mediaLibrary);
+          } else {
+            setMediaLibrary(prev => (prev && prev.length > 0 ? prev : CURATED_MEDIA_DATABASE));
           }
         }
         setIsVaultLoaded(true);
       })
-      .catch(() => setIsVaultLoaded(true));
+      .catch(() => {
+        setMediaLibrary(prev => (prev && prev.length > 0 ? prev : CURATED_MEDIA_DATABASE));
+        setIsVaultLoaded(true);
+      });
   }, []);
 
   // Listen for API request timeouts on critical endpoints (/api/metadata/categorize, /api/vault/state)

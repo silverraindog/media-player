@@ -1,0 +1,10 @@
+/Users/sargus/repos/media-player/target/debug/deps/manganis_macro-ea45e26b54db22f0.d: /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/lib.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/asset.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/css_module.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/ffi.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/linker.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/../README.md
+
+/Users/sargus/repos/media-player/target/debug/deps/libmanganis_macro-ea45e26b54db22f0.dylib: /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/lib.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/asset.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/css_module.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/ffi.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/linker.rs /Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/../README.md
+
+/Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/lib.rs:
+/Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/asset.rs:
+/Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/css_module.rs:
+/Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/ffi.rs:
+/Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/linker.rs:
+/Users/sargus/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/manganis-macro-0.7.10/src/../README.md:

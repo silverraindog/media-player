@@ -36,6 +36,8 @@ export const FullDiskAccessOverlay: React.FC<FullDiskAccessOverlayProps> = ({
   onRecheck,
   onOpenSettings,
 }) => {
+  if (!isOpen) return null;
+
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifyMessage, setVerifyMessage] = useState<{ text: string; success: boolean } | null>(null);
   const [copiedCli, setCopiedCli] = useState(false);

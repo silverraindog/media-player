@@ -5496,6 +5496,127 @@ app.post('/api/media/transcode/upload', (req: Request, res: Response) => {
   });
 });
 
+app.get('/api/samba/transcode', (req: Request, res: Response) => {
+  try {
+    const rawPath = ((req.query.path || req.query.file) as string || '').trim();
+    if (!rawPath) {
+      return res.status(400).json({ error: 'path query parameter is required' });
+    }
+
+    let cleanRaw = rawPath
+      .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
+      .replace(/^file:\/\/{1,3}/i, '');
+    try {
+      if (cleanRaw.includes('%')) cleanRaw = decodeURIComponent(cleanRaw);
+    } catch {}
+    cleanRaw = cleanRaw.replace(/\\/g, '/');
+
+    const candidateRoots = Array.from(new Set([
+      cleanRaw,
+      path.resolve(cleanRaw),
+      resolveSambaFullPath(cleanRaw),
+      path.join(SAMBA_SHARE_ROOT, cleanRaw.replace(/^[/\\]+/, '')),
+      path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
+      path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
+    ])).filter(Boolean);
+
+    let fullPath = '';
+    for (const root of candidateRoots) {
+      if (fs.existsSync(root)) {
+        try {
+          const stat = fs.statSync(root);
+          if (stat.isFile() && stat.size > 256) {
+            fullPath = root;
+            break;
+          }
+        } catch {}
+      }
+    }
+
+    if (!fullPath || !fs.existsSync(fullPath)) {
+      return res.status(404).json({ error: `Transcode source file not found for path: "${rawPath}"` });
+    }
+
+    const mediaType = req.query.type === 'audio' ? 'audio' : 'video';
+    const args = [
+      '-nostdin',
+      '-hide_banner',
+      '-loglevel', 'warning',
+      '-fflags', '+genpts+fastseek',
+      '-err_detect', 'ignore_err',
+      '-i', fullPath,
+    ];
+
+    if (mediaType === 'audio') {
+      args.push('-map', '0:a:0?', '-vn');
+    } else {
+      args.push('-map', '0:v:0?', '-map', '0:a:0?');
+      args.push(
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-pix_fmt', 'yuv420p',
+        '-max_muxing_queue_size', '9999'
+      );
+    }
+    args.push(
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-ac', '2',
+      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+      '-f', 'mp4',
+      'pipe:1'
+    );
+
+    const ffmpegBin = resolveFfmpegBinary();
+    const ffmpeg = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+
+    ffmpeg.stderr.on('data', (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4000);
+    });
+
+    ffmpeg.stdout.on('data', () => {
+      if (!res.headersSent) {
+        res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
+    });
+
+    ffmpeg.stdout.pipe(res);
+
+    ffmpeg.on('error', (error) => {
+      if (!res.headersSent) {
+        const message = (error as any).code === 'ENOENT'
+          ? 'FFmpeg is not installed or FFMPEG_PATH is not configured in system PATH.'
+          : `Could not start FFmpeg: ${error.message}`;
+        res.status(503).json({ error: message });
+      } else {
+        res.end();
+      }
+    });
+
+    ffmpeg.on('close', (code) => {
+      if (code && !res.headersSent) {
+        res.status(422).json({
+          error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media (HEVC/H.265 transcode).`,
+        });
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    });
+
+    res.on('close', () => {
+      if (!res.writableEnded) ffmpeg.kill('SIGTERM');
+    });
+  } catch (err: any) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Transcode streaming failed', details: err?.message });
+    }
+  }
+});
+
 app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   const job = transcodeJobs.get(req.params.token);
   if (!job) return res.status(404).json({ error: 'Transcode session expired. Retry playback to create a new one.' });
@@ -5515,17 +5636,34 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
 
   if (!input) return res.status(400).json({ error: 'Transcode source is unavailable.' });
 
-  const args = ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', input];
+  const args = [
+    '-nostdin',
+    '-hide_banner',
+    '-loglevel', 'warning',
+    '-fflags', '+genpts+fastseek',
+    '-err_detect', 'ignore_err',
+    '-i', input,
+  ];
+
   if (mediaType === 'audio') {
     args.push('-map', '0:a:0?', '-vn');
   } else {
     args.push('-map', '0:v:0?', '-map', '0:a:0?');
-    args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p');
+    args.push(
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      '-max_muxing_queue_size', '9999'
+    );
   }
   args.push(
-    '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-ac', '2',
     '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-    '-f', 'mp4', 'pipe:1'
+    '-f', 'mp4',
+    'pipe:1'
   );
 
   const ffmpegBin = resolveFfmpegBinary();
@@ -5538,6 +5676,7 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     if (!res.headersSent) {
       res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
       res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Access-Control-Allow-Origin', '*');
     }
   });
   ffmpeg.stdout.pipe(res);
@@ -5554,7 +5693,7 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   ffmpeg.on('close', (code) => {
     if (code && !res.headersSent) {
       res.status(422).json({
-        error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media.`,
+        error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media (HEVC/H.265 transcode).`,
       });
     } else if (!res.writableEnded) {
       res.end();
@@ -5684,3 +5823,4 @@ async function startServer() {
 }
 
 startServer();
+

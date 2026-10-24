@@ -1,0 +1,11 @@
+const fs = require('fs');
+const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="100" fill="#0f172a"/>
+  <circle cx="256" cy="256" r="160" fill="#3b82f6" opacity="0.3"/>
+  <path d="M160 180 h192 a20 20 0 0 1 20 20 v112 a20 20 0 0 1 -20 20 h-192 a20 20 0 0 1 -20 -20 v-112 a20 20 0 0 1 20 -20 z" fill="#1e293b" stroke="#3b82f6" stroke-width="8"/>
+  <circle cx="210" cy="256" r="30" fill="#3b82f6"/>
+  <circle cx="302" cy="256" r="30" fill="#3b82f6"/>
+  <line x1="240" y1="256" x2="272" y2="256" stroke="#93c5fd" stroke-width="8"/>
+</svg>`;
+fs.writeFileSync('src-tauri/icon.svg', svgContent);
+console.log('SVG icon created successfully.');

@@ -1,0 +1,8 @@
+{
+  "name": "Remix Samba Media Vault \u0026 Metadata Downloader",
+  "description": "Cross-platform media metadata manager \u0026 downloader for Movies, TV Series, and Music Albums with Samba (SMB) network share sync for macOS, Linux, and Windows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

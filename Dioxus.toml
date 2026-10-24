@@ -1,0 +1,3 @@
+[application]
+name = "media-player"
+default_platform = "desktop"

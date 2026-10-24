@@ -1,0 +1,839 @@
+import React, { useState, useEffect } from 'react';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
+import {
+  Youtube,
+  LogIn,
+  LogOut,
+  RefreshCw,
+  Search,
+  Play,
+  ExternalLink,
+  Calendar,
+  Tv,
+  AlertCircle,
+  AlertTriangle,
+  Key,
+  ShieldCheck,
+  User as UserIcon,
+  BarChart3,
+  Terminal,
+  Laptop,
+  Globe,
+  Copy,
+  Check,
+  Sparkles,
+} from 'lucide-react';
+import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, GoogleAuthProvider, User } from '../lib/firebase';
+import { fetchSubscriptions, fetchChannelUploads, getCuratedSampleFeeds, YouTubeSubscription, YouTubeVideo } from '../services/youtubeService';
+import { logger } from '../utils/loggerService';
+import { openExternalUrl } from '../utils/tauriBridge';
+
+interface SyncLog {
+  timestamp: string;
+  message: string;
+  type: 'info' | 'error' | 'warning';
+}
+
+const YouTubeSkeleton = () => (
+  <div className="space-y-6 animate-pulse">
+    <div className="h-32 bg-slate-800 rounded-2xl"></div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      {[...Array(8)].map((_, i) => (
+        <div key={i} className="h-64 bg-slate-800 rounded-2xl"></div>
+      ))}
+    </div>
+  </div>
+);
+
+export const YouTubeTab: React.FC = () => {
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string>(() => localStorage.getItem('youtube_access_token') || '');
+  const [manualToken, setManualToken] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [subscriptions, setSubscriptions] = useState<YouTubeSubscription[]>([]);
+  const [recentVideos, setRecentVideos] = useState<YouTubeVideo[]>([]);
+  const [selectedChannelId, setSelectedChannelId] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
+  const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Desktop WebView / iframe Sandbox & Popup Blocker Detection
+  const isTauriEnv = typeof window !== 'undefined' && (
+    Boolean((window as any).__TAURI_IPC__) ||
+    Boolean((window as any).__TAURI__) ||
+    window.location.protocol === 'tauri:' ||
+    window.location.origin.includes('tauri.localhost') ||
+    window.location.origin.includes('tauri://')
+  );
+  const isIframeEnv = typeof window !== 'undefined' && window.self !== window.top;
+
+  const [popupBlocked, setPopupBlocked] = useState(isTauriEnv);
+
+  const GOOGLE_CLIENT_ID = '152448014679-5ppmkrq192enef9tivfum5pg90a3olaf.apps.googleusercontent.com';
+  const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly';
+
+  const addLog = (message: string, type: SyncLog['type'] = 'info') => {
+    const timestamp = new Date().toLocaleTimeString();
+    setSyncLogs((prev) => [{ timestamp, message, type }, ...prev].slice(0, 50));
+  };
+
+  const getSanitizedRedirectUri = (): string => {
+    if (typeof window === 'undefined') return 'http://localhost:3000';
+    const origin = window.location.origin || '';
+    if (origin.startsWith('tauri://') || origin.includes('tauri.localhost') || origin.includes('localhost:1420')) {
+      return 'http://localhost:3000';
+    }
+    if (origin.startsWith('http://') || origin.startsWith('https://')) {
+      return `${origin}${window.location.pathname.replace(/\/+$/, '')}`;
+    }
+    return 'http://localhost:3000';
+  };
+
+  // Check location hash/query on mount for OAuth access token callback or errors
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const urlStr = window.location.href;
+    const hash = window.location.hash || window.location.search;
+
+    if (hash && hash.includes('access_token=')) {
+      const match = hash.match(/access_token=([^&]+)/);
+      if (match && match[1]) {
+        const extractedToken = decodeURIComponent(match[1]);
+        setAccessToken(extractedToken);
+        localStorage.setItem('youtube_access_token', extractedToken);
+        addLog('Extracted YouTube access token from browser OAuth redirect!', 'info');
+        // Clean hash from URL without reloading page
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, '', window.location.pathname);
+        }
+        fetchYouTubeData(extractedToken);
+      }
+    } else if (urlStr.includes('error=') || hash.includes('error=')) {
+      const matchErr = hash.match(/error=([^&]+)/) || urlStr.match(/error=([^&]+)/);
+      if (matchErr && matchErr[1]) {
+        const errCode = decodeURIComponent(matchErr[1]);
+        if (errCode === 'redirect_uri_mismatch' || errCode === 'invalid_request') {
+          const currentUri = getSanitizedRedirectUri();
+          setErrorMsg(`Google Cloud OAuth restricted this preview domain (${errCode}). Click 'Explore Sample Feeds (No Login)' below to instantly browse verified trailers & channels.`);
+          addLog(`OAuth error (${errCode}) detected for URI: ${currentUri}. Switching to sample feeds recommendation.`, 'warning');
+        } else {
+          setErrorMsg(`Google OAuth error: ${errCode}`);
+          addLog(`Google OAuth error callback: ${errCode}`, 'error');
+        }
+      }
+    }
+  }, []);
+
+  // Monitor Firebase Auth session state
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Sync Timer: 30 minutes
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const intervalId = setInterval(() => {
+      console.log('[YouTubeTab] Triggering background sync...');
+      fetchYouTubeData(accessToken);
+    }, 30 * 60 * 1000);
+
+    return () => clearInterval(intervalId);
+  }, [accessToken]);
+
+  const openGoogleOAuthInBrowser = () => {
+    setErrorMsg(null);
+    const scope = encodeURIComponent(YOUTUBE_SCOPE);
+    const rawRedirectUri = getSanitizedRedirectUri();
+    const redirectUri = encodeURIComponent(rawRedirectUri);
+    
+    // Construct standard client-side OAuth Implicit flow URL with valid HTTP/HTTPS redirect_uri
+    const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}&prompt=consent`;
+    openExternalUrl(oauthUrl);
+    addLog(`Opening Google Authorization in system browser with redirect_uri: ${rawRedirectUri}`, 'info');
+    logger.info(`Opening Google OAuth with redirect URI: ${rawRedirectUri}`, 'Auth');
+    setPopupBlocked(true);
+  };
+
+  const handleGoogleIdentityDirect = () => {
+    setErrorMsg(null);
+    if (isTauriEnv || !(window as any).google?.accounts?.oauth2) {
+      openGoogleOAuthInBrowser();
+      return;
+    }
+
+    try {
+      const client = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: YOUTUBE_SCOPE,
+        callback: (response: any) => {
+          if (response && response.access_token) {
+            setAccessToken(response.access_token);
+            localStorage.setItem('youtube_access_token', response.access_token);
+            setErrorMsg(null);
+            setPopupBlocked(false);
+            fetchYouTubeData(response.access_token);
+            addLog('Successfully authenticated with Google Identity OAuth!', 'info');
+          } else if (response && response.error) {
+            console.warn('GIS error response:', response);
+            setErrorMsg(`Google OAuth error: ${response.error_description || response.error}`);
+            setPopupBlocked(true);
+          }
+        },
+        error_callback: (err: any) => {
+          console.warn('Google Identity error callback:', err);
+          setPopupBlocked(true);
+          setErrorMsg('Popup was blocked by your browser or desktop environment. Please use the External Browser button or paste a token.');
+        },
+      });
+      client.requestAccessToken({ prompt: 'select_account' });
+    } catch (e: any) {
+      console.error('OAuth token client error:', e);
+      setPopupBlocked(true);
+      setErrorMsg(`Popup failed (${e?.message || e}). Click below to authorize in your browser or paste a token.`);
+    }
+  };
+
+  const loadCuratedSampleFeeds = () => {
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      const { subscriptions: sampleSubs, videos: sampleVids } = getCuratedSampleFeeds();
+      setSubscriptions(sampleSubs);
+      setRecentVideos(sampleVids);
+      setAccessToken('sample_curated_feed_active');
+      localStorage.setItem('youtube_access_token', 'sample_curated_feed_active');
+      addLog('Loaded curated Movie & TV Trailer YouTube feeds (Rotten Tomatoes Movieclips, Warner Bros, Universal Pictures, IGN)! No Google OAuth login required.', 'info');
+      logger.info('Loaded curated sample YouTube channels and trailers without OAuth login.', 'Auth');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFirebaseGoogleSignIn = async () => {
+    setErrorMsg(null);
+    setIsLoading(true);
+
+    try {
+      console.log('[YouTubeTab] Launching Firebase Popup Sign-in...');
+      const result = await signInWithPopup(auth, googleProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      const token = credential?.accessToken;
+
+      if (token) {
+        setAccessToken(token);
+        localStorage.setItem('youtube_access_token', token);
+        fetchYouTubeData(token);
+        addLog('Successfully signed in with Firebase Google Auth!', 'info');
+      } else {
+        addLog('Signed in to Firebase. Loading channel feeds...', 'info');
+        loadCuratedSampleFeeds();
+      }
+    } catch (e: any) {
+      console.warn('[YouTubeTab] Firebase Auth popup result:', e);
+      const isCancelled =
+        e?.code === 'auth/cancelled-popup-request' ||
+        e?.code === 'auth/popup-blocked' ||
+        e?.code === 'auth/popup-closed-by-user';
+
+      if (isCancelled) {
+        addLog('Popup window was closed or blocked. Activating sample feeds fallback.', 'warning');
+        setErrorMsg('Sign-in popup was blocked or closed. You can explore sample trailer channels right now or paste an access token.');
+      } else {
+        setErrorMsg(`Google Sign-in encountered an issue (${e?.code || e?.message || e}). Click 'Explore Sample Channels' to browse immediately without Google OAuth.`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+
+  const handleSaveManualToken = () => {
+    let token = manualToken.trim();
+    if (!token) return;
+
+    // Automatically parse access_token if user pasted the full redirect URL or query string
+    if (token.includes('access_token=')) {
+      const match = token.match(/access_token=([^&]+)/);
+      if (match && match[1]) {
+        token = decodeURIComponent(match[1]);
+      }
+    }
+
+    setAccessToken(token);
+    localStorage.setItem('youtube_access_token', token);
+    setManualToken('');
+    setErrorMsg(null);
+    setPopupBlocked(false);
+    addLog('Access token set. Fetching YouTube subscriptions...', 'info');
+    fetchYouTubeData(token);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {}
+    setAccessToken('');
+    localStorage.removeItem('youtube_access_token');
+    setSubscriptions([]);
+    setRecentVideos([]);
+  };
+
+  const fetchYouTubeData = async (token: string) => {
+    setIsLoading(true);
+    setErrorMsg(null);
+    addLog('Starting YouTube data sync...', 'info');
+    try {
+      const subs = await fetchSubscriptions(token);
+      setSubscriptions(subs);
+      addLog(`Fetched ${subs.length} subscriptions.`, 'info');
+
+      const allVideos: YouTubeVideo[] = [];
+      for (const sub of subs.slice(0, 15)) {
+        const channelId = sub.snippet.resourceId.channelId;
+        const vids = await fetchChannelUploads(token, channelId);
+        allVideos.push(...vids);
+      }
+
+      // Sort by publishedAt descending
+      allVideos.sort((a, b) => new Date(b.snippet.publishedAt).getTime() - new Date(a.snippet.publishedAt).getTime());
+      setRecentVideos(allVideos);
+      addLog('YouTube data sync completed successfully.', 'info');
+    } catch (err: any) {
+      console.error('YouTube API error:', err);
+      const msg = err?.message || 'Failed to connect to YouTube API. Please re-authenticate.';
+      setErrorMsg(msg);
+      addLog(`Sync error: ${msg}`, 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const filteredVideos = recentVideos.filter((video) => {
+    if (selectedChannelId !== 'all' && video.snippet.channelId !== selectedChannelId) {
+      return false;
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const title = (video.snippet.title || '').toLowerCase();
+      const channel = (video.snippet.channelTitle || '').toLowerCase();
+      return title.includes(q) || channel.includes(q);
+    }
+    return true;
+  });
+
+  // Calculate daily upload frequency (last 7 days)
+  const chartData = React.useMemo(() => {
+    const last7Days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      return d.toISOString().split('T')[0];
+    }).reverse();
+
+    const freqMap = last7Days.reduce((acc, date) => ({ ...acc, [date]: 0 }), {} as Record<string, number>);
+
+    recentVideos.forEach((v) => {
+      const date = v.snippet.publishedAt.split('T')[0];
+      if (freqMap[date] !== undefined) {
+        freqMap[date]++;
+      }
+    });
+
+    return last7Days.map((date) => ({
+      name: new Date(date).toLocaleDateString(undefined, { weekday: 'short' }),
+      uploads: freqMap[date],
+    }));
+  }, [recentVideos]);
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-200">
+      {/* Header Banner */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-red-950/80 via-slate-900 to-indigo-950/80 border border-red-500/30 p-6 sm:p-8 shadow-xl">
+        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+          <Youtube className="w-48 h-48 text-red-500" />
+        </div>
+        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-2 max-w-2xl">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/20 text-red-300 border border-red-500/30 text-xs font-semibold">
+              <Youtube className="w-3.5 h-3.5" /> Firebase Authenticated YouTube Feed
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+              YouTube Channel Updates
+            </h1>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Securely sign in with Firebase Authentication & Google OAuth to inspect new video uploads and updates across your subscribed YouTube channels.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            {currentUser || accessToken ? (
+              <div className="flex items-center gap-3">
+                {currentUser && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-200">
+                    {currentUser.photoURL ? (
+                      <img src={currentUser.photoURL} alt="" className="w-5 h-5 rounded-full object-cover" />
+                    ) : (
+                      <UserIcon className="w-4 h-4 text-red-400" />
+                    )}
+                    <span className="font-semibold truncate max-w-[140px]">{currentUser.displayName || currentUser.email}</span>
+                  </div>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-red-400 font-bold text-xs transition border border-red-500/30 cursor-pointer shadow-lg"
+                >
+                  <LogOut className="w-4 h-4" /> Sign Out
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                {isTauriEnv ? (
+                  <button
+                    onClick={openGoogleOAuthInBrowser}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer active:scale-95"
+                    title="Open Google authorization in your default desktop browser"
+                  >
+                    <ExternalLink className="w-4 h-4" /> Authorize in Browser
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleFirebaseGoogleSignIn}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer active:scale-95"
+                  >
+                    <LogIn className="w-4 h-4" /> Sign In with Google
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Activity Graph */}
+      {(currentUser || accessToken) && recentVideos.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+          <div className="flex items-center gap-2 mb-6">
+            <BarChart3 className="w-5 h-5 text-red-400" />
+            <h3 className="text-sm font-bold text-white">Upload Activity (Last 7 Days)</h3>
+          </div>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} />
+                <YAxis stroke="#94a3b8" fontSize={10} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#fff', fontSize: '12px' }}
+                />
+                <Line type="monotone" dataKey="uploads" stroke="#ef4444" strokeWidth={2} dot={{ fill: '#ef4444' }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Authentication / Token Input Box if not connected */}
+      {!currentUser && !accessToken && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 max-w-xl mx-auto shadow-xl text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center mx-auto border border-red-500/20">
+            <ShieldCheck className="w-8 h-8" />
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-center gap-2">
+              <h3 className="text-base font-bold text-white">Google & YouTube Authorization</h3>
+              {isTauriEnv && (
+                <span className="px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800/60 text-[10px] font-mono flex items-center gap-1">
+                  <Laptop className="w-3 h-3" /> Desktop Tauri
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-400">
+              Authenticate via Google OAuth to load your subscribed YouTube channels and track video releases.
+            </p>
+          </div>
+
+          {/* Desktop Sandbox / Popup Blocked Fallback Card */}
+          {(popupBlocked || isTauriEnv) && (
+            <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-600/40 text-left space-y-3 animate-in fade-in duration-200">
+              <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Desktop Sandbox / Browser Popup Restrained</span>
+              </div>
+              <p className="text-[11px] text-amber-200/90 leading-relaxed font-mono">
+                Embedded webview popups are blocked by security policy (<code className="text-amber-300">tauri://localhost</code>). Authorize directly in your default browser or paste an OAuth access token below.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={openGoogleOAuthInBrowser}
+                  className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-red-950/40 transition cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Authorize in Default Browser</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleGoogleIdentityDirect}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Try 1-Click Popup</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="pt-1 flex flex-col gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {!isTauriEnv && (
+                <button
+                  onClick={handleFirebaseGoogleSignIn}
+                  disabled={isLoading}
+                  className="py-3 px-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:bg-red-900/50 text-white font-bold text-xs transition shadow-lg shadow-red-600/30 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <LogIn className="w-4 h-4" /> {isLoading ? 'Opening Sign In...' : 'Sign In with Google'}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={loadCuratedSampleFeeds}
+                disabled={isLoading}
+                className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-xs transition border border-amber-500/30 shadow-md cursor-pointer flex items-center justify-center gap-2"
+                title="Browse Movie & TV trailers and channels immediately without Google OAuth login"
+              >
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Explore Sample Feeds (No Login)</span>
+              </button>
+            </div>
+
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-slate-800"></div>
+              <span className="flex-shrink mx-4 text-[10px] text-slate-500 uppercase tracking-widest">
+                or connect with access token
+              </span>
+              <div className="flex-grow border-t border-slate-800"></div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Key className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <input
+                    type="password"
+                    value={manualToken}
+                    onChange={(e) => setManualToken(e.target.value)}
+                    placeholder="Paste access token (ya29...) or redirect URL..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500 transition font-mono"
+                  />
+                </div>
+                <button
+                  onClick={handleSaveManualToken}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition cursor-pointer"
+                >
+                  Connect
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+                <span>Auto-detects token from redirect URL</span>
+                <button
+                  type="button"
+                  onClick={openGoogleOAuthInBrowser}
+                  className="text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 cursor-pointer"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>Get token via Google OAuth</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Authorized Redirect URI Inspector & Troubleshooting Panel */}
+            <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl space-y-2 text-left">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Authorized OAuth Redirect URI Config
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentUri = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}` : 'http://localhost:3000';
+                    navigator.clipboard.writeText(currentUri);
+                    setCopiedKey('redirect_uri');
+                    setTimeout(() => setCopiedKey(null), 2000);
+                  }}
+                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 font-mono flex items-center gap-1 transition cursor-pointer"
+                >
+                  {copiedKey === 'redirect_uri' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-slate-400" />}
+                  <span>{copiedKey === 'redirect_uri' ? 'Copied!' : 'Copy URI'}</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 font-mono bg-slate-900 p-2 rounded border border-slate-800/80 truncate">
+                {typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname.replace(/\/+$/, '')}` : 'http://localhost:3000'}
+              </p>
+              <p className="text-[10px] text-slate-500 leading-normal">
+                If Google displays <strong>Error 400: redirect_uri_mismatch</strong>, add this exact URL above into your Google Cloud Console Credentials under <em>Authorized redirect URIs</em> for Client ID <code className="text-slate-400 font-mono">{GOOGLE_CLIENT_ID}</code>.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="bg-rose-950/40 border border-rose-500/30 rounded-xl p-4 flex items-center justify-between gap-3 text-rose-300 text-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+            <span>{errorMsg}</span>
+          </div>
+          <button
+            onClick={() => setErrorMsg(null)}
+            className="text-slate-400 hover:text-white text-xs p-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Subscribed Channels & Feed */}
+      {(currentUser || accessToken) && (
+        <div className="space-y-6">
+          {/* Controls Bar: Channel Filter & Search */}
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-lg">
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search recent updates by title or channel..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500/50 transition"
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <select
+                value={selectedChannelId}
+                onChange={(e) => setSelectedChannelId(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-red-500 transition cursor-pointer"
+              >
+                <option value="all">All Subscribed Channels ({subscriptions.length})</option>
+                {subscriptions.map((sub) => (
+                  <option key={sub.id} value={sub.snippet.resourceId.channelId}>
+                    {sub.snippet.title}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                onClick={() => fetchYouTubeData(accessToken)}
+                disabled={isLoading}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition border border-slate-700 cursor-pointer disabled:opacity-50"
+                title="Sync Now"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Sync Now</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Videos Grid */}
+          {isLoading && recentVideos.length === 0 ? (
+            <YouTubeSkeleton />
+          ) : filteredVideos.length === 0 ? (
+            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
+              <div className="w-16 h-16 rounded-full bg-red-500/10 text-red-400 flex items-center justify-center mx-auto border border-red-500/20">
+                <Youtube className="w-8 h-8" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-white">No Video Updates Found</h3>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  No recent uploads matched your filter. Try selecting a different channel or refreshing your feed.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {filteredVideos.map((video, index) => {
+                const videoId = typeof video.id === 'string' ? video.id : video.id?.videoId || video.snippet.resourceId?.videoId;
+                const thumb = video.snippet.thumbnails?.medium?.url || video.snippet.thumbnails?.high?.url || video.snippet.thumbnails?.default?.url;
+                const pubDate = new Date(video.snippet.publishedAt).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                });
+
+                return (
+                  <div
+                    key={videoId || index}
+                    className="group bg-slate-900 border border-slate-800 hover:border-red-500/40 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 flex flex-col"
+                  >
+                    {/* Thumbnail Cover */}
+                    <div className="relative aspect-video overflow-hidden bg-slate-950">
+                      <img
+                        src={thumb || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80'}
+                        alt={video.snippet.title}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80';
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-80" />
+
+                      {/* Play Button Overlay */}
+                      {videoId && (
+                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-[2px]">
+                          <button
+                            onClick={() => setActiveVideoUrl(`https://www.youtube.com/embed/${videoId}?autoplay=1`)}
+                            className="w-12 h-12 rounded-full bg-red-600 text-white flex items-center justify-center shadow-2xl hover:scale-110 transition cursor-pointer"
+                            title="Play Video"
+                          >
+                            <Play className="w-5 h-5 fill-white ml-0.5" />
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Published Date Badge */}
+                      <div className="absolute top-2.5 left-2.5 flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-red-500/30 text-[10px] font-bold text-red-300">
+                        <Calendar className="w-3 h-3" />
+                        <span>{pubDate}</span>
+                      </div>
+                    </div>
+
+                    {/* Content Info */}
+                    <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                      <div className="space-y-1.5">
+                        <h3 className="text-xs sm:text-sm font-bold text-white group-hover:text-red-300 transition line-clamp-2 leading-snug">
+                          {video.snippet.title}
+                        </h3>
+                        <p className="text-[11px] font-medium text-slate-400 truncate flex items-center gap-1">
+                          <Tv className="w-3 h-3 text-red-400 shrink-0" />
+                          <span>{video.snippet.channelTitle}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs">
+                        {videoId ? (
+                          <a
+                            href={`https://www.youtube.com/watch?v=${videoId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 text-slate-400 hover:text-white transition text-[11px]"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-red-400" />
+                            <span>Open on YouTube</span>
+                          </a>
+                        ) : (
+                          <span className="text-[11px] text-slate-500">YouTube Upload</span>
+                        )}
+
+                        {videoId && (
+                          <button
+                            onClick={() => setActiveVideoUrl(`https://www.youtube.com/embed/${videoId}?autoplay=1`)}
+                            className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-[11px] flex items-center gap-1 transition cursor-pointer shadow-md shadow-red-600/30"
+                          >
+                            <Play className="w-3 h-3 fill-white" />
+                            <span>Watch</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Video Player Modal */}
+      {activeVideoUrl && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-950">
+              <div className="flex items-center gap-2">
+                <Youtube className="w-5 h-5 text-red-500 animate-pulse" />
+                <h3 className="text-sm font-bold text-white">YouTube Video Player</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={(() => {
+                    try {
+                      const match = activeVideoUrl.match(/\/embed\/([^/?]+)/);
+                      if (match && match[1]) {
+                        return `https://www.youtube.com/watch?v=${match[1]}`;
+                      }
+                    } catch (_) {}
+                    return 'https://www.youtube.com';
+                  })()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 hover:text-white flex items-center gap-1.5 transition font-medium border border-slate-700"
+                  title="If embedding is restricted by the publisher, click here to watch directly on YouTube"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-red-500" />
+                  <span>Watch on YouTube</span>
+                </a>
+                <button
+                  onClick={() => setActiveVideoUrl(null)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div className="relative aspect-video bg-black">
+              <iframe
+                src={activeVideoUrl}
+                title="YouTube video player"
+                className="w-full h-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+            <div className="p-3 bg-slate-950 text-slate-400 text-[11px] text-center border-t border-slate-800 flex items-center justify-center gap-1">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>Publisher restricted embed playback (Playback ID error)? Click the <strong>Watch on YouTube</strong> button to open the video directly.</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Log Viewer */}
+      {(currentUser || accessToken) && (
+        <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 mt-6">
+          <div className="flex justify-between items-center mb-3">
+             <div className="flex items-center gap-2">
+               <Terminal className="w-4 h-4 text-slate-400" />
+               <h4 className="text-xs font-bold text-slate-300">Sync Events Log</h4>
+             </div>
+             <button onClick={() => setSyncLogs([])} className="text-[10px] text-slate-500 hover:text-red-400 transition cursor-pointer">Clear</button>
+          </div>
+          <div className="text-[10px] font-mono text-slate-400 max-h-40 overflow-y-auto space-y-1">
+             {syncLogs.length === 0 ? (
+               <p className="text-slate-600 italic">No sync events logged yet.</p>
+             ) : (
+               syncLogs.map((log, i) => (
+                  <div key={i} className={log.type === 'error' ? 'text-rose-400' : log.type === 'warning' ? 'text-amber-400' : 'text-slate-400'}>
+                     [{log.timestamp}] {log.message}
+                  </div>
+               ))
+             )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

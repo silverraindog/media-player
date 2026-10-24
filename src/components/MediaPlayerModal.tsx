@@ -29,6 +29,7 @@ import {
 } from '../types';
 import { MatroskaPlayer } from './MatroskaPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
+import { transcodeService, TranscodeStatusInfo, MediaInfo } from '../services/TranscodeService';
 
 export interface MediaPlayerModalProps {
   isOpen: boolean;
@@ -70,6 +71,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [showPlaylistSidebar, setShowPlaylistSidebar] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<string | null>(null);
+  const [transcodeStatus, setTranscodeStatus] = useState<TranscodeStatusInfo>({
+    state: 'native',
+    progressPercent: 0,
+    message: 'Native Playback',
+  });
+  const [isProbing, setIsProbing] = useState(false);
+  const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -103,14 +111,55 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     return p.endsWith('.mkv') || p.includes('.mkv?');
   }, [activeFilePath, media.matchedFilename]);
 
-  // Build the direct playback URL directly from the file path (not via the API)
+  // Probe media and subscribe to transcode service updates
+  useEffect(() => {
+    if (!activeFilePath) return;
+    let isMounted = true;
+    setIsProbing(true);
+
+    transcodeService.probe(activeFilePath)
+      .then((info) => {
+        if (!isMounted) return;
+        setMediaInfo(info);
+        setIsProbing(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsProbing(false);
+      });
+
+    const unsubscribe = transcodeService.subscribe((path, status) => {
+      if (path === activeFilePath) {
+        setTranscodeStatus(status);
+      }
+    });
+
+    setTranscodeStatus(transcodeService.getStatus(activeFilePath));
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [activeFilePath]);
+
+  const handleStartTranscode = async () => {
+    setUseTranscode(true);
+    setPlaybackError(null);
+    try {
+      await transcodeService.transcode(activeFilePath, media.type === 'album' ? 'audio' : 'video');
+    } catch (err: any) {
+      setPlaybackError(err?.message || 'Transcoding failed');
+    }
+  };
+
+  // Build the playback URL (direct or transcoded output)
   const streamUrl = useMemo(() => {
     if (!activeFilePath) return '';
-    if (useTranscode) {
-      return `/api/samba/transcode?path=${encodeURIComponent(activeFilePath)}`;
+    if (useTranscode || transcodeStatus.state === 'ready') {
+      const targetPath = transcodeStatus.outputPath || activeFilePath;
+      return `/api/samba/transcode?path=${encodeURIComponent(targetPath)}`;
     }
     return getDirectMediaPlayUrl(activeFilePath, sambaConfig);
-  }, [activeFilePath, sambaConfig, useTranscode]);
+  }, [activeFilePath, sambaConfig, useTranscode, transcodeStatus]);
 
   // Reset playback errors when target file changes
   useEffect(() => {
@@ -284,6 +333,15 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             )}
 
             <button
+              onClick={handleStartTranscode}
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow"
+              title="Force transcode file to H.264 / AAC"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Force Transcode</span>
+            </button>
+
+            <button
               onClick={onClose}
               className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
               title="Close Player (Esc)"
@@ -297,6 +355,51 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         <div className="relative flex-1 flex flex-col md:flex-row min-h-[380px] sm:min-h-[480px] bg-black overflow-hidden">
           {/* Player Display Container */}
           <div className="relative flex-1 flex flex-col items-center justify-center bg-black overflow-hidden">
+            {/* Transcoding Progress Bar Overlay */}
+            {(transcodeStatus.state === 'transcoding' || isProbing) && (
+              <div className="absolute inset-0 z-30 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl flex flex-col items-center space-y-4">
+                  <div className="w-12 h-12 rounded-full bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center animate-pulse">
+                    <RefreshCw className="w-6 h-6 animate-spin" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-semibold text-white">
+                      {isProbing ? 'Probing Media Codecs (H.265 / HEVC / MKV)...' : 'Transcoding to H.264 / AAC'}
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {transcodeStatus.message || 'Converting unsupported file format on the fly via FFmpeg'}
+                    </p>
+                  </div>
+                  
+                  {/* Progress Bar */}
+                  <div className="w-full space-y-2">
+                    <div className="flex justify-between text-xs font-mono text-slate-400">
+                      <span>Transcoding Progress</span>
+                      <span className="text-indigo-400 font-semibold">{transcodeStatus.progressPercent}%</span>
+                    </div>
+                    <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
+                      <div
+                        className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 rounded-full transition-all duration-300"
+                        style={{ width: `${transcodeStatus.progressPercent}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      onClick={() => {
+                        setUseTranscode(false);
+                        transcodeService.setStatus(activeFilePath, { state: 'native', progressPercent: 0, message: 'Cancelled' });
+                      }}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors"
+                    >
+                      Cancel & Use Direct Play
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {playbackError && (
               <div className="absolute top-4 inset-x-4 z-20 bg-rose-950/90 border border-rose-800 text-rose-200 px-4 py-3 rounded-xl flex items-start gap-3 backdrop-blur-md shadow-lg">
                 <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />

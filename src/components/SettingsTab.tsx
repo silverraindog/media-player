@@ -32,7 +32,7 @@ import {
   Wifi,
   FolderOpen,
 } from 'lucide-react';
-import { SyncScheduleConfig, ClassifierSettings, SambaConfig, TranscodeConfig } from '../types';
+import { SyncScheduleConfig, ClassifierSettings, SambaConfig, TranscodeConfig, TranscodePreset } from '../types';
 import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag, BUILD_INCREMENTS, ReleaseIncrement } from '../version';
 import {
   syncScheduler,
@@ -69,6 +69,14 @@ interface SettingsTabProps {
   serverVersionInfo?: any;
 }
 
+export function validateTranscodePreset(preset: any): preset is TranscodePreset {
+  if (!preset || typeof preset !== 'object') return false;
+  const hasId = typeof preset.id === 'string' && preset.id.trim().length > 0;
+  const hasName = typeof preset.name === 'string' && preset.name.trim().length > 0;
+  const hasResolution = typeof preset.resolution === 'string' && preset.resolution.length > 0;
+  return hasId && hasName && hasResolution;
+}
+
 export const SettingsTab: React.FC<SettingsTabProps> = ({
   classifierSettings,
   onUpdateClassifierSettings,
@@ -83,6 +91,35 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   onUpdateTranscodeConfig,
   serverVersionInfo,
 }) => {
+  const safeTranscodeConfig: TranscodeConfig = React.useMemo(() => {
+    if (!transcodeConfig || typeof transcodeConfig !== 'object') {
+      return {
+        codec: 'h264',
+        resolution: '1080p',
+        maxCacheSizeGb: 50,
+        hwAccel: { enabled: true, nvenc: false, videotoolbox: false, vaapi: false },
+        presets: [],
+      };
+    }
+    const rawPresets = Array.isArray(transcodeConfig.presets) ? transcodeConfig.presets : [];
+    const validPresets = rawPresets.filter(validateTranscodePreset);
+
+    return {
+      ...transcodeConfig,
+      codec: transcodeConfig.codec || 'h264',
+      resolution: transcodeConfig.resolution || '1080p',
+      maxCacheSizeGb: transcodeConfig.maxCacheSizeGb ?? 50,
+      hwAccel: {
+        enabled: true,
+        nvenc: false,
+        videotoolbox: false,
+        vaapi: false,
+        ...(transcodeConfig.hwAccel || {}),
+      },
+      presets: validPresets,
+    };
+  }, [transcodeConfig]);
+
   const [scheduleConfig, setScheduleConfig] = useState<SyncScheduleConfig>(() => syncScheduler.getConfig());
   const [customCronInput, setCustomCronInput] = useState(scheduleConfig.cronExpression);
   const [isSyncRunning, setIsSyncRunning] = useState(false);
@@ -953,7 +990,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-500">Output Codec</label>
                 <select
-                  value={transcodeConfig.codec}
+                  value={transcodeConfig?.codec || 'h264'}
                   onChange={(e) => onUpdateTranscodeConfig({ ...transcodeConfig, codec: e.target.value as any })}
                   className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-white"
                 >
@@ -964,7 +1001,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-500">Target Resolution</label>
                 <select
-                  value={transcodeConfig.resolution}
+                  value={transcodeConfig?.resolution || '1080p'}
                   onChange={(e) => onUpdateTranscodeConfig({ ...transcodeConfig, resolution: e.target.value as any })}
                   className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-white"
                 >
@@ -980,7 +1017,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   type="number"
                   min="1"
                   max="1000"
-                  value={transcodeConfig.maxCacheSizeGb}
+                  value={transcodeConfig?.maxCacheSizeGb ?? 50}
                   onChange={(e) => onUpdateTranscodeConfig({ ...transcodeConfig, maxCacheSizeGb: parseInt(e.target.value) || 1 })}
                   className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1.5 text-xs text-white"
                 />
@@ -990,8 +1027,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 onClick={async () => {
                   try {
                     const { purgeTranscodeCache } = await import('../utils/tauriBridge');
-                    await purgeTranscodeCache(transcodeConfig.maxCacheSizeGb);
-                    logger.info(`Purged transcode cache to limit of ${transcodeConfig.maxCacheSizeGb}GB`, 'Transcode');
+                    await purgeTranscodeCache(transcodeConfig?.maxCacheSizeGb || 50);
+                    logger.info(`Purged transcode cache to limit of ${transcodeConfig?.maxCacheSizeGb || 50}GB`, 'Transcode');
                   } catch (e) {
                     console.error('Failed to purge cache:', e);
                   }
@@ -1002,11 +1039,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <span>Purge Transcode Cache Now</span>
               </button>
               <HwAccelSettingsCard 
-                transcodeConfig={transcodeConfig}
+                transcodeConfig={safeTranscodeConfig}
                 onUpdateTranscodeConfig={onUpdateTranscodeConfig}
               />
               <PresetManager 
-                transcodeConfig={transcodeConfig}
+                transcodeConfig={safeTranscodeConfig}
                 onUpdateTranscodeConfig={onUpdateTranscodeConfig}
               />
             </div>

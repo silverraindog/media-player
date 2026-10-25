@@ -32,12 +32,14 @@ export const HwAccelSettingsCard: React.FC<HwAccelSettingsCardProps> = ({
       .catch(() => setIsLoading(false));
   }, []);
 
+  const hwAccel = transcodeConfig?.hwAccel || { enabled: true, nvenc: false, videotoolbox: false, vaapi: false };
+
   const toggleAccel = (key: keyof HwAccelSupport) => {
     onUpdateTranscodeConfig({
       ...transcodeConfig,
       hwAccel: {
-        ...transcodeConfig.hwAccel,
-        [key]: !transcodeConfig.hwAccel[key],
+        ...hwAccel,
+        [key]: !hwAccel[key],
       },
     });
   };
@@ -46,8 +48,8 @@ export const HwAccelSettingsCard: React.FC<HwAccelSettingsCardProps> = ({
     onUpdateTranscodeConfig({
       ...transcodeConfig,
       hwAccel: {
-        ...transcodeConfig.hwAccel,
-        enabled: !transcodeConfig.hwAccel.enabled,
+        ...hwAccel,
+        enabled: !hwAccel.enabled,
       },
     });
   };
@@ -66,20 +68,20 @@ export const HwAccelSettingsCard: React.FC<HwAccelSettingsCardProps> = ({
           <span className="text-xs text-slate-300">Enable Hardware Acceleration</span>
           <button
             onClick={toggleEnabled}
-            className={`w-10 h-5 rounded-full relative transition-colors ${transcodeConfig.hwAccel.enabled ? 'bg-cyan-600' : 'bg-slate-700'}`}
+            className={`w-10 h-5 rounded-full relative transition-colors ${hwAccel.enabled ? 'bg-cyan-600' : 'bg-slate-700'}`}
           >
-            <div className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-transform ${transcodeConfig.hwAccel.enabled ? 'left-6' : 'left-1'}`} />
+            <div className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-transform ${hwAccel.enabled ? 'left-6' : 'left-1'}`} />
           </button>
         </div>
 
-        {transcodeConfig.hwAccel.enabled && (
+        {hwAccel.enabled && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2">
             {(['nvenc', 'videotoolbox', 'vaapi'] as const).map((key) => (
               <div key={key} className={`p-2 rounded border text-xs flex items-center justify-between ${hwSupport?.[key] ? 'border-slate-700 bg-slate-900' : 'border-slate-800 bg-slate-950 opacity-50'}`}>
                 <span className="capitalize">{key === 'videotoolbox' ? 'VideoToolbox' : key}</span>
                 <input
                   type="checkbox"
-                  checked={transcodeConfig.hwAccel[key]}
+                  checked={Boolean(hwAccel[key])}
                   disabled={!hwSupport?.[key]}
                   onChange={() => toggleAccel(key)}
                   className="accent-cyan-500"

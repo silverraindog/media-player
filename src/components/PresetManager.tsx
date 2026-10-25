@@ -14,6 +14,10 @@ export const PresetManager: React.FC<PresetManagerProps> = ({
   className = '',
 }) => {
   const [newPresetName, setNewPresetName] = useState('');
+  const rawPresets = Array.isArray(transcodeConfig?.presets) ? transcodeConfig.presets : [];
+  const presets = rawPresets.filter(
+    (p) => p && typeof p === 'object' && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.resolution === 'string'
+  );
 
   const addPreset = () => {
     if (!newPresetName) return;
@@ -26,7 +30,7 @@ export const PresetManager: React.FC<PresetManagerProps> = ({
     };
     onUpdateTranscodeConfig({
       ...transcodeConfig,
-      presets: [...transcodeConfig.presets, newPreset],
+      presets: [...presets, newPreset],
     });
     setNewPresetName('');
   };
@@ -34,8 +38,8 @@ export const PresetManager: React.FC<PresetManagerProps> = ({
   const deletePreset = (id: string) => {
     onUpdateTranscodeConfig({
       ...transcodeConfig,
-      presets: transcodeConfig.presets.filter(p => p.id !== id),
-      activePresetId: transcodeConfig.activePresetId === id ? undefined : transcodeConfig.activePresetId,
+      presets: presets.filter(p => p.id !== id),
+      activePresetId: transcodeConfig?.activePresetId === id ? undefined : transcodeConfig?.activePresetId,
     });
   };
 
@@ -59,23 +63,29 @@ export const PresetManager: React.FC<PresetManagerProps> = ({
           value={newPresetName}
           onChange={(e) => setNewPresetName(e.target.value)}
           placeholder="New preset name (e.g., 720p-Low)"
-          className="flex-1 bg-slate-900 border border-slate-800 rounded px-3 py-1.5 text-xs text-white"
+          className="flex-1 bg-slate-900 border border-slate-800 rounded px-3 py-1.5 text-xs text-white placeholder-slate-500"
         />
-        <button onClick={addPreset} className="bg-indigo-600 hover:bg-indigo-500 text-white rounded px-3 py-1.5 text-xs font-semibold">
+        <button onClick={addPreset} className="bg-indigo-600 hover:bg-indigo-500 text-white rounded px-3 py-1.5 text-xs font-semibold cursor-pointer">
           <Plus className="w-4 h-4" />
         </button>
       </div>
 
       <div className="space-y-2">
-        {transcodeConfig.presets.map((preset) => (
-          <div key={preset.id} className={`p-2 rounded border text-xs flex items-center justify-between ${transcodeConfig.activePresetId === preset.id ? 'border-indigo-500 bg-indigo-900/20' : 'border-slate-800 bg-slate-900'}`}>
-            <span className="font-medium text-white">{preset.name}</span>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setActivePreset(preset.id)} className="text-indigo-400 hover:text-indigo-300">Select</button>
-              <button onClick={() => deletePreset(preset.id)} className="text-rose-400 hover:text-rose-300"><Trash2 className="w-4 h-4" /></button>
-            </div>
+        {presets.length === 0 ? (
+          <div className="p-3 text-center text-xs text-slate-500 bg-slate-900/50 border border-slate-800/60 rounded-lg font-medium">
+            No custom transcoding presets configured.
           </div>
-        ))}
+        ) : (
+          (transcodeConfig?.presets || presets || []).map((preset) => (
+            <div key={preset.id} className={`p-2 rounded border text-xs flex items-center justify-between ${transcodeConfig?.activePresetId === preset.id ? 'border-indigo-500 bg-indigo-900/20' : 'border-slate-800 bg-slate-900'}`}>
+              <span className="font-medium text-white">{preset.name}</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setActivePreset(preset.id)} className="text-indigo-400 hover:text-indigo-300 cursor-pointer">Select</button>
+                <button onClick={() => deletePreset(preset.id)} className="text-rose-400 hover:text-rose-300 cursor-pointer"><Trash2 className="w-4 h-4" /></button>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

@@ -381,8 +381,23 @@ function App() {
   const [transcodeConfig, setTranscodeConfig] = useState<TranscodeConfig>(() => {
     try {
       const saved = localStorage.getItem('samba_vault_transcode_config');
-      if (saved) return JSON.parse(saved);
-    } catch {}
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            ...INITIAL_TRANSCODE_CONFIG,
+            ...parsed,
+            hwAccel: {
+              ...INITIAL_TRANSCODE_CONFIG.hwAccel,
+              ...(parsed.hwAccel || {}),
+            },
+            presets: Array.isArray(parsed.presets) ? parsed.presets : [],
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse samba_vault_transcode_config from localStorage:', e);
+    }
     return INITIAL_TRANSCODE_CONFIG;
   });
 

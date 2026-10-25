@@ -4490,22 +4490,22 @@ app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => 
         });
       } else {
         const firstLine = stdout.split('\n')[0] || 'FFmpeg installed';
-        exec(`"${ffmpegPath}" -codecs`, (cErr, cStdout) => {
-          const rawCodecs = (cStdout || '').toLowerCase();
-          const hasH264 = rawCodecs.includes('h264') || rawCodecs.includes('264') || true;
-          const hasHevc = rawCodecs.includes('hevc') || rawCodecs.includes('265') || true;
-          const detectedCodecs = ['aac', 'mp3', 'mkv', 'mp4'];
-          if (hasH264) detectedCodecs.unshift('h264');
-          if (hasHevc) detectedCodecs.unshift('hevc');
-
+        exec(`"${ffmpegPath}" -encoders`, (cErr, cStdout) => {
+          const rawEncoders = (cStdout || '').toLowerCase();
+          const hasNvenc = rawEncoders.includes('h264_nvenc') || rawEncoders.includes('hevc_nvenc');
+          const hasVtb = rawEncoders.includes('h264_videotoolbox') || rawEncoders.includes('hevc_videotoolbox');
+          const hasVaapi = rawEncoders.includes('h264_vaapi') || rawEncoders.includes('hevc_vaapi');
+          
           res.json({
             available: true,
             version: firstLine,
             path: ffmpegPath,
-            hasH264,
-            hasHevc,
-            codecs: detectedCodecs,
             os: process.platform,
+            hwSupport: {
+              nvenc: hasNvenc,
+              videotoolbox: hasVtb,
+              vaapi: hasVaapi,
+            },
             docUrl: 'https://ffmpeg.org/download.html',
           });
         });
@@ -4516,9 +4516,7 @@ app.get('/api/media/diagnostics/ffmpeg', async (req: Request, res: Response) => 
       available: false,
       error: e?.message,
       message: 'Failed to probe FFmpeg diagnostics.',
-      hasH264: false,
-      hasHevc: false,
-      codecs: [],
+      hwSupport: { nvenc: false, videotoolbox: false, vaapi: false },
       docUrl: 'https://ffmpeg.org/download.html',
       os: process.platform,
     });
@@ -5503,11 +5501,19 @@ class CircularBufferTransform extends Transform {
   private chunks: Buffer[] = [];
 
   constructor(maxSize: number = 4 * 1024 * 1024) {
-    super({ highWaterMark: 64 * 1024 });
+    // Dynamically enforce 512KB highWaterMark for the chunking stream
+    super({ highWaterMark: 512 * 1024 });
     this.maxSize = maxSize;
   }
 
   _transform(chunk: Buffer, encoding: string, callback: () => void) {
+    const heapUsed = process.memoryUsage().heapUsed;
+    if (heapUsed > 500 * 1024 * 1024) { // 500MB
+      console.warn(`[Transcode Memory Monitor] Heap usage high: ${(heapUsed / 1024 / 1024).toFixed(2)}MB. Pruning buffer and forcing flush.`);
+      this.chunks = [];
+      this.currentSize = 0;
+    }
+
     this.chunks.push(chunk);
     this.currentSize += chunk.length;
 
@@ -5604,7 +5610,14 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
     ];
 
     if (useHardwareAccel && mediaType === 'video') {
-      args.push('-hwaccel', 'auto');
+      const platform = os.platform();
+      if (platform === 'darwin') {
+        args.push('-hwaccel', 'videotoolbox');
+      } else if (platform === 'win32') {
+        args.push('-hwaccel', 'd3d11va');
+      } else {
+        args.push('-hwaccel', 'cuda');
+      }
     }
 
     args.push(
@@ -5642,9 +5655,21 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
       const msg = chunk.toString();
       stderr = (stderr + msg).slice(-8000);
       console.warn('[FFmpeg Transcode Stderr]:', msg.trim());
+      
+      // Parse FPS and Latency
+      const fpsMatch = msg.match(/fps=\s*(\d+(\.\d+)?)/);
+      if (fpsMatch) {
+        const fps = parseFloat(fpsMatch[1]);
+        // Forward FPS to client if possible
+        if (fps < 15) {
+            console.warn(`[FFmpeg Pipeline Health] WARNING: Low FPS detected: ${fps} FPS.`);
+        }
+      }
+      
       const lower = msg.toLowerCase();
-      if (lower.includes('buffer full') || lower.includes('frame dropped') || lower.includes('warning') || lower.includes('error') || lower.includes('stall')) {
-        console.warn(`[FFmpeg Secondary Stderr Listener / Stall Monitor] H.265 Transcode Anomaly Detected: "${msg.trim()}"`);
+      const criticalErrors = ['hwaccel_init_failed', 'non-monotonic dts', 'buffer full', 'frame dropped', 'error', 'warning', 'stall'];
+      if (criticalErrors.some(err => lower.includes(err))) {
+        console.warn(`[FFmpeg Secondary Stderr Listener / Stall Monitor] !!! CRITICAL H.265 Transcode Anomaly Detected !!!: "${msg.trim()}"`);
       }
     });
 
@@ -5725,7 +5750,14 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   ];
 
   if (useHardwareAccel && mediaType === 'video') {
-    args.push('-hwaccel', 'auto');
+    const platform = os.platform();
+    if (platform === 'darwin') {
+      args.push('-hwaccel', 'videotoolbox');
+    } else if (platform === 'win32') {
+      args.push('-hwaccel', 'd3d11va');
+    } else {
+      args.push('-hwaccel', 'cuda');
+    }
   }
 
   args.push(
@@ -5763,8 +5795,9 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     stderr = (stderr + msg).slice(-8000);
     console.warn('[FFmpeg Transcode Token Stderr]:', msg.trim());
     const lower = msg.toLowerCase();
-    if (lower.includes('buffer full') || lower.includes('frame dropped') || lower.includes('warning') || lower.includes('error') || lower.includes('stall')) {
-      console.warn(`[FFmpeg Secondary Stderr Listener / Stall Monitor] H.265 Token Transcode Anomaly Detected: "${msg.trim()}"`);
+    const criticalErrors = ['hwaccel_init_failed', 'non-monotonic dts', 'buffer full', 'frame dropped', 'error', 'warning', 'stall'];
+    if (criticalErrors.some(err => lower.includes(err))) {
+      console.warn(`[FFmpeg Secondary Stderr Listener / Stall Monitor] !!! CRITICAL H.265 Token Transcode Anomaly Detected !!!: "${msg.trim()}"`);
     }
   });
 

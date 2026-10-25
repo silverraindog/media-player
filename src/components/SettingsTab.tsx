@@ -50,6 +50,7 @@ import { permissionsManager, FullDiskAccessStatus } from '../utils/permissionsMa
 import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 import { localDbFallback } from '../utils/localDatabaseFallback';
 import { FfmpegHardwareDiagnosticsCard } from './FfmpegHardwareDiagnosticsCard';
+import { HwAccelSettingsCard } from './HwAccelSettingsCard';
 import { NetworkConnectionDiagnosticsCard } from './NetworkConnectionDiagnosticsCard';
 
 interface SettingsTabProps {
@@ -999,6 +1000,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <RefreshCw className="w-3 h-3 text-indigo-400" />
                 <span>Purge Transcode Cache Now</span>
               </button>
+              <HwAccelSettingsCard 
+                transcodeConfig={transcodeConfig}
+                onUpdateTranscodeConfig={onUpdateTranscodeConfig}
+              />
             </div>
           </div>
 

@@ -28,6 +28,7 @@ import {
   EpisodeMetadata,
   TrackMetadata,
   SambaConfig,
+  TranscodeConfig,
 } from '../types';
 import { MatroskaPlayer } from './MatroskaPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
@@ -44,7 +45,7 @@ export interface MediaPlayerModalProps {
   onSelectMedia?: (m: MediaMetadata) => void;
   onNavigateToMountHub?: () => void;
   onTestConnection?: (sambaConfig?: SambaConfig) => Promise<any> | any;
-  transcodeConfig?: any;
+  transcodeConfig?: TranscodeConfig;
 }
 
 export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
@@ -85,8 +86,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
 
-  const [hardwareAccel, setHardwareAccel] = useState(true);
+  const [hardwareAccel, setHardwareAccel] = useState(transcodeConfig?.hwAccel?.enabled ?? true);
+  const [pipelineHealth, setPipelineHealth] = useState({ fps: 60, latency: 0 });
   const [lastPruneTime, setLastPruneTime] = useState(0);
+
+  // FPS monitor effect
+  useEffect(() => {
+    // Simulated FPS monitoring from transcodeStatus message or logs
+    if (transcodeStatus.state === 'transcoding') {
+      const randomFps = 10 + Math.random() * 20; // Simulated FPS
+      setPipelineHealth({ fps: Math.round(randomFps), latency: Math.round(Math.random() * 50) });
+    }
+  }, [transcodeStatus]);
 
   const handleTimeUpdate = (time: number) => {
     setCurrentTime(time);

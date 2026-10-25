@@ -3720,6 +3720,7 @@ function App() {
           onSelectMedia={(m) => setPlayerMediaState({ media: m })}
           onTestConnection={handleTestConnection}
           onNavigateToMountHub={() => setActiveTab('samba-mount')}
+          transcodeConfig={transcodeConfig}
         />
       )}
 

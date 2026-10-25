@@ -119,6 +119,12 @@ export interface TranscodeConfig {
   codec: 'h264' | 'hevc';
   resolution: '720p' | '1080p' | '4k' | 'original';
   maxCacheSizeGb: number;
+  hwAccel: {
+    enabled: boolean;
+    nvenc: boolean;
+    videotoolbox: boolean;
+    vaapi: boolean;
+  };
 }
 
 export interface SambaConfig {

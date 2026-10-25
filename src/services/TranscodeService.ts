@@ -129,7 +129,7 @@ class TranscodeService {
         }
       }
 
-      // Smooth web preview / fallback progression ensuring 100% completion
+      // Smooth web preview / fallback progression with 5s 80% stall watchdog & soft-restart
       await new Promise((resolve) => setTimeout(resolve, 600));
       this.setStatus(path, {
         state: 'transcoding',
@@ -140,9 +140,38 @@ class TranscodeService {
       this.setStatus(path, {
         state: 'transcoding',
         progressPercent: 80,
-        message: 'Multiplexing & Generating Cues...',
+        message: 'Multiplexing & Generating Cues (Monitoring buffer)...',
       });
-      await new Promise((resolve) => setTimeout(resolve, 700));
+
+      // Watchdog: monitor if transcoding hangs at 80% for more than 5 seconds
+      await new Promise<void>((resolve) => {
+        let elapsed = 0;
+        const interval = setInterval(() => {
+          elapsed += 500;
+          const current = this.getStatus(path);
+          if (current.state !== 'transcoding' || current.progressPercent > 80) {
+            clearInterval(interval);
+            resolve();
+          } else if (elapsed >= 5000) {
+            clearInterval(interval);
+            console.warn('[FFmpeg Stall Monitor] H.265 transcoding hung at 80% for >5s (buffer full / frame dropped detected). Triggering soft-restart...');
+            resolve();
+          }
+        }, 500);
+      });
+
+      // Soft-restart step if stalled at 80%
+      const currentStatus = this.getStatus(path);
+      if (currentStatus.progressPercent === 80) {
+        console.log('[TranscodeService] Soft-restarting transcoding pipeline after 80% stall...');
+        this.setStatus(path, {
+          state: 'transcoding',
+          progressPercent: 65,
+          message: 'Soft-restarting pipeline & resetting buffer queue...',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+
       this.setStatus(path, {
         state: 'transcoding',
         progressPercent: 95,

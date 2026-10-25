@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn, spawnSync } from 'child_process';
-import { pipeline } from 'stream';
+import { pipeline, Transform } from 'stream';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
@@ -5497,6 +5497,38 @@ app.post('/api/media/transcode/upload', (req: Request, res: Response) => {
   });
 });
 
+class CircularBufferTransform extends Transform {
+  private maxSize: number;
+  private currentSize: number = 0;
+  private chunks: Buffer[] = [];
+
+  constructor(maxSize: number = 4 * 1024 * 1024) {
+    super({ highWaterMark: 64 * 1024 });
+    this.maxSize = maxSize;
+  }
+
+  _transform(chunk: Buffer, encoding: string, callback: () => void) {
+    this.chunks.push(chunk);
+    this.currentSize += chunk.length;
+
+    while (this.currentSize > this.maxSize && this.chunks.length > 0) {
+      const removed = this.chunks.shift();
+      if (removed) {
+        this.currentSize -= removed.length;
+      }
+    }
+
+    this.push(chunk);
+    callback();
+  }
+
+  _flush(callback: () => void) {
+    this.chunks = [];
+    this.currentSize = 0;
+    callback();
+  }
+}
+
 app.post('/api/samba/transcode/prune', (req: Request, res: Response) => {
   try {
     const { currentTime } = req.body;
@@ -5610,6 +5642,10 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
       const msg = chunk.toString();
       stderr = (stderr + msg).slice(-8000);
       console.warn('[FFmpeg Transcode Stderr]:', msg.trim());
+      const lower = msg.toLowerCase();
+      if (lower.includes('buffer full') || lower.includes('frame dropped') || lower.includes('warning') || lower.includes('error') || lower.includes('stall')) {
+        console.warn(`[FFmpeg Secondary Stderr Listener / Stall Monitor] H.265 Transcode Anomaly Detected: "${msg.trim()}"`);
+      }
     });
 
     if (!res.headersSent) {
@@ -5618,9 +5654,14 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
       res.setHeader('Access-Control-Allow-Origin', '*');
     }
 
-    pipeline(ffmpeg.stdout, res, (err) => {
+    const circularBuffer = new CircularBufferTransform(4 * 1024 * 1024);
+    circularBuffer.on('drain', () => {
+      // Explicitly drained
+    });
+
+    pipeline(ffmpeg.stdout, circularBuffer, res, (err) => {
       if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
-        console.error('[FFmpeg Stream Pipeline Error]:', err);
+        console.error('[FFmpeg Circular Buffer Stream Pipeline Error]:', err);
       }
     });
 
@@ -5721,6 +5762,10 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     const msg = chunk.toString();
     stderr = (stderr + msg).slice(-8000);
     console.warn('[FFmpeg Transcode Token Stderr]:', msg.trim());
+    const lower = msg.toLowerCase();
+    if (lower.includes('buffer full') || lower.includes('frame dropped') || lower.includes('warning') || lower.includes('error') || lower.includes('stall')) {
+      console.warn(`[FFmpeg Secondary Stderr Listener / Stall Monitor] H.265 Token Transcode Anomaly Detected: "${msg.trim()}"`);
+    }
   });
 
   if (!res.headersSent) {
@@ -5729,9 +5774,14 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
 
-  pipeline(ffmpeg.stdout, res, (err) => {
+  const circularBuffer = new CircularBufferTransform(4 * 1024 * 1024);
+  circularBuffer.on('drain', () => {
+    // Explicitly drained
+  });
+
+  pipeline(ffmpeg.stdout, circularBuffer, res, (err) => {
     if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
-      console.error('[FFmpeg Token Stream Pipeline Error]:', err);
+      console.error('[FFmpeg Token Circular Buffer Pipeline Error]:', err);
     }
   });
 

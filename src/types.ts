@@ -115,6 +115,14 @@ export interface CustomMountPath {
   itemCount?: number;
 }
 
+export interface TranscodePreset {
+  id: string;
+  name: string;
+  resolution: '720p' | '1080p' | '4k' | 'original';
+  bitrate: string;
+  hwAccelType: 'nvenc' | 'videotoolbox' | 'vaapi' | 'none';
+}
+
 export interface TranscodeConfig {
   codec: 'h264' | 'hevc';
   resolution: '720p' | '1080p' | '4k' | 'original';
@@ -125,6 +133,8 @@ export interface TranscodeConfig {
     videotoolbox: boolean;
     vaapi: boolean;
   };
+  presets: TranscodePreset[];
+  activePresetId?: string;
 }
 
 export interface SambaConfig {

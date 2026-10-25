@@ -51,6 +51,7 @@ import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 import { localDbFallback } from '../utils/localDatabaseFallback';
 import { FfmpegHardwareDiagnosticsCard } from './FfmpegHardwareDiagnosticsCard';
 import { HwAccelSettingsCard } from './HwAccelSettingsCard';
+import { PresetManager } from './PresetManager';
 import { NetworkConnectionDiagnosticsCard } from './NetworkConnectionDiagnosticsCard';
 
 interface SettingsTabProps {
@@ -1001,6 +1002,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <span>Purge Transcode Cache Now</span>
               </button>
               <HwAccelSettingsCard 
+                transcodeConfig={transcodeConfig}
+                onUpdateTranscodeConfig={onUpdateTranscodeConfig}
+              />
+              <PresetManager 
                 transcodeConfig={transcodeConfig}
                 onUpdateTranscodeConfig={onUpdateTranscodeConfig}
               />

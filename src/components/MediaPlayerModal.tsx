@@ -59,6 +59,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   onSelectMedia,
   onTestConnection,
   onNavigateToMountHub,
+  transcodeConfig,
 }) => {
   const [currentEpisode, setCurrentEpisode] = useState<EpisodeMetadata | undefined>(initialEpisode);
   const [currentTrack, setCurrentTrack] = useState<TrackMetadata | undefined>(initialTrack);

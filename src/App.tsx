@@ -360,6 +360,13 @@ const INITIAL_TRANSCODE_CONFIG: TranscodeConfig = {
   codec: 'h264',
   resolution: '1080p',
   maxCacheSizeGb: 50,
+  hwAccel: {
+    enabled: true,
+    nvenc: false,
+    videotoolbox: false,
+    vaapi: false,
+  },
+  presets: [],
 };
 
 function App() {

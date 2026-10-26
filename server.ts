@@ -6403,6 +6403,7 @@ app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) =>
 
 // Endpoint 4: Master HLS stream endpoint (/api/media/stream/:id or /api/media/stream/:id/index.m3u8)
 const handleHlsMasterStream = async (req: Request, res: Response) => {
+  console.log(`[handleHlsMasterStream] Called for media: ${req.params.id}, query: ${JSON.stringify(req.query)}`);
   try {
     const mediaId = req.params.id;
     const rawPath = ((req.query.path || req.query.file || mediaId) as string || '').trim();

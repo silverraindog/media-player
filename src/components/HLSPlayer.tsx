@@ -142,6 +142,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [activeAudioTrack, setActiveAudioTrack] = useState<number>(0);
   const [activeSubtitleTrack, setActiveSubtitleTrack] = useState<number>(-1); // -1 = Disabled
   const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // ms
+  const [retryCount, setRetryCount] = useState<number>(0);
+  const [forceRemount, setForceRemount] = useState<number>(0);
   const [hlsStatus, setHlsStatus] = useState<'initializing' | 'streaming' | 'buffering' | 'error'>('initializing');
   const [streamError, setStreamError] = useState<string | null>(null);
   const [isRecovering, setIsRecovering] = useState<boolean>(false);
@@ -215,6 +217,24 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       lastKnownTimeRef.current = videoRef.current.currentTime;
     }
     console.warn('[HLSPlayer] Stream decoding or network failure detected. Restarting FFmpeg stream from timestamp:', lastKnownTimeRef.current);
+    
+    const nextCount = retryCount + 1;
+    if (nextCount >= 3) {
+      setRetryCount(0);
+      setForceRemount(prev => prev + 1);
+      if (hlsInstanceRef.current) {
+        hlsInstanceRef.current.destroy();
+        hlsInstanceRef.current = null;
+      }
+    } else {
+      setRetryCount(nextCount);
+    }
+
+    // Disable hardware acceleration after first failure
+    if (retryCount >= 1 && hwAccel) {
+      console.warn('[HLSPlayer] Disabling hardware acceleration due to stream failures');
+      setHwAccel(false);
+    }
 
     try {
       await fetch(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`, {
@@ -229,7 +249,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       setRestartNonce((prev) => prev + 1);
       setIsRecovering(false);
     }, 1200);
-  }, [mediaId, isRecovering]);
+  }, [mediaId, isRecovering, hwAccel, retryCount]);
 
   // 2. Build HLS Master stream URL
   const streamSrc = useMemo(() => {
@@ -242,6 +262,10 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     const qs = params.toString();
     return `/api/media/stream/${encodeURIComponent(mediaId)}${qs ? `?${qs}` : ''}`;
   }, [mediaId, filePath, activePreset, hwAccel, activeAudioTrack, restartNonce]);
+
+  useEffect(() => {
+      setRetryCount(0);
+  }, [streamSrc]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -825,6 +849,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
         {/* Underlying Video Element */}
         <video
+          key={forceRemount}
           ref={videoRef}
           poster={posterUrl}
           className={`w-full h-full object-contain ${isAudio ? 'hidden' : 'block'}`}

@@ -57,41 +57,56 @@ export const HwAccelSettingsCard: React.FC<HwAccelSettingsCardProps> = ({
   if (isLoading) return <div className="p-4 text-xs text-slate-400"><RefreshCw className="w-4 h-4 animate-spin inline mr-2" /> Detecting hardware...</div>;
 
   return (
-    <div className={`p-4 rounded-xl bg-slate-950 border border-slate-800 ${className}`}>
-      <div className="flex items-center gap-2 mb-4">
-        <Cpu className="w-5 h-5 text-cyan-400" />
-        <h3 className="text-sm font-bold text-white">GPU Hardware Acceleration</h3>
+    <div className={`p-5 rounded-2xl bg-slate-950 border border-slate-800 shadow-xl space-y-4 ${className}`}>
+      <div className="flex items-center gap-2.5 border-b border-slate-800 pb-3">
+        <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+          <Cpu className="w-5 h-5" />
+        </div>
+        <div>
+          <h3 className="text-sm font-bold text-white">GPU Hardware Acceleration</h3>
+          <p className="text-xs text-slate-400">Dynamically update FFmpeg transcode command flags with <code className="text-cyan-300 font-mono">-hwaccel auto</code></p>
+        </div>
       </div>
       
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-300">Enable Hardware Acceleration</span>
+        {/* Main Hardware Acceleration Auto Toggle */}
+        <div className="p-3.5 rounded-xl bg-slate-900 border border-cyan-500/30 flex items-center justify-between gap-4 shadow-sm">
+          <div className="space-y-0.5">
+            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5 text-cyan-400 fill-cyan-400" />
+              <span>Hardware Acceleration (-hwaccel auto)</span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Ensures smoother playback on devices with supported GPUs by passing auto hardware acceleration flags.
+            </p>
+          </div>
           <button
             onClick={toggleEnabled}
-            className={`w-10 h-5 rounded-full relative transition-colors ${hwAccel.enabled ? 'bg-cyan-600' : 'bg-slate-700'}`}
+            className={`w-11 h-6 rounded-full relative transition-colors cursor-pointer shrink-0 ${hwAccel.enabled ? 'bg-cyan-600' : 'bg-slate-700'}`}
+            title="Toggle Hardware Acceleration (-hwaccel auto)"
           >
-            <div className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-transform ${hwAccel.enabled ? 'left-6' : 'left-1'}`} />
+            <div className={`w-5 h-5 rounded-full bg-white absolute top-0.5 transition-transform ${hwAccel.enabled ? 'left-5.5' : 'left-0.5'}`} />
           </button>
         </div>
 
         {hwAccel.enabled && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 animate-in fade-in">
             {(['nvenc', 'videotoolbox', 'vaapi'] as const).map((key) => (
-              <div key={key} className={`p-2 rounded border text-xs flex items-center justify-between ${hwSupport?.[key] ? 'border-slate-700 bg-slate-900' : 'border-slate-800 bg-slate-950 opacity-50'}`}>
-                <span className="capitalize">{key === 'videotoolbox' ? 'VideoToolbox' : key}</span>
+              <div key={key} className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${hwSupport?.[key] ? 'border-slate-700 bg-slate-900/90' : 'border-slate-800 bg-slate-950 opacity-50'}`}>
+                <span className="capitalize font-medium text-slate-300">{key === 'videotoolbox' ? 'VideoToolbox' : key}</span>
                 <input
                   type="checkbox"
                   checked={Boolean(hwAccel[key])}
                   disabled={!hwSupport?.[key]}
                   onChange={() => toggleAccel(key)}
-                  className="accent-cyan-500"
+                  className="accent-cyan-500 cursor-pointer"
                 />
               </div>
             ))}
           </div>
         )}
         
-        {!hwSupport && <div className="text-xs text-rose-400 flex items-center gap-1 mt-2"><AlertCircle className="w-3 h-3" /> Could not detect HW capabilities.</div>}
+        {!hwSupport && <div className="text-xs text-rose-400 flex items-center gap-1 mt-2"><AlertCircle className="w-3 h-3" /> Could not detect hardware capabilities.</div>}
       </div>
     </div>
   );

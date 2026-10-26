@@ -198,6 +198,13 @@ export async function getDatabase(): Promise<Database> {
       notes TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS media_playback_settings (
+      media_id TEXT PRIMARY KEY,
+      subtitle_offset_ms INTEGER DEFAULT 0,
+      last_watched_seconds INTEGER DEFAULT 0,
+      last_watched_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS watch_history_log (
       id TEXT PRIMARY KEY,
       media_id TEXT,
@@ -2058,6 +2065,27 @@ export async function saveSmartPlaylist(playlist: any) {
 export async function deleteSmartPlaylist(id: string) {
   const db = await getDatabase();
   db.run("DELETE FROM smart_playlists WHERE id = ?", [id]);
+  persistDbToDisk();
+}
+
+export async function getMediaPlaybackSettings(mediaId: string) {
+  const db = await getDatabase();
+  const res = db.exec("SELECT subtitle_offset_ms, last_watched_seconds, last_watched_at FROM media_playback_settings WHERE media_id = ?", [mediaId]);
+  if (res.length === 0) return { subtitle_offset_ms: 0, last_watched_seconds: 0, last_watched_at: null };
+  return {
+    subtitle_offset_ms: res[0].values[0][0],
+    last_watched_seconds: res[0].values[0][1],
+    last_watched_at: res[0].values[0][2]
+  };
+}
+
+export async function saveMediaPlaybackSettings(mediaId: string, subtitleOffsetMs: number, lastWatchedSeconds: number) {
+  const db = await getDatabase();
+  db.run(
+    `INSERT OR REPLACE INTO media_playback_settings (media_id, subtitle_offset_ms, last_watched_seconds, last_watched_at)
+     VALUES (?, ?, ?, datetime('now'))`,
+    [mediaId, subtitleOffsetMs, lastWatchedSeconds]
+  );
   persistDbToDisk();
 }
 

@@ -45,6 +45,8 @@ import {
   getAllSmartPlaylists,
   saveSmartPlaylist,
   deleteSmartPlaylist,
+  getMediaPlaybackSettings,
+  saveMediaPlaybackSettings,
   renameVaultMediaFile,
   getPersistentStorageInfo,
   getVaultStateFromDisk,
@@ -5631,14 +5633,7 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
     ];
 
     if (useHardwareAccel && mediaType === 'video') {
-      const platform = os.platform();
-      if (platform === 'darwin') {
-        args.push('-hwaccel', 'videotoolbox');
-      } else if (platform === 'win32') {
-        args.push('-hwaccel', 'd3d11va');
-      } else {
-        args.push('-hwaccel', 'cuda');
-      }
+      args.push('-hwaccel', 'auto');
     }
 
     args.push(
@@ -5771,14 +5766,7 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
   ];
 
   if (useHardwareAccel && mediaType === 'video') {
-    const platform = os.platform();
-    if (platform === 'darwin') {
-      args.push('-hwaccel', 'videotoolbox');
-    } else if (platform === 'win32') {
-      args.push('-hwaccel', 'd3d11va');
-    } else {
-      args.push('-hwaccel', 'cuda');
-    }
+    args.push('-hwaccel', 'auto');
   }
 
   args.push(
@@ -5922,6 +5910,40 @@ export interface StreamProbeResult {
     bit_rate?: number;
     channel_layout?: string;
   };
+  audioStreams?: Array<{
+    index: number;
+    audioIndex: number;
+    codec_name: string;
+    codec_long_name?: string;
+    channels?: number;
+    sample_rate?: number;
+    bit_rate?: number;
+    channel_layout?: string;
+    tags?: {
+      language?: string;
+      title?: string;
+      [key: string]: any;
+    };
+  }>;
+  subtitleStreams?: Array<{
+    index: number;
+    codec_name: string;
+    codec_long_name?: string;
+    tags?: {
+      language?: string;
+      title?: string;
+      [key: string]: any;
+    };
+  }>;
+  chapters?: Array<{
+    id: number;
+    start_time: number;
+    end_time: number;
+    tags?: {
+      title?: string;
+      [key: string]: any;
+    };
+  }>;
   rawStreams: any[];
   needsVideoTranscode: boolean;
   needsAudioTranscode: boolean;
@@ -5937,6 +5959,7 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
       '-print_format', 'json',
       '-show_format',
       '-show_streams',
+      '-show_chapters',
       filePath,
     ];
 
@@ -5955,9 +5978,40 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
         const parsed = JSON.parse(stdout);
         const format = parsed.format || {};
         const streams: any[] = parsed.streams || [];
+        const chapters: any[] = parsed.chapters || [];
 
         const videoStream = streams.find((s) => s.codec_type === 'video');
         const audioStream = streams.find((s) => s.codec_type === 'audio');
+
+        const audioStreams = streams
+          .filter((s) => s.codec_type === 'audio')
+          .map((s, idx) => ({
+            index: s.index,
+            audioIndex: idx,
+            codec_name: s.codec_name || 'unknown',
+            codec_long_name: s.codec_long_name,
+            channels: s.channels || 2,
+            sample_rate: s.sample_rate ? parseInt(s.sample_rate, 10) : 48000,
+            bit_rate: s.bit_rate ? parseInt(s.bit_rate, 10) : undefined,
+            channel_layout: s.channel_layout,
+            tags: s.tags || {},
+          }));
+
+        const subtitleStreams = streams
+          .filter((s) => s.codec_type === 'subtitle')
+          .map((s) => ({
+            index: s.index,
+            codec_name: s.codec_name || 'unknown',
+            codec_long_name: s.codec_long_name,
+            tags: s.tags || {},
+          }));
+
+        const parsedChapters = chapters.map((c) => ({
+            id: c.id,
+            start_time: parseFloat(c.start_time),
+            end_time: parseFloat(c.end_time),
+            tags: c.tags || {},
+        }));
 
         const reasons: string[] = [];
         let needsVideoTranscode = false;
@@ -5986,7 +6040,6 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
             bit_rate: videoStream.bit_rate ? parseInt(videoStream.bit_rate, 10) : undefined,
           };
 
-          // H.264 (AVC) with 8-bit yuv420p is universally playable in HLS players without re-encoding
           if (vCodec !== 'h264' || (pixFmt && pixFmt.includes('10le')) || (pixFmt && pixFmt.includes('444'))) {
             needsVideoTranscode = true;
             reasons.push(`Video codec "${vCodec}" (${pixFmt || 'unknown format'}) requires transcoding to H.264 (yuv420p)`);
@@ -6005,7 +6058,6 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
             channel_layout: audioStream.channel_layout,
           };
 
-          // AAC & MP3 are directly streamable in HLS; DTS, AC3, EAC3, TrueHD, FLAC need AAC transcode
           if (aCodec !== 'aac' && aCodec !== 'mp3') {
             needsAudioTranscode = true;
             reasons.push(`Audio codec "${aCodec}" requires transcoding to AAC stereo`);
@@ -6027,6 +6079,9 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
           },
           video: videoInfo,
           audio: audioInfo,
+          audioStreams,
+          subtitleStreams,
+          chapters: parsedChapters,
           rawStreams: streams,
           needsVideoTranscode,
           needsAudioTranscode,
@@ -6230,6 +6285,26 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+// Media Playback Settings
+app.get('/api/media/settings/:id', async (req: Request, res: Response) => {
+  try {
+    const settings = await getMediaPlaybackSettings(req.params.id);
+    res.json({ success: true, settings });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch settings', details: err?.message });
+  }
+});
+
+app.post('/api/media/settings/:id', async (req: Request, res: Response) => {
+  try {
+    const { subtitleOffsetMs, lastWatchedSeconds } = req.body;
+    await saveMediaPlaybackSettings(req.params.id, subtitleOffsetMs, lastWatchedSeconds);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to save settings', details: err?.message });
+  }
+});
+
 // Endpoint 1: Probe media file format via ffprobe
 app.get('/api/media/stream/:id/probe', async (req: Request, res: Response) => {
   try {
@@ -6334,6 +6409,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     const preset = (req.query.preset as string) || '';
     const hwaccel = (req.query.hwaccel as string || '').toLowerCase();
     const forceTranscode = req.query.forceTranscode === 'true';
+    const audioTrack = parseInt((req.query.audioTrack as string) || '0', 10);
 
     const resolvedPath = resolveStreamSourceFile(rawPath, req.query);
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
@@ -6342,7 +6418,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       });
     }
 
-    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + forceTranscode).digest('hex').slice(0, 10)}`;
+    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + forceTranscode + audioTrack).digest('hex').slice(0, 10)}`;
     let session = activeHlsStreamSessions.get(sessionKey);
 
     // If session exists, verify playlist exists
@@ -6372,9 +6448,11 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
 
     // Hardware acceleration flags
     const platform = os.platform();
-    if (hwaccel === 'videotoolbox' || (hwaccel === 'true' && platform === 'darwin')) {
+    if (hwaccel === 'auto' || hwaccel === 'true') {
+      args.push('-hwaccel', 'auto');
+    } else if (hwaccel === 'videotoolbox' || (hwaccel === '' && platform === 'darwin')) {
       args.push('-hwaccel', 'videotoolbox');
-    } else if (hwaccel === 'nvenc' || (hwaccel === 'true' && platform === 'linux')) {
+    } else if (hwaccel === 'nvenc') {
       args.push('-hwaccel', 'cuda');
     } else if (hwaccel === 'vaapi') {
       args.push('-hwaccel', 'vaapi');
@@ -6418,8 +6496,14 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     }
 
     if (hasAudio) {
-      args.push('-map', '0:a:0');
-      if (probeResult.needsAudioTranscode || forceTranscode) {
+      const selectedAudio = probeResult.audioStreams?.[audioTrack] || probeResult.audioStreams?.[0];
+      const audioSpecifier = selectedAudio ? `0:${selectedAudio.index}` : `0:a:${audioTrack}`;
+      args.push('-map', audioSpecifier);
+
+      const targetAudioCodec = selectedAudio ? (selectedAudio.codec_name || '').toLowerCase() : (probeResult.audio?.codec_name || '').toLowerCase();
+      const needsThisAudioTranscode = targetAudioCodec !== 'aac' && targetAudioCodec !== 'mp3';
+
+      if (needsThisAudioTranscode || probeResult.needsAudioTranscode || forceTranscode) {
         args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2');
       } else {
         args.push('-c:a', 'copy');

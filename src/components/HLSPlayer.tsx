@@ -48,6 +48,40 @@ export interface StreamProbeData {
     bit_rate?: number;
     channel_layout?: string;
   };
+  audioStreams?: Array<{
+    index: number;
+    audioIndex: number;
+    codec_name: string;
+    codec_long_name?: string;
+    channels?: number;
+    sample_rate?: number;
+    bit_rate?: number;
+    channel_layout?: string;
+    tags?: {
+      language?: string;
+      title?: string;
+      [key: string]: any;
+    };
+  }>;
+  subtitleStreams?: Array<{
+    index: number;
+    codec_name: string;
+    codec_long_name?: string;
+    tags?: {
+      language?: string;
+      title?: string;
+      [key: string]: any;
+    };
+  }>;
+  chapters?: Array<{
+    id: number;
+    start_time: number;
+    end_time: number;
+    tags?: {
+      title?: string;
+      [key: string]: any;
+    };
+  }>;
   needsVideoTranscode: boolean;
   needsAudioTranscode: boolean;
   needsTranscoding: boolean;
@@ -102,9 +136,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [showControls, setShowControls] = useState(true);
   const [showProbeDetails, setShowProbeDetails] = useState(false);
 
-  // Transcoding presets & HW accel configuration
+  // Transcoding presets & HW accel & Audio Track & Subtitle Track configuration
   const [activePreset, setActivePreset] = useState<string>(initialPreset);
   const [hwAccel, setHwAccel] = useState<boolean>(initialHwAccel);
+  const [activeAudioTrack, setActiveAudioTrack] = useState<number>(0);
+  const [activeSubtitleTrack, setActiveSubtitleTrack] = useState<number>(-1); // -1 = Disabled
+  const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // ms
   const [hlsStatus, setHlsStatus] = useState<'initializing' | 'streaming' | 'buffering' | 'error'>('initializing');
   const [streamError, setStreamError] = useState<string | null>(null);
   const [isRecovering, setIsRecovering] = useState<boolean>(false);
@@ -140,6 +177,36 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     fetchProbeData();
   }, [fetchProbeData]);
 
+  // Fetch settings on mount
+  useEffect(() => {
+    fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.success && d.settings) {
+          setSubtitleOffset(d.settings.subtitle_offset_ms || 0);
+          if (videoRef.current && d.settings.last_watched_seconds > 0) {
+            videoRef.current.currentTime = d.settings.last_watched_seconds;
+          }
+        }
+      })
+      .catch(e => console.warn('Failed to fetch media settings', e));
+  }, [mediaId]);
+
+  // Save settings (debounce)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subtitleOffsetMs: subtitleOffset,
+          lastWatchedSeconds: Math.floor(currentTime)
+        })
+      }).catch(e => console.warn('Failed to save media settings', e));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [subtitleOffset, currentTime, mediaId]);
+
   // Stream failure auto-recovery: stop backend FFmpeg process and restart stream from last known timestamp
   const handleStreamFailure = useCallback(async () => {
     if (isRecovering) return;
@@ -170,10 +237,11 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (filePath) params.set('path', filePath);
     if (activePreset) params.set('preset', activePreset);
     if (hwAccel) params.set('hwaccel', 'true');
+    if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
     return `/api/media/stream/${encodeURIComponent(mediaId)}${qs ? `?${qs}` : ''}`;
-  }, [mediaId, filePath, activePreset, hwAccel, restartNonce]);
+  }, [mediaId, filePath, activePreset, hwAccel, activeAudioTrack, restartNonce]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -285,6 +353,32 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     };
   }, [mediaId]);
 
+  // Update subtitle tracks visibility & offset
+  useEffect(() => {
+    if (!videoRef.current) return;
+    const tracks = videoRef.current.textTracks;
+    for (let i = 0; i < tracks.length; i++) {
+      const track = tracks[i];
+      if (i === activeSubtitleTrack) {
+        track.mode = 'showing';
+        // Apply offset to cues
+        if (track.cues) {
+          for (let j = 0; j < track.cues.length; j++) {
+            const cue = track.cues[j] as VTTCue;
+            if (!(cue as any).originalStartTime) {
+                (cue as any).originalStartTime = cue.startTime;
+                (cue as any).originalEndTime = cue.endTime;
+            }
+            cue.startTime = (cue as any).originalStartTime + (subtitleOffset / 1000);
+            cue.endTime = (cue as any).originalEndTime + (subtitleOffset / 1000);
+          }
+        }
+      } else {
+        track.mode = 'disabled';
+      }
+    }
+  }, [activeSubtitleTrack, subtitleOffset]);
+
   // Video event handlers
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
@@ -319,8 +413,28 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
   const handleSeek = (newTime: number) => {
     if (!videoRef.current) return;
-    videoRef.current.currentTime = newTime;
-    setCurrentTime(newTime);
+    const startTime = videoRef.current.currentTime;
+    const endTime = newTime;
+    const duration = 200; // ms
+    let startTimestamp: number | null = null;
+
+    const animate = (timestamp: number) => {
+      if (!startTimestamp) startTimestamp = timestamp;
+      const elapsed = timestamp - startTimestamp;
+      const progress = Math.min(elapsed / duration, 1);
+      const easedProgress = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+      
+      const seekTime = startTime + (endTime - startTime) * easedProgress;
+      if (videoRef.current) {
+          videoRef.current.currentTime = seekTime;
+          setCurrentTime(seekTime);
+      }
+
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    };
+    requestAnimationFrame(animate);
   };
 
   const handleVolumeChange = (newVol: number) => {
@@ -456,17 +570,77 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             }`}
             title="Toggle Hardware Accelerated Transcoding"
           >
-            <Cpu className="w-3.5 h-3.5" />
+            <Cpu className={`w-3.5 h-3.5 ${hwAccel ? 'animate-pulse' : ''}`} />
             <span className="hidden md:inline">GPU Accel: {hwAccel ? 'ON' : 'OFF'}</span>
           </button>
 
-          {/* Preset Selector Dropdown */}
+          {/* Audio Track Selector Dropdown */}
+          {probeData?.audioStreams && probeData.audioStreams.length > 0 && (
+            <div className="relative">
+              <select
+                value={activeAudioTrack}
+                onChange={(e) => setActiveAudioTrack(parseInt(e.target.value, 10))}
+                className="bg-slate-900/90 text-slate-200 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:border-indigo-500"
+                title="Select Audio Track / Language Channel"
+              >
+                {probeData.audioStreams.map((a, idx) => {
+                  const lang = a.tags?.language ? `[${a.tags.language.toUpperCase()}]` : '';
+                  const trackTitle = a.tags?.title || `Track ${idx + 1}`;
+                  const codec = a.codec_name ? a.codec_name.toUpperCase() : 'AUDIO';
+                  const channels = a.channels ? `${a.channels}ch` : '';
+                  return (
+                    <option key={idx} value={idx}>
+                      Audio {idx + 1}: {lang} {trackTitle} ({codec} {channels})
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
+
+          {/* Subtitle Track Selector Dropdown */}
+          {probeData?.subtitleStreams && probeData.subtitleStreams.length > 0 && (
+            <div className="flex items-center gap-2">
+              <select
+                value={activeSubtitleTrack}
+                onChange={(e) => setActiveSubtitleTrack(parseInt(e.target.value, 10))}
+                className="bg-slate-900/90 text-slate-200 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:border-indigo-500"
+                title="Select Subtitle Track"
+              >
+                <option value="-1">Subtitles: Off</option>
+                {probeData.subtitleStreams.map((s, idx) => {
+                  const lang = s.tags?.language ? `[${s.tags.language.toUpperCase()}]` : '';
+                  const trackTitle = s.tags?.title || `Track ${idx + 1}`;
+                  return (
+                    <option key={idx} value={idx}>
+                      {lang} {trackTitle} ({s.codec_name.toUpperCase()})
+                    </option>
+                  );
+                })}
+              </select>
+              <div className="flex items-center gap-1 bg-slate-900/90 rounded-lg border border-slate-700">
+                <button
+                    onClick={() => setSubtitleOffset(prev => prev - 100)}
+                    className="px-2 py-1 hover:bg-slate-800 rounded-l-lg text-xs"
+                    title="Subtitle Delay -100ms"
+                >-</button>
+                <span className="text-[10px] font-mono w-16 text-center">{subtitleOffset > 0 ? '+' : ''}{subtitleOffset}ms</span>
+                <button
+                    onClick={() => setSubtitleOffset(prev => prev + 100)}
+                    className="px-2 py-1 hover:bg-slate-800 rounded-r-lg text-xs"
+                    title="Subtitle Delay +100ms"
+                >+</button>
+              </div>
+            </div>
+          )}
+
+        {/* Resolution Selector Dropdown */}
           <div className="relative">
             <select
               value={activePreset}
               onChange={(e) => setActivePreset(e.target.value)}
               className="bg-slate-900/90 text-slate-200 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:border-indigo-500"
-              title="Select FFmpeg Transcoding Profile"
+              title="Select Streaming Resolution"
             >
               <option value="">Auto (Direct/H.264)</option>
               <option value="1080p-HighBitrate">1080p (High Bitrate)</option>
@@ -474,7 +648,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
               <option value="480p-Mobile">480p (Mobile Fast)</option>
             </select>
           </div>
-
+          
           {onClose && (
             <button
               onClick={onClose}
@@ -680,10 +854,38 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
+        {/* Chapter Navigation Bar */}
+        {probeData?.chapters && probeData.chapters.length > 0 && (
+           <div className="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+             {probeData.chapters.map((c) => (
+               <button
+                 key={c.id}
+                 onClick={() => handleSeek(c.start_time)}
+                 className="px-2 py-1 rounded bg-slate-800 hover:bg-indigo-600 text-[10px] text-slate-300 hover:text-white truncate whitespace-nowrap min-w-max"
+                 title={c.tags?.title || `Chapter ${c.id}`}
+               >
+                 {c.tags?.title || `Chapter ${c.id}`}
+               </button>
+             ))}
+           </div>
+        )}
+
         {/* Scrubber Progress Bar */}
         <div className="relative w-full group/scrub py-1 cursor-pointer">
           {/* Buffer Progress */}
           <div className="relative w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            {/* Chapter Markers */}
+            {probeData?.chapters?.map((c) => (
+              <div
+                key={c.id}
+                className="absolute h-full bg-indigo-500/40"
+                style={{
+                  left: `${(c.start_time / (duration || 1)) * 100}%`,
+                  width: `${Math.max(0.5, ((c.end_time - c.start_time) / (duration || 1)) * 100)}%`,
+                }}
+                title={c.tags?.title || `Chapter ${c.id}`}
+              />
+            ))}
             <div
               className="absolute left-0 top-0 bottom-0 bg-slate-700/80 transition-all duration-200"
               style={{ width: `${(bufferedEnd / (duration || 1)) * 100}%` }}

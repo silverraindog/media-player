@@ -31,6 +31,7 @@ import {
   TranscodeConfig,
 } from '../types';
 import { MatroskaPlayer } from './MatroskaPlayer';
+import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
 import { transcodeService, TranscodeStatusInfo, MediaInfo } from '../services/TranscodeService';
 
@@ -484,60 +485,25 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   }}
                 />
               </div>
-            ) : media.type === 'album' ? (
-              // Audio Player UI with Cover Art
-              <div className="flex flex-col items-center justify-center p-8 w-full max-w-md text-center">
-                <div className="relative w-48 h-48 sm:w-64 sm:h-64 rounded-2xl overflow-hidden shadow-2xl border border-slate-800 bg-slate-900 mb-6 group">
-                  <img
-                    src={media.posterUrl || media.fanartUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80'}
-                    alt={media.title}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent opacity-80" />
-                </div>
-                <h3 className="text-xl font-bold text-white truncate max-w-full">
-                  {currentTrack?.title || media.title}
-                </h3>
-                <p className="text-sm text-slate-400 mt-1">
-                  {currentTrack?.artist || (media.artists && media.artists[0]) || media.studio || 'Album Track'}
-                </p>
-
-                <audio
-                  ref={audioRef}
-                  src={streamUrl}
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  onTimeUpdate={(e) => setCurrentTime((e.target as HTMLAudioElement).currentTime)}
-                  onLoadedMetadata={(e) => setDuration((e.target as HTMLAudioElement).duration)}
-                  onError={() => {
-                    setPlaybackError('Direct audio streaming could not find the file at this network share path.');
-                  }}
-                  autoPlay
-                />
-              </div>
             ) : (
-              // Video Player UI
-              <div className="relative w-full h-full flex items-center justify-center bg-black">
-                <video
-                  ref={videoRef}
-                  src={streamUrl}
-                  poster={media.fanartUrl || media.posterUrl}
-                  className="w-full h-full max-h-[70vh] object-contain"
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
-                  onLoadedMetadata={(e) => setDuration((e.target as HTMLVideoElement).duration)}
-                  onError={() => {
-                    setPlaybackError('The browser could not play this video format directly. Try clicking "Attempt Transcode" or use the MKV Inspector.');
-                  }}
-                  onClick={togglePlay}
-                  autoPlay
-                />
-              </div>
+              <HLSPlayer
+                mediaId={media.id}
+                filePath={activeFilePath}
+                title={media.title}
+                posterUrl={media.fanartUrl || media.posterUrl}
+                isAudio={media.type === 'album'}
+                currentTrackTitle={currentTrack?.title}
+                currentEpisodeTitle={currentEpisode ? `S${String(currentEpisode.seasonNumber).padStart(2, '0')}E${String(currentEpisode.episodeNumber).padStart(2, '0')}: ${currentEpisode.title}` : undefined}
+                initialHwAccel={hardwareAccel}
+                onClose={onClose}
+                onFallbackDirect={() => {
+                  setUseTranscode(false);
+                }}
+              />
             )}
 
-            {/* Bottom Controls Bar (when not in Matroska inspector mode) */}
-            {!useMatroskaEngine && (
+            {/* Bottom Controls Bar (when not in HLS or Matroska mode) */}
+            {false && !useMatroskaEngine && (
               <div className="w-full bg-slate-950/95 border-t border-slate-800 px-4 py-3 flex flex-col gap-2">
                 {/* Timeline scrubber */}
                 <div className="flex items-center gap-3 text-xs text-slate-400 font-mono">

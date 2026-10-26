@@ -53,6 +53,7 @@ import { FfmpegHardwareDiagnosticsCard } from './FfmpegHardwareDiagnosticsCard';
 import { HwAccelSettingsCard } from './HwAccelSettingsCard';
 import { PresetManager } from './PresetManager';
 import { NetworkConnectionDiagnosticsCard } from './NetworkConnectionDiagnosticsCard';
+import { FfmpegTranscodeLogsCard } from './FfmpegTranscodeLogsCard';
 
 interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
@@ -1428,6 +1429,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         sambaConfig={sambaConfig}
         onUpdateSambaConfig={onUpdateSambaConfig}
       />
+
+      {/* SECTION 4.7: FFPEG TRANSCODE & STREAM LOGS */}
+      <FfmpegTranscodeLogsCard />
 
       {/* SECTION 5: RELEASE VERSION TRACKER & BUILD INCREMENTS */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">

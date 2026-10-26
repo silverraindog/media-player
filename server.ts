@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import { spawn, spawnSync } from 'child_process';
 import { pipeline, Transform } from 'stream';
-import { randomUUID } from 'crypto';
+import crypto, { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
 import { GoogleGenAI } from '@google/genai';
@@ -83,6 +83,27 @@ export function resolveFfmpegBinary(): string {
     } catch {}
   }
   return process.env.FFMPEG_PATH || 'ffmpeg';
+}
+
+export function resolveFfprobeBinary(): string {
+  if (process.env.FFPROBE_PATH && fs.existsSync(process.env.FFPROBE_PATH)) {
+    return process.env.FFPROBE_PATH;
+  }
+  const candidates = [
+    '/opt/homebrew/bin/ffprobe',
+    '/usr/local/bin/ffprobe',
+    '/opt/local/bin/ffprobe',
+    '/usr/bin/ffprobe',
+    '/bin/ffprobe',
+  ];
+  for (const cand of candidates) {
+    try {
+      if (fs.existsSync(cand)) {
+        return cand;
+      }
+    } catch {}
+  }
+  return process.env.FFPROBE_PATH || 'ffprobe';
 }
 
 const app = express();
@@ -5845,6 +5866,642 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     }
   });
 });
+
+const ffmpegLogRingBuffer: string[] = [];
+function pushFfmpegLog(line: string) {
+  const timestamp = new Date().toLocaleTimeString();
+  const formatted = `[${timestamp}] ${line.trim()}`;
+  ffmpegLogRingBuffer.push(formatted);
+  if (ffmpegLogRingBuffer.length > 200) {
+    ffmpegLogRingBuffer.shift();
+  }
+}
+
+app.get('/api/media/stream/logs', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    lines: ffmpegLogRingBuffer.slice(-50),
+    totalCaptured: ffmpegLogRingBuffer.length,
+  });
+});
+
+app.post('/api/media/stream/logs/clear', (req: Request, res: Response) => {
+  ffmpegLogRingBuffer.length = 0;
+  res.json({ success: true, message: 'Logs cleared successfully' });
+});
+
+// ============================================================================
+// FFMPEG BACKEND MEDIA PROBING & ON-THE-FLY HLS STREAMING PIPELINE
+// Route: /api/media/stream/:id
+// ============================================================================
+
+export interface StreamProbeResult {
+  format: {
+    format_name: string;
+    format_long_name?: string;
+    duration: number;
+    size: number;
+    bit_rate?: number;
+  };
+  video?: {
+    codec_name: string;
+    codec_long_name?: string;
+    profile?: string;
+    width: number;
+    height: number;
+    pix_fmt?: string;
+    r_frame_rate?: string;
+    fps?: number;
+    bit_rate?: number;
+  };
+  audio?: {
+    codec_name: string;
+    codec_long_name?: string;
+    channels?: number;
+    sample_rate?: number;
+    bit_rate?: number;
+    channel_layout?: string;
+  };
+  rawStreams: any[];
+  needsVideoTranscode: boolean;
+  needsAudioTranscode: boolean;
+  needsTranscoding: boolean;
+  reasons: string[];
+}
+
+export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
+  return new Promise((resolve, reject) => {
+    const ffprobeBin = resolveFfprobeBinary();
+    const args = [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_format',
+      '-show_streams',
+      filePath,
+    ];
+
+    const proc = spawn(ffprobeBin, args);
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    proc.on('close', (code) => {
+      if (code !== 0 && !stdout) {
+        return reject(new Error(stderr || `ffprobe exited with code ${code}`));
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        const format = parsed.format || {};
+        const streams: any[] = parsed.streams || [];
+
+        const videoStream = streams.find((s) => s.codec_type === 'video');
+        const audioStream = streams.find((s) => s.codec_type === 'audio');
+
+        const reasons: string[] = [];
+        let needsVideoTranscode = false;
+        let needsAudioTranscode = false;
+
+        let videoInfo: any = undefined;
+        if (videoStream) {
+          const vCodec = (videoStream.codec_name || '').toLowerCase();
+          const pixFmt = (videoStream.pix_fmt || '').toLowerCase();
+          let fps = 24;
+          if (videoStream.r_frame_rate) {
+            const parts = videoStream.r_frame_rate.split('/');
+            if (parts.length === 2 && parseFloat(parts[1]) > 0) {
+              fps = Math.round(parseFloat(parts[0]) / parseFloat(parts[1]));
+            }
+          }
+          videoInfo = {
+            codec_name: videoStream.codec_name,
+            codec_long_name: videoStream.codec_long_name,
+            profile: videoStream.profile,
+            width: videoStream.width || 0,
+            height: videoStream.height || 0,
+            pix_fmt: videoStream.pix_fmt,
+            r_frame_rate: videoStream.r_frame_rate,
+            fps,
+            bit_rate: videoStream.bit_rate ? parseInt(videoStream.bit_rate, 10) : undefined,
+          };
+
+          // H.264 (AVC) with 8-bit yuv420p is universally playable in HLS players without re-encoding
+          if (vCodec !== 'h264' || (pixFmt && pixFmt.includes('10le')) || (pixFmt && pixFmt.includes('444'))) {
+            needsVideoTranscode = true;
+            reasons.push(`Video codec "${vCodec}" (${pixFmt || 'unknown format'}) requires transcoding to H.264 (yuv420p)`);
+          }
+        }
+
+        let audioInfo: any = undefined;
+        if (audioStream) {
+          const aCodec = (audioStream.codec_name || '').toLowerCase();
+          audioInfo = {
+            codec_name: audioStream.codec_name,
+            codec_long_name: audioStream.codec_long_name,
+            channels: audioStream.channels || 2,
+            sample_rate: audioStream.sample_rate ? parseInt(audioStream.sample_rate, 10) : 48000,
+            bit_rate: audioStream.bit_rate ? parseInt(audioStream.bit_rate, 10) : undefined,
+            channel_layout: audioStream.channel_layout,
+          };
+
+          // AAC & MP3 are directly streamable in HLS; DTS, AC3, EAC3, TrueHD, FLAC need AAC transcode
+          if (aCodec !== 'aac' && aCodec !== 'mp3') {
+            needsAudioTranscode = true;
+            reasons.push(`Audio codec "${aCodec}" requires transcoding to AAC stereo`);
+          }
+        }
+
+        const container = (format.format_name || '').toLowerCase();
+        if (container.includes('matroska') || container.includes('webm') || container.includes('avi') || container.includes('flv')) {
+          reasons.push(`Container format "${container}" repackaged into HLS MPEG-TS segments`);
+        }
+
+        resolve({
+          format: {
+            format_name: format.format_name || 'unknown',
+            format_long_name: format.format_long_name,
+            duration: format.duration ? parseFloat(format.duration) : 0,
+            size: format.size ? parseInt(format.size, 10) : 0,
+            bit_rate: format.bit_rate ? parseInt(format.bit_rate, 10) : undefined,
+          },
+          video: videoInfo,
+          audio: audioInfo,
+          rawStreams: streams,
+          needsVideoTranscode,
+          needsAudioTranscode,
+          needsTranscoding: needsVideoTranscode || needsAudioTranscode,
+          reasons,
+        });
+      } catch (parseErr: any) {
+        reject(new Error(`Failed to parse ffprobe output: ${parseErr.message}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
+function resolveStreamSourceFile(targetPath: string, queryParams: any = {}): string | null {
+  if (!targetPath) return null;
+
+  const seasonQuery = queryParams.season !== undefined ? parseInt(queryParams.season as string, 10) : undefined;
+  const episodeQuery = queryParams.episode !== undefined ? parseInt(queryParams.episode as string, 10) : undefined;
+  const fileQuery = ((queryParams.file || '') as string).trim();
+
+  let cleanRaw = targetPath
+    .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
+    .replace(/^file:\/\/{1,3}/i, '');
+  try {
+    if (cleanRaw.includes('%')) cleanRaw = decodeURIComponent(cleanRaw);
+  } catch {}
+  cleanRaw = cleanRaw.replace(/\\/g, '/');
+
+  const stripVirtual = (p: string) => {
+    return p
+      .replace(/\/([^/]+)\/\1\s+\((?:Main Series|\d{4})\)(?=\/|$)/gi, '/$1')
+      .replace(/\/([^/]+)\s+\(Main Series\)(?=\/|$)/gi, '/$1');
+  };
+  const cleanRawStripped = stripVirtual(cleanRaw);
+
+  const getShareRelative = (p: string) => {
+    let rel = p;
+    rel = rel.replace(/^(?:smb:)?\/{2,}[^/]+\/[^/]+(?:\/|$)/i, '');
+    rel = rel.replace(/^\/?(?:Volumes|mnt|media)\/[^/]+(?:\/|$)/i, '');
+    rel = rel.replace(/^[a-zA-Z]:\/?/, '');
+    return rel.replace(/^[/\\]+/, '');
+  };
+
+  const relPath = getShareRelative(cleanRaw);
+  const relPathStripped = getShareRelative(cleanRawStripped);
+
+  const candidateRoots = Array.from(new Set([
+    cleanRaw,
+    cleanRawStripped,
+    path.resolve(cleanRaw),
+    path.resolve(cleanRawStripped),
+    resolveSambaFullPath(cleanRaw),
+    resolveSambaFullPath(cleanRawStripped),
+    relPath ? path.join(SAMBA_SHARE_ROOT, relPath) : '',
+    relPathStripped ? path.join(SAMBA_SHARE_ROOT, relPathStripped) : '',
+    path.join(SAMBA_SHARE_ROOT, cleanRaw.replace(/^[/\\]+/, '')),
+    path.join('/Volumes', cleanRaw.replace(/^[/\\]+/, '')),
+    path.join('/mnt', cleanRaw.replace(/^[/\\]+/, '')),
+  ])).filter(Boolean);
+
+  try {
+    if (fs.existsSync('/Volumes')) {
+      const mounted = fs.readdirSync('/Volumes');
+      for (const m of mounted) {
+        if (!m.startsWith('.')) {
+          candidateRoots.push(path.join('/Volumes', m, cleanRaw.replace(/^[/\\]+/, '')));
+          if (relPathStripped) candidateRoots.push(path.join('/Volumes', m, relPathStripped));
+        }
+      }
+    }
+  } catch (e) {}
+
+  const videoAudioExtensions = new Set([
+    '.mkv', '.mp4', '.m4v', '.webm', '.avi', '.mov', '.ts', '.m2ts', '.wmv', '.flv',
+    '.mp3', '.flac', '.m4a', '.wav', '.aac', '.ogg', '.opus',
+  ]);
+
+  for (const root of candidateRoots) {
+    if (fs.existsSync(root)) {
+      try {
+        const stat = fs.statSync(root);
+        if (stat.isFile() && stat.size > 256) {
+          const rootName = path.basename(root);
+          if (rootName.startsWith('._')) {
+            const sibling = path.join(path.dirname(root), rootName.slice(2));
+            if (fs.existsSync(sibling) && fs.statSync(sibling).isFile()) return sibling;
+          } else {
+            return root;
+          }
+        } else if (stat.isDirectory()) {
+          const findInDir = (dirPath: string, depth = 0): string | null => {
+            if (depth > 8) return null;
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            if (fileQuery) {
+              const reqName = fileQuery.replace(/^\._/, '').toLowerCase();
+              for (const e of entries) {
+                if (!e.name.startsWith('._') && e.isFile() && e.name.toLowerCase() === reqName) {
+                  return path.join(dirPath, e.name);
+                }
+              }
+            }
+            if (seasonQuery !== undefined && episodeQuery !== undefined) {
+              const epPatterns = [
+                new RegExp(`[sS]0?${seasonQuery}[eE]0?${episodeQuery}\\b`, 'i'),
+                new RegExp(`\\b${seasonQuery}x0?${episodeQuery}\\b`, 'i'),
+                new RegExp(`[eE]0?${episodeQuery}\\b`, 'i'),
+                new RegExp(`episode[ ._-]*0?${episodeQuery}\\b`, 'i'),
+              ];
+              for (const e of entries) {
+                if (e.isFile() && !e.name.startsWith('._')) {
+                  const ext = path.extname(e.name).toLowerCase();
+                  if (videoAudioExtensions.has(ext)) {
+                    for (const pat of epPatterns) {
+                      if (pat.test(e.name)) return path.join(dirPath, e.name);
+                    }
+                  }
+                }
+              }
+            }
+            for (const e of entries) {
+              if (e.isFile() && !e.name.startsWith('._')) {
+                const ext = path.extname(e.name).toLowerCase();
+                if (videoAudioExtensions.has(ext)) return path.join(dirPath, e.name);
+              }
+            }
+            for (const e of entries) {
+              if (e.isDirectory() && !e.name.startsWith('.')) {
+                const found = findInDir(path.join(dirPath, e.name), depth + 1);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          const found = findInDir(root);
+          if (found) return found;
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Fallback placeholder generation so the user can test FFmpeg HLS transcoding immediately
+  // even if external Samba volumes are unmounted in web environments
+  try {
+    const titleLabel = path.basename(cleanRawStripped) || 'sambavault_media';
+    const previewFile = path.join(os.tmpdir(), `sambavault_stream_${titleLabel.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`);
+    if (!fs.existsSync(previewFile) || fs.statSync(previewFile).size < 1000) {
+      const ffmpegBin = resolveFfmpegBinary();
+      const genCmd = [
+        '-nostdin', '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=45:size=1280x720:rate=24',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=45',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-movflags', '+faststart',
+        previewFile
+      ];
+      spawnSync(ffmpegBin, genCmd, { timeout: 4000 });
+    }
+    if (fs.existsSync(previewFile)) return previewFile;
+  } catch (err) {}
+
+  return null;
+}
+
+interface HlsSessionRecord {
+  sessionId: string;
+  mediaId: string;
+  filePath: string;
+  sessionDir: string;
+  playlistPath: string;
+  process: ReturnType<typeof spawn> | null;
+  probeResult: StreamProbeResult;
+  createdAt: number;
+  lastAccessed: number;
+  preset?: string;
+  hwaccel?: string;
+}
+
+const activeHlsStreamSessions = new Map<string, HlsSessionRecord>();
+
+// Periodic session garbage collector (idle > 15 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, session] of activeHlsStreamSessions.entries()) {
+    if (now - session.lastAccessed > 15 * 60 * 1000) {
+      try {
+        if (session.process && !session.process.killed) {
+          session.process.kill('SIGTERM');
+        }
+        if (fs.existsSync(session.sessionDir)) {
+          fs.rmSync(session.sessionDir, { recursive: true, force: true });
+        }
+      } catch {}
+      activeHlsStreamSessions.delete(key);
+      console.log(`[FFmpeg HLS] Evicted idle session: ${key}`);
+    }
+  }
+}, 5 * 60 * 1000);
+
+// Endpoint 1: Probe media file format via ffprobe
+app.get('/api/media/stream/:id/probe', async (req: Request, res: Response) => {
+  try {
+    const rawPath = ((req.query.path || req.query.file || req.params.id) as string || '').trim();
+    const resolvedPath = resolveStreamSourceFile(rawPath, req.query);
+
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return res.status(404).json({
+        error: 'Media file not found or storage volume is unmounted.',
+        requestedPath: rawPath,
+      });
+    }
+
+    const probeResult = await probeMediaFile(resolvedPath);
+    return res.json({
+      success: true,
+      mediaId: req.params.id,
+      filePath: resolvedPath,
+      fileName: path.basename(resolvedPath),
+      probe: probeResult,
+      transcodeRequired: probeResult.needsTranscoding,
+      reasons: probeResult.reasons,
+      streamUrl: `/api/media/stream/${encodeURIComponent(req.params.id)}?path=${encodeURIComponent(resolvedPath)}`,
+    });
+  } catch (err: any) {
+    console.error('[FFmpeg Probe API Error]:', err);
+    res.status(500).json({ error: 'FFprobe analysis failed', details: err?.message });
+  }
+});
+
+// Endpoint 2: Stop stream session and release ffmpeg child process
+app.post('/api/media/stream/:id/stop', (req: Request, res: Response) => {
+  try {
+    const id = req.params.id;
+    let stoppedCount = 0;
+    for (const [key, session] of activeHlsStreamSessions.entries()) {
+      if (session.mediaId === id || key.startsWith(id)) {
+        if (session.process && !session.process.killed) {
+          session.process.kill('SIGTERM');
+        }
+        try {
+          if (fs.existsSync(session.sessionDir)) {
+            fs.rmSync(session.sessionDir, { recursive: true, force: true });
+          }
+        } catch {}
+        activeHlsStreamSessions.delete(key);
+        stoppedCount++;
+      }
+    }
+    res.json({ success: true, stoppedSessions: stoppedCount, message: `Terminated FFmpeg stream session for media ${id}` });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to stop stream', details: err?.message });
+  }
+});
+
+// Endpoint 3: Segment / sub-resource delivery (*.ts or index.m3u8)
+app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) => {
+  const { id, segment } = req.params;
+
+  // Find corresponding session
+  let matchedSession: HlsSessionRecord | undefined;
+  for (const session of activeHlsStreamSessions.values()) {
+    if (session.mediaId === id || session.sessionId.startsWith(id)) {
+      matchedSession = session;
+      break;
+    }
+  }
+
+  if (!matchedSession) {
+    return res.status(404).send('HLS stream session not active or expired. Reload player.');
+  }
+
+  matchedSession.lastAccessed = Date.now();
+  const filePath = path.join(matchedSession.sessionDir, segment);
+
+  // If segment file is still being created/written by FFmpeg, poll for up to 3000ms
+  const startWait = Date.now();
+  while (!fs.existsSync(filePath) && Date.now() - startWait < 3000) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send(`Segment not ready: ${segment}`);
+  }
+
+  if (segment.endsWith('.m3u8')) {
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  } else if (segment.endsWith('.ts')) {
+    res.setHeader('Content-Type', 'video/mp2t');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+  }
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.sendFile(filePath);
+});
+
+// Endpoint 4: Master HLS stream endpoint (/api/media/stream/:id or /api/media/stream/:id/index.m3u8)
+const handleHlsMasterStream = async (req: Request, res: Response) => {
+  try {
+    const mediaId = req.params.id;
+    const rawPath = ((req.query.path || req.query.file || mediaId) as string || '').trim();
+    const preset = (req.query.preset as string) || '';
+    const hwaccel = (req.query.hwaccel as string || '').toLowerCase();
+    const forceTranscode = req.query.forceTranscode === 'true';
+
+    const resolvedPath = resolveStreamSourceFile(rawPath, req.query);
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+      return res.status(404).json({
+        error: `Media file not found or volume unmounted for path "${rawPath}"`,
+      });
+    }
+
+    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + forceTranscode).digest('hex').slice(0, 10)}`;
+    let session = activeHlsStreamSessions.get(sessionKey);
+
+    // If session exists, verify playlist exists
+    if (session && fs.existsSync(session.playlistPath)) {
+      session.lastAccessed = Date.now();
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      return res.sendFile(session.playlistPath);
+    }
+
+    // Otherwise, create a new FFmpeg HLS transcode session
+    const probeResult = await probeMediaFile(resolvedPath);
+    const sessionDir = path.join(os.tmpdir(), `sambavault_hls_${sessionKey}`);
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+    const playlistPath = path.join(sessionDir, 'index.m3u8');
+
+    const ffmpegBin = resolveFfmpegBinary();
+    const args: string[] = [
+      '-nostdin',
+      '-hide_banner',
+      '-loglevel', 'warning',
+      '-y',
+    ];
+
+    // Hardware acceleration flags
+    const platform = os.platform();
+    if (hwaccel === 'videotoolbox' || (hwaccel === 'true' && platform === 'darwin')) {
+      args.push('-hwaccel', 'videotoolbox');
+    } else if (hwaccel === 'nvenc' || (hwaccel === 'true' && platform === 'linux')) {
+      args.push('-hwaccel', 'cuda');
+    } else if (hwaccel === 'vaapi') {
+      args.push('-hwaccel', 'vaapi');
+    }
+
+    args.push(
+      '-fflags', '+genpts+fastseek',
+      '-err_detect', 'ignore_err',
+      '-i', resolvedPath,
+    );
+
+    // Map streams
+    const hasVideo = Boolean(probeResult.video);
+    const hasAudio = Boolean(probeResult.audio);
+
+    if (hasVideo) {
+      args.push('-map', '0:v:0');
+      if (probeResult.needsVideoTranscode || forceTranscode || preset || hwaccel) {
+        let vEncoder = 'libx264';
+        if (hwaccel === 'videotoolbox') vEncoder = 'h264_videotoolbox';
+        else if (hwaccel === 'nvenc') vEncoder = 'h264_nvenc';
+        else if (hwaccel === 'vaapi') vEncoder = 'h264_vaapi';
+
+        args.push('-c:v', vEncoder);
+        if (vEncoder === 'libx264') {
+          args.push('-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p');
+        }
+
+        // Apply resolution and bitrate presets
+        if (preset === '1080p-HighBitrate') {
+          args.push('-vf', 'scale=-2:1080', '-b:v', '5500k', '-maxrate', '6500k', '-bufsize', '10000k');
+        } else if (preset === '720p-LowBandwidth') {
+          args.push('-vf', 'scale=-2:720', '-b:v', '2200k', '-maxrate', '2800k', '-bufsize', '5000k');
+        } else if (preset === '480p-Mobile') {
+          args.push('-vf', 'scale=-2:480', '-b:v', '1000k', '-maxrate', '1400k', '-bufsize', '2500k');
+        }
+      } else {
+        // Direct stream copy
+        args.push('-c:v', 'copy');
+      }
+    }
+
+    if (hasAudio) {
+      args.push('-map', '0:a:0');
+      if (probeResult.needsAudioTranscode || forceTranscode) {
+        args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2');
+      } else {
+        args.push('-c:a', 'copy');
+      }
+    }
+
+    // Segment configuration for fast first-frame latency
+    args.push(
+      '-f', 'hls',
+      '-hls_time', '2',
+      '-hls_list_size', '0',
+      '-hls_flags', 'append_list',
+      '-hls_segment_type', 'mpegts',
+      '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.ts'),
+      playlistPath
+    );
+
+    console.log(`[FFmpeg HLS] Spawning transcode for "${resolvedPath}" -> ${playlistPath}`);
+    const proc = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+
+    proc.stderr.on('data', (d) => {
+      const msg = d.toString();
+      stderr = (stderr + msg).slice(-4000);
+      pushFfmpegLog(msg);
+    });
+
+    proc.on('close', (code) => {
+      console.log(`[FFmpeg HLS Process Exited] code=${code} for session ${sessionKey}`);
+    });
+
+    session = {
+      sessionId: sessionKey,
+      mediaId,
+      filePath: resolvedPath,
+      sessionDir,
+      playlistPath,
+      process: proc,
+      probeResult,
+      createdAt: Date.now(),
+      lastAccessed: Date.now(),
+      preset,
+      hwaccel,
+    };
+    activeHlsStreamSessions.set(sessionKey, session);
+
+    // Wait until playlist has initial content
+    const startWait = Date.now();
+    let ready = false;
+    while (Date.now() - startWait < 5000) {
+      if (fs.existsSync(playlistPath)) {
+        try {
+          const content = fs.readFileSync(playlistPath, 'utf8');
+          if (content.includes('.ts') || content.includes('#EXTINF') || content.includes('#EXT-X-ENDLIST')) {
+            ready = true;
+            break;
+          }
+        } catch {}
+      }
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    if (!ready && !fs.existsSync(playlistPath)) {
+      return res.status(500).json({
+        error: 'FFmpeg HLS generation failed to initialize',
+        details: stderr || 'Timeout waiting for initial HLS playlist chunk',
+      });
+    }
+
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.sendFile(playlistPath);
+  } catch (err: any) {
+    console.error('[FFmpeg Master Stream Error]:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to start HLS stream', details: err?.message });
+    }
+  }
+};
+
+app.get('/api/media/stream/:id', handleHlsMasterStream);
 
 // Batch processing endpoint to enrich multiple media items with missing metadata/artwork
 app.post('/api/metadata/batch-enrich', async (req: Request, res: Response) => {

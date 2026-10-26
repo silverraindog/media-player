@@ -6364,12 +6364,27 @@ app.post('/api/media/stream/:id/stop', (req: Request, res: Response) => {
 app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) => {
   const { id, segment } = req.params;
 
-  // Find corresponding session
+  if (segment === 'index.m3u8' || segment.endsWith('.m3u8')) {
+    return handleHlsMasterStream(req, res);
+  }
+
+  // Find corresponding session (prefer most recently active session)
   let matchedSession: HlsSessionRecord | undefined;
   for (const session of activeHlsStreamSessions.values()) {
     if (session.mediaId === id || session.sessionId.startsWith(id)) {
-      matchedSession = session;
-      break;
+      if (!matchedSession || session.lastAccessed > matchedSession.lastAccessed) {
+        matchedSession = session;
+      }
+    }
+  }
+
+  // Fallback: check if any active session contains this segment file
+  if (!matchedSession) {
+    for (const session of activeHlsStreamSessions.values()) {
+      if (fs.existsSync(path.join(session.sessionDir, segment))) {
+        matchedSession = session;
+        break;
+      }
     }
   }
 
@@ -6380,9 +6395,9 @@ app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) =>
   matchedSession.lastAccessed = Date.now();
   const filePath = path.join(matchedSession.sessionDir, segment);
 
-  // If segment file is still being created/written by FFmpeg, poll for up to 3000ms
+  // If segment file is still being created/written by FFmpeg, poll for up to 4000ms
   const startWait = Date.now();
-  while (!fs.existsSync(filePath) && Date.now() - startWait < 3000) {
+  while ((!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) && Date.now() - startWait < 4000) {
     await new Promise((r) => setTimeout(r, 100));
   }
 
@@ -6406,6 +6421,22 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
   console.log(`[handleHlsMasterStream] Called for media: ${req.params.id}, query: ${JSON.stringify(req.query)}`);
   try {
     const mediaId = req.params.id;
+
+    // Safety guard: If a client or browser resolved a relative .ts segment directly against /api/media/stream/:id
+    if (mediaId && mediaId.endsWith('.ts')) {
+      for (const session of activeHlsStreamSessions.values()) {
+        const segPath = path.join(session.sessionDir, mediaId);
+        if (fs.existsSync(segPath)) {
+          session.lastAccessed = Date.now();
+          res.setHeader('Content-Type', 'video/mp2t');
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          return res.sendFile(segPath);
+        }
+      }
+      return res.status(404).send(`Segment not found: ${mediaId}`);
+    }
+
     const rawPath = ((req.query.path || req.query.file || mediaId) as string || '').trim();
     const preset = (req.query.preset as string) || '';
     const hwaccel = (req.query.hwaccel as string || '').toLowerCase();
@@ -6422,13 +6453,18 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + forceTranscode + audioTrack).digest('hex').slice(0, 10)}`;
     let session = activeHlsStreamSessions.get(sessionKey);
 
-    // If session exists, verify playlist exists
+    // If session exists, verify playlist exists and has content
     if (session && fs.existsSync(session.playlistPath)) {
-      session.lastAccessed = Date.now();
-      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      return res.sendFile(session.playlistPath);
+      try {
+        const existingContent = fs.readFileSync(session.playlistPath, 'utf8');
+        if (existingContent.includes('.ts') || existingContent.includes('#EXT-X-ENDLIST')) {
+          session.lastAccessed = Date.now();
+          res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          return res.sendFile(session.playlistPath);
+        }
+      } catch {}
     }
 
     // Otherwise, create a new FFmpeg HLS transcode session
@@ -6551,26 +6587,35 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     };
     activeHlsStreamSessions.set(sessionKey, session);
 
-    // Wait until playlist has initial content
+    // Wait until playlist has initial content AND at least one segment file exists on disk
     const startWait = Date.now();
     let ready = false;
-    while (Date.now() - startWait < 5000) {
+    while (Date.now() - startWait < 6000) {
       if (fs.existsSync(playlistPath)) {
         try {
           const content = fs.readFileSync(playlistPath, 'utf8');
-          if (content.includes('.ts') || content.includes('#EXTINF') || content.includes('#EXT-X-ENDLIST')) {
-            ready = true;
-            break;
+          if (content.includes('.ts') || content.includes('#EXT-X-ENDLIST')) {
+            const match = content.match(/([a-zA-Z0-9_\-\.]+\.ts)/);
+            if (match && match[1]) {
+              const segFile = path.join(sessionDir, match[1]);
+              if (fs.existsSync(segFile) && fs.statSync(segFile).size > 512) {
+                ready = true;
+                break;
+              }
+            } else if (content.includes('#EXT-X-ENDLIST')) {
+              ready = true;
+              break;
+            }
           }
         } catch {}
       }
       await new Promise((r) => setTimeout(r, 120));
     }
 
-    if (!ready && !fs.existsSync(playlistPath)) {
+    if (!ready) {
       return res.status(500).json({
-        error: 'FFmpeg HLS generation failed to initialize',
-        details: stderr || 'Timeout waiting for initial HLS playlist chunk',
+        error: 'FFmpeg HLS generation failed to initialize or timed out',
+        details: stderr || 'Timeout waiting for initial HLS playlist chunk and segment',
       });
     }
 
@@ -6586,6 +6631,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
   }
 };
 
+app.get('/api/media/stream/:id/index.m3u8', handleHlsMasterStream);
 app.get('/api/media/stream/:id', handleHlsMasterStream);
 
 // Batch processing endpoint to enrich multiple media items with missing metadata/artwork

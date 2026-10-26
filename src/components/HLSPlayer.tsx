@@ -149,6 +149,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [isRecovering, setIsRecovering] = useState<boolean>(false);
   const [restartNonce, setRestartNonce] = useState<number>(0);
   const lastKnownTimeRef = useRef<number>(0);
+  const initialSeekPendingRef = useRef<number | null>(null);
+  const lastFailureTimestampRef = useRef<number>(0);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // 1. Fetch backend ffprobe metadata for this file
@@ -179,15 +181,43 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     fetchProbeData();
   }, [fetchProbeData]);
 
-  // Fetch settings on mount
+  // Reset retry count when media changes
+  useEffect(() => {
+    setRetryCount(0);
+    lastKnownTimeRef.current = 0;
+    initialSeekPendingRef.current = null;
+    setStreamError(null);
+  }, [mediaId]);
+
+  // Safe seek helper: avoids out-of-bounds seeks that crash HTMLMediaElement pipelines
+  const safeSeek = useCallback((targetTime: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isNaN(targetTime) || !isFinite(targetTime) || targetTime < 0) return;
+
+    const maxDuration = video.duration && isFinite(video.duration) && video.duration > 0
+      ? Math.max(0, video.duration - 0.5)
+      : (probeData?.format?.duration ? Math.max(0, probeData.format.duration - 0.5) : targetTime);
+
+    const clamped = Math.min(targetTime, maxDuration);
+    try {
+      video.currentTime = clamped;
+      setCurrentTime(clamped);
+      lastKnownTimeRef.current = clamped;
+    } catch (e) {
+      console.warn('[HLSPlayer] Safe seek warning:', e);
+    }
+  }, [probeData]);
+
+  // Fetch settings on mount (stores initial timestamp in pending ref without crashing video element)
   useEffect(() => {
     fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`)
       .then(r => r.json())
       .then(d => {
         if (d.success && d.settings) {
           setSubtitleOffset(d.settings.subtitle_offset_ms || 0);
-          if (videoRef.current && d.settings.last_watched_seconds > 0) {
-            videoRef.current.currentTime = d.settings.last_watched_seconds;
+          if (d.settings.last_watched_seconds > 0) {
+            initialSeekPendingRef.current = d.settings.last_watched_seconds;
           }
         }
       })
@@ -209,31 +239,66 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     return () => clearTimeout(timer);
   }, [subtitleOffset, currentTime, mediaId]);
 
-  // Stream failure auto-recovery: stop backend FFmpeg process and restart stream from last known timestamp
-  const handleStreamFailure = useCallback(async () => {
-    if (isRecovering) return;
-    setIsRecovering(true);
-    if (videoRef.current) {
+  // Playback stabilization monitor: resets retryCount after 4 seconds of uninterrupted playing
+  useEffect(() => {
+    if (!isPlaying || isRecovering || hlsStatus !== 'streaming') return;
+    const timer = setTimeout(() => {
+      setRetryCount((prev) => {
+        if (prev > 0) {
+          console.log('[HLSPlayer] Stream stabilized without errors. Resetting retry count.');
+          return 0;
+        }
+        return prev;
+      });
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [isPlaying, isRecovering, hlsStatus]);
+
+  // Stream failure auto-recovery state machine
+  const handleStreamFailure = useCallback(async (reason: string = 'Stream stall') => {
+    const now = Date.now();
+    // Debounce duplicate triggers within 2000ms
+    if (now - lastFailureTimestampRef.current < 2000) {
+      return;
+    }
+    lastFailureTimestampRef.current = now;
+
+    if (videoRef.current && videoRef.current.currentTime > 0) {
       lastKnownTimeRef.current = videoRef.current.currentTime;
     }
-    console.warn('[HLSPlayer] Stream decoding or network failure detected. Restarting FFmpeg stream from timestamp:', lastKnownTimeRef.current);
-    
+    console.warn(`[HLSPlayer] Stream failure: ${reason}. Retry attempt: ${retryCount + 1}/3`);
+
+    // If max retries reached, halt auto-recovery loop and show actionable error UI
+    if (retryCount >= 2) {
+      console.error('[HLSPlayer] Maximum recovery retries reached (3). Halting auto-recovery loop.');
+      setIsRecovering(false);
+      setHlsStatus('error');
+      setStreamError('Playback interrupted: stream decoding or network error persisted after 3 recovery attempts. The source media or transcode settings may need adjustment.');
+      if (hlsInstanceRef.current) {
+        hlsInstanceRef.current.destroy();
+        hlsInstanceRef.current = null;
+      }
+      return;
+    }
+
     const nextCount = retryCount + 1;
-    if (nextCount >= 3) {
-      setRetryCount(0);
+    setRetryCount(nextCount);
+    setIsRecovering(true);
+    setHlsStatus('initializing');
+
+    // On 2nd retry, disable hardware acceleration in case GPU codec decoder stalled
+    if (hwAccel) {
+      console.warn('[HLSPlayer] Disabling hardware acceleration for retry attempt', nextCount);
+      setHwAccel(false);
+    }
+
+    // Force video element re-creation on attempt 2 to purge corrupted WebGL/decoder pipeline
+    if (nextCount >= 2) {
       setForceRemount(prev => prev + 1);
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
       }
-    } else {
-      setRetryCount(nextCount);
-    }
-
-    // Disable hardware acceleration after first failure
-    if (retryCount >= 1 && hwAccel) {
-      console.warn('[HLSPlayer] Disabling hardware acceleration due to stream failures');
-      setHwAccel(false);
     }
 
     try {
@@ -245,13 +310,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
     setTimeout(() => {
       setStreamError(null);
-      setHlsStatus('initializing');
       setRestartNonce((prev) => prev + 1);
       setIsRecovering(false);
     }, 1200);
-  }, [mediaId, isRecovering, hwAccel, retryCount]);
+  }, [mediaId, hwAccel, retryCount]);
 
-  // 2. Build HLS Master stream URL
+  // 2. Build HLS Master stream URL with explicit /index.m3u8 path
   const streamSrc = useMemo(() => {
     const params = new URLSearchParams();
     if (filePath) params.set('path', filePath);
@@ -260,12 +324,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
-    return `/api/media/stream/${encodeURIComponent(mediaId)}${qs ? `?${qs}` : ''}`;
+    return `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
   }, [mediaId, filePath, activePreset, hwAccel, activeAudioTrack, restartNonce]);
-
-  useEffect(() => {
-      setRetryCount(0);
-  }, [streamSrc]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -297,12 +357,22 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setHlsStatus('streaming');
-        if (lastKnownTimeRef.current > 0 && video) {
-          video.currentTime = lastKnownTimeRef.current;
-        }
         video.play().catch(() => {
           setIsPlaying(false);
         });
+      });
+
+      hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => {
+        if (data.details && data.details.totalduration) {
+          setDuration(data.details.totalduration);
+        }
+        if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
+          const seekTo = initialSeekPendingRef.current;
+          initialSeekPendingRef.current = null;
+          safeSeek(seekTo);
+        } else if (lastKnownTimeRef.current > 0 && Math.abs(video.currentTime - lastKnownTimeRef.current) > 2) {
+          safeSeek(lastKnownTimeRef.current);
+        }
       });
 
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
@@ -315,13 +385,17 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         console.warn('[HLS.js Stream Event]:', data);
         if (data.fatal) {
           switch (data.type) {
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.warn('[HLS.js] Fatal media error, attempting media recovery...');
+              try {
+                hls.recoverMediaError();
+              } catch {
+                handleStreamFailure('Media error recovery failed');
+              }
+              break;
             case Hls.ErrorTypes.NETWORK_ERROR:
               console.warn('[HLS.js] Fatal network error, auto-restarting FFmpeg stream...');
-              handleStreamFailure();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.warn('[HLS.js] Fatal media error, auto-restarting FFmpeg stream...');
-              handleStreamFailure();
+              handleStreamFailure('Network error');
               break;
             default:
               setHlsStatus('error');
@@ -338,15 +412,19 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       video.src = streamSrc;
       video.addEventListener('loadedmetadata', () => {
         setHlsStatus('streaming');
-        if (lastKnownTimeRef.current > 0 && video) {
-          video.currentTime = lastKnownTimeRef.current;
+        if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
+          const seekTo = initialSeekPendingRef.current;
+          initialSeekPendingRef.current = null;
+          safeSeek(seekTo);
+        } else if (lastKnownTimeRef.current > 0) {
+          safeSeek(lastKnownTimeRef.current);
         }
         video.play().catch(() => setIsPlaying(false));
       });
       video.addEventListener('error', () => {
         const errCode = video.error?.code;
         if (errCode === 2 || errCode === 3) {
-          handleStreamFailure();
+          handleStreamFailure(`Native HLS error code ${errCode}`);
         } else {
           setHlsStatus('error');
           setStreamError('Native browser HLS pipeline could not play stream.');
@@ -363,7 +441,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         hlsInstanceRef.current = null;
       }
     };
-  }, [streamSrc, handleStreamFailure]);
+  }, [streamSrc, handleStreamFailure, safeSeek]);
 
   // 4. Send stop command to backend on unmount to release FFmpeg child process
   useEffect(() => {
@@ -420,6 +498,14 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     } else if (probeData?.format?.duration) {
       setDuration(probeData.format.duration);
     }
+
+    if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
+      const seekTo = initialSeekPendingRef.current;
+      initialSeekPendingRef.current = null;
+      safeSeek(seekTo);
+    } else if (lastKnownTimeRef.current > 0) {
+      safeSeek(lastKnownTimeRef.current);
+    }
   };
 
   const togglePlay = () => {
@@ -437,25 +523,28 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
   const handleSeek = (newTime: number) => {
     if (!videoRef.current) return;
-    const startTime = videoRef.current.currentTime;
+    const startTime = currentTime;
     const endTime = newTime;
-    const duration = 200; // ms
+    const animDuration = 180; // ms
     let startTimestamp: number | null = null;
 
+    // Apply single safe seek to video player
+    safeSeek(endTime);
+
+    // Smoothly animate the scrub needle across timeline to avoid abrupt visual jumps
     const animate = (timestamp: number) => {
       if (!startTimestamp) startTimestamp = timestamp;
       const elapsed = timestamp - startTimestamp;
-      const progress = Math.min(elapsed / duration, 1);
+      const progress = Math.min(elapsed / animDuration, 1);
       const easedProgress = 1 - Math.pow(1 - progress, 3); // easeOutCubic
       
-      const seekTime = startTime + (endTime - startTime) * easedProgress;
-      if (videoRef.current) {
-          videoRef.current.currentTime = seekTime;
-          setCurrentTime(seekTime);
-      }
+      const needleTime = startTime + (endTime - startTime) * easedProgress;
+      setCurrentTime(needleTime);
 
       if (progress < 1) {
         requestAnimationFrame(animate);
+      } else {
+        setCurrentTime(endTime);
       }
     };
     requestAnimationFrame(animate);
@@ -793,8 +882,11 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
               <div className="flex items-center gap-2 mt-3">
                 <button
                   onClick={() => {
+                    setRetryCount(0);
                     setStreamError(null);
+                    setForceRemount((prev) => prev + 1);
                     fetchProbeData();
+                    setRestartNonce((prev) => prev + 1);
                   }}
                   className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5"
                 >
@@ -861,8 +953,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             const vid = e.currentTarget;
             const code = vid.error?.code;
             if (code === 2 || code === 3) {
-              console.warn(`[HLSPlayer] Video element error (code ${code}): network or decode failure. Triggering auto-recovery.`);
-              handleStreamFailure();
+              console.warn(`[HLSPlayer] Video element error (code ${code}): network or decode failure.`);
+              handleStreamFailure(`Video element error code ${code}`);
             } else if (code) {
               setHlsStatus('error');
               setStreamError(`Video element encountered error code ${code}`);

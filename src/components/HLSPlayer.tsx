@@ -100,6 +100,7 @@ interface HLSPlayerProps {
   initialPreset?: string;
   initialHwAccel?: boolean;
   initialCodec?: string;
+  initialForceTranscode?: boolean;
   onClose?: () => void;
   onFallbackDirect?: () => void;
 }
@@ -115,6 +116,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   initialPreset = '',
   initialHwAccel = false,
   initialCodec = 'h264',
+  initialForceTranscode = false,
   onClose,
   onFallbackDirect,
 }) => {
@@ -149,6 +151,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [activePreset, setActivePreset] = useState<string>(initialPreset);
   const [hwAccel, setHwAccel] = useState<boolean>(initialHwAccel);
   const [activeCodec, setActiveCodec] = useState<string>(initialCodec);
+  const [forceTranscode, setForceTranscode] = useState<boolean>(initialForceTranscode);
   const [activeAudioTrack, setActiveAudioTrack] = useState<number>(0);
   const [activeSubtitleTrack, setActiveSubtitleTrack] = useState<number>(-1); // -1 = Disabled
   const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // ms
@@ -161,6 +164,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const lastKnownTimeRef = useRef<number>(0);
   const initialSeekPendingRef = useRef<number | null>(null);
   const lastFailureTimestampRef = useRef<number>(0);
+  const mediaRecoveryAttemptsRef = useRef<number>(0);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // 1. Fetch backend ffprobe metadata for this file
@@ -257,6 +261,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   useEffect(() => {
     if (!isPlaying || isRecovering || hlsStatus !== 'streaming') return;
     const timer = setTimeout(() => {
+      mediaRecoveryAttemptsRef.current = 0;
       setRetryCount((prev) => {
         if (prev > 0) {
           console.log('[HLSPlayer] Stream stabilized without errors. Resetting retry count.');
@@ -302,11 +307,16 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     setIsRecovering(true);
     setHlsStatus('initializing');
 
-    // On 2nd retry, disable hardware acceleration in case GPU codec decoder stalled
+    // On recovery, automatically fall back to software H.264 transcoding
+    if (activeCodec !== 'h264') {
+      console.warn('[HLSPlayer] Stream recovery: Switching codec from', activeCodec, 'to h264 for maximum compatibility');
+      setActiveCodec('h264');
+    }
     if (hwAccel) {
-      console.warn('[HLSPlayer] Disabling hardware acceleration for retry attempt', nextCount);
+      console.warn('[HLSPlayer] Stream recovery: Disabling hardware acceleration for retry attempt', nextCount);
       setHwAccel(false);
     }
+    setForceTranscode(true);
 
     // Force video element re-creation on attempt 2 to purge corrupted WebGL/decoder pipeline
     if (nextCount >= 2) {
@@ -339,11 +349,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (activePreset) params.set('preset', activePreset);
     if (hwAccel) params.set('hwaccel', 'true');
     if (activeCodec) params.set('codec', activeCodec);
+    if (forceTranscode || retryCount > 0) params.set('forceTranscode', 'true');
     if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
     return `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
-  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, activeAudioTrack, restartNonce]);
+  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, forceTranscode, retryCount, activeAudioTrack, restartNonce]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -402,12 +413,18 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         if (data.details && data.details.totalduration) {
           setDuration(data.details.totalduration);
         }
+        // Only seek if the target timestamp is already within the loaded/generated duration
+        const totalAvail = data.details?.totalduration || 0;
         if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
           const seekTo = initialSeekPendingRef.current;
-          initialSeekPendingRef.current = null;
-          safeSeek(seekTo);
+          if (totalAvail > 0 && seekTo <= totalAvail) {
+            initialSeekPendingRef.current = null;
+            safeSeek(seekTo);
+          }
         } else if (lastKnownTimeRef.current > 0 && Math.abs(video.currentTime - lastKnownTimeRef.current) > 2) {
-          safeSeek(lastKnownTimeRef.current);
+          if (totalAvail > 0 && lastKnownTimeRef.current <= totalAvail) {
+            safeSeek(lastKnownTimeRef.current);
+          }
         }
       });
 
@@ -422,14 +439,31 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         console.warn('[HLS.js Stream Event]:', data);
         if (data.fatal) {
           switch (data.type) {
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              console.warn('[HLS.js] Fatal media error, attempting media recovery...');
-              try {
-                hls.recoverMediaError();
-              } catch {
-                handleStreamFailure('Media error recovery failed');
+            case Hls.ErrorTypes.MEDIA_ERROR: {
+              const attempts = mediaRecoveryAttemptsRef.current;
+              mediaRecoveryAttemptsRef.current += 1;
+              if (attempts === 0) {
+                console.warn('[HLS.js] Fatal media error (attempt 1): calling recoverMediaError()...');
+                try {
+                  hls.recoverMediaError();
+                } catch {
+                  handleStreamFailure('Media error recovery failed');
+                }
+              } else if (attempts === 1) {
+                console.warn('[HLS.js] Fatal media error (attempt 2): swapping audio codec and recovering...');
+                try {
+                  hls.swapAudioCodec();
+                  hls.recoverMediaError();
+                } catch {
+                  handleStreamFailure('Swap audio codec recovery failed');
+                }
+              } else {
+                console.warn('[HLS.js] Fatal media error persists after internal recovery. Auto-recovering stream...');
+                mediaRecoveryAttemptsRef.current = 0;
+                handleStreamFailure('Decode error persistent');
               }
               break;
+            }
             case Hls.ErrorTypes.NETWORK_ERROR:
               console.warn('[HLS.js] Fatal network error, auto-restarting FFmpeg stream...');
               handleStreamFailure('Network error');
@@ -1035,12 +1069,11 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
           onError={(e) => {
             const vid = e.currentTarget;
             const code = vid.error?.code;
-            if (code === 2 || code === 3) {
-              console.warn(`[HLSPlayer] Video element error (code ${code}): network or decode failure.`);
-              handleStreamFailure(`Video element error code ${code}`);
-            } else if (code) {
-              setHlsStatus('error');
-              setStreamError(`Video element encountered error code ${code}`);
+            console.warn(`[HLSPlayer] Video element error (code ${code}):`, vid.error?.message);
+            // When Hls.js is active, allow Hls.js to manage buffer and decode recovery through its events
+            // Only trigger manual stream failure if Hls.js is not active (native HLS) or fatal stall
+            if (!hlsInstanceRef.current && (code === 2 || code === 3)) {
+              handleStreamFailure(`Native video error code ${code}`);
             }
           }}
           onClick={togglePlay}

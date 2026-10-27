@@ -509,6 +509,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 currentEpisodeTitle={currentEpisode ? `S${String(currentEpisode.seasonNumber).padStart(2, '0')}E${String(currentEpisode.episodeNumber).padStart(2, '0')}: ${currentEpisode.title}` : undefined}
                 initialHwAccel={hardwareAccel}
                 initialCodec={selectedCodec}
+                initialForceTranscode={useTranscode || transcodeStatus.state === 'ready'}
                 onClose={onClose}
                 onFallbackDirect={() => {
                   setUseTranscode(false);

@@ -6521,9 +6521,9 @@ app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) =>
   matchedSession.lastAccessed = Date.now();
   const filePath = path.join(matchedSession.sessionDir, segment);
 
-  // If segment file is still being created/written by FFmpeg, poll for up to 4000ms
+  // If segment file is still being created/written by FFmpeg, poll for up to 8000ms
   const startWait = Date.now();
-  while ((!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) && Date.now() - startWait < 4000) {
+  while ((!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) && Date.now() - startWait < 8000) {
     await new Promise((r) => setTimeout(r, 100));
   }
 
@@ -6537,6 +6537,12 @@ app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) =>
   } else if (segment.endsWith('.ts')) {
     res.setHeader('Content-Type', 'video/mp2t');
     res.setHeader('Cache-Control', 'public, max-age=3600');
+  } else if (segment.endsWith('.m4s')) {
+    res.setHeader('Content-Type', 'video/iso.segment');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+  } else if (segment.endsWith('.mp4')) {
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
   }
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.sendFile(filePath);
@@ -6548,13 +6554,15 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
   try {
     const mediaId = req.params.id;
 
-    // Safety guard: If a client or browser resolved a relative .ts segment directly against /api/media/stream/:id
-    if (mediaId && mediaId.endsWith('.ts')) {
+    // Safety guard: If a client or browser resolved a relative segment directly against /api/media/stream/:id
+    if (mediaId && (mediaId.endsWith('.ts') || mediaId.endsWith('.m4s') || mediaId.endsWith('.mp4'))) {
       for (const session of activeHlsStreamSessions.values()) {
         const segPath = path.join(session.sessionDir, mediaId);
         if (fs.existsSync(segPath)) {
           session.lastAccessed = Date.now();
-          res.setHeader('Content-Type', 'video/mp2t');
+          if (mediaId.endsWith('.m4s')) res.setHeader('Content-Type', 'video/iso.segment');
+          else if (mediaId.endsWith('.mp4')) res.setHeader('Content-Type', 'video/mp4');
+          else res.setHeader('Content-Type', 'video/mp2t');
           res.setHeader('Cache-Control', 'public, max-age=3600');
           res.setHeader('Access-Control-Allow-Origin', '*');
           return res.sendFile(segPath);
@@ -6635,30 +6643,29 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       args.push('-map', '0:v:0');
       if (probeResult.needsVideoTranscode || forceTranscode || preset || hwaccel || codec !== 'h264') {
         let vEncoder = 'libx264';
+        const isLinux = os.platform() === 'linux';
         if (codec === 'hevc') {
-          if (hwaccel === 'videotoolbox') vEncoder = 'hevc_videotoolbox';
+          if (hwaccel === 'videotoolbox' && !isLinux) vEncoder = 'hevc_videotoolbox';
           else if (hwaccel === 'nvenc') vEncoder = 'hevc_nvenc';
           else if (hwaccel === 'vaapi') vEncoder = 'hevc_vaapi';
           else vEncoder = 'libx265';
         } else if (codec === 'av1') {
-          if (hwaccel === 'videotoolbox') vEncoder = 'av1_videotoolbox';
+          if (hwaccel === 'videotoolbox' && !isLinux) vEncoder = 'av1_videotoolbox';
           else if (hwaccel === 'nvenc') vEncoder = 'av1_nvenc';
           else if (hwaccel === 'vaapi') vEncoder = 'av1_vaapi';
-          else vEncoder = 'libsvtav1';
+          else vEncoder = 'libx264'; // fallback to universal libx264 if av1 software encoder is missing
         } else {
-          if (hwaccel === 'videotoolbox') vEncoder = 'h264_videotoolbox';
+          if (hwaccel === 'videotoolbox' && !isLinux) vEncoder = 'h264_videotoolbox';
           else if (hwaccel === 'nvenc') vEncoder = 'h264_nvenc';
           else if (hwaccel === 'vaapi') vEncoder = 'h264_vaapi';
           else vEncoder = 'libx264';
         }
 
         args.push('-c:v', vEncoder);
-        if (vEncoder === 'libx264') {
+        if (vEncoder === 'libx264' || vEncoder.includes('h264')) {
           args.push('-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24', '-sc_threshold', '0');
-        } else if (vEncoder === 'libx265') {
+        } else if (vEncoder === 'libx265' || vEncoder.includes('hevc')) {
           args.push('-preset', 'medium', '-crf', '28', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24');
-        } else if (vEncoder === 'libsvtav1') {
-          args.push('-preset', '6', '-crf', '30', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24');
         }
 
         // Apply resolution and bitrate presets
@@ -6670,8 +6677,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
           args.push('-vf', 'scale=-2:480', '-b:v', '1000k', '-maxrate', '1400k', '-bufsize', '2500k');
         }
       } else {
-        // Direct stream copy
-        args.push('-c:v', 'copy');
+        // Direct stream copy with Annex B bitstream filter so HLS.js demuxer can parse NAL units cleanly
+        args.push('-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb');
       }
     }
 
@@ -6684,23 +6691,36 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       const needsThisAudioTranscode = targetAudioCodec !== 'aac' && targetAudioCodec !== 'mp3';
 
       if (needsThisAudioTranscode || probeResult.needsAudioTranscode || forceTranscode) {
-        args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2');
+        args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000');
       } else {
-        args.push('-c:a', 'copy');
+        args.push('-c:a', 'copy', '-bsf:a', 'aac_adtstoasc');
       }
     }
 
-    // Segment configuration for fast first-frame latency
-    args.push(
-      '-f', 'hls',
-      '-hls_init_time', '1',
-      '-hls_time', '2',
-      '-hls_list_size', '0',
-      '-hls_flags', 'append_list',
-      '-hls_segment_type', 'mpegts',
-      '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.ts'),
-      playlistPath
-    );
+    // Segment configuration for fast first-frame latency with independent segments
+    const isFmp4 = codec === 'hevc' || codec === 'av1';
+    if (isFmp4) {
+      args.push(
+        '-f', 'hls',
+        '-hls_time', '2',
+        '-hls_list_size', '0',
+        '-hls_segment_type', 'fmp4',
+        '-hls_fmp4_init_filename', 'init.mp4',
+        '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.m4s'),
+        '-hls_flags', 'independent_segments',
+        playlistPath
+      );
+    } else {
+      args.push(
+        '-f', 'hls',
+        '-hls_time', '2',
+        '-hls_list_size', '0',
+        '-hls_segment_type', 'mpegts',
+        '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.ts'),
+        '-hls_flags', 'independent_segments',
+        playlistPath
+      );
+    }
 
     console.log(`[FFmpeg HLS] Spawning transcode for "${resolvedPath}" -> ${playlistPath}`);
     const proc = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -6748,11 +6768,11 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       if (fs.existsSync(playlistPath)) {
         try {
           const content = fs.readFileSync(playlistPath, 'utf8');
-          if (content.includes('.ts') || content.includes('#EXT-X-ENDLIST')) {
-            const match = content.match(/([a-zA-Z0-9_\-\.]+\.ts)/);
+          if (content.includes('.ts') || content.includes('.m4s') || content.includes('#EXT-X-ENDLIST')) {
+            const match = content.match(/([a-zA-Z0-9_\-\.]+\.(?:ts|m4s))/);
             if (match && match[1]) {
               const segFile = path.join(sessionDir, match[1]);
-              if (fs.existsSync(segFile) && fs.statSync(segFile).size > 512) {
+              if (fs.existsSync(segFile) && fs.statSync(segFile).size > 256) {
                 ready = true;
                 break;
               }

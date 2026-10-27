@@ -6566,6 +6566,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     const rawPath = ((req.query.path || req.query.file || mediaId) as string || '').trim();
     const preset = (req.query.preset as string) || '';
     const hwaccel = (req.query.hwaccel as string || '').toLowerCase();
+    const codec = (req.query.codec as string || 'h264').toLowerCase();
     const forceTranscode = req.query.forceTranscode === 'true';
     const audioTrack = parseInt((req.query.audioTrack as string) || '0', 10);
 
@@ -6576,7 +6577,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       });
     }
 
-    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + forceTranscode + audioTrack).digest('hex').slice(0, 10)}`;
+    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + codec + forceTranscode + audioTrack).digest('hex').slice(0, 10)}`;
     let session = activeHlsStreamSessions.get(sessionKey);
 
     // If session exists, verify playlist exists and has content
@@ -6609,11 +6610,10 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       '-y',
     ];
 
-    // Hardware acceleration flags
-    const platform = os.platform();
+    // Hardware acceleration flags (opt-in for maximum decoding stability across environments)
     if (hwaccel === 'auto' || hwaccel === 'true') {
       args.push('-hwaccel', 'auto');
-    } else if (hwaccel === 'videotoolbox' || (hwaccel === '' && platform === 'darwin')) {
+    } else if (hwaccel === 'videotoolbox') {
       args.push('-hwaccel', 'videotoolbox');
     } else if (hwaccel === 'nvenc') {
       args.push('-hwaccel', 'cuda');
@@ -6633,15 +6633,32 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
 
     if (hasVideo) {
       args.push('-map', '0:v:0');
-      if (probeResult.needsVideoTranscode || forceTranscode || preset || hwaccel) {
+      if (probeResult.needsVideoTranscode || forceTranscode || preset || hwaccel || codec !== 'h264') {
         let vEncoder = 'libx264';
-        if (hwaccel === 'videotoolbox') vEncoder = 'h264_videotoolbox';
-        else if (hwaccel === 'nvenc') vEncoder = 'h264_nvenc';
-        else if (hwaccel === 'vaapi') vEncoder = 'h264_vaapi';
+        if (codec === 'hevc') {
+          if (hwaccel === 'videotoolbox') vEncoder = 'hevc_videotoolbox';
+          else if (hwaccel === 'nvenc') vEncoder = 'hevc_nvenc';
+          else if (hwaccel === 'vaapi') vEncoder = 'hevc_vaapi';
+          else vEncoder = 'libx265';
+        } else if (codec === 'av1') {
+          if (hwaccel === 'videotoolbox') vEncoder = 'av1_videotoolbox';
+          else if (hwaccel === 'nvenc') vEncoder = 'av1_nvenc';
+          else if (hwaccel === 'vaapi') vEncoder = 'av1_vaapi';
+          else vEncoder = 'libsvtav1';
+        } else {
+          if (hwaccel === 'videotoolbox') vEncoder = 'h264_videotoolbox';
+          else if (hwaccel === 'nvenc') vEncoder = 'h264_nvenc';
+          else if (hwaccel === 'vaapi') vEncoder = 'h264_vaapi';
+          else vEncoder = 'libx264';
+        }
 
         args.push('-c:v', vEncoder);
         if (vEncoder === 'libx264') {
           args.push('-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24', '-sc_threshold', '0');
+        } else if (vEncoder === 'libx265') {
+          args.push('-preset', 'medium', '-crf', '28', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24');
+        } else if (vEncoder === 'libsvtav1') {
+          args.push('-preset', '6', '-crf', '30', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24');
         }
 
         // Apply resolution and bitrate presets

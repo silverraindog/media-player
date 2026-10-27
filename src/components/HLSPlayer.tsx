@@ -99,6 +99,7 @@ interface HLSPlayerProps {
   currentEpisodeTitle?: string;
   initialPreset?: string;
   initialHwAccel?: boolean;
+  initialCodec?: string;
   onClose?: () => void;
   onFallbackDirect?: () => void;
 }
@@ -113,6 +114,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   currentEpisodeTitle,
   initialPreset = '',
   initialHwAccel = false,
+  initialCodec = 'h264',
   onClose,
   onFallbackDirect,
 }) => {
@@ -146,6 +148,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   // Transcoding presets & HW accel & Audio Track & Subtitle Track configuration
   const [activePreset, setActivePreset] = useState<string>(initialPreset);
   const [hwAccel, setHwAccel] = useState<boolean>(initialHwAccel);
+  const [activeCodec, setActiveCodec] = useState<string>(initialCodec);
   const [activeAudioTrack, setActiveAudioTrack] = useState<number>(0);
   const [activeSubtitleTrack, setActiveSubtitleTrack] = useState<number>(-1); // -1 = Disabled
   const [subtitleOffset, setSubtitleOffset] = useState<number>(0); // ms
@@ -335,11 +338,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (effectivePath) params.set('path', effectivePath);
     if (activePreset) params.set('preset', activePreset);
     if (hwAccel) params.set('hwaccel', 'true');
+    if (activeCodec) params.set('codec', activeCodec);
     if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
     return `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
-  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeAudioTrack, restartNonce]);
+  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, activeAudioTrack, restartNonce]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -367,8 +371,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         enableWorker: true,
         lowLatencyMode: true,
         backBufferLength: 60,
-        fragLoadingTimeOut: 20000,
-        manifestLoadingTimeOut: 15000,
+        fragLoadingTimeOut: 30000,
+        manifestLoadingTimeOut: 20000,
+        levelLoadingTimeOut: 20000,
+        fragLoadingMaxRetry: 6,
+        manifestLoadingMaxRetry: 6,
+        fragLoadingMaxRetryTimeout: 8000,
       });
 
       // Bind media first, then load source on MEDIA_ATTACHED
@@ -718,6 +726,18 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             <Cpu className={`w-3.5 h-3.5 ${hwAccel ? 'animate-pulse' : ''}`} />
             <span className="hidden md:inline">GPU Accel: {hwAccel ? 'ON' : 'OFF'}</span>
           </button>
+
+          {/* Encoder / Codec Selector Dropdown */}
+          <select
+            value={activeCodec}
+            onChange={(e) => setActiveCodec(e.target.value)}
+            className="bg-slate-900/90 text-cyan-300 border border-cyan-500/40 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:border-cyan-500"
+            title="Select Hardware Acceleration Encoder (H.264, HEVC, AV1)"
+          >
+            <option value="h264">Encoder: H.264</option>
+            <option value="hevc">Encoder: HEVC</option>
+            <option value="av1">Encoder: AV1</option>
+          </select>
 
           {/* Audio Track Selector Dropdown */}
           {probeData?.audioStreams && probeData.audioStreams.length > 0 && (

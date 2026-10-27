@@ -997,6 +997,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 >
                   <option value="h264">H.264 (Compatible)</option>
                   <option value="hevc">HEVC (Efficient)</option>
+                  <option value="av1">AV1 (Next-Gen)</option>
                 </select>
               </div>
               <div className="space-y-1">

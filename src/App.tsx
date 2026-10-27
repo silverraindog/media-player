@@ -365,6 +365,9 @@ const INITIAL_TRANSCODE_CONFIG: TranscodeConfig = {
     nvenc: false,
     videotoolbox: false,
     vaapi: false,
+    h264: true,
+    hevc: true,
+    av1: false,
   },
   presets: [],
 };

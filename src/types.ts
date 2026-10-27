@@ -124,7 +124,7 @@ export interface TranscodePreset {
 }
 
 export interface TranscodeConfig {
-  codec: 'h264' | 'hevc';
+  codec: 'h264' | 'hevc' | 'av1';
   resolution: '720p' | '1080p' | '4k' | 'original';
   maxCacheSizeGb: number;
   hwAccel: {
@@ -132,6 +132,9 @@ export interface TranscodeConfig {
     nvenc: boolean;
     videotoolbox: boolean;
     vaapi: boolean;
+    h264?: boolean;
+    hevc?: boolean;
+    av1?: boolean;
   };
   presets: TranscodePreset[];
   activePresetId?: string;

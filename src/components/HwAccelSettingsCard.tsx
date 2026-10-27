@@ -90,19 +90,45 @@ export const HwAccelSettingsCard: React.FC<HwAccelSettingsCardProps> = ({
         </div>
 
         {hwAccel.enabled && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2 animate-in fade-in">
-            {(['nvenc', 'videotoolbox', 'vaapi'] as const).map((key) => (
-              <div key={key} className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${hwSupport?.[key] ? 'border-slate-700 bg-slate-900/90' : 'border-slate-800 bg-slate-950 opacity-50'}`}>
-                <span className="capitalize font-medium text-slate-300">{key === 'videotoolbox' ? 'VideoToolbox' : key}</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(hwAccel[key])}
-                  disabled={!hwSupport?.[key]}
-                  onChange={() => toggleAccel(key)}
-                  className="accent-cyan-500 cursor-pointer"
-                />
-              </div>
-            ))}
+          <div className="space-y-3 mt-3 animate-in fade-in">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Hardware Accelerators</div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {(['nvenc', 'videotoolbox', 'vaapi'] as const).map((key) => (
+                <div key={key} className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${hwSupport?.[key] ? 'border-slate-700 bg-slate-900/90' : 'border-slate-800 bg-slate-950 opacity-50'}`}>
+                  <span className="capitalize font-medium text-slate-300">{key === 'videotoolbox' ? 'VideoToolbox' : key}</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(hwAccel[key as keyof typeof hwAccel])}
+                    disabled={!hwSupport?.[key]}
+                    onChange={() => toggleAccel(key)}
+                    className="accent-cyan-500 cursor-pointer"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 pt-1">Hardware Acceleration Encoders (AV1 / HEVC / H.264)</div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {(['h264', 'hevc', 'av1'] as const).map((enc) => (
+                <div key={enc} className="p-2.5 rounded-xl border border-slate-700 bg-slate-900/90 text-xs flex items-center justify-between">
+                  <span className="uppercase font-semibold text-cyan-300">{enc}</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(hwAccel[enc as keyof typeof hwAccel])}
+                    onChange={() => {
+                      onUpdateTranscodeConfig({
+                        ...transcodeConfig,
+                        hwAccel: {
+                          ...hwAccel,
+                          [enc]: !hwAccel[enc],
+                        },
+                      });
+                    }}
+                    className="accent-cyan-500 cursor-pointer"
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         )}
         

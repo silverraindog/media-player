@@ -89,6 +89,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
 
   const [hardwareAccel, setHardwareAccel] = useState(transcodeConfig?.hwAccel?.enabled ?? true);
+  const [selectedCodec, setSelectedCodec] = useState<'h264' | 'hevc' | 'av1'>(transcodeConfig?.codec || 'h264');
   const [pipelineHealth, setPipelineHealth] = useState({ fps: 60, latency: 0 });
   const [lastPruneTime, setLastPruneTime] = useState(0);
 
@@ -373,6 +374,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               <span className="hidden md:inline">HW Accel: {hardwareAccel ? 'ON' : 'OFF'}</span>
             </button>
 
+            {/* Encoder / Codec Selector Dropdown */}
+            <select
+              value={selectedCodec}
+              onChange={(e) => setSelectedCodec(e.target.value as any)}
+              className="bg-slate-900 border border-cyan-500/40 text-cyan-300 rounded-lg px-2 py-1.5 text-xs font-medium cursor-pointer"
+              title="Select Hardware Acceleration Encoder (H.264, HEVC, AV1)"
+            >
+              <option value="h264">Encoder: H.264</option>
+              <option value="hevc">Encoder: HEVC</option>
+              <option value="av1">Encoder: AV1</option>
+            </select>
+
             <button
               onClick={handleStartTranscode}
               className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow"
@@ -495,6 +508,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 currentTrackTitle={currentTrack?.title}
                 currentEpisodeTitle={currentEpisode ? `S${String(currentEpisode.seasonNumber).padStart(2, '0')}E${String(currentEpisode.episodeNumber).padStart(2, '0')}: ${currentEpisode.title}` : undefined}
                 initialHwAccel={hardwareAccel}
+                initialCodec={selectedCodec}
                 onClose={onClose}
                 onFallbackDirect={() => {
                   setUseTranscode(false);

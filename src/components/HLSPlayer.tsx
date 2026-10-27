@@ -380,14 +380,18 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
         enableWorker: true,
-        lowLatencyMode: true,
+        lowLatencyMode: false,
         backBufferLength: 60,
         fragLoadingTimeOut: 30000,
         manifestLoadingTimeOut: 20000,
         levelLoadingTimeOut: 20000,
-        fragLoadingMaxRetry: 6,
-        manifestLoadingMaxRetry: 6,
-        fragLoadingMaxRetryTimeout: 8000,
+        fragLoadingMaxRetry: 8,
+        manifestLoadingMaxRetry: 8,
+        fragLoadingMaxRetryTimeout: 10000,
+        maxBufferHole: 0.8,
+        nudgeOffset: 0.2,
+        nudgeMaxRetry: 5,
+        startPosition: 0,
       });
 
       // Bind media first, then load source on MEDIA_ATTACHED
@@ -464,10 +468,22 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
               }
               break;
             }
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              console.warn('[HLS.js] Fatal network error, auto-restarting FFmpeg stream...');
-              handleStreamFailure('Network error');
+            case Hls.ErrorTypes.NETWORK_ERROR: {
+              const netRetries = (hls as any).__netRetryCount || 0;
+              if (netRetries < 2) {
+                (hls as any).__netRetryCount = netRetries + 1;
+                console.warn(`[HLS.js] Network error, reloading segments (attempt ${netRetries + 1}/2)...`);
+                try {
+                  hls.startLoad();
+                } catch {
+                  handleStreamFailure('Network error');
+                }
+              } else {
+                console.warn('[HLS.js] Fatal network error persists, auto-restarting FFmpeg stream...');
+                handleStreamFailure('Network error');
+              }
               break;
+            }
             default:
               setHlsStatus('error');
               setStreamError(`HLS stream playback error: ${data.details || 'Transcoder stream stalled'}`);

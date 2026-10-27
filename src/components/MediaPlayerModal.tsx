@@ -33,6 +33,7 @@ import {
 import { MatroskaPlayer } from './MatroskaPlayer';
 import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
+import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { transcodeService, TranscodeStatusInfo, MediaInfo } from '../services/TranscodeService';
 
 export interface MediaPlayerModalProps {
@@ -124,19 +125,29 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     setCurrentTrack(initialTrack);
   }, [initialTrack]);
 
-  // Determine active media path
+  // Determine active media path resolved to mounted local path (e.g. /Volumes/media/...)
   const activeFilePath = useMemo(() => {
+    let resolved = '';
     if (media.type === 'album') {
-      if (currentTrack?.playbackUrl) return currentTrack.playbackUrl;
-      return media.playbackUrl || media.path || '';
+      resolved = currentTrack?.playbackUrl || media.playbackUrl || media.path || '';
+    } else if (media.type === 'series') {
+      resolved = currentEpisode?.playbackUrl || currentEpisode?.filePath || media.playbackUrl || media.path || '';
+    } else {
+      resolved = media.playbackUrl || media.path || '';
     }
-    if (media.type === 'series') {
-      if (currentEpisode?.playbackUrl) return currentEpisode.playbackUrl;
-      if (currentEpisode?.filePath) return currentEpisode.filePath;
-      return media.playbackUrl || media.path || '';
+
+    if (!resolved) {
+      const server = sambaConfig?.server || '192.168.1.25';
+      const share = sambaConfig?.share || 'media';
+      const folder = media.recommendedFolderStructure || (media.type === 'series' ? 'Series' : 'Movies');
+      const filename = media.recommendedFilenames?.[0] || `${media.title || 'media'}.mkv`;
+      const cleanFolder = folder.replace(/^\/+/, '').replace(/\/+$/, '');
+      resolved = `//${server}/${share}/${cleanFolder ? `${cleanFolder}/` : ''}${filename}`;
     }
-    return media.playbackUrl || media.path || '';
-  }, [media, currentEpisode, currentTrack]);
+
+    const mountRoot = sambaConfig?.mountPath || sambaConfig?.baseMountPath || `/Volumes/${sambaConfig?.share || 'media'}`;
+    return getMountedDisplayPath(resolved, mountRoot, sambaConfig?.share || 'media');
+  }, [media, currentEpisode, currentTrack, sambaConfig]);
 
   const isMkv = useMemo(() => {
     const p = (activeFilePath || media.matchedFilename || '').toLowerCase();
@@ -692,6 +703,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             <span className="flex items-center gap-1.5">
               <Radio className="w-3.5 h-3.5 text-emerald-400" />
               <span>Share: <strong className="text-slate-200">//{sambaConfig.server}/{sambaConfig.share}</strong></span>
+              {activeFilePath && (
+                <span className="text-slate-400 font-mono text-[11px] truncate max-w-[180px] sm:max-w-xs" title={activeFilePath}>
+                  ({activeFilePath.split('/').pop()})
+                </span>
+              )}
             </span>
             <span className="px-2 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-800 text-[11px] flex items-center gap-1 font-mono">
               <CheckCircle className="w-3 h-3 text-emerald-400" />

@@ -6353,25 +6353,59 @@ function resolveStreamSourceFile(targetPath: string, queryParams: any = {}): str
   }
 
   // Fallback placeholder generation so the user can test FFmpeg HLS transcoding immediately
-  // even if external Samba volumes are unmounted in web environments
+  // even if external Samba volumes are unmounted in web environments (like //192.168.1.25/media/...)
   try {
-    const titleLabel = path.basename(cleanRawStripped) || 'sambavault_media';
-    const previewFile = path.join(os.tmpdir(), `sambavault_stream_${titleLabel.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`);
-    if (!fs.existsSync(previewFile) || fs.statSync(previewFile).size < 1000) {
+    const masterPreview = path.join(os.tmpdir(), 'sambavault_master_preview.mp4');
+    let hasMaster = false;
+    try {
+      hasMaster = fs.existsSync(masterPreview) && fs.statSync(masterPreview).size > 1000;
+    } catch {}
+
+    if (!hasMaster) {
       const ffmpegBin = resolveFfmpegBinary();
       const genCmd = [
         '-nostdin', '-y',
-        '-f', 'lavfi', '-i', 'testsrc=duration=45:size=1280x720:rate=24',
-        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=45',
+        '-f', 'lavfi', '-i', 'testsrc=duration=60:size=1280x720:rate=24',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=60',
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '128k',
+        '-g', '24', '-keyint_min', '24', '-sc_threshold', '0',
+        '-c:a', 'aac', '-b:a', '128k', '-ar', '48000',
         '-movflags', '+faststart',
-        previewFile
+        masterPreview
       ];
-      spawnSync(ffmpegBin, genCmd, { timeout: 4000 });
+      spawnSync(ffmpegBin, genCmd, { timeout: 15000 });
+      try {
+        hasMaster = fs.existsSync(masterPreview) && fs.statSync(masterPreview).size > 1000;
+      } catch {}
     }
-    if (fs.existsSync(previewFile)) return previewFile;
-  } catch (err) {}
+
+    if (hasMaster) {
+      const rawBase = path.basename(cleanRawStripped) || 'sambavault_media';
+      const cleanLabel = rawBase.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const previewFile = path.join(os.tmpdir(), `sambavault_stream_${cleanLabel}.mp4`);
+      if (!fs.existsSync(previewFile)) {
+        try {
+          fs.copyFileSync(masterPreview, previewFile);
+        } catch {
+          return masterPreview;
+        }
+      }
+      return previewFile;
+    }
+  } catch (err) {
+    console.warn('[resolveStreamSourceFile] Fallback preview error:', err);
+  }
+
+  // Last-resort fallback: check if any existing sambavault_*.mp4 exists in /tmp
+  try {
+    const tmpFiles = fs.readdirSync(os.tmpdir());
+    for (const f of tmpFiles) {
+      if (f.startsWith('sambavault_') && f.endsWith('.mp4')) {
+        const full = path.join(os.tmpdir(), f);
+        if (fs.statSync(full).size > 1000) return full;
+      }
+    }
+  } catch {}
 
   return null;
 }
@@ -6521,13 +6555,21 @@ app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) =>
   matchedSession.lastAccessed = Date.now();
   const filePath = path.join(matchedSession.sessionDir, segment);
 
-  // If segment file is still being created/written by FFmpeg, poll for up to 8000ms
+  // If segment file is still being created/written by FFmpeg, poll for up to 12000ms
   const startWait = Date.now();
-  while ((!fs.existsSync(filePath) || fs.statSync(filePath).size === 0) && Date.now() - startWait < 8000) {
+  const getFileSize = (p: string) => {
+    try {
+      return fs.existsSync(p) ? fs.statSync(p).size : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  while (getFileSize(filePath) === 0 && Date.now() - startWait < 12000) {
     await new Promise((r) => setTimeout(r, 100));
   }
 
-  if (!fs.existsSync(filePath)) {
+  if (getFileSize(filePath) === 0) {
     return res.status(404).send(`Segment not ready: ${segment}`);
   }
 
@@ -6687,14 +6729,9 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       const audioSpecifier = selectedAudio ? `0:${selectedAudio.index}` : `0:a:${audioTrack}`;
       args.push('-map', audioSpecifier);
 
-      const targetAudioCodec = selectedAudio ? (selectedAudio.codec_name || '').toLowerCase() : (probeResult.audio?.codec_name || '').toLowerCase();
-      const needsThisAudioTranscode = targetAudioCodec !== 'aac' && targetAudioCodec !== 'mp3';
-
-      if (needsThisAudioTranscode || probeResult.needsAudioTranscode || forceTranscode) {
-        args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000');
-      } else {
-        args.push('-c:a', 'copy', '-bsf:a', 'aac_adtstoasc');
-      }
+      // Always encode audio to clean AAC stereo 48kHz for HLS streams:
+      // Guarantees ADTS sync headers for MPEG-TS and clean AAC for fMP4, avoiding all audio demux errors
+      args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000');
     }
 
     // Segment configuration for fast first-frame latency with independent segments
@@ -6712,6 +6749,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       );
     } else {
       args.push(
+        '-muxpreload', '0',
+        '-muxdelay', '0',
         '-f', 'hls',
         '-hls_time', '2',
         '-hls_list_size', '0',

@@ -66,10 +66,75 @@ import {
   Sliders,
   Target,
   Clock,
+  Film,
 } from 'lucide-react';
 import { ConsoleLogEntry, ConsoleLogLevel, ConsoleLogCategory, SyncIncident, SambaConfig } from '../types';
 import * as d3 from 'd3';
 import { logger, LOG_LEVEL_RANKS } from '../utils/loggerService';
+
+// Helpers for classifying and highlighting FFmpeg transcode logs
+export const isFfmpegErrorLine = (text: string): boolean => {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const errorPatterns = [
+    'error',
+    'failed',
+    'invalid data found',
+    'non-monotonic dts',
+    'non-monotonous',
+    'hwaccel_init_failed',
+    'conversion failed',
+    'broken pipe',
+    'sigterm',
+    'exited with code',
+    'decoder',
+    'cannot find',
+    'unsupported',
+    'fatal',
+    'corrupt',
+    'stalled',
+    'buffer full',
+    'transcode failed',
+    'interruption',
+  ];
+  return errorPatterns.some((pattern) => lower.includes(pattern));
+};
+
+export const isFfmpegWarnLine = (text: string): boolean => {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  const warnPatterns = [
+    'warn',
+    'warning',
+    'dropped',
+    'frame dropped',
+    'retry',
+    'recovering',
+    'past duration',
+    'missing keyframe',
+    'restarting ffmpeg',
+  ];
+  return warnPatterns.some((pattern) => lower.includes(pattern));
+};
+
+export const isFfmpegLog = (entry: ConsoleLogEntry | string): boolean => {
+  const text = typeof entry === 'string'
+    ? entry
+    : `${entry.category} ${entry.message} ${JSON.stringify(entry.details || '')}`;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('ffmpeg') ||
+    lower.includes('transcode') ||
+    lower.includes('hls') ||
+    lower.includes('ffprobe') ||
+    lower.includes('libx264') ||
+    lower.includes('videotoolbox') ||
+    lower.includes('nvenc') ||
+    lower.includes('vaapi') ||
+    lower.includes('mpegts') ||
+    (typeof entry !== 'string' && entry.category === 'Transcode')
+  );
+};
 import {
   resolveSambaPathToLocalMount,
   PathAnalysisRecord,
@@ -983,6 +1048,64 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   // Samba Traversability & Path Diagnostics States
   const [onlyShowAccessBarriers, setOnlyShowAccessBarriers] = useState(false);
+  const [onlyShowFfmpegErrors, setOnlyShowFfmpegErrors] = useState(false);
+  const [clearNotification, setClearNotification] = useState<{ message: string; timestamp: number } | null>(null);
+
+  // Live FFmpeg Transcode Stream Stderr & Output State
+  const [ffmpegLogs, setFfmpegLogs] = useState<string[]>([]);
+  const [ffmpegErrorCount, setFfmpegErrorCount] = useState(0);
+  const [ffmpegActiveSessions, setFfmpegActiveSessions] = useState(0);
+  const [isFfmpegLoading, setIsFfmpegLoading] = useState(false);
+  const [isFfmpegAutoRefresh, setIsFfmpegAutoRefresh] = useState(true);
+  const [ffmpegSearchQuery, setFfmpegSearchQuery] = useState('');
+  const [ffmpegViewMode, setFfmpegViewMode] = useState<'all' | 'errors' | 'warnings'>('all');
+
+  // Transcode Queue State
+  const [transcodeQueue, setTranscodeQueue] = useState<any[]>([]);
+  const [queueLoading, setQueueLoading] = useState(false);
+
+  const fetchTranscodeQueue = async () => {
+    try {
+      setQueueLoading(true);
+      const res = await fetch('/api/media/transcode/queue');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.queue)) {
+          setTranscodeQueue(data.queue);
+          if (typeof data.activeCount === 'number') {
+            setFfmpegActiveSessions(data.activeCount);
+          }
+        }
+      }
+    } catch {}
+    finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const handlePrioritizeTask = async (sessionId: string) => {
+    try {
+      const res = await fetch(`/api/media/transcode/queue/${encodeURIComponent(sessionId)}/prioritize`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        await fetchTranscodeQueue();
+      }
+    } catch {}
+  };
+
+  const handleCancelTask = async (sessionId: string) => {
+    try {
+      const res = await fetch(`/api/media/transcode/queue/${encodeURIComponent(sessionId)}/cancel`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        await fetchTranscodeQueue();
+        await fetchFfmpegLogs();
+      }
+    } catch {}
+  };
+
   const actualUserPath = (
     sambaConfig?.hostPath ||
     sambaConfig?.mountPath ||
@@ -1013,11 +1136,46 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   // Diagnostic Tab Toggles
   const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<
-    'performance' | 'scanner-logs' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info' | 'scan-errors-chart' | 'discovery-ratio'
+    'performance' | 'scanner-logs' | 'ffmpeg-transcode' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info' | 'scan-errors-chart' | 'discovery-ratio'
   >('scanner-logs');
 
   const logsEndRef = useRef<HTMLDivElement | null>(null);
   const scannerLogsEndRef = useRef<HTMLDivElement | null>(null);
+  const ffmpegLogsEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Fetch backend FFmpeg stream stderr lines and transcode queue
+  const fetchFfmpegLogs = async () => {
+    try {
+      setIsFfmpegLoading(true);
+      const res = await fetch('/api/media/stream/logs?limit=300');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.lines)) {
+          setFfmpegLogs(data.lines);
+          if (typeof data.errorCount === 'number') {
+            setFfmpegErrorCount(data.errorCount);
+          }
+          if (typeof data.activeSessionsCount === 'number') {
+            setFfmpegActiveSessions(data.activeSessionsCount);
+          }
+        }
+      }
+      await fetchTranscodeQueue();
+    } catch (err) {
+      // ignore transient polling errors
+    } finally {
+      setIsFfmpegLoading(false);
+    }
+  };
+
+  // Poll FFmpeg logs and queue periodically when viewing or active
+  useEffect(() => {
+    fetchFfmpegLogs();
+    if (activeDiagnosticTab === 'ffmpeg-transcode' && isFfmpegAutoRefresh) {
+      const interval = setInterval(fetchFfmpegLogs, 2500);
+      return () => clearInterval(interval);
+    }
+  }, [activeDiagnosticTab, isFfmpegAutoRefresh]);
 
   // Subscribe to Logger
   useEffect(() => {
@@ -1149,6 +1307,12 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   // Filter logs
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
+      // Explicit FFmpeg error logs filter
+      if (onlyShowFfmpegErrors) {
+        const isFfmpeg = isFfmpegLog(log);
+        const isErr = log.level === 'error' || isFfmpegErrorLine(log.message);
+        if (!isFfmpeg || !isErr) return false;
+      }
       if (selectedLevel !== 'all' && log.level !== selectedLevel) return false;
       if (selectedCategory !== 'all' && log.category !== selectedCategory) return false;
       if (onlyShowAccessBarriers) {
@@ -1169,7 +1333,30 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
       }
       return true;
     });
-  }, [logs, selectedLevel, selectedCategory, searchQuery, onlyShowAccessBarriers]);
+  }, [logs, selectedLevel, selectedCategory, searchQuery, onlyShowAccessBarriers, onlyShowFfmpegErrors]);
+
+  // Total detected FFmpeg error count across system log stream and backend ring buffer
+  const totalFfmpegErrorsCount = useMemo(() => {
+    const errorCountInLogs = logs.filter(
+      (l) => isFfmpegLog(l) && (l.level === 'error' || isFfmpegErrorLine(l.message))
+    ).length;
+    return Math.max(errorCountInLogs, ffmpegErrorCount);
+  }, [logs, ffmpegErrorCount]);
+
+  // Filter backend FFmpeg stderr / stream logs for dedicated tab
+  const filteredFfmpegStreamLogs = useMemo(() => {
+    return ffmpegLogs.filter((line) => {
+      const isErr = isFfmpegErrorLine(line);
+      const isWarn = isFfmpegWarnLine(line);
+      if (ffmpegViewMode === 'errors' && !isErr) return false;
+      if (ffmpegViewMode === 'warnings' && !isErr && !isWarn) return false;
+      if (ffmpegSearchQuery) {
+        const q = ffmpegSearchQuery.toLowerCase();
+        return line.toLowerCase().includes(q);
+      }
+      return true;
+    });
+  }, [ffmpegLogs, ffmpegViewMode, ffmpegSearchQuery]);
 
   // Filter Scanner Logs
   const filteredScannerLogs = useMemo(() => {
@@ -1256,9 +1443,39 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  const handleClearLogs = () => {
+  // Clear all console and transcode logs for troubleshooting failed sessions
+  const handleClearLogs = async () => {
     logger.clearLogs();
     setLogs([]);
+    setExpandedLogId(null);
+    try {
+      await fetch('/api/media/stream/logs/clear', { method: 'POST' });
+      setFfmpegLogs([]);
+      setFfmpegErrorCount(0);
+    } catch (e) {
+      console.warn('Failed to clear backend FFmpeg logs:', e);
+    }
+    setClearNotification({
+      message: 'Console logs & FFmpeg transcode buffers cleared successfully. Clean slate ready for troubleshooting.',
+      timestamp: Date.now(),
+    });
+    setTimeout(() => setClearNotification(null), 4000);
+  };
+
+  // Specifically clear backend FFmpeg transcode session logs
+  const handleClearFfmpegLogsOnly = async () => {
+    try {
+      await fetch('/api/media/stream/logs/clear', { method: 'POST' });
+      setFfmpegLogs([]);
+      setFfmpegErrorCount(0);
+    } catch (e) {
+      console.warn('Failed to clear FFmpeg transcode logs:', e);
+    }
+    setClearNotification({
+      message: 'FFmpeg transcode stream stderr logs reset successfully.',
+      timestamp: Date.now(),
+    });
+    setTimeout(() => setClearNotification(null), 4000);
   };
 
   const handleClearScannerLogs = () => {
@@ -1288,6 +1505,28 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
         {/* Global Action Toolbar */}
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* FFmpeg Error Logs Quick-Filter Toggle */}
+          <button
+            type="button"
+            onClick={() => setOnlyShowFfmpegErrors(!onlyShowFfmpegErrors)}
+            title="Filter and highlight FFmpeg error logs and transcode issues"
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-sm ${
+              onlyShowFfmpegErrors
+                ? 'bg-rose-950 text-rose-300 border border-rose-500 ring-2 ring-rose-500/30'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+            }`}
+          >
+            <Film className={`w-4 h-4 ${onlyShowFfmpegErrors ? 'text-rose-400 animate-pulse' : 'text-slate-400'}`} />
+            <span>FFmpeg Errors</span>
+            <span
+              className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                totalFfmpegErrorsCount > 0 ? 'bg-rose-600 text-white font-bold' : 'bg-slate-700 text-slate-400'
+              }`}
+            >
+              {totalFfmpegErrorsCount}
+            </span>
+          </button>
+
           {/* Path Audit Barrier Filter Button */}
           <button
             type="button"
@@ -1320,6 +1559,17 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
             <span>Path Sandbox</span>
           </button>
 
+          {/* Prominent Clear Logs Button for Troubleshooting Failed Transcode Sessions */}
+          <button
+            type="button"
+            onClick={handleClearLogs}
+            title="Clear all console logs and wipe FFmpeg transcode error ring buffer for troubleshooting failed sessions"
+            className="px-3.5 py-2 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 hover:text-white border border-rose-700/80 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-sm active:scale-95"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+            <span>Clear Logs</span>
+          </button>
+
           {/* Trigger Live Sync Button */}
           {onTriggerSync && (
             <button
@@ -1333,6 +1583,23 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
           )}
         </div>
       </div>
+
+      {/* Clear Notification Banner */}
+      {clearNotification && (
+        <div className="bg-emerald-950/90 border border-emerald-500/60 rounded-2xl p-4 flex items-center justify-between text-xs text-emerald-200 animate-in fade-in slide-in-from-top-1 shadow-lg backdrop-blur-md">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="font-semibold">{clearNotification.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setClearNotification(null)}
+            className="text-emerald-400 hover:text-white p-1 cursor-pointer transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Sync Incident Notification Banner */}
       {activeIncident && (
@@ -1391,6 +1658,28 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
           <span className="px-1.5 py-0.2 rounded-full bg-slate-950/60 text-[10px] font-mono">
             {totalScannedCounter > 0 ? totalScannedCounter : scannerLogs.length}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveDiagnosticTab('ffmpeg-transcode')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shrink-0 ${
+            activeDiagnosticTab === 'ffmpeg-transcode'
+              ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/25 ring-1 ring-rose-400/50'
+              : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
+          }`}
+        >
+          <Film className={`w-3.5 h-3.5 ${totalFfmpegErrorsCount > 0 ? 'text-rose-300 animate-pulse' : 'text-rose-400'}`} />
+          <span>FFmpeg Transcode Session</span>
+          {totalFfmpegErrorsCount > 0 ? (
+            <span className="px-1.5 py-0.2 rounded-full bg-rose-950 text-rose-200 border border-rose-500 font-bold text-[10px] font-mono animate-pulse">
+              {totalFfmpegErrorsCount} ERR
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.2 rounded-full bg-slate-950/60 text-[10px] font-mono text-slate-400">
+              {ffmpegLogs.length}
+            </span>
+          )}
         </button>
 
         <button
@@ -1636,6 +1925,364 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
         </div>
       )}
 
+      {/* TAB CONTENT 1.5: FFMPEG TRANSCODE SESSION & ERROR MONITOR */}
+      {activeDiagnosticTab === 'ffmpeg-transcode' && (
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          {/* Header & Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+                <Film className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>FFmpeg Transcode Session &amp; Error Monitor</span>
+                  <span className={`w-2 h-2 rounded-full ${totalFfmpegErrorsCount > 0 ? 'bg-rose-500 animate-ping' : 'bg-emerald-500 animate-pulse'}`}></span>
+                </h4>
+                <p className="text-xs text-slate-400">
+                  Real-time inspection of on-the-fly HLS transcoding, video codec pipelines, and hardware acceleration errors
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsFfmpegAutoRefresh(!isFfmpegAutoRefresh)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+                  !isFfmpegAutoRefresh
+                    ? 'bg-amber-600/20 text-amber-300 border border-amber-500/30'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {!isFfmpegAutoRefresh ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                <span>{isFfmpegAutoRefresh ? 'Auto-Polling Active' : 'Auto-Polling Paused'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={fetchFfmpegLogs}
+                disabled={isFfmpegLoading}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isFfmpegLoading ? 'animate-spin text-rose-400' : ''}`} />
+                <span>Refresh</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleClearFfmpegLogsOnly}
+                title="Wipe FFmpeg stderr log ring buffer for troubleshooting failed transcode sessions"
+                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-rose-950/50 cursor-pointer active:scale-95"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-white" />
+                <span>Clear Logs</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Metrics KPI Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                Captured Stderr Lines
+              </span>
+              <div className="text-lg font-bold text-white font-mono">{ffmpegLogs.length}</div>
+              <p className="text-[10px] text-slate-500">Ring buffer capacity: 500 lines</p>
+            </div>
+
+            <div className={`p-3 rounded-xl border space-y-1 ${
+              totalFfmpegErrorsCount > 0
+                ? 'bg-rose-950/40 border-rose-600/60 ring-1 ring-rose-500/20'
+                : 'bg-slate-950/70 border-slate-800/80'
+            }`}>
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center justify-between">
+                <span>FFmpeg Errors</span>
+                {totalFfmpegErrorsCount > 0 && <AlertOctagon className="w-3.5 h-3.5 text-rose-400 animate-bounce" />}
+              </span>
+              <div className={`text-lg font-bold font-mono ${totalFfmpegErrorsCount > 0 ? 'text-rose-400 font-extrabold' : 'text-slate-400'}`}>
+                {totalFfmpegErrorsCount}
+              </div>
+              <p className="text-[10px] text-slate-500">
+                {totalFfmpegErrorsCount > 0 ? 'Transcode failures detected' : 'Zero transcode errors recorded'}
+              </p>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                Active HLS Sessions
+              </span>
+              <div className="text-lg font-bold text-cyan-400 font-mono">{ffmpegActiveSessions}</div>
+              <p className="text-[10px] text-slate-500">Concurrent live transcodes</p>
+            </div>
+
+            <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 space-y-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                Engine Status
+              </span>
+              <div className={`text-xs font-bold font-mono mt-1 ${totalFfmpegErrorsCount > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {totalFfmpegErrorsCount > 0 ? 'ATTENTION REQUIRED' : 'PIPELINE HEALTHY'}
+              </div>
+              <p className="text-[10px] text-slate-500">HLS MPEG-TS segmentation</p>
+            </div>
+          </div>
+
+          {/* Actionable Troubleshooting Card if Errors Exist */}
+          {totalFfmpegErrorsCount > 0 && (
+            <div className="bg-rose-950/60 border border-rose-500/60 rounded-xl p-4 shadow-lg flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <AlertOctagon className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <h5 className="text-xs font-bold text-rose-200 uppercase tracking-wider">
+                    Transcode Session Errors Highlighted Below
+                  </h5>
+                  <p className="text-xs text-rose-100 mt-0.5">
+                    FFmpeg encountered decoder/encoder stalls, non-monotonic timestamps, or invalid frames during streaming. Use "Clear Logs" below to purge prior errors before testing a revised stream session.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleClearFfmpegLogsOnly}
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Reset &amp; Clear Logs</span>
+              </button>
+            </div>
+          )}
+
+          {/* Transcode Queue Sub-Section */}
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <h5 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Transcode Queue &amp; Active Tasks ({transcodeQueue.length})
+                </h5>
+              </div>
+              <button
+                type="button"
+                onClick={fetchTranscodeQueue}
+                disabled={queueLoading}
+                className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-lg text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 ${queueLoading ? 'animate-spin' : ''}`} />
+                <span>Refresh Queue</span>
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              {transcodeQueue.length === 0 ? (
+                <div className="p-6 text-center text-slate-500 text-xs font-mono">
+                  No active FFmpeg transcode tasks in queue. Start video playback to initiate on-the-fly HLS transcoding.
+                </div>
+              ) : (
+                transcodeQueue.map((task) => {
+                  const isHighPriority = task.priority === 'high';
+                  return (
+                    <div
+                      key={task.sessionId}
+                      className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                        isHighPriority
+                          ? 'bg-amber-950/30 border-amber-500/50 ring-1 ring-amber-500/20'
+                          : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-white text-xs truncate max-w-md" title={task.fileName}>
+                            🎬 {task.fileName}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                            isHighPriority
+                              ? 'bg-amber-500 text-slate-950'
+                              : 'bg-indigo-950 text-indigo-300 border border-indigo-800/60'
+                          }`}>
+                            {isHighPriority ? '⚡ High Priority' : 'Normal'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800 text-[10px] font-mono">
+                            {task.preset}
+                          </span>
+                        </div>
+
+                        <div className="text-[11px] text-slate-400 font-mono truncate" title={task.filePath}>
+                          {task.filePath}
+                        </div>
+
+                        {/* Progress Bar & Stats */}
+                        <div className="space-y-1 pt-1">
+                          <div className="flex items-center justify-between text-[11px] font-mono">
+                            <span className="text-slate-300">
+                              Progress: <strong className="text-emerald-400">{task.progressPercent}%</strong>
+                            </span>
+                            <span className="text-slate-500">
+                              Segments: {task.segmentCount} ({task.encodedSeconds}s / {task.totalDuration ? `${Math.round(task.totalDuration)}s` : 'Live'})
+                            </span>
+                          </div>
+                          <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                isHighPriority
+                                  ? 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                                  : 'bg-gradient-to-r from-indigo-500 to-cyan-500'
+                              }`}
+                              style={{ width: `${task.progressPercent}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Actions: Prioritize & Cancel */}
+                      <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
+                        {!isHighPriority && (
+                          <button
+                            type="button"
+                            onClick={() => handlePrioritizeTask(task.sessionId)}
+                            className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                            title="Boost task scheduling priority"
+                          >
+                            <Zap className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Prioritize</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleCancelTask(task.sessionId)}
+                          className="px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-700/80 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                          title="Terminate transcode process and delete segment files"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                          <span>Cancel</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Search, Filter Mode & View Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Search FFmpeg logs by keyword, codec, segment, or error..."
+                value={ffmpegSearchQuery}
+                onChange={(e) => setFfmpegSearchQuery(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-rose-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setFfmpegViewMode('all')}
+                className={`px-3 py-1 rounded-lg font-medium transition cursor-pointer ${
+                  ffmpegViewMode === 'all'
+                    ? 'bg-indigo-600 text-white font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                All Output ({ffmpegLogs.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFfmpegViewMode('errors')}
+                className={`px-3 py-1 rounded-lg font-medium transition flex items-center gap-1 cursor-pointer ${
+                  ffmpegViewMode === 'errors'
+                    ? 'bg-rose-600 text-white font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <AlertOctagon className="w-3 h-3 text-rose-400" />
+                <span>Errors Only ({totalFfmpegErrorsCount})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFfmpegViewMode('warnings')}
+                className={`px-3 py-1 rounded-lg font-medium transition cursor-pointer ${
+                  ffmpegViewMode === 'warnings'
+                    ? 'bg-amber-600 text-white font-bold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Warnings &amp; Errors
+              </button>
+            </div>
+          </div>
+
+          {/* Stderr Terminal Output Stream */}
+          <div className="bg-slate-950 rounded-xl border border-slate-800/90 overflow-hidden font-mono text-xs">
+            <div className="bg-slate-900/80 px-4 py-2 border-b border-slate-800 flex items-center justify-between text-[11px] text-slate-400 font-semibold">
+              <span className="w-12 text-right pr-2">#</span>
+              <span className="flex-1">FFmpeg Process Stderr / Event Log Stream</span>
+              <span className="w-28 text-right">Severity</span>
+            </div>
+
+            <div className="max-h-[380px] overflow-y-auto divide-y divide-slate-900/60 p-2 space-y-1">
+              {filteredFfmpegStreamLogs.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 space-y-2">
+                  <Film className="w-8 h-8 mx-auto opacity-30 text-rose-400" />
+                  <p>No FFmpeg logs captured matching the current filter.</p>
+                  <p className="text-[11px] text-slate-600">
+                    Play a video in the HLSPlayer to spawn FFmpeg transcoding or adjust your filter above.
+                  </p>
+                </div>
+              ) : (
+                filteredFfmpegStreamLogs.map((line, idx) => {
+                  const isErr = isFfmpegErrorLine(line);
+                  const isWarn = isFfmpegWarnLine(line);
+                  return (
+                    <div
+                      key={`ffmpeg-line-${idx}`}
+                      className={`px-3 py-1.5 rounded-lg flex items-start gap-3 transition ${
+                        isErr
+                          ? 'bg-rose-950/70 border border-rose-600/70 text-rose-100 shadow-sm'
+                          : isWarn
+                          ? 'bg-amber-950/40 border border-amber-600/40 text-amber-200'
+                          : 'text-slate-300 hover:bg-slate-900/50'
+                      }`}
+                    >
+                      <span className="w-10 text-[10px] text-slate-600 font-mono shrink-0 text-right select-none pt-0.5">
+                        #{idx + 1}
+                      </span>
+
+                      <div className="flex-1 font-mono text-xs break-all leading-relaxed flex items-start gap-2">
+                        {isErr && <AlertOctagon className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />}
+                        {isWarn && !isErr && <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />}
+                        <span>{line}</span>
+                      </div>
+
+                      <div className="shrink-0 text-right">
+                        {isErr ? (
+                          <span className="px-2 py-0.5 rounded-full bg-rose-600 text-white font-bold text-[9px] uppercase tracking-wider shadow-sm">
+                            ERROR
+                          </span>
+                        ) : isWarn ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[9px] uppercase">
+                            WARN
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] uppercase">
+                            INFO
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={ffmpegLogsEndRef} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* TAB CONTENT 2: SCAN PERFORMANCE DASHBOARD */}
       {activeDiagnosticTab === 'performance' && (
         <ScanPerformanceDashboard onTriggerSync={onTriggerSync} />
@@ -1796,6 +2443,12 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
             <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
               System Log Stream ({filteredLogs.length})
             </h4>
+            {onlyShowFfmpegErrors && (
+              <span className="px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-600 text-[10px] font-mono font-bold flex items-center gap-1">
+                <Film className="w-3 h-3 text-rose-400" />
+                FFmpeg Errors Filter Active
+              </span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -1809,6 +2462,45 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
                 className="bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1 text-xs text-slate-200 focus:outline-none"
               />
             </div>
+
+            {/* FFmpeg Error Logs Quick-Filter Pill */}
+            <button
+              type="button"
+              onClick={() => setOnlyShowFfmpegErrors(!onlyShowFfmpegErrors)}
+              title="Filter exclusively for FFmpeg transcode failures and decoding errors"
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                onlyShowFfmpegErrors
+                  ? 'bg-rose-600 text-white shadow-sm ring-1 ring-rose-400'
+                  : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+              }`}
+            >
+              <Film className="w-3.5 h-3.5" />
+              <span>FFmpeg Errors</span>
+              {totalFfmpegErrorsCount > 0 && (
+                <span
+                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                    onlyShowFfmpegErrors ? 'bg-white text-rose-700 font-bold' : 'bg-rose-950 text-rose-300 border border-rose-800'
+                  }`}
+                >
+                  {totalFfmpegErrorsCount}
+                </span>
+              )}
+            </button>
+
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value as any)}
+              className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none"
+            >
+              <option value="all">All Categories</option>
+              <option value="Transcode">Transcode (FFmpeg)</option>
+              <option value="Sync">Sync</option>
+              <option value="Samba">Samba</option>
+              <option value="Mount">Mount</option>
+              <option value="Database">Database</option>
+              <option value="Scanner">Scanner</option>
+              <option value="System">System</option>
+            </select>
 
             <select
               value={selectedLevel}
@@ -1840,46 +2532,104 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
               <Download className="w-3.5 h-3.5" />
             </button>
 
+            {/* Clear Logs Button for Troubleshooting Failed Transcode Sessions */}
             <button
               type="button"
               onClick={handleClearLogs}
-              title="Clear logs"
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-rose-400 rounded-lg text-xs transition cursor-pointer"
+              title="Clear all console logs and wipe FFmpeg transcode buffers for troubleshooting failed sessions"
+              className="px-3 py-1 bg-rose-950/70 hover:bg-rose-900 border border-rose-700/80 text-rose-300 hover:text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Clear Logs</span>
             </button>
           </div>
         </div>
 
-        {/* Terminal Window */}
-        <div className="bg-slate-950 rounded-xl border border-slate-800/80 p-3 font-mono text-xs max-h-[260px] overflow-y-auto space-y-1">
+        {/* Terminal Window with Enhanced FFmpeg Error Highlighting */}
+        <div className="bg-slate-950 rounded-xl border border-slate-800/80 p-3 font-mono text-xs max-h-[300px] overflow-y-auto space-y-1.5">
           {filteredLogs.length === 0 ? (
-            <div className="text-slate-600 text-center py-6">No log messages found.</div>
+            <div className="text-slate-600 text-center py-8 space-y-1">
+              <Terminal className="w-6 h-6 mx-auto opacity-30 text-slate-500" />
+              <p>No log messages found matching the selected filter.</p>
+              {onlyShowFfmpegErrors && (
+                <p className="text-[11px] text-slate-500">
+                  Zero FFmpeg errors recorded. If a playback transcode failed, start playback or toggle filter off.
+                </p>
+              )}
+            </div>
           ) : (
             filteredLogs.map((log) => {
-              const isErr = log.level === 'error';
-              const isWarn = log.level === 'warn';
+              const isFfmpeg = isFfmpegLog(log);
+              const isFfmpegErr = isFfmpeg && (log.level === 'error' || isFfmpegErrorLine(log.message));
+              const isFfmpegWarn = isFfmpeg && !isFfmpegErr && (log.level === 'warn' || isFfmpegWarnLine(log.message));
+              const isErr = log.level === 'error' || isFfmpegErr;
+              const isWarn = log.level === 'warn' || isFfmpegWarn;
+              const isExpanded = expandedLogId === log.id;
+
               return (
                 <div
                   key={log.id}
-                  className={`flex items-start gap-2 py-0.5 leading-relaxed ${
-                    isErr ? 'text-rose-400' : isWarn ? 'text-amber-300' : 'text-slate-300'
+                  className={`rounded-lg transition ${
+                    isFfmpegErr
+                      ? 'bg-rose-950/70 border border-rose-600/70 border-l-4 border-l-rose-500 p-2 text-rose-100 shadow-md my-1'
+                      : isFfmpegWarn
+                      ? 'bg-amber-950/40 border border-amber-600/50 border-l-4 border-l-amber-500 p-1.5 text-amber-200 my-0.5'
+                      : isErr
+                      ? 'bg-rose-950/40 border border-rose-800/40 p-1 text-rose-300'
+                      : isWarn
+                      ? 'bg-amber-950/20 p-1 text-amber-300'
+                      : 'py-0.5 px-1 text-slate-300 hover:bg-slate-900/40'
                   }`}
                 >
-                  <span className="text-slate-500 shrink-0 text-[10px]">{log.timestamp}</span>
-                  <span
-                    className={`text-[9px] px-1 rounded font-bold uppercase shrink-0 ${
-                      isErr
-                        ? 'bg-rose-950 text-rose-300'
-                        : isWarn
-                        ? 'bg-amber-950 text-amber-300'
-                        : 'bg-slate-800 text-slate-400'
-                    }`}
-                  >
-                    {log.level}
-                  </span>
-                  <span className="text-[10px] text-indigo-400 shrink-0">[{log.category}]</span>
-                  <span className="break-all">{log.message}</span>
+                  <div className="flex items-start gap-2 leading-relaxed">
+                    <span className="text-slate-500 shrink-0 text-[10px] pt-0.5">{log.timestamp}</span>
+
+                    {/* Specific Badges */}
+                    {isFfmpegErr ? (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 bg-rose-600 text-white flex items-center gap-1 shadow-sm">
+                        <AlertOctagon className="w-3 h-3" />
+                        FFMPEG ERROR
+                      </span>
+                    ) : isFfmpegWarn ? (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 bg-amber-500 text-slate-950 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" />
+                        FFMPEG WARN
+                      </span>
+                    ) : (
+                      <span
+                        className={`text-[9px] px-1 rounded font-bold uppercase shrink-0 ${
+                          isErr
+                            ? 'bg-rose-950 text-rose-300'
+                            : isWarn
+                            ? 'bg-amber-950 text-amber-300'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {log.level}
+                      </span>
+                    )}
+
+                    <span className="text-[10px] text-indigo-400 shrink-0 font-bold">[{log.category}]</span>
+                    <span className={`break-all flex-1 ${isFfmpegErr ? 'font-semibold' : ''}`}>
+                      {log.message}
+                    </span>
+
+                    {log.details && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                        className="text-[10px] text-slate-400 hover:text-white px-1.5 py-0.5 rounded bg-slate-800/60 shrink-0 cursor-pointer"
+                      >
+                        {isExpanded ? 'Hide' : 'Details'}
+                      </button>
+                    )}
+                  </div>
+
+                  {isExpanded && log.details && (
+                    <div className="mt-2 p-2 bg-slate-950 rounded border border-slate-800 text-[11px] text-slate-300 font-mono overflow-x-auto">
+                      <pre>{typeof log.details === 'string' ? log.details : JSON.stringify(log.details, null, 2)}</pre>
+                    </div>
+                  )}
                 </div>
               );
             })

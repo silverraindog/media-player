@@ -20,6 +20,7 @@ import {
   Info,
   ChevronDown
 } from 'lucide-react';
+import { logger } from '../utils/loggerService';
 
 export interface StreamProbeData {
   format: {
@@ -123,6 +124,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [probeData, setProbeData] = useState<StreamProbeData | null>(null);
   const [probeLoading, setProbeLoading] = useState(true);
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [resolvedSourcePath, setResolvedSourcePath] = useState<string>(filePath || '');
+
+  // Keep resolvedSourcePath in sync with filePath prop
+  useEffect(() => {
+    if (filePath) setResolvedSourcePath(filePath);
+  }, [filePath]);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -155,11 +162,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
   // 1. Fetch backend ffprobe metadata for this file
   const fetchProbeData = useCallback(async () => {
-    if (!mediaId && !filePath) return;
+    if (!mediaId && !filePath && !resolvedSourcePath) return;
     setProbeLoading(true);
     setProbeError(null);
     try {
-      const qPath = filePath ? `?path=${encodeURIComponent(filePath)}` : '';
+      const targetP = resolvedSourcePath || filePath;
+      const qPath = targetP ? `?path=${encodeURIComponent(targetP)}` : '';
       const res = await fetch(`/api/media/stream/${encodeURIComponent(mediaId)}/probe${qPath}`);
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
@@ -169,13 +177,16 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       if (data.probe) {
         setProbeData(data.probe);
       }
+      if (data.filePath && !resolvedSourcePath) {
+        setResolvedSourcePath(data.filePath);
+      }
     } catch (err: any) {
       console.warn('[HLSPlayer] ffprobe fetch error:', err);
       setProbeError(err.message || 'Could not probe media streams');
     } finally {
       setProbeLoading(false);
     }
-  }, [mediaId, filePath]);
+  }, [mediaId, filePath, resolvedSourcePath]);
 
   useEffect(() => {
     fetchProbeData();
@@ -267,10 +278,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       lastKnownTimeRef.current = videoRef.current.currentTime;
     }
     console.warn(`[HLSPlayer] Stream failure: ${reason}. Retry attempt: ${retryCount + 1}/3`);
+    logger.warn(`[FFmpeg HLS Transcode] Stream interruption: ${reason} (Attempt ${retryCount + 1}/3)`, 'Transcode');
 
     // If max retries reached, halt auto-recovery loop and show actionable error UI
     if (retryCount >= 2) {
       console.error('[HLSPlayer] Maximum recovery retries reached (3). Halting auto-recovery loop.');
+      logger.error(`[FFmpeg HLS Transcode Error] Transcode session failed after 3 recovery attempts: ${reason}`, 'Transcode', { mediaId, title });
       setIsRecovering(false);
       setHlsStatus('error');
       setStreamError('Playback interrupted: stream decoding or network error persisted after 3 recovery attempts. The source media or transcode settings may need adjustment.');
@@ -318,14 +331,15 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   // 2. Build HLS Master stream URL with explicit /index.m3u8 path
   const streamSrc = useMemo(() => {
     const params = new URLSearchParams();
-    if (filePath) params.set('path', filePath);
+    const effectivePath = resolvedSourcePath || filePath;
+    if (effectivePath) params.set('path', effectivePath);
     if (activePreset) params.set('preset', activePreset);
     if (hwAccel) params.set('hwaccel', 'true');
     if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
     return `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
-  }, [mediaId, filePath, activePreset, hwAccel, activeAudioTrack, restartNonce]);
+  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeAudioTrack, restartNonce]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -334,6 +348,11 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
     setHlsStatus('initializing');
     setStreamError(null);
+
+    // Timeout safety: if stuck in 'initializing' for > 4.5s, transition to 'streaming'
+    const initTimer = setTimeout(() => {
+      setHlsStatus((prev) => (prev === 'initializing' ? 'streaming' : prev));
+    }, 4500);
 
     // Destroy existing instance if preset or params changed
     if (hlsInstanceRef.current) {
@@ -352,8 +371,16 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         manifestLoadingTimeOut: 15000,
       });
 
-      hls.loadSource(streamSrc);
+      // Bind media first, then load source on MEDIA_ATTACHED
       hls.attachMedia(video);
+
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        hls.loadSource(streamSrc);
+      });
+
+      hls.on(Hls.Events.MANIFEST_LOADED, () => {
+        setHlsStatus('streaming');
+      });
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setHlsStatus('streaming');
@@ -363,6 +390,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       });
 
       hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => {
+        setHlsStatus('streaming');
         if (data.details && data.details.totalduration) {
           setDuration(data.details.totalduration);
         }
@@ -376,6 +404,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       });
 
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        setHlsStatus('streaming');
         if (video.buffered.length > 0) {
           setBufferedEnd(video.buffered.end(video.buffered.length - 1));
         }
@@ -410,6 +439,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native Apple Safari / iOS HLS
       video.src = streamSrc;
+      video.load();
       video.addEventListener('loadedmetadata', () => {
         setHlsStatus('streaming');
         if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
@@ -421,6 +451,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         }
         video.play().catch(() => setIsPlaying(false));
       });
+      video.addEventListener('canplay', () => setHlsStatus('streaming'));
       video.addEventListener('error', () => {
         const errCode = video.error?.code;
         if (errCode === 2 || errCode === 3) {
@@ -436,12 +467,13 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
 
     return () => {
+      clearTimeout(initTimer);
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
       }
     };
-  }, [streamSrc, handleStreamFailure, safeSeek]);
+  }, [streamSrc, handleStreamFailure, safeSeek, forceRemount]);
 
   // 4. Send stop command to backend on unmount to release FFmpeg child process
   useEffect(() => {
@@ -869,6 +901,19 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             <div className="text-xs text-slate-400 mt-1 max-w-sm">
               {isRecovering ? 'Auto-recovering from stream decode or network interruption' : 'Analyzing media format via ffprobe and dynamically generating MPEG-TS chunks'}
             </div>
+            {hlsStatus === 'initializing' && (
+              <button
+                onClick={() => {
+                  setHlsStatus('streaming');
+                  if (videoRef.current) {
+                    videoRef.current.play().catch(() => setIsPlaying(false));
+                  }
+                }}
+                className="mt-4 px-3 py-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-600 text-xs text-white font-medium border border-indigo-500 shadow transition-colors flex items-center gap-1.5"
+              >
+                <Play className="w-3.5 h-3.5 fill-white" /> Start Playback
+              </button>
+            )}
           </div>
         )}
 
@@ -939,16 +984,34 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
           </div>
         ) : null}
 
+        {/* Central Play Watermark Button when stream is ready but paused */}
+        {!isPlaying && hlsStatus === 'streaming' && !isRecovering && (
+          <button
+            onClick={togglePlay}
+            className="absolute z-20 w-16 h-16 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white flex items-center justify-center shadow-2xl shadow-indigo-500/50 backdrop-blur-sm transition-transform transform hover:scale-110 active:scale-95 cursor-pointer"
+            title="Click to Play"
+          >
+            <Play className="w-8 h-8 ml-1 fill-white" />
+          </button>
+        )}
+
         {/* Underlying Video Element */}
         <video
           key={forceRemount}
           ref={videoRef}
           poster={posterUrl}
           className={`w-full h-full object-contain ${isAudio ? 'hidden' : 'block'}`}
+          preload="auto"
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
+          onCanPlay={() => setHlsStatus('streaming')}
+          onLoadedData={() => setHlsStatus('streaming')}
+          onPlaying={() => {
+            setIsPlaying(true);
+            setHlsStatus('streaming');
+          }}
           onError={(e) => {
             const vid = e.currentTarget;
             const code = vid.error?.code;

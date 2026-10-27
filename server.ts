@@ -5858,24 +5858,150 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
 const ffmpegLogRingBuffer: string[] = [];
 function pushFfmpegLog(line: string) {
   const timestamp = new Date().toLocaleTimeString();
-  const formatted = `[${timestamp}] ${line.trim()}`;
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  const formatted = `[${timestamp}] ${trimmed}`;
   ffmpegLogRingBuffer.push(formatted);
-  if (ffmpegLogRingBuffer.length > 200) {
+  if (ffmpegLogRingBuffer.length > 500) {
     ffmpegLogRingBuffer.shift();
   }
 }
 
 app.get('/api/media/stream/logs', (req: Request, res: Response) => {
+  const limit = Math.min(500, Math.max(10, parseInt((req.query.limit as string) || '200', 10)));
+  const filter = ((req.query.filter || req.query.level || '') as string).toLowerCase();
+  const onlyErrors = req.query.errorsOnly === 'true' || filter === 'error' || filter === 'errors';
+
+  const isErrorLine = (line: string) => {
+    const l = line.toLowerCase();
+    return (
+      l.includes('error') ||
+      l.includes('failed') ||
+      l.includes('invalid') ||
+      l.includes('non-monotonic') ||
+      l.includes('non-monotonous') ||
+      l.includes('fatal') ||
+      l.includes('hwaccel_init_failed') ||
+      l.includes('conversion failed') ||
+      l.includes('broken pipe') ||
+      l.includes('sigterm') ||
+      l.includes('exited with code') ||
+      l.includes('decoder') ||
+      l.includes('critical')
+    );
+  };
+
+  let lines = ffmpegLogRingBuffer;
+  if (onlyErrors) {
+    lines = lines.filter(isErrorLine);
+  }
+
+  const errorCount = ffmpegLogRingBuffer.filter(isErrorLine).length;
+
   res.json({
     success: true,
-    lines: ffmpegLogRingBuffer.slice(-50),
+    lines: lines.slice(-limit),
     totalCaptured: ffmpegLogRingBuffer.length,
+    errorCount,
+    activeSessionsCount: activeHlsStreamSessions.size,
   });
 });
 
 app.post('/api/media/stream/logs/clear', (req: Request, res: Response) => {
+  const clearedCount = ffmpegLogRingBuffer.length;
   ffmpegLogRingBuffer.length = 0;
-  res.json({ success: true, message: 'Logs cleared successfully' });
+  res.json({ success: true, message: 'FFmpeg transcode logs cleared successfully', clearedCount });
+});
+
+// ============================================================================
+// TRANSCODE QUEUE API ENDPOINTS
+// ============================================================================
+
+app.get('/api/media/transcode/queue', (req: Request, res: Response) => {
+  try {
+    const queueItems: any[] = [];
+    for (const [sessionId, session] of activeHlsStreamSessions.entries()) {
+      let segmentCount = 0;
+      let totalDuration = session.probeResult?.format?.duration || 0;
+      try {
+        if (fs.existsSync(session.sessionDir)) {
+          const files = fs.readdirSync(session.sessionDir);
+          segmentCount = files.filter((f) => f.endsWith('.ts')).length;
+        }
+      } catch {}
+
+      // Estimate current encoded time (each segment is ~2s)
+      const encodedSeconds = segmentCount * 2;
+      const progressPercent = totalDuration > 0
+        ? Math.min(100, Math.round((encodedSeconds / totalDuration) * 100))
+        : (segmentCount > 0 ? Math.min(95, segmentCount * 5) : 10);
+
+      queueItems.push({
+        sessionId,
+        mediaId: session.mediaId,
+        fileName: path.basename(session.filePath),
+        filePath: session.filePath,
+        preset: session.preset || 'Default Transcode',
+        hwaccel: session.hwaccel || 'videotoolbox/auto',
+        priority: (session as any).priority || 'normal',
+        segmentCount,
+        encodedSeconds,
+        totalDuration,
+        progressPercent,
+        createdAt: session.createdAt,
+        status: session.process && !session.process.killed ? 'transcoding' : 'idle',
+      });
+    }
+
+    res.json({
+      success: true,
+      queue: queueItems,
+      activeCount: queueItems.length,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch transcode queue', details: err?.message });
+  }
+});
+
+app.post('/api/media/transcode/queue/:sessionId/prioritize', (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    const session = activeHlsStreamSessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Transcode task session not found or already completed.' });
+    }
+
+    (session as any).priority = 'high';
+    pushFfmpegLog(`[Transcode Queue] Prioritized session ${sessionId} (${path.basename(session.filePath)})`);
+    res.json({ success: true, sessionId, priority: 'high', message: 'Task priority set to High.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to prioritize task', details: err?.message });
+  }
+});
+
+app.post('/api/media/transcode/queue/:sessionId/cancel', (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    const session = activeHlsStreamSessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Transcode task session not found or already terminated.' });
+    }
+
+    try {
+      if (session.process && !session.process.killed) {
+        session.process.kill('SIGKILL');
+      }
+      if (fs.existsSync(session.sessionDir)) {
+        fs.rmSync(session.sessionDir, { recursive: true, force: true });
+      }
+    } catch {}
+
+    activeHlsStreamSessions.delete(sessionId);
+    pushFfmpegLog(`[Transcode Queue] Cancelled & terminated session ${sessionId}`);
+    res.json({ success: true, sessionId, message: 'Transcode task cancelled and process terminated.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to cancel task', details: err?.message });
+  }
 });
 
 // ============================================================================
@@ -6515,7 +6641,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
 
         args.push('-c:v', vEncoder);
         if (vEncoder === 'libx264') {
-          args.push('-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p');
+          args.push('-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24', '-sc_threshold', '0');
         }
 
         // Apply resolution and bitrate presets
@@ -6550,6 +6676,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     // Segment configuration for fast first-frame latency
     args.push(
       '-f', 'hls',
+      '-hls_init_time', '1',
       '-hls_time', '2',
       '-hls_list_size', '0',
       '-hls_flags', 'append_list',
@@ -6570,6 +6697,16 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
 
     proc.on('close', (code) => {
       console.log(`[FFmpeg HLS Process Exited] code=${code} for session ${sessionKey}`);
+      if (code !== 0 && code !== null) {
+        pushFfmpegLog(`[FFmpeg HLS ERROR] Process exited abnormally with code ${code} for session ${sessionKey}`);
+      } else {
+        pushFfmpegLog(`[FFmpeg HLS Info] Process cleanly completed / closed with code 0`);
+      }
+    });
+
+    proc.on('error', (err) => {
+      console.error(`[FFmpeg HLS Process Error]:`, err);
+      pushFfmpegLog(`[FFmpeg HLS FATAL ERROR] Failed to spawn or execute FFmpeg binary: ${err.message}`);
     });
 
     session = {
@@ -6590,7 +6727,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     // Wait until playlist has initial content AND at least one segment file exists on disk
     const startWait = Date.now();
     let ready = false;
-    while (Date.now() - startWait < 6000) {
+    while (Date.now() - startWait < 12000) {
       if (fs.existsSync(playlistPath)) {
         try {
           const content = fs.readFileSync(playlistPath, 'utf8');

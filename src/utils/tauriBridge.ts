@@ -84,7 +84,7 @@ export const checkPathMetadata = async (path: string): Promise<PathMetadata | nu
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import('@tauri-apps/api/tauri');
-      const result = await invoke<any>('check_path_metadata', { path });
+      const result = await invoke<any>('check_path_integrity', { path });
       return {
         exists: Boolean(result?.exists),
         isDir: Boolean(result?.is_dir ?? result?.isDir),
@@ -94,7 +94,7 @@ export const checkPathMetadata = async (path: string): Promise<PathMetadata | nu
         error: result?.error || null,
       };
     } catch (e) {
-      console.error('Tauri check_path_metadata error:', e);
+      console.error('Tauri check_path_integrity error:', e);
       return { exists: false, isDir: false, isFile: false, permissions: '', size: 0, error: String(e) };
     }
   }

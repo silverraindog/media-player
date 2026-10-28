@@ -135,7 +135,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
   return window.fetch(modifiedInput, init);
 };
 
-// Robust global fetch wrapper with retry logic, 5s timeout for metadata/vault calls, and detailed stage logging
+// Robust global fetch wrapper with retry logic, 5s timeout for metadata/vault calls, request prioritization, and detailed stage logging
 const fetchWithRetry = async (
     url: string,
     options: RequestInit = {},
@@ -143,17 +143,46 @@ const fetchWithRetry = async (
     isMediaSegment = false
   ): Promise<Response> => {
     let lastError: any;
+
+    // Detect media streaming/segments vs metadata requests
+    const isMedia = isMediaSegment ||
+      url.includes('/api/media/stream') ||
+      url.includes('/api/transcode') ||
+      url.includes('/stream') ||
+      /\.(m3u8|ts|m4s|mp4|webm)(\?.*)?$/i.test(url);
+
+    // Apply Request Priority headers:
+    // - High priority & 'Cache-Control: no-cache' for media streaming segments to prevent buffering/stalls
+    // - Low priority for metadata / background telemetry requests to prevent network congestion
+    const headers = new Headers(options.headers || {});
+    if (isMedia) {
+      headers.set('Priority', 'u=1, i');
+      headers.set('Request-Priority', 'high');
+      headers.set('Cache-Control', 'no-cache');
+      headers.set('Pragma', 'no-cache');
+    } else {
+      headers.set('Priority', 'u=6');
+      headers.set('Request-Priority', 'low');
+    }
+
+    // Modern Fetch Request priority: 'high' vs 'low'
+    const priorityOptions: RequestInit = {
+      ...options,
+      headers,
+      priority: isMedia ? 'high' : 'low',
+    } as RequestInit;
+
     const isSpecialCall = url.includes('/api/metadata/categorize') || url.includes('/api/vault/state') || url.includes('/api/samba/');
-    const timeoutMs = isSpecialCall ? 5000 : (isMediaSegment ? 30000 : 15000);
+    const timeoutMs = isSpecialCall ? 5000 : (isMedia ? 30000 : 15000);
     const reqId = Math.random().toString(36).substring(2, 7);
 
     for (let i = 0; i < maxRetries; i++) {
       const startTime = performance.now();
-      console.log(`[FetchStage][${reqId}] 🚀 REQUEST SENT: [Attempt ${i + 1}/${maxRetries}] ${options.method || 'GET'} ${url}`, { body: options.body });
+      console.log(`[FetchStage][${reqId}] 🚀 REQUEST SENT: [Attempt ${i + 1}/${maxRetries}] ${priorityOptions.method || 'GET'} ${url} [Priority: ${isMedia ? 'HIGH' : 'LOW'}]`, { body: priorityOptions.body });
 
       try {
         const controller = new AbortController();
-        console.log(`[FetchStage][${reqId}] ⏳ TIMEOUT WAITING: Started ${timeoutMs}ms timer for ${url}`);
+        console.log(`[FetchStage][${reqId}] ⏳ TIMEOUT WAITING: Started ${timeoutMs}ms timer for ${url} (Priority: ${isMedia ? 'HIGH' : 'LOW'})`);
 
         const timer = setTimeout(() => {
           console.warn(`[FetchStage][${reqId}] ⏰ TIMEOUT REACHED: Request to ${url} exceeded ${timeoutMs}ms limit.`);
@@ -161,12 +190,12 @@ const fetchWithRetry = async (
         }, timeoutMs);
 
         let signal = controller.signal;
-        if (options.signal) {
-          if (options.signal.aborted) controller.abort();
-          else options.signal.addEventListener('abort', () => controller.abort());
+        if (priorityOptions.signal) {
+          if (priorityOptions.signal.aborted) controller.abort();
+          else priorityOptions.signal.addEventListener('abort', () => controller.abort());
         }
 
-        const response = await customFetch(url, { ...options, signal });
+        const response = await customFetch(url, { ...priorityOptions, signal });
         clearTimeout(timer);
         const elapsed = Math.round(performance.now() - startTime);
 
@@ -193,12 +222,12 @@ const fetchWithRetry = async (
     // Fallback for API routes if all retries fail
     if (url.includes('/api/')) {
       let bodyObj: any = null;
-      if (options.body && typeof options.body === 'string') {
-        try { bodyObj = JSON.parse(options.body); } catch {}
+      if (priorityOptions.body && typeof priorityOptions.body === 'string') {
+        try { bodyObj = JSON.parse(priorityOptions.body as string); } catch {}
       }
       const fallback = localDbFallback.handleDbRequestFallback(
         url,
-        (options.method || 'GET').toUpperCase(),
+        (priorityOptions.method || 'GET').toUpperCase(),
         bodyObj
       );
       if (fallback) return fallback;

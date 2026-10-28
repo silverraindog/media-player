@@ -76,7 +76,7 @@ pub struct PathMetadataResult {
 }
 
 #[tauri::command]
-pub async fn check_path_metadata(path: String) -> Result<PathMetadataResult, String> {
+pub async fn check_path_integrity(path: String) -> Result<PathMetadataResult, String> {
     let p = Path::new(&path);
     match fs::metadata(p) {
         Ok(meta) => {

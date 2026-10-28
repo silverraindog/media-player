@@ -392,6 +392,15 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         nudgeOffset: 0.2,
         nudgeMaxRetry: 5,
         startPosition: 0,
+        xhrSetup: (xhr: XMLHttpRequest) => {
+          try {
+            xhr.setRequestHeader('Priority', 'u=1, i');
+            xhr.setRequestHeader('Request-Priority', 'high');
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
+          } catch {
+            // Silently pass if headers cannot be modified for specific state
+          }
+        },
       });
 
       // Bind media first, then load source on MEDIA_ATTACHED

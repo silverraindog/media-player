@@ -1007,6 +1007,22 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Retry Transcode
                 </button>
+                <button
+                  onClick={async () => {
+                    setStreamError(null);
+                    setHlsStatus('initializing');
+                    try {
+                        await fetch(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`, {
+                            method: 'POST',
+                            keepalive: true,
+                        });
+                    } catch {}
+                    setRestartNonce((prev) => prev + 1);
+                  }}
+                  className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Force Restart Stream
+                </button>
                 {onFallbackDirect && (
                   <button
                     onClick={onFallbackDirect}

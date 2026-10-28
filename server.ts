@@ -6651,6 +6651,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       fs.mkdirSync(sessionDir, { recursive: true });
     }
     const playlistPath = path.join(sessionDir, 'index.m3u8');
+    console.log(`[FFmpeg HLS] Session dir: ${sessionDir}, Playlist: ${playlistPath}`);
 
     const ffmpegBin = resolveFfmpegBinary();
     const args: string[] = [
@@ -6674,6 +6675,9 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     args.push(
       '-fflags', '+genpts+fastseek',
       '-err_detect', 'ignore_err',
+      '-probesize', '10M',
+      '-analyzeduration', '10M',
+      '-avoid_negative_ts', 'make_zero',
       '-i', resolvedPath,
     );
 
@@ -6682,7 +6686,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     const hasAudio = Boolean(probeResult.audio);
 
     if (hasVideo) {
-      args.push('-map', '0:v:0');
+      args.push('-map', '0:v:0?');
       if (probeResult.needsVideoTranscode || forceTranscode || preset || hwaccel || codec !== 'h264') {
         let vEncoder = 'libx264';
         const isLinux = os.platform() === 'linux';

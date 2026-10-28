@@ -139,11 +139,12 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
 const fetchWithRetry = async (
     url: string,
     options: RequestInit = {},
-    maxRetries = 3
+    maxRetries = 3,
+    isMediaSegment = false
   ): Promise<Response> => {
     let lastError: any;
     const isSpecialCall = url.includes('/api/metadata/categorize') || url.includes('/api/vault/state') || url.includes('/api/samba/');
-    const timeoutMs = isSpecialCall ? 5000 : 15000;
+    const timeoutMs = isSpecialCall ? 5000 : (isMediaSegment ? 30000 : 15000);
     const reqId = Math.random().toString(36).substring(2, 7);
 
     for (let i = 0; i < maxRetries; i++) {

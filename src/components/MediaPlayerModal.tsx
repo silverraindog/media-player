@@ -702,7 +702,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5">
               <Radio className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Share: <strong className="text-slate-200">//{sambaConfig.server}/{sambaConfig.share}</strong></span>
+              <span>Share: <strong className="text-slate-200">{sambaConfig.mountPath || sambaConfig.baseMountPath || sambaConfig.hostPath || `//${sambaConfig.server}/${sambaConfig.share}`}</strong></span>
               {activeFilePath && (
                 <span className="text-slate-400 font-mono text-[11px] truncate max-w-[180px] sm:max-w-xs" title={activeFilePath}>
                   ({activeFilePath.split('/').pop()})

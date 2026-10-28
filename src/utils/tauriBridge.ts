@@ -71,6 +71,36 @@ export const cleanupTranscodedFile = async (path: string): Promise<void> => {
   }
 };
 
+export interface PathMetadata {
+  exists: boolean;
+  isDir: boolean;
+  isFile: boolean;
+  permissions: string;
+  size: number;
+  error?: string | null;
+}
+
+export const checkPathMetadata = async (path: string): Promise<PathMetadata | null> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const result = await invoke<any>('check_path_metadata', { path });
+      return {
+        exists: Boolean(result?.exists),
+        isDir: Boolean(result?.is_dir ?? result?.isDir),
+        isFile: Boolean(result?.is_file ?? result?.isFile),
+        permissions: result?.permissions || '',
+        size: Number(result?.size ?? 0),
+        error: result?.error || null,
+      };
+    } catch (e) {
+      console.error('Tauri check_path_metadata error:', e);
+      return { exists: false, isDir: false, isFile: false, permissions: '', size: 0, error: String(e) };
+    }
+  }
+  return null;
+};
+
 export const purgeTranscodeCache = async (limitGb: number): Promise<void> => {
   if (isTauriEnvironment()) {
     try {

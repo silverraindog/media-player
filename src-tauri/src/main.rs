@@ -65,6 +65,44 @@ fn cleanup_transcoded_file(path: String) -> Result<(), String> {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PathMetadataResult {
+    pub exists: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub permissions: String,
+    pub size: u64,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn check_path_metadata(path: String) -> Result<PathMetadataResult, String> {
+    let p = Path::new(&path);
+    match fs::metadata(p) {
+        Ok(meta) => {
+            let permissions = meta.permissions();
+            Ok(PathMetadataResult {
+                exists: true,
+                is_dir: meta.is_dir(),
+                is_file: meta.is_file(),
+                permissions: format!("{:?}", permissions),
+                size: meta.len(),
+                error: None,
+            })
+        }
+        Err(e) => {
+            Ok(PathMetadataResult {
+                exists: false,
+                is_dir: false,
+                is_file: false,
+                permissions: "".to_string(),
+                size: 0,
+                error: Some(format!("Error: {}", e)),
+            })
+        }
+    }
+}
+
 #[tauri::command]
 fn vault_save_state(app_handle: AppHandle, state: String) -> Result<(), String> {
     let data_dir = db::get_data_dir(&app_handle);
@@ -1311,7 +1349,18 @@ struct PathCheckResult {
 #[tauri::command]
 async fn check_path_exists(path: String) -> Result<PathCheckResult, String> {
     let p = resolve_absolute_samba_path(&path);
+    println!("[Scanner] check_path_exists: input={}, resolved={}", path, p.display());
+    
     let exists = p.exists();
+    if !exists {
+        let mut parent = p.parent();
+        while let Some(par) = parent {
+            println!("[Scanner] check_path_exists: parent {} exists={}", par.display(), par.exists());
+            if par.exists() { break; }
+            parent = par.parent();
+        }
+    }
+
     let mut is_directory = false;
     let mut file_count = 0;
     let mut readable = false;

@@ -150,6 +150,7 @@ import {
   clearScanDebugHistory,
 } from '../utils/scanPathDebugger';
 import { PathInspectorView } from './PathInspectorView';
+import { PathIntegrityDiagnosticPanel } from './PathIntegrityDiagnosticPanel';
 import { PathTesterModal } from './PathTesterModal';
 import { ScanPerformanceDashboard } from './ScanPerformanceDashboard';
 import { PermissionHelpModal } from './PermissionHelpModal';
@@ -1136,7 +1137,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   // Diagnostic Tab Toggles
   const [activeDiagnosticTab, setActiveDiagnosticTab] = useState<
-    'performance' | 'scanner-logs' | 'ffmpeg-transcode' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info' | 'scan-errors-chart' | 'discovery-ratio'
+    'performance' | 'scanner-logs' | 'ffmpeg-transcode' | 'tree' | 'analysis' | 'scan-debug' | 'folder-inspector' | 'info' | 'scan-errors-chart' | 'discovery-ratio' | 'integrity-check'
   >('scanner-logs');
 
   const logsEndRef = useRef<HTMLDivElement | null>(null);
@@ -1785,6 +1786,19 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
           <Info className="w-3.5 h-3.5 text-blue-400" />
           <span>System Environment</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveDiagnosticTab('integrity-check')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shrink-0 ${
+            activeDiagnosticTab === 'integrity-check'
+              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
+              : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Integrity Check</span>
+        </button>
       </div>
 
       {/* TAB CONTENT 1: REAL-TIME SCANNER LOGS */}
@@ -2407,6 +2421,11 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
       {/* TAB CONTENT 6: FOLDER INSPECTOR */}
       {activeDiagnosticTab === 'folder-inspector' && (
         <PathInspectorView records={scanDebugRecords} onTriggerSync={onTriggerSync} />
+      )}
+
+      {/* TAB CONTENT 6.5: PATH INTEGRITY DIAGNOSTIC */}
+      {activeDiagnosticTab === 'integrity-check' && (
+        <PathIntegrityDiagnosticPanel />
       )}
 
       {/* TAB CONTENT 7: SYSTEM ENVIRONMENT */}

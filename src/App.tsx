@@ -623,22 +623,48 @@ function App() {
   const sanitizedMedia = useMemo(() => {
     if (!playerMediaState?.media) return null;
     const m = playerMediaState.media;
+    let resolvedUrl = m.playbackUrl ? sanitizePath(m.playbackUrl) : undefined;
+
+    if (isTauri && (m.path || m.playbackUrl)) {
+      try {
+        const tauriGlobal = (window as any).__TAURI__;
+        const convert = tauriGlobal?.convertFileSrc || (window as any).__TAURI_IPC__?.convertFileSrc;
+        const rawP = m.path || m.playbackUrl || '';
+        if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
+          resolvedUrl = convert(rawP);
+        }
+      } catch {}
+    }
+
     return {
       ...m,
       path: m.path ? sanitizePath(m.path) : undefined,
       folderPath: m.folderPath ? sanitizePath(m.folderPath) : undefined,
       recommendedFolderStructure: m.recommendedFolderStructure ? sanitizePath(m.recommendedFolderStructure) : '',
-      playbackUrl: m.playbackUrl ? sanitizePath(m.playbackUrl) : undefined,
+      playbackUrl: resolvedUrl,
     };
   }, [playerMediaState?.media, sanitizePath]);
 
   const sanitizedEpisode = useMemo(() => {
     if (!playerMediaState?.episode) return undefined;
     const ep = playerMediaState.episode;
+    let resolvedUrl = ep.playbackUrl ? sanitizePath(ep.playbackUrl) : undefined;
+
+    if (isTauri && (ep.filePath || ep.playbackUrl)) {
+      try {
+        const tauriGlobal = (window as any).__TAURI__;
+        const convert = tauriGlobal?.convertFileSrc || (window as any).__TAURI_IPC__?.convertFileSrc;
+        const rawP = ep.filePath || ep.playbackUrl || '';
+        if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
+          resolvedUrl = convert(rawP);
+        }
+      } catch {}
+    }
+
     return {
       ...ep,
       filePath: ep.filePath ? sanitizePath(ep.filePath) : undefined,
-      playbackUrl: ep.playbackUrl ? sanitizePath(ep.playbackUrl) : undefined,
+      playbackUrl: resolvedUrl,
     };
   }, [playerMediaState?.episode, sanitizePath]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);

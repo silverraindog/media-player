@@ -235,6 +235,38 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Build the playback URL (direct or transcoded output)
   const streamUrl = useMemo(() => {
     if (!activeFilePath) return '';
+
+    // Check if running inside a Tauri container
+    const isTauriContainer = typeof window !== 'undefined' && (
+      Boolean((window as any).__TAURI__) ||
+      Boolean((window as any).__TAURI_IPC__) ||
+      window.location.protocol === 'tauri:' ||
+      window.location.origin.includes('tauri.localhost')
+    );
+
+    // If running inside a Tauri container and not explicitly forcing server-side transcode,
+    // utilize Tauri's native asset converter convertFileSrc(activeFilePath)
+    if (isTauriContainer && !useTranscode) {
+      try {
+        const tauriGlobal = (window as any).__TAURI__;
+        const convert = tauriGlobal?.convertFileSrc ||
+          (window as any).__TAURI_IPC__?.convertFileSrc ||
+          (window as any).convertFileSrc;
+
+        if (typeof convert === 'function') {
+          let absPath = activeFilePath.trim().replace(/\\/g, '/');
+          // Ensure absolute filesystem path format
+          if (!absPath.startsWith('/') && !absPath.match(/^[a-zA-Z]:/)) {
+            const share = sambaConfig?.share || 'media';
+            absPath = `/Volumes/${share}/${absPath.replace(/^\/+/, '')}`;
+          }
+          return convert(absPath);
+        }
+      } catch (err) {
+        console.warn('[MediaPlayerModal] Tauri convertFileSrc error, falling back to direct play:', err);
+      }
+    }
+
     const hwParam = hardwareAccel ? '&hwaccel=true' : '';
     if (useTranscode || transcodeStatus.state === 'ready') {
       const targetPath = transcodeStatus.outputPath || activeFilePath;

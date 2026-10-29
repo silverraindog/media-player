@@ -2707,6 +2707,38 @@ function sanitizeSambaSegment(name: string): string {
   return cleaned;
 }
 
+function sanitizeTauriPath(rawPath: string): string {
+  if (!rawPath) return '';
+  let str = String(rawPath).trim();
+
+  // 1. Strip protocol prefixes (tauri://, asset://, file://, http(s)://asset.localhost, http(s)://tauri.localhost)
+  str = str.replace(/^(?:https?:\/\/(?:asset|tauri)\.localhost(?:\/|$)|\b(?:asset|tauri):\/\/(?:localhost\/?)?|\bfile:\/\/{1,3})/i, '');
+
+  // 2. Decode URL percent-encoding (e.g. %2F -> /)
+  try {
+    if (str.includes('%')) {
+      str = decodeURIComponent(str);
+    }
+  } catch {}
+
+  // 3. Normalize backslashes to forward slashes
+  str = str.replace(/\\/g, '/');
+
+  // 4. Handle Windows drive letter prefixed with leading slash e.g. /C:/Users -> C:/Users
+  if (/^\/[a-zA-Z]:\//.test(str)) {
+    str = str.slice(1);
+  }
+
+  // 5. Safely preserve absolute filesystem paths:
+  // If the path starts with a known Unix root or volume directory (Volumes, mnt, Users, home, private, tmp, var, media, opt, usr, App, app, etc.)
+  // but is missing the leading slash, restore it!
+  if (/^(?:Volumes|mnt|Users|home|private|tmp|var|media|opt|usr|App|app)\//i.test(str)) {
+    str = '/' + str;
+  }
+
+  return str;
+}
+
 function sanitizeSambaPath(rawPath: string): string {
   if (!rawPath) return '';
   let normalized = rawPath.replace(/\\/g, '/');
@@ -5287,14 +5319,8 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
     const episodeQuery = req.query.episode !== undefined ? parseInt(req.query.episode as string, 10) : undefined;
     const fileQuery = ((req.query.file || '') as string).trim();
 
-    // 1. Sanitize rawPath by stripping local protocols and decoding URL components
-    let cleanRaw = rawPath
-      .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
-      .replace(/^file:\/\/{1,3}/i, '');
-    try {
-      if (cleanRaw.includes('%')) cleanRaw = decodeURIComponent(cleanRaw);
-    } catch {}
-    cleanRaw = cleanRaw.replace(/\\/g, '/');
+    // 1. Sanitize rawPath by stripping local protocols while preserving absolute filesystem paths
+    let cleanRaw = sanitizeTauriPath(rawPath);
 
     // Strip virtual franchise series suffixes like "/Glee (Main Series)" -> "/Glee"
     const stripVirtual = (p: string) => {
@@ -5828,13 +5854,7 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'path query parameter is required' });
     }
 
-    let cleanRaw = rawPath
-      .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
-      .replace(/^file:\/\/{1,3}/i, '');
-    try {
-      if (cleanRaw.includes('%')) cleanRaw = decodeURIComponent(cleanRaw);
-    } catch {}
-    cleanRaw = cleanRaw.replace(/\\/g, '/');
+    let cleanRaw = sanitizeTauriPath(rawPath);
 
     const candidateRoots = Array.from(new Set([
       cleanRaw,
@@ -6471,13 +6491,7 @@ function resolveStreamSourceFile(targetPath: string, queryParams: any = {}): str
   const episodeQuery = queryParams.episode !== undefined ? parseInt(queryParams.episode as string, 10) : undefined;
   const fileQuery = ((queryParams.file || '') as string).trim();
 
-  let cleanRaw = targetPath
-    .replace(/^(asset|tauri):\/\/(localhost\/?)?/i, '')
-    .replace(/^file:\/\/{1,3}/i, '');
-  try {
-    if (cleanRaw.includes('%')) cleanRaw = decodeURIComponent(cleanRaw);
-  } catch {}
-  cleanRaw = cleanRaw.replace(/\\/g, '/');
+  let cleanRaw = sanitizeTauriPath(targetPath);
 
   const stripVirtual = (p: string) => {
     return p

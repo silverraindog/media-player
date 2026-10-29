@@ -30,9 +30,13 @@
       "shell": {
         "all": false,
         "execute": true,
-        "sidecar": false,
+        "sidecar": true,
         "open": true,
         "scope": [
+          { "name": "binaries/ffmpeg", "sidecar": true, "args": true },
+          { "name": "binaries/ffprobe", "sidecar": true, "args": true },
+          { "name": "ffmpeg", "sidecar": true, "args": true },
+          { "name": "ffprobe", "sidecar": true, "args": true },
           { "name": "ffmpeg", "cmd": "ffmpeg", "args": true },
           { "name": "ffprobe", "cmd": "ffprobe", "args": true },
           { "name": "homebrew-ffmpeg", "cmd": "/opt/homebrew/bin/ffmpeg", "args": true },
@@ -53,7 +57,10 @@
       "deb": {
         "depends": []
       },
-      "externalBin": [],
+      "externalBin": [
+        "binaries/ffmpeg",
+        "binaries/ffprobe"
+      ],
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",

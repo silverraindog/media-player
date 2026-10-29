@@ -276,6 +276,7 @@ pub struct DebugPathResolutionReport {
     pub inspected_dir: String,
     pub artifacts: Vec<OsStringArtifactReport>,
     pub raw_input_hex: String,
+    pub has_os_artifacts: bool,
     pub encountered_artifacts_count: usize,
     pub diagnostic_notes: Vec<String>,
     pub timestamp: String,

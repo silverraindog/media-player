@@ -21,6 +21,7 @@ import {
   FileVideo,
   Cpu,
   Zap,
+  Activity,
 } from 'lucide-react';
 import {
   MediaMetadata,
@@ -83,6 +84,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     message: 'Native Playback',
   });
   const [isProbing, setIsProbing] = useState(false);
+  const [showDiagnosticOverlay, setShowDiagnosticOverlay] = useState(false);
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -93,6 +95,28 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [selectedCodec, setSelectedCodec] = useState<'h264' | 'hevc' | 'av1'>(transcodeConfig?.codec || 'h264');
   const [pipelineHealth, setPipelineHealth] = useState({ fps: 60, latency: 0 });
   const [lastPruneTime, setLastPruneTime] = useState(0);
+  const [isForceStreamViaPipe, setIsForceStreamViaPipe] = useState(false);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  const handleNativeFallback = async () => {
+    try {
+      console.log('[MediaPlayerModal] Attempting native file fallback for:', activeFilePath);
+      const tauri = (window as any).__TAURI__;
+      if (!tauri || !tauri.fs) {
+        throw new Error('Tauri filesystem API not available');
+      }
+
+      // Read the file as binary using Tauri
+      const binaryData = await tauri.fs.readBinaryFile(activeFilePath);
+      const blob = new Blob([binaryData], { type: 'video/mp4' }); 
+      const url = URL.createObjectURL(blob);
+      setBlobUrl(url);
+      console.log('[MediaPlayerModal] Native fallback URL created:', url);
+    } catch (err) {
+      console.error('[MediaPlayerModal] Native fallback failed:', err);
+      setPlaybackError('Native fallback failed: ' + (err as Error).message);
+    }
+  };
 
   // FPS monitor effect
   useEffect(() => {
@@ -245,8 +269,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     );
 
     // If running inside a Tauri container and not explicitly forcing server-side transcode,
-    // utilize Tauri's native asset converter convertFileSrc(activeFilePath)
-    if (isTauriContainer && !useTranscode) {
+    // and not forced to stream via pipe fallback, utilize Tauri's native asset converter
+    if (isTauriContainer && !useTranscode && !isForceStreamViaPipe) {
       try {
         const tauriGlobal = (window as any).__TAURI__;
         const convert = tauriGlobal?.convertFileSrc ||
@@ -262,7 +286,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             const share = sambaConfig?.share || 'media';
             absPath = `/Volumes/${share}/${absPath.replace(/^\/+/, '')}`;
           }
-          return convert(absPath);
+          console.log('[MediaPlayerModal] convertFileSrc input path:', absPath);
+          const convertedUrl = convert(absPath);
+          console.log('[MediaPlayerModal] convertFileSrc output URL:', convertedUrl);
+          return convertedUrl;
         }
       } catch (err) {
         console.warn('[MediaPlayerModal] Tauri convertFileSrc error, falling back to direct play:', err);
@@ -276,6 +303,23 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
     return getDirectMediaPlayUrl(activeFilePath, sambaConfig);
   }, [activeFilePath, sambaConfig, useTranscode, transcodeStatus, hardwareAccel]);
+
+  // Diagnostic: Check if streamUrl is blocked
+  useEffect(() => {
+    if (streamUrl && (streamUrl.startsWith('tauri://') || streamUrl.startsWith('asset://'))) {
+      fetch(streamUrl, { method: 'HEAD' })
+        .then(response => {
+          if (!response.ok) {
+            console.error('[MediaPlayerModal] Diagnostic: Asset URL might be blocked by CORS or origin-check:', streamUrl, 'Status:', response.status);
+          } else {
+            console.log('[MediaPlayerModal] Diagnostic: Asset URL is accessible:', streamUrl);
+          }
+        })
+        .catch(err => {
+           console.error('[MediaPlayerModal] Diagnostic: Failed to access asset URL:', streamUrl, err);
+        });
+    }
+  }, [streamUrl]);
 
   // Reset playback errors when target file changes
   useEffect(() => {
@@ -470,6 +514,15 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             </select>
 
             <button
+              onClick={() => setShowDiagnosticOverlay(!showDiagnosticOverlay)}
+              className={`p-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${showDiagnosticOverlay ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              title="Toggle Diagnostic Overlay"
+            >
+              <Activity className="w-4 h-4" />
+              <span className="hidden md:inline">Diagnostics</span>
+            </button>
+
+            <button
               onClick={handleStartTranscode}
               className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow"
               title="Force transcode file to H.264 / AAC"
@@ -492,6 +545,38 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         <div className="relative flex-1 flex flex-col md:flex-row min-h-[380px] sm:min-h-[480px] bg-black overflow-hidden">
           {/* Player Display Container */}
           <div className="relative flex-1 flex flex-col items-center justify-center bg-black overflow-hidden">
+            {/* Diagnostic Overlay */}
+            {showDiagnosticOverlay && (
+              <div className="absolute top-16 left-4 z-40 bg-black/80 backdrop-blur-md border border-slate-700 rounded-xl p-4 w-64 text-xs font-mono text-slate-300 shadow-2xl">
+                <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-amber-400" />
+                  Live Diagnostics
+                </h4>
+                <div className="space-y-1.5">
+                  <div className="flex justify-between">
+                    <span>FPS:</span>
+                    <span className="text-emerald-400">{pipelineHealth.fps}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Latency:</span>
+                    <span className="text-amber-400">{pipelineHealth.latency}ms</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Buffer:</span>
+                    <span className="text-indigo-400">{bufferSecondsRemaining.toFixed(1)}s</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Status:</span>
+                    <span className="text-slate-100 truncate">{transcodeStatus.state}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Progress:</span>
+                    <span className="text-white">{transcodeStatus.progressPercent}%</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Transcoding Progress Bar Overlay */}
             {(transcodeStatus.state === 'transcoding' || isProbing) && (
               <div className="absolute inset-0 z-30 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
@@ -554,6 +639,21 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <p className="font-semibold">Playback Notice</p>
                   <p className="text-xs text-rose-300 mt-0.5">{playbackError}</p>
                   <div className="flex items-center gap-3 mt-2">
+                    <button
+                      onClick={handleNativeFallback}
+                      className="px-2.5 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded text-xs font-medium transition-colors"
+                    >
+                      Native Fallback (Blob URL)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsForceStreamViaPipe(true);
+                        setPlaybackError(null);
+                      }}
+                      className="px-2.5 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
+                    >
+                      Force Pipe Streaming (Emergency)
+                    </button>
                     <button
                       onClick={() => {
                         setUseTranscode(true);

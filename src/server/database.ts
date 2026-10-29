@@ -2406,28 +2406,81 @@ export async function globalSanitizeVaultPaths(): Promise<{
   };
 }
 
-export async function resetDatabaseInDb(): Promise<void> {
-  const db = await getDatabase();
-  db.run("DELETE FROM media_items;");
-  db.run("DELETE FROM series_watch_progress;");
-  db.run("DELETE FROM watch_history_log;");
-  db.run("DELETE FROM thumbnail_metadata_cache;");
-  db.run("DELETE FROM smart_playlists;");
-  db.run("DELETE FROM user_watchlist;");
-
-  try {
-    const vaultState = getVaultStateFromDisk();
-    if (vaultState) {
-      vaultState.sambaTree = [];
-      vaultState.mediaLibrary = [];
-      saveVaultStateToDiskSync(vaultState);
-    } else {
-      saveVaultStateToDiskSync({ mediaLibrary: [], sambaTree: [] });
+export async function hardResetAndDeleteDatabaseFiles(): Promise<{
+  success: boolean;
+  dbDeleted: boolean;
+  stateDeleted: boolean;
+  dbPath: string;
+  statePath: string;
+  message: string;
+}> {
+  if (dbInstance) {
+    try {
+      dbInstance.run(`
+        DROP TABLE IF EXISTS media_items;
+        DROP TABLE IF EXISTS series_watch_progress;
+        DROP TABLE IF EXISTS watch_history_log;
+        DROP TABLE IF EXISTS thumbnail_metadata_cache;
+        DROP TABLE IF EXISTS smart_playlists;
+        DROP TABLE IF EXISTS user_watchlist;
+        DROP TABLE IF EXISTS media_playback_settings;
+      `);
+    } catch (e) {
+      console.warn('Error dropping tables during hard reset:', e);
     }
-  } catch (e) {
-    console.error('Error clearing vault state during reset:', e);
+
+    try {
+      dbInstance.close();
+    } catch (e) {
+      console.warn('Error closing SQLite DB instance:', e);
+    }
+    dbInstance = null;
   }
 
-  persistDbToDiskSync();
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+
+  const filesToRemove = [
+    DB_PATH,
+    `${DB_PATH}-journal`,
+    `${DB_PATH}-wal`,
+    `${DB_PATH}-shm`,
+    `${DB_PATH}.tmp`,
+    VAULT_STATE_FILE,
+    `${VAULT_STATE_FILE}.tmp`,
+  ];
+
+  filesToRemove.forEach((filePath) => {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.info(`[Storage] Unlinked physical storage file: ${filePath}`);
+      }
+    } catch (err) {
+      console.error(`[Storage] Failed to unlink file ${filePath}:`, err);
+    }
+  });
+
+  const dbDeleted = !fs.existsSync(DB_PATH);
+  const stateDeleted = !fs.existsSync(VAULT_STATE_FILE);
+
+  return {
+    success: dbDeleted && stateDeleted,
+    dbDeleted,
+    stateDeleted,
+    dbPath: DB_PATH,
+    statePath: VAULT_STATE_FILE,
+    message: dbDeleted && stateDeleted
+      ? 'Successfully dropped tables, closed SQLite database connection, and unlinked physical storage files from disk.'
+      : 'Executed hard reset, but one or more physical storage files remained on disk.',
+  };
 }
+
+export async function resetDatabaseInDb(): Promise<void> {
+  await hardResetAndDeleteDatabaseFiles();
+}
+
+
 

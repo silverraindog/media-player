@@ -27,6 +27,7 @@ class SqliteBatchWriterService {
   private countdownTimer: any = null;
   private secondsRemaining: number = BATCH_INTERVAL_SECONDS;
   private isFlushing: boolean = false;
+  private isLocked: boolean = false;
   private lastFlushTime: number | null = null;
   private lastFlushCount: number = 0;
   private subscribers: Set<(status: SqliteQueueStatus) => void> = new Set();
@@ -41,6 +42,40 @@ class SqliteBatchWriterService {
         this.flushNowSync();
       });
     }
+  }
+
+  /**
+   * Lock all incoming writes, clear queue and timers during database reset operations
+   */
+  public lockWrites(): void {
+    this.isLocked = true;
+    if (this.countdownTimer) {
+      clearInterval(this.countdownTimer);
+      this.countdownTimer = null;
+    }
+    this.queue.clear();
+    this.cache.clear();
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(CACHE_STORAGE_KEY);
+      } catch (e) {
+        console.warn('Failed clearing SQLite cache from localStorage:', e);
+      }
+    }
+    this.notifySubscribers();
+  }
+
+  /**
+   * Unlock write operations after reset completion
+   */
+  public unlockWrites(): void {
+    this.isLocked = false;
+    this.startBatchTimer();
+    this.notifySubscribers();
+  }
+
+  public isWriteLocked(): boolean {
+    return this.isLocked;
   }
 
   /**
@@ -89,6 +124,7 @@ class SqliteBatchWriterService {
    * Synchronously update the persistent cache
    */
   public updateCache(items: MediaMetadata[]): void {
+    if (this.isLocked) return;
     items.forEach((item) => {
       if (item && item.id) {
         this.cache.set(item.id, item);
@@ -118,7 +154,7 @@ class SqliteBatchWriterService {
    * Enqueue a single media item for the 30-second SQLite batch write
    */
   public enqueue(media: MediaMetadata): void {
-    if (!media || !media.id) return;
+    if (this.isLocked || !media || !media.id) return;
 
     // Update persistent cache immediately for instant UI availability
     this.cache.set(media.id, media);
@@ -139,7 +175,7 @@ class SqliteBatchWriterService {
    * Enqueue multiple media items (e.g. from large Samba sync operations)
    */
   public enqueueMany(mediaList: MediaMetadata[]): void {
-    if (!mediaList || mediaList.length === 0) return;
+    if (this.isLocked || !mediaList || mediaList.length === 0) return;
 
     mediaList.forEach((media) => {
       if (media && media.id) {
@@ -180,7 +216,7 @@ class SqliteBatchWriterService {
    * Flush all queued media changes to SQLite database in a single batch call
    */
   public async flushNow(): Promise<{ success: boolean; count: number }> {
-    if (this.isFlushing || this.queue.size === 0) {
+    if (this.isLocked || this.isFlushing || this.queue.size === 0) {
       return { success: true, count: 0 };
     }
 
@@ -220,7 +256,7 @@ class SqliteBatchWriterService {
    * Synchronous beacon flush for page unload
    */
   private flushNowSync(): void {
-    if (this.queue.size === 0) return;
+    if (this.isLocked || this.queue.size === 0) return;
     const itemsToFlush = Array.from(this.queue.values()).map((q) => q.media);
     try {
       const blob = new Blob([JSON.stringify({ items: itemsToFlush })], {

@@ -53,6 +53,7 @@ import {
   saveVaultStateToDisk,
   globalSanitizeVaultPaths,
   resetDatabaseInDb,
+  hardResetAndDeleteDatabaseFiles,
 } from './src/server/database';
 import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 
@@ -4737,11 +4738,15 @@ app.get('/api/db/stats/distribution', async (req: Request, res: Response) => {
   }
 });
 
-// Reset SQLite Database endpoint (Wipes local metadata and watch progress cache)
+// Reset SQLite Database endpoint (Wipes local metadata and physically unlinks SQLite database)
 app.post('/api/db/reset', async (req: Request, res: Response) => {
   try {
-    await resetDatabaseInDb();
-    res.json({ success: true, message: 'SQLite database has been successfully reset and reinitialized.' });
+    const result = await hardResetAndDeleteDatabaseFiles();
+    res.json({
+      success: result.success,
+      ...result,
+      message: result.message || 'SQLite database has been successfully reset, closed, and unlinked from disk.',
+    });
   } catch (error: any) {
     console.error('Error resetting database in SQLite:', error);
     res.status(500).json({ error: 'Failed to reset database', message: error?.message });
@@ -4751,8 +4756,12 @@ app.post('/api/db/reset', async (req: Request, res: Response) => {
 // Dedicated DELETE endpoint for resetting SQLite database and clearing persistent stores
 app.delete('/api/db/reset', async (req: Request, res: Response) => {
   try {
-    await resetDatabaseInDb();
-    res.json({ success: true, message: 'SQLite database successfully wiped via DELETE request.' });
+    const result = await hardResetAndDeleteDatabaseFiles();
+    res.json({
+      success: result.success,
+      ...result,
+      message: result.message || 'SQLite database successfully wiped and unlinked via DELETE request.',
+    });
   } catch (error: any) {
     console.error('Error in DELETE /api/db/reset:', error);
     res.status(500).json({ error: 'Failed to reset database via DELETE', message: error?.message });

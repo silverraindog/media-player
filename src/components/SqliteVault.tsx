@@ -98,14 +98,40 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
     setResetStatusAlert(null);
 
     try {
-      // 1. Clear frontend SQLite batch writer queue & in-memory cache
-      sqliteBatchWriter.clear();
+      // 1. Lock writes to stop pending flush timers or enqueue attempts
+      sqliteBatchWriter.lockWrites();
 
       // 2. Clear frontend fallback database cache
       localDbFallback.clearAll();
 
-      // 3. Clear all browser localStorage keys across the application
+      // 3. Send native IPC reset if running in Tauri desktop environment
+      const isTauri = typeof window !== 'undefined' && '__TAURI_IPC__' in window;
+      if (isTauri) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/tauri');
+          await invoke('reset_database');
+          await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
+        } catch (tauriErr) {
+          console.warn('[SqliteVault] Tauri reset invoke error:', tauriErr);
+        }
+      }
+
+      // 4. Call backend dedicated DELETE endpoint to physically drop tables, close connection, and unlink files
+      let response = await fetch('/api/db/reset', {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        response = await fetch('/api/db/reset', { method: 'POST' });
+      }
+
+      const resData = await response.json().catch(() => null);
+      if (!response.ok || (resData && resData.success === false)) {
+        throw new Error(resData?.message || 'Backend failed to process database file unlinking.');
+      }
+
+      // 5. Clear browser localStorage keys AFTER backend confirms physical file unlinking
       if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.setItem('sambavault_db_reset', 'true');
         const knownKeys = [
           'sambavault_media_library_v2',
           'sambavault_persistent_vault_state',
@@ -114,6 +140,7 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
           'samba_vault_last_scan_errors',
           'media_vault_watchlist_cache',
           'sambavault_sqlite_persistent_cache',
+          'sambavault_sqlite_persistent_cache_v2',
           'sambavault_saved_state',
           'samba_vault_mount_mappings',
           'samba_path_debug_logs',
@@ -131,7 +158,7 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
         }
       }
 
-      // 4. Clear all IndexedDB databases across the application
+      // 6. Clear all IndexedDB databases across the application
       if (typeof window !== 'undefined' && window.indexedDB) {
         try {
           if ((window.indexedDB as any).databases) {
@@ -153,29 +180,6 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
         }
       }
 
-      // 5. Send native IPC reset if running in Tauri desktop environment
-      const isTauri = typeof window !== 'undefined' && '__TAURI_IPC__' in window;
-      if (isTauri) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          await invoke('reset_database');
-          await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
-        } catch (tauriErr) {
-          console.warn('[SqliteVault] Tauri reset invoke error:', tauriErr);
-        }
-      }
-
-      // 6. Call backend dedicated DELETE endpoint
-      const response = await fetch('/api/db/reset', {
-        method: 'DELETE',
-      });
-      if (!response.ok && !isTauri) {
-        const fallbackRes = await fetch('/api/db/reset', { method: 'POST' });
-        if (!fallbackRes.ok) {
-          throw new Error('Backend failed to process database wipe.');
-        }
-      }
-
       // 7. Update component state and provide confirmation
       setMediaItems([]);
       setWatchProgressList([]);
@@ -188,7 +192,7 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
       });
       setResetStatusAlert({
         type: 'success',
-        message: 'SQLite database wiped successfully. All localStorage and IndexedDB caches cleared.',
+        message: 'SQLite database files dropped and persistent storage unlinked successfully.',
       });
       setIsResetModalOpen(false);
       setConfirmDeleteText('');
@@ -197,11 +201,13 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
         onRefreshTrigger();
       }
 
+      // 8. Execute window reload ONLY AFTER backend confirms deletion
       setTimeout(() => {
         window.location.reload();
-      }, 600);
+      }, 500);
     } catch (err: any) {
       console.error('[SqliteVault] Reset database failed:', err);
+      sqliteBatchWriter.unlockWrites();
       setResetStatusAlert({
         type: 'error',
         message: err?.message || 'Failed to wipe SQLite database.',

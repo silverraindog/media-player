@@ -1147,6 +1147,8 @@ function App() {
   const [isVaultLoaded, setIsVaultLoaded] = useState(false);
   const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
     try {
+      const wasReset = localStorage.getItem('sambavault_db_reset') === 'true';
+      if (wasReset) return [];
       const cached = sqliteBatchWriter.getCachedMedia();
       if (cached && cached.length > 0) return cached;
       const v2 = localStorage.getItem('sambavault_media_library_v2');
@@ -1188,18 +1190,22 @@ function App() {
         localStorage.removeItem('samba_vault_tree');
         localStorage.removeItem('samba_vault_last_scan_summary');
         localStorage.removeItem('sambavault_sqlite_persistent_cache');
+        localStorage.setItem('sambavault_db_reset', 'true');
       }
 
-      setMediaLibrary(CURATED_MEDIA_DATABASE);
-      setSambaTree(INITIAL_SAMBA_TREE);
-      setW({ mediaLibrary: CURATED_MEDIA_DATABASE, sambaTree: INITIAL_SAMBA_TREE, sambaConfig, isLoaded: true });
+      sqliteBatchWriter.clear();
+      localDbFallback.clearAll();
+
+      setMediaLibrary([]);
+      setSambaTree([]);
+      setW({ mediaLibrary: [], sambaTree: [], sambaConfig, isLoaded: true });
 
       const res = await fetch('/api/db/reset', { method: 'DELETE' });
       if (!res.ok) {
         await fetch('/api/db/reset', { method: 'POST' }).catch(() => {});
       }
 
-      showToast('Database reset successfully. Cleared sambavault_media_library_v2 and sambavault_persistent_vault_state.');
+      showToast('Database reset successfully. Cleared database and persistent state.');
       setTimeout(() => {
         window.location.reload();
       }, 500);
@@ -1213,23 +1219,33 @@ function App() {
     fetchWithRetry('/api/vault/state')
       .then(res => res.json())
       .then(data => {
+        const wasReset = typeof window !== 'undefined' && localStorage.getItem('sambavault_db_reset') === 'true';
         if (data.success && data.state) {
           if (data.state.sambaTree && Array.isArray(data.state.sambaTree)) setSambaTree(data.state.sambaTree);
           if (data.state.syncLogs && Array.isArray(data.state.syncLogs)) setSyncLogs(data.state.syncLogs);
           if (data.state.sambaConfig) setSambaConfig(data.state.sambaConfig);
           if (data.state.classifierSettings) setClassifierSettings(data.state.classifierSettings);
           // Load mediaLibrary if available in state
-          if (data.state.mediaLibrary && Array.isArray(data.state.mediaLibrary) && data.state.mediaLibrary.length > 0) {
-            setMediaLibrary(data.state.mediaLibrary);
-            sqliteBatchWriter.updateCache(data.state.mediaLibrary);
+          if (data.state.mediaLibrary && Array.isArray(data.state.mediaLibrary)) {
+            if (data.state.mediaLibrary.length === 0 && wasReset) {
+              setMediaLibrary([]);
+            } else if (data.state.mediaLibrary.length > 0) {
+              setMediaLibrary(data.state.mediaLibrary);
+              sqliteBatchWriter.updateCache(data.state.mediaLibrary);
+            } else {
+              setMediaLibrary(prev => (prev && prev.length > 0 ? prev : (wasReset ? [] : CURATED_MEDIA_DATABASE)));
+            }
           } else {
-            setMediaLibrary(prev => (prev && prev.length > 0 ? prev : CURATED_MEDIA_DATABASE));
+            setMediaLibrary(prev => (prev && prev.length > 0 ? prev : (wasReset ? [] : CURATED_MEDIA_DATABASE)));
           }
+        } else if (wasReset) {
+          setMediaLibrary([]);
         }
         setIsVaultLoaded(true);
       })
       .catch(() => {
-        setMediaLibrary(prev => (prev && prev.length > 0 ? prev : CURATED_MEDIA_DATABASE));
+        const wasReset = typeof window !== 'undefined' && localStorage.getItem('sambavault_db_reset') === 'true';
+        setMediaLibrary(prev => (prev && prev.length > 0 ? prev : (wasReset ? [] : CURATED_MEDIA_DATABASE)));
         setIsVaultLoaded(true);
       });
   }, []);

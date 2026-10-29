@@ -103,6 +103,11 @@ async fn check_path_integrity(path: String) -> Result<PathMetadataResult, String
     }
 }
 
+#[tauri::command]
+async fn check_path_metadata(path: String) -> Result<PathMetadataResult, String> {
+    check_path_integrity(path).await
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct VerbosePathResolutionResult {
     pub raw_input: String,
@@ -276,7 +281,6 @@ pub struct DebugPathResolutionReport {
     pub inspected_dir: String,
     pub artifacts: Vec<OsStringArtifactReport>,
     pub raw_input_hex: String,
-    pub has_os_artifacts: bool,
     pub encountered_artifacts_count: usize,
     pub diagnostic_notes: Vec<String>,
     pub timestamp: String,
@@ -474,7 +478,7 @@ async fn debug_path_resolution(path: String) -> Result<DebugPathResolutionReport
         inspected_dir,
         artifacts,
         raw_input_hex: raw_bytes_hex,
-        has_os_artifacts: encountered_artifacts_count > 0,
+        encountered_artifacts_count,
         diagnostic_notes,
         timestamp,
     })
@@ -2380,6 +2384,7 @@ fn main() {
             check_path_exists,
             checkPathExists,
             check_path_integrity,
+            check_path_metadata,
             resolve_path_verbose,
             debug_path_resolution,
             find_episode_media_file,

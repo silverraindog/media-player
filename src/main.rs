@@ -45,38 +45,168 @@ fn App() -> Element {
     }
 }
 
-/// Diagnostic function that performs a full fs::metadata and fs::read_dir check
-pub fn debug_path_resolution(path: &str) -> Result<String, String> {
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct PathMetadataResult {
+    pub exists: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub permissions: String,
+    pub size: u64,
+    pub error: Option<String>,
+}
+
+pub fn check_path_integrity(path: &str) -> Result<PathMetadataResult, String> {
     use std::fs;
     use std::path::Path;
 
     let p = Path::new(path);
-    let mut report = format!("Debug Path Resolution for: {}\n", path);
+    match fs::metadata(p) {
+        Ok(meta) => Ok(PathMetadataResult {
+            exists: true,
+            is_dir: meta.is_dir(),
+            is_file: meta.is_file(),
+            permissions: format!("{:?}", meta.permissions()),
+            size: meta.len(),
+            error: None,
+        }),
+        Err(e) => Ok(PathMetadataResult {
+            exists: false,
+            is_dir: false,
+            is_file: false,
+            permissions: "".to_string(),
+            size: 0,
+            error: Some(format!("Error: {}", e)),
+        }),
+    }
+}
+
+pub fn check_path_metadata(path: &str) -> Result<PathMetadataResult, String> {
+    check_path_integrity(path)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct OsStringArtifactReport {
+    pub name: String,
+    pub raw_os_string: String,
+    pub is_valid_unicode: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub size_bytes: u64,
+    pub permissions: String,
+    pub hex_bytes: String,
+    pub has_hidden_control_chars: bool,
+    pub has_trailing_space: bool,
+    pub is_appledouble: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct DebugPathResolutionReport {
+    pub target_path: String,
+    pub resolved_path: String,
+    pub exists: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub permissions: String,
+    pub size_bytes: u64,
+    pub file_count: usize,
+    pub metadata_error: Option<String>,
+    pub read_dir_error: Option<String>,
+    pub parent_path: Option<String>,
+    pub parent_exists: bool,
+    pub inspected_dir: String,
+    pub artifacts: Vec<OsStringArtifactReport>,
+    pub raw_input_hex: String,
+    pub encountered_artifacts_count: usize,
+    pub diagnostic_notes: Vec<String>,
+    pub timestamp: String,
+}
+
+/// Diagnostic function that performs a full fs::metadata and fs::read_dir check
+pub fn debug_path_resolution(path: &str) -> Result<DebugPathResolutionReport, String> {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    let p = Path::new(path);
+    let resolved_path = p.to_string_lossy().to_string();
+    let mut exists = false;
+    let mut is_dir = false;
+    let mut is_file = false;
+    let mut permissions = String::new();
+    let mut size_bytes = 0u64;
+    let mut metadata_error = None;
+    let mut read_dir_error = None;
+    let mut diagnostic_notes = Vec::new();
 
     match fs::metadata(p) {
         Ok(meta) => {
-            report.push_str(&format!(
-                "Exists: true | Dir: {} | File: {} | Permissions: {:?} | Size: {} bytes\n",
-                meta.is_dir(), meta.is_file(), meta.permissions(), meta.len()
-            ));
+            exists = true;
+            is_dir = meta.is_dir();
+            is_file = meta.is_file();
+            permissions = format!("{:?}", meta.permissions());
+            size_bytes = meta.len();
+            diagnostic_notes.push(format!("fs::metadata success: permissions={:?}", meta.permissions()));
         }
         Err(e) => {
-            report.push_str(&format!("fs::metadata error: {}\n", e));
+            metadata_error = Some(e.to_string());
         }
     }
 
-    if let Ok(entries) = fs::read_dir(p) {
-        let mut count = 0;
-        report.push_str("Directory Entries (OsString check):\n");
+    let parent_path = p.parent().map(|par| par.to_string_lossy().to_string());
+    let parent_exists = p.parent().map(|par| par.exists()).unwrap_or(false);
+    let mut artifacts = Vec::new();
+    let mut file_count = 0;
+
+    let dir_to_read = if is_dir {
+        p.to_path_buf()
+    } else {
+        p.parent().unwrap_or_else(|| Path::new("/")).to_path_buf()
+    };
+
+    if let Ok(entries) = fs::read_dir(&dir_to_read) {
         for entry in entries.filter_map(|e| e.ok()) {
-            count += 1;
+            file_count += 1;
             let os_name = entry.file_name();
-            let lossy = os_name.to_string_lossy();
-            let is_valid = os_name.to_str().is_some();
-            report.push_str(&format!(" - [ValidUnicode: {}] {:?} (lossy: {})\n", is_valid, os_name, lossy));
+            let raw_os_string = format!("{:?}", os_name);
+            let name = os_name.to_string_lossy().to_string();
+            let is_valid_unicode = os_name.to_str().is_some();
+            artifacts.push(OsStringArtifactReport {
+                name,
+                raw_os_string,
+                is_valid_unicode,
+                is_dir: entry.metadata().map(|m| m.is_dir()).unwrap_or(false),
+                is_file: entry.metadata().map(|m| m.is_file()).unwrap_or(false),
+                size_bytes: entry.metadata().map(|m| m.len()).unwrap_or(0),
+                permissions: "".to_string(),
+                hex_bytes: "".to_string(),
+                has_hidden_control_chars: false,
+                has_trailing_space: false,
+                is_appledouble: false,
+            });
         }
-        report.push_str(&format!("Total Count: {}\n", count));
+    } else if let Err(e) = fs::read_dir(&dir_to_read) {
+        read_dir_error = Some(e.to_string());
     }
 
-    Ok(report)
+    let encountered_artifacts_count = artifacts.len();
+
+    Ok(DebugPathResolutionReport {
+        target_path: path.to_string(),
+        resolved_path,
+        exists,
+        is_dir,
+        is_file,
+        permissions,
+        size_bytes,
+        file_count,
+        metadata_error,
+        read_dir_error,
+        parent_path,
+        parent_exists,
+        inspected_dir: dir_to_read.to_string_lossy().to_string(),
+        artifacts,
+        raw_input_hex: "".to_string(),
+        encountered_artifacts_count,
+        diagnostic_notes,
+        timestamp: "".to_string(),
+    })
 }

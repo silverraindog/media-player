@@ -2405,6 +2405,47 @@ export const openMacosSecurityPrivacy = async (): Promise<string> => {
   throw new Error('Not running inside desktop Tauri runtime');
 };
 
+export interface FfmpegSidecarReport {
+  available: boolean;
+  isBundled?: boolean;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  version?: string;
+  error?: string | null;
+}
+
+/**
+ * Validates the existence and version of bundled FFmpeg sidecar binaries.
+ */
+export const validateFfmpegSidecar = async (): Promise<FfmpegSidecarReport> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const result = await invoke<any>('validate_ffmpeg_sidecar');
+      return {
+        available: Boolean(result?.available),
+        isBundled: Boolean(result?.is_bundled ?? result?.isBundled),
+        ffmpegPath: result?.ffmpeg_path ?? result?.ffmpegPath ?? '',
+        ffprobePath: result?.ffprobe_path ?? result?.ffprobePath ?? '',
+        version: result?.version || '',
+        error: result?.error || null,
+      };
+    } catch (e: any) {
+      console.warn('[TauriBridge] validate_ffmpeg_sidecar invoke error:', e);
+      return {
+        available: false,
+        isBundled: false,
+        error: e?.message || String(e),
+      };
+    }
+  }
+  return {
+    available: true,
+    isBundled: false,
+    version: 'Browser Preview Fallback Mode',
+  };
+};
+
 
 
 

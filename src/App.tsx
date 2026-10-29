@@ -72,6 +72,8 @@ import {
   normalizeScannedRelativePath,
   resolveLocalMountPath,
   VolumeMountInfo,
+  validateFfmpegSidecar,
+  FfmpegSidecarReport,
 } from './utils/tauriBridge';
 import { recordScanBatchDiscovered } from './utils/scanPathDebugger';
 import { recordScanPerformanceRun } from './utils/scanPerformanceCollector';
@@ -698,6 +700,26 @@ function App() {
     }).catch((err) => {
       console.warn('[Permissions] Pre-flight system check error:', err);
     });
+  }, []);
+
+  // Bundled FFmpeg Sidecar Startup Check
+  const [ffmpegSidecarStatus, setFfmpegSidecarStatus] = useState<FfmpegSidecarReport | null>(null);
+  const [showFfmpegSidecarWarning, setShowFfmpegSidecarWarning] = useState(false);
+
+  useEffect(() => {
+    if (isTauriEnvironment()) {
+      validateFfmpegSidecar()
+        .then((report) => {
+          setFfmpegSidecarStatus(report);
+          if (!report.available || !report.version || report.error) {
+            setShowFfmpegSidecarWarning(true);
+          }
+        })
+        .catch((err) => {
+          console.warn('[App] validateFfmpegSidecar check failed:', err);
+          setShowFfmpegSidecarWarning(true);
+        });
+    }
   }, []);
 
 
@@ -3912,6 +3934,42 @@ function App() {
         </div>
         <span className="font-mono text-[11px] text-slate-200">API Debugger</span>
       </button>
+
+      {/* FFmpeg Sidecar Missing or Incompatible Warning Overlay */}
+      {showFfmpegSidecarWarning && isTauriEnvironment() && (
+        <div className="fixed bottom-16 right-4 z-50 max-w-md bg-amber-950/95 border border-amber-500/50 rounded-xl p-4 text-amber-200 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="flex-1 text-xs">
+              <h4 className="font-semibold text-amber-300 text-sm mb-1 flex items-center justify-between">
+                FFmpeg Sidecar Warning
+              </h4>
+              <p className="text-amber-200/90 leading-relaxed mb-2">
+                {ffmpegSidecarStatus?.error || 'Bundled FFmpeg sidecar binary was not found or failed version validation. Video transcoding and playback streaming may be unavailable or degraded.'}
+              </p>
+              {ffmpegSidecarStatus?.ffmpegPath && (
+                <p className="font-mono text-[10px] text-amber-400/80 truncate mb-2" title={ffmpegSidecarStatus.ffmpegPath}>
+                  Binary Path: {ffmpegSidecarStatus.ffmpegPath}
+                </p>
+              )}
+              <div className="flex items-center gap-2 mt-2">
+                <button
+                  onClick={() => setShowFfmpegSidecarWarning(false)}
+                  className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Dismiss Warning
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowFfmpegSidecarWarning(false)}
+              className="text-amber-400/60 hover:text-amber-300 transition-colors cursor-pointer p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Clean Minimalist Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">

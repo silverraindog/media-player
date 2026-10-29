@@ -2033,6 +2033,44 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
         }
     }
 
+    // Search bundled Tauri sidecar locations
+    let mut candidate_dirs = Vec::new();
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidate_dirs.push(exe_dir.to_path_buf());
+            candidate_dirs.push(exe_dir.join("binaries"));
+            candidate_dirs.push(exe_dir.join("../Resources"));
+            candidate_dirs.push(exe_dir.join("../Resources/binaries"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidate_dirs.push(cwd.join("src-tauri").join("binaries"));
+        candidate_dirs.push(cwd.join("binaries"));
+    }
+
+    for dir in &candidate_dirs {
+        if let Ok(entries) = fs::read_dir(dir) {
+            let mut found_ffmpeg: Option<PathBuf> = None;
+            let mut found_ffprobe: Option<PathBuf> = None;
+
+            for entry in entries.filter_map(|e| e.ok()) {
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                if file_name.starts_with("ffmpeg") {
+                    found_ffmpeg = Some(entry.path());
+                } else if file_name.starts_with("ffprobe") {
+                    found_ffprobe = Some(entry.path());
+                }
+            }
+
+            if let Some(ffmpeg_p) = found_ffmpeg {
+                let probe_p = found_ffprobe.unwrap_or_else(|| ffmpeg_p.clone());
+                if let Ok(loc) = FfmpegLocator::with_paths(ffmpeg_p, probe_p) {
+                    return Ok(loc);
+                }
+            }
+        }
+    }
+
     let mut search_dirs = Vec::new();
     #[cfg(target_os = "macos")]
     search_dirs.extend([
@@ -2069,6 +2107,64 @@ fn locate_ffmpeg() -> Result<FfmpegLocator, String> {
     }
 
     Err("FFmpeg was not found. Install FFmpeg or configure FFMPEG_PATH.".to_string())
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FfmpegSidecarReport {
+    pub available: bool,
+    pub is_bundled: bool,
+    pub ffmpeg_path: String,
+    pub ffprobe_path: String,
+    pub version: String,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+async fn validate_ffmpeg_sidecar() -> Result<FfmpegSidecarReport, String> {
+    match locate_ffmpeg() {
+        Ok(locator) => {
+            let ffmpeg_p = locator.ffmpeg();
+            let ffprobe_p = locator.ffprobe();
+
+            let version_output = Command::new(ffmpeg_p)
+                .arg("-version")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            let first_line = version_output
+                .lines()
+                .next()
+                .unwrap_or("FFmpeg sidecar active")
+                .to_string();
+
+            let is_bundled = ffmpeg_p.to_string_lossy().contains("binaries")
+                || ffmpeg_p.to_string_lossy().contains("Resources")
+                || ffmpeg_p.to_string_lossy().contains("src-tauri");
+
+            Ok(FfmpegSidecarReport {
+                available: !first_line.is_empty(),
+                is_bundled,
+                ffmpeg_path: ffmpeg_p.to_string_lossy().to_string(),
+                ffprobe_path: ffprobe_p.to_string_lossy().to_string(),
+                version: first_line,
+                error: None,
+            })
+        }
+        Err(err) => Ok(FfmpegSidecarReport {
+            available: false,
+            is_bundled: false,
+            ffmpeg_path: "".to_string(),
+            ffprobe_path: "".to_string(),
+            version: "".to_string(),
+            error: Some(err),
+        }),
+    }
+}
+
+#[tauri::command]
+async fn check_bundled_ffmpeg() -> Result<FfmpegSidecarReport, String> {
+    validate_ffmpeg_sidecar().await
 }
 
 #[tauri::command]
@@ -2418,6 +2514,8 @@ fn main() {
             check_ffmpeg_codecs,
             set_custom_ffmpeg_path,
             get_detected_ffmpeg_path,
+            validate_ffmpeg_sidecar,
+            check_bundled_ffmpeg,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

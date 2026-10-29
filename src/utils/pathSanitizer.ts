@@ -403,3 +403,40 @@ export function getStandardArtworkFilenames(type: 'movie' | 'series' | 'album' =
     nfo: 'movie.nfo',
   };
 }
+
+export interface PathDirtyStateResult {
+  isDirty: boolean;
+  reason?: string;
+  score: number;
+  report: PathDiagnosticReport;
+}
+
+export function checkPathDirtyState(path: string): PathDirtyStateResult {
+  if (!path) {
+    const emptyReport: PathDiagnosticReport = {
+      rawPath: '',
+      sanitizedPath: '',
+      hasDoubleSlash: false,
+      hasMixedSlashes: false,
+      hasUnclosedParens: false,
+      issues: [],
+      isSuspicious: false,
+      cleanlinessScore: 100,
+    };
+    return { isDirty: false, score: 100, report: emptyReport };
+  }
+  const report = diagnoseSambaPath(path);
+  return {
+    isDirty: report.isSuspicious,
+    reason: report.issues.join('; ') || undefined,
+    score: report.cleanlinessScore,
+    report,
+  };
+}
+
+export function cleanPathValue(rawPath: string): string {
+  if (!rawPath) return '';
+  let cleaned = rawPath.replace(/%20/g, ' ').replace(/\/{2,}/g, '/');
+  return sanitizeSambaPath(cleaned);
+}
+

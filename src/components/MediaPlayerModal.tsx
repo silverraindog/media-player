@@ -103,6 +103,44 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
   }, [transcodeStatus]);
 
+  const [isBufferingCache, setIsBufferingCache] = useState(false);
+  const [bufferSecondsRemaining, setBufferSecondsRemaining] = useState(10);
+
+  // Pre-load buffer strategy & 5-second buffer threshold monitor:
+  // Automatically pauses when buffer < 5s and waits for transcoder cache to fill before resuming playback.
+  useEffect(() => {
+    const el = media.type === 'album' ? audioRef.current : videoRef.current;
+    if (!el) return;
+
+    const checkBufferHealth = () => {
+      try {
+        if (el.buffered && el.buffered.length > 0) {
+          const bufferedEnd = el.buffered.end(el.buffered.length - 1);
+          const current = el.currentTime;
+          const bufferRemaining = bufferedEnd - current;
+          setBufferSecondsRemaining(Math.max(0, bufferRemaining));
+
+          if (bufferRemaining < 5 && !el.paused && current < (duration - 2)) {
+            if (!isBufferingCache) {
+              console.warn(`[MediaPlayerModal] Buffer dropped below 5s threshold (${bufferRemaining.toFixed(1)}s). Pausing stream to let transcoder fill cache...`);
+              setIsBufferingCache(true);
+              el.pause();
+            }
+          } else if (bufferRemaining >= 5 && isBufferingCache) {
+            console.log(`[MediaPlayerModal] Buffer refilled (${bufferRemaining.toFixed(1)}s >= 5s). Resuming playback...`);
+            setIsBufferingCache(false);
+            el.play().catch(() => {});
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
+    };
+
+    const interval = setInterval(checkBufferHealth, 1000);
+    return () => clearInterval(interval);
+  }, [isBufferingCache, duration, media.type]);
+
   const handleTimeUpdate = (time: number) => {
     setCurrentTime(time);
     // Sliding-window buffer strategy: every 30s of playback, prune consumed transcode segments from cache
@@ -461,6 +499,16 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       Cancel & Use Direct Play
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {isBufferingCache && (
+              <div className="absolute top-4 inset-x-4 z-20 bg-amber-950/90 border border-amber-500/50 text-amber-200 px-4 py-3 rounded-xl flex items-center gap-3 backdrop-blur-md shadow-lg animate-pulse">
+                <RefreshCw className="w-5 h-5 text-amber-400 animate-spin shrink-0" />
+                <div className="flex-1 text-xs">
+                  <p className="font-bold">Pre-loading Buffer & Waiting for Transcoder Cache...</p>
+                  <p className="text-amber-300 mt-0.5">Buffer dropped below 5s threshold ({bufferSecondsRemaining.toFixed(1)}s remaining). Automatically paused to let transcoder fill cache. Resuming shortly...</p>
                 </div>
               </div>
             )}

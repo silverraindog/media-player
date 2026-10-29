@@ -15,8 +15,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { SambaShareNode, SambaConfig } from '../types';
-import { checkPathDirtyState, cleanPathValue } from './SambaExplorer';
-import { sanitizeSambaPath } from '../utils/pathSanitizer';
+import { sanitizeSambaPath, checkPathDirtyState, cleanPathValue } from '../utils/pathSanitizer';
 import { logger } from '../utils/loggerService';
 
 interface PathIntegrityDiagnosticModalProps {

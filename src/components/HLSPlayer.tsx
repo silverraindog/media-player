@@ -21,6 +21,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { logger } from '../utils/loggerService';
+import { hlsPrefetchWorkerService } from '../services/hlsPrefetchWorkerService';
 
 export interface StreamProbeData {
   format: {
@@ -441,10 +442,36 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         }
       });
 
-      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+      hls.on(Hls.Events.FRAG_BUFFERED, (_e, data) => {
         setHlsStatus('streaming');
         if (video.buffered.length > 0) {
           setBufferedEnd(video.buffered.end(video.buffered.length - 1));
+        }
+
+        // Web Worker based dynamic pre-fetch service for high-bitrate content (>3 Mbps):
+        // Dynamically adjusts pre-fetched segment count from 3 up to 8 during high-jitter intervals
+        try {
+          const currentLevel = hls.levels[hls.currentLevel];
+          const levelDetails = currentLevel?.details;
+          const currentBitrate = currentLevel?.bitrate || probeData?.format?.bit_rate || 5000000;
+          const isHighBitrate = currentBitrate >= 3000000 || Boolean(probeData?.video?.height && probeData.video.height >= 1080);
+
+          if (levelDetails && levelDetails.fragments && data && data.frag) {
+            const currentSn = data.frag.sn;
+            const fragIndex = levelDetails.fragments.findIndex((f) => f.sn === currentSn);
+
+            if (fragIndex >= 0) {
+              const dynamicTarget = hlsPrefetchWorkerService.getDynamicPreFetchCount();
+              const upcomingFrags = levelDetails.fragments.slice(fragIndex + 1, fragIndex + 1 + Math.max(8, dynamicTarget));
+              const upcomingUrls = upcomingFrags.map((f) => f.url).filter(Boolean);
+
+              if (upcomingUrls.length > 0 && isHighBitrate) {
+                hlsPrefetchWorkerService.prefetchNextSegments(upcomingUrls, currentBitrate, isHighBitrate);
+              }
+            }
+          }
+        } catch (prefetchErr) {
+          console.warn('[HLSPlayer] Dynamic pre-fetch worker error:', prefetchErr);
         }
       });
 

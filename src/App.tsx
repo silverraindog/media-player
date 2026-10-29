@@ -84,6 +84,11 @@ import { sanitizeFilename, sanitizeSambaPath, encodeSambaPathForUrl, diagnoseSam
 import { categorizeMediaWithRetry } from './utils/metadataCategorizer';
 import { localDbFallback } from './utils/localDatabaseFallback';
 import { apiCall } from './lib/api';
+import { hlsPrefetchWorkerService } from './services/hlsPrefetchWorkerService';
+
+if (typeof window !== 'undefined') {
+  (window as any).hlsPrefetchWorker = hlsPrefetchWorkerService;
+}
 
 const isTauriProtocol = typeof window !== 'undefined' && (
   (((window as any).location?.origin || '').includes('tauri://')) ||
@@ -144,12 +149,13 @@ const fetchWithRetry = async (
   ): Promise<Response> => {
     let lastError: any;
 
-    // Detect media streaming/segments vs metadata requests
     const isMedia = isMediaSegment ||
       url.includes('/api/media/stream') ||
       url.includes('/api/transcode') ||
       url.includes('/stream') ||
       /\.(m3u8|ts|m4s|mp4|webm)(\?.*)?$/i.test(url);
+
+    const isTranscodeStream = isMedia || url.includes('/api/media/stream') || url.includes('/api/transcode') || url.includes('/index.m3u8') || url.includes('.ts');
 
     // Apply Request Priority headers:
     // - High priority & 'Cache-Control: no-cache' for media streaming segments to prevent buffering/stalls
@@ -160,6 +166,10 @@ const fetchWithRetry = async (
       headers.set('Request-Priority', 'high');
       headers.set('Cache-Control', 'no-cache');
       headers.set('Pragma', 'no-cache');
+      if (isTranscodeStream) {
+        headers.set('X-Preload-Buffer', 'true');
+        headers.set('X-Buffer-Threshold-Sec', '5');
+      }
     } else {
       headers.set('Priority', 'u=6');
       headers.set('Request-Priority', 'low');
@@ -173,7 +183,7 @@ const fetchWithRetry = async (
     } as RequestInit;
 
     const isSpecialCall = url.includes('/api/metadata/categorize') || url.includes('/api/vault/state') || url.includes('/api/samba/');
-    const timeoutMs = isSpecialCall ? 5000 : (isMedia ? 30000 : 15000);
+    const timeoutMs = isTranscodeStream ? 45000 : (isSpecialCall ? 5000 : (isMedia ? 30000 : 15000));
     const reqId = Math.random().toString(36).substring(2, 7);
 
     for (let i = 0; i < maxRetries; i++) {
@@ -1106,6 +1116,50 @@ function App() {
     } catch {}
     return CURATED_MEDIA_DATABASE;
   });
+
+  // State initialization guard for 'w' object in SambaVault Application view
+  const [w, setW] = useState<any>(null);
+
+  useEffect(() => {
+    if (isVaultLoaded) {
+      setW({
+        mediaLibrary,
+        sambaTree,
+        sambaConfig,
+        isLoaded: true,
+      });
+    }
+  }, [isVaultLoaded, mediaLibrary, sambaTree, sambaConfig]);
+
+  // Database delete and reset logic properly clearing sambavault_media_library_v2 and sambavault_persistent_vault_state
+  const handleResetDatabaseInApp = async () => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        localStorage.removeItem('sambavault_media_library_v2');
+        localStorage.removeItem('sambavault_persistent_vault_state');
+        localStorage.removeItem('samba_vault_tree');
+        localStorage.removeItem('samba_vault_last_scan_summary');
+        localStorage.removeItem('sambavault_sqlite_persistent_cache');
+      }
+
+      setMediaLibrary(CURATED_MEDIA_DATABASE);
+      setSambaTree(INITIAL_SAMBA_TREE);
+      setW({ mediaLibrary: CURATED_MEDIA_DATABASE, sambaTree: INITIAL_SAMBA_TREE, sambaConfig, isLoaded: true });
+
+      const res = await fetch('/api/db/reset', { method: 'DELETE' });
+      if (!res.ok) {
+        await fetch('/api/db/reset', { method: 'POST' }).catch(() => {});
+      }
+
+      showToast('Database reset successfully. Cleared sambavault_media_library_v2 and sambavault_persistent_vault_state.');
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } catch (err) {
+      console.error('[App] Database reset error:', err);
+      showToast('Failed to reset database.');
+    }
+  };
 
   useEffect(() => {
     fetchWithRetry('/api/vault/state')
@@ -3328,6 +3382,17 @@ function App() {
     setNfoStudioMedia(media);
     setActiveTab('nfo-studio');
   };
+
+  if (!isVaultLoaded || !w) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-300 font-mono text-xs">
+        <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-6 py-4 rounded-2xl shadow-2xl">
+          <span className="w-3 h-3 rounded-full bg-indigo-500 animate-ping"></span>
+          <span>Initializing SambaVault Application view...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white relative z-[10]">

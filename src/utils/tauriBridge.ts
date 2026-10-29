@@ -1398,6 +1398,66 @@ export const openExternalUrl = async (url: string): Promise<boolean> => {
   return false;
 };
 
+export interface VerbosePathResolutionResult {
+  raw_input: string;
+  raw_bytes_hex: string;
+  has_carriage_return: boolean;
+  has_newline: boolean;
+  has_trailing_spaces: boolean;
+  has_leading_spaces: boolean;
+  has_non_breaking_spaces: boolean;
+  has_zero_width_spaces: boolean;
+  has_control_chars: boolean;
+  hidden_character_details: string[];
+  sanitized_out: string[];
+  normalized_string: string;
+  std_path: string;
+  raw_path_exists: boolean;
+  normalized_path_exists: boolean;
+  is_dir: boolean;
+  is_file: boolean;
+  parent_path: string | null;
+  parent_exists: boolean;
+  permissions: string;
+  file_count: number;
+  error: string | null;
+}
+
+export interface OsStringArtifactReport {
+  name: string;
+  raw_os_string: string;
+  is_valid_unicode: boolean;
+  is_dir: boolean;
+  is_file: boolean;
+  size_bytes: number;
+  permissions: string;
+  hex_bytes: string;
+  has_hidden_control_chars: boolean;
+  has_trailing_space: boolean;
+  is_appledouble: boolean;
+}
+
+export interface DebugPathResolutionReport {
+  target_path: string;
+  resolved_path: string;
+  exists: boolean;
+  is_dir: boolean;
+  is_file: boolean;
+  permissions: string;
+  size_bytes: number;
+  file_count: number;
+  metadata_error: string | null;
+  read_dir_error: string | null;
+  parent_path: string | null;
+  parent_exists: boolean;
+  inspected_dir: string;
+  artifacts: OsStringArtifactReport[];
+  raw_input_hex: string;
+  encountered_artifacts_count: number;
+  diagnostic_notes: string[];
+  timestamp: string;
+}
+
 export interface PathExistsResult {
   exists: boolean;
   isDirectory?: boolean;
@@ -1637,6 +1697,23 @@ export const verifyPath = async (targetPath: string): Promise<PathExistsResult> 
     }
   );
 
+  if (!result.exists || result.accessDenied) {
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('sambavault-path-error', {
+            detail: {
+              path: rawInput || cleanPath,
+              resolvedPath: result.resolvedPath || cleanPath,
+              message: result.message,
+              errorCode: result.errorCode,
+            },
+          })
+        );
+      }
+    } catch {}
+  }
+
   return result;
 };
 
@@ -1674,6 +1751,156 @@ const fetchBackendCheckPath = async (cleanPath: string, rawInput: string): Promi
     path: cleanPath,
     resolvedPath: cleanPath,
     message: `Host path "${cleanPath}" verified`,
+  };
+};
+
+/**
+ * Verbose path resolution: captures raw input, normalized string, and backend std::path object
+ * to determine whether hidden characters (e.g. carriage return \r, trailing spaces, zero-width chars)
+ * are being sanitized out before the filesystem check is triggered.
+ */
+export const resolvePathVerbose = async (path: string): Promise<VerbosePathResolutionResult> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      return await invoke<VerbosePathResolutionResult>('resolve_path_verbose', { path });
+    } catch (e) {
+      console.warn('[resolvePathVerbose] Tauri invoke error, falling back to backend:', e);
+    }
+  }
+
+  try {
+    const res = await fetch('/api/samba/verbose-path-resolution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    console.warn('[resolvePathVerbose] fetch /api/samba/verbose-path-resolution error:', e);
+  }
+
+  // Client-side simulation fallback
+  const raw_input = path || '';
+  const raw_bytes_hex = Array.from(new TextEncoder().encode(raw_input))
+    .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
+    .join(' ');
+  const has_carriage_return = raw_input.includes('\r');
+  const has_newline = raw_input.includes('\n');
+  const has_trailing_spaces = raw_input.endsWith(' ');
+  const has_leading_spaces = raw_input.startsWith(' ');
+  const has_non_breaking_spaces = raw_input.includes('\u00A0');
+  const has_zero_width_spaces = /[\u200B\u200C\u200D\uFEFF]/.test(raw_input);
+  const has_control_chars = /[\x00-\x1F\x7F]/.test(raw_input);
+
+  const hidden_details: string[] = [];
+  const sanitized_out: string[] = [];
+  if (has_carriage_return) {
+    hidden_details.push('Carriage Return (\\r / 0x0D)');
+    sanitized_out.push('Stripped carriage return (\\r)');
+  }
+  if (has_newline) {
+    hidden_details.push('Newline (\\n / 0x0A)');
+    sanitized_out.push('Stripped line break (\\n)');
+  }
+  if (has_trailing_spaces) {
+    hidden_details.push('Trailing whitespace at end of path');
+    sanitized_out.push('Trimmed trailing spaces');
+  }
+  if (has_leading_spaces) {
+    hidden_details.push('Leading whitespace at start of path');
+    sanitized_out.push('Trimmed leading spaces');
+  }
+  if (has_non_breaking_spaces) {
+    hidden_details.push('Non-breaking space (\\u00A0 / 0xC2 0xA0)');
+    sanitized_out.push('Normalized non-breaking space');
+  }
+  if (has_zero_width_spaces) {
+    hidden_details.push('Zero-width space (\\u200B / \\uFEFF)');
+    sanitized_out.push('Stripped zero-width spaces');
+  }
+  if (has_control_chars) {
+    hidden_details.push('Unprintable ASCII control character (< 0x20)');
+    sanitized_out.push('Stripped control characters');
+  }
+
+  const normalized_string = raw_input.trim().replace(/^file:\/\//, '').replace(/\\/g, '/');
+
+  return {
+    raw_input,
+    raw_bytes_hex,
+    has_carriage_return,
+    has_newline,
+    has_trailing_spaces,
+    has_leading_spaces,
+    has_non_breaking_spaces,
+    has_zero_width_spaces,
+    has_control_chars,
+    hidden_character_details: hidden_details,
+    sanitized_out,
+    normalized_string,
+    std_path: `PathBuf("${normalized_string}")`,
+    raw_path_exists: false,
+    normalized_path_exists: false,
+    is_dir: false,
+    is_file: false,
+    parent_path: null,
+    parent_exists: false,
+    permissions: 'N/A',
+    file_count: 0,
+    error: 'Live filesystem stat unavailable in static browser mode',
+  };
+};
+
+/**
+ * Diagnostic command: performs full fs::metadata and fs::read_dir check on path
+ * and returns verbose report containing permissions, file count, and any encountered OsString artifacts.
+ */
+export const debugPathResolution = async (path: string): Promise<DebugPathResolutionReport> => {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      return await invoke<DebugPathResolutionReport>('debug_path_resolution', { path });
+    } catch (e) {
+      console.warn('[debugPathResolution] Tauri invoke error, falling back to backend:', e);
+    }
+  }
+
+  try {
+    const res = await fetch('/api/samba/debug-path-resolution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    console.warn('[debugPathResolution] fetch /api/samba/debug-path-resolution error:', e);
+  }
+
+  // Simulated fallback
+  return {
+    target_path: path,
+    resolved_path: path,
+    exists: false,
+    is_dir: false,
+    is_file: false,
+    permissions: 'N/A',
+    size_bytes: 0,
+    file_count: 0,
+    metadata_error: 'Unable to reach Tauri or backend service',
+    read_dir_error: null,
+    parent_path: null,
+    parent_exists: false,
+    inspected_dir: path,
+    artifacts: [],
+    raw_input_hex: '',
+    encountered_artifacts_count: 0,
+    diagnostic_notes: ['Connection to backend diagnostic service failed.'],
+    timestamp: new Date().toISOString(),
   };
 };
 

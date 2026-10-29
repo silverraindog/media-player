@@ -41,6 +41,7 @@ import {
   AlertCircle,
   AlertTriangle,
   Shield,
+  ShieldAlert,
   ShieldCheck,
   PieChart,
   Compass,
@@ -107,6 +108,8 @@ import {
 import { JsonPathInspectorModal } from './JsonPathInspectorModal';
 import { PathIntegrityDiagnosticModal } from './PathIntegrityDiagnosticModal';
 import { SanitizationHistoryPanel } from './SanitizationHistoryPanel';
+import { VerbosePathResolutionModal } from './VerbosePathResolutionModal';
+import { DebugPathResolutionModal } from './DebugPathResolutionModal';
 import { sanitizationTracker } from '../utils/sanitizationTracker';
 import { pathDebugLogger } from '../utils/debugPathLogger';
 import { logger } from '../utils/loggerService';
@@ -777,6 +780,33 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   const [isPathInspectorOpen, setIsPathInspectorOpen] = useState(false);
   const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
   const [isSanitizationHistoryOpen, setIsSanitizationHistoryOpen] = useState(false);
+  const [isVerboseResolutionOpen, setIsVerboseResolutionOpen] = useState(false);
+  const [verboseSelectedPath, setVerboseSelectedPath] = useState<string>('');
+  const [isDebugResolutionOpen, setIsDebugResolutionOpen] = useState(false);
+  const [debugSelectedPath, setDebugSelectedPath] = useState<string>('');
+  const [lastPathError, setLastPathError] = useState<{ path: string; resolvedPath: string; message?: string } | null>(null);
+
+  // Auto-listen for filesystem path errors dispatched across the app
+  useEffect(() => {
+    const handlePathError = (e: any) => {
+      if (e.detail?.path) {
+        setLastPathError({
+          path: e.detail.path,
+          resolvedPath: e.detail.resolvedPath || e.detail.path,
+          message: e.detail.message,
+        });
+      }
+    };
+    window.addEventListener('sambavault-path-error', handlePathError);
+    return () => window.removeEventListener('sambavault-path-error', handlePathError);
+  }, []);
+
+  // Helper to trigger debug_path_resolution on any path
+  const triggerDebugPathResolution = (path: string) => {
+    setDebugSelectedPath(path);
+    setIsDebugResolutionOpen(true);
+  };
+
   // --- New Scan Errors Panel Logic ---
   const [scanErrors, setScanErrors] = useState<string[]>([]);
   useEffect(() => {
@@ -3257,6 +3287,39 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     <div className="space-y-6 flex-1 flex flex-col min-h-0 w-full">
       {/* Top Banner */}
       <div className="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        {/* Dynamic Path Error Alert Banner with Debug Path Resolution Trigger */}
+        {lastPathError && (
+          <div className="mb-4 p-4 rounded-xl bg-amber-950/40 border border-amber-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-white">Filesystem Path Error Encountered:</span>
+                  <span className="font-mono text-amber-300 truncate max-w-md">{lastPathError.path}</span>
+                </div>
+                {lastPathError.message && <p className="text-[11px] text-amber-400/80 mt-0.5">{lastPathError.message}</p>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => triggerDebugPathResolution(lastPathError.path)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition cursor-pointer shadow-md"
+                title="Run Rust debug_path_resolution diagnostic to check fs::metadata and OsString artifacts"
+              >
+                <Terminal className="w-3.5 h-3.5" />
+                <span>Debug Path Resolution</span>
+              </button>
+              <button
+                onClick={() => setLastPathError(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white transition cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Scan Errors Panel */}
         {scanErrors.length > 0 && (
           <div className="mb-6 p-4 rounded-xl bg-rose-950/30 border border-rose-900/50">
@@ -3280,9 +3343,17 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
               {scanErrors.map((err, i) => (
                 <div key={i} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-950/50 border border-rose-900/30 text-xs font-mono">
                   <span className="truncate text-rose-200/80">{err}</span>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => handleCopyScanErrorPath(err)} className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white" title="Copy Path"><Copy className="w-3.5 h-3.5" /></button>
-                    <button onClick={() => onSyncSamba(err)} className="p-1.5 rounded hover:bg-rose-900 text-rose-400 hover:text-white" title="Retry Sync"><RefreshCw className="w-3.5 h-3.5" /></button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => triggerDebugPathResolution(err)}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-500/40 text-[10px] font-bold transition cursor-pointer"
+                      title="Run Rust debug_path_resolution (OsString and fs::metadata audit) on this failed path"
+                    >
+                      <Terminal className="w-3 h-3 text-amber-400" />
+                      <span>Debug Stat</span>
+                    </button>
+                    <button onClick={() => handleCopyScanErrorPath(err)} className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer" title="Copy Path"><Copy className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => onSyncSamba(err)} className="p-1.5 rounded hover:bg-rose-900 text-rose-400 hover:text-white transition cursor-pointer" title="Retry Sync"><RefreshCw className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
               ))}
@@ -3429,6 +3500,31 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
             >
               <History className="w-3.5 h-3.5 text-teal-400" />
               <span>Sanitization History</span>
+            </button>
+
+            {/* Verbose Path Resolution Log Button */}
+            <button
+              id="samba-verbose-resolution-btn"
+              onClick={() => {
+                setVerboseSelectedPath(customScanPath || `/Volumes/${sambaConfig.share || 'media'}`);
+                setIsVerboseResolutionOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-950/70 hover:bg-indigo-900/90 text-indigo-200 border border-indigo-500/50 text-xs font-semibold shadow transition cursor-pointer"
+              title="Verbose Path Resolution Log: View raw input, normalized string, and backend std::path::Path object to verify hidden characters like \\r or trailing spaces"
+            >
+              <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Verbose Path Log</span>
+            </button>
+
+            {/* Debug Path Resolution Button */}
+            <button
+              id="samba-toolbar-debug-stat-btn"
+              onClick={() => triggerDebugPathResolution(customScanPath || `/Volumes/${sambaConfig.share || 'media'}`)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-950/70 hover:bg-amber-900/90 text-amber-200 border border-amber-500/50 text-xs font-semibold shadow transition cursor-pointer"
+              title="Debug Path Resolution: Run full fs::metadata and fs::read_dir check to inspect permissions, file count, and OsString artifacts"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+              <span>Debug Resolution</span>
             </button>
 
             {/* Preview Mode Toggle Button */}
@@ -3607,6 +3703,30 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
                 placeholder={`Default: /Volumes/${sambaConfig.share || 'media'}`}
                 className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-slate-200 font-mono text-xs focus:outline-none focus:border-indigo-500 w-56"
               />
+              <button
+                id="samba-inspect-verbose-path-btn"
+                type="button"
+                onClick={() => {
+                  setVerboseSelectedPath(customScanPath || `/Volumes/${sambaConfig.share || 'media'}`);
+                  setIsVerboseResolutionOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 hover:text-white border border-indigo-500/40 text-[11px] font-semibold transition cursor-pointer shrink-0 shadow-xs"
+                title="Verbose Path Resolution: Inspect raw input bytes, detect hidden characters (\\r, trailing spaces), and verify backend std::path::Path"
+              >
+                <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Verbose Log</span>
+              </button>
+
+              <button
+                id="samba-debug-path-stat-btn"
+                type="button"
+                onClick={() => triggerDebugPathResolution(customScanPath || `/Volumes/${sambaConfig.share || 'media'}`)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-950/80 hover:bg-amber-900 text-amber-300 hover:text-white border border-amber-500/40 text-[11px] font-semibold transition cursor-pointer shrink-0 shadow-xs"
+                title="Debug Path Resolution: Run full fs::metadata and fs::read_dir check on path and inspect OsString artifacts"
+              >
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                <span>Debug Stat</span>
+              </button>
             </div>
 
             {/* Configurable Depth Limit Controls */}
@@ -5236,6 +5356,21 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         isOpen={isSanitizationHistoryOpen}
         onClose={() => setIsSanitizationHistoryOpen(false)}
         sambaTree={sambaTree}
+      />
+
+      {/* Verbose Path Resolution Log Modal */}
+      <VerbosePathResolutionModal
+        isOpen={isVerboseResolutionOpen}
+        onClose={() => setIsVerboseResolutionOpen(false)}
+        initialPath={verboseSelectedPath || customScanPath || `/Volumes/${sambaConfig.share || 'media'}`}
+        defaultShare={sambaConfig.share || 'media'}
+      />
+
+      {/* Rust Diagnostic: debug_path_resolution Modal */}
+      <DebugPathResolutionModal
+        isOpen={isDebugResolutionOpen}
+        onClose={() => setIsDebugResolutionOpen(false)}
+        targetPath={debugSelectedPath || customScanPath || `/Volumes/${sambaConfig.share || 'media'}`}
       />
     </div>
   );

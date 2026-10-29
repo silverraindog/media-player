@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { SyncLog, DeepRefreshJobState } from '../types';
 import { SyncHealthDashboard } from './SyncHealthDashboard';
+import { VerbosePathResolutionModal } from './VerbosePathResolutionModal';
 
 interface ConsoleLogSectionProps {
   logs: SyncLog[];
@@ -50,6 +51,7 @@ export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({
   const [copied, setCopied] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [showPipelineDetails, setShowPipelineDetails] = useState(true);
+  const [isVerboseInspectorOpen, setIsVerboseInspectorOpen] = useState(false);
 
   const failedLogsIn24h = logs.filter((l) => {
     const isFailed =
@@ -179,6 +181,15 @@ export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({
           >
             {copied ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-indigo-400" />}
             <span>{copied ? 'Copied!' : 'Copy Logs'}</span>
+          </button>
+
+          <button
+            onClick={() => setIsVerboseInspectorOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-950/70 hover:bg-indigo-900 text-indigo-300 hover:text-white border border-indigo-500/40 text-xs font-semibold transition cursor-pointer"
+            title="Inspect raw path strings, detect hidden characters, and test backend std::path resolution"
+          >
+            <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Path Inspector</span>
           </button>
 
           {onClearLogs && (
@@ -432,6 +443,12 @@ export const ConsoleLogSection: React.FC<ConsoleLogSectionProps> = ({
           })
         )}
       </div>
+
+      <VerbosePathResolutionModal
+        isOpen={isVerboseInspectorOpen}
+        onClose={() => setIsVerboseInspectorOpen(false)}
+        initialPath="/Volumes/media"
+      />
     </div>
   );
 };

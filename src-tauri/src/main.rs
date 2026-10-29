@@ -76,7 +76,7 @@ pub struct PathMetadataResult {
 }
 
 #[tauri::command]
-pub async fn check_path_integrity(path: String) -> Result<PathMetadataResult, String> {
+async fn check_path_integrity(path: String) -> Result<PathMetadataResult, String> {
     let p = Path::new(&path);
     match fs::metadata(p) {
         Ok(meta) => {
@@ -101,6 +101,382 @@ pub async fn check_path_integrity(path: String) -> Result<PathMetadataResult, St
             })
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct VerbosePathResolutionResult {
+    pub raw_input: String,
+    pub raw_bytes_hex: String,
+    pub has_carriage_return: bool,
+    pub has_newline: bool,
+    pub has_trailing_spaces: bool,
+    pub has_leading_spaces: bool,
+    pub has_non_breaking_spaces: bool,
+    pub has_zero_width_spaces: bool,
+    pub has_control_chars: bool,
+    pub hidden_character_details: Vec<String>,
+    pub sanitized_out: Vec<String>,
+    pub normalized_string: String,
+    pub std_path: String,
+    pub raw_path_exists: bool,
+    pub normalized_path_exists: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub parent_path: Option<String>,
+    pub parent_exists: bool,
+    pub permissions: String,
+    pub file_count: usize,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+async fn resolve_path_verbose(path: String) -> Result<VerbosePathResolutionResult, String> {
+    let raw_input = path.clone();
+    let raw_bytes = raw_input.as_bytes();
+    let raw_bytes_hex = raw_bytes
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let has_carriage_return = raw_bytes.contains(&b'\r');
+    let has_newline = raw_bytes.contains(&b'\n');
+    let has_trailing_spaces = raw_input.ends_with(' ');
+    let has_leading_spaces = raw_input.starts_with(' ');
+    let has_non_breaking_spaces = raw_input.contains('\u{00A0}');
+    let has_zero_width_spaces = raw_input.contains('\u{200B}')
+        || raw_input.contains('\u{200C}')
+        || raw_input.contains('\u{200D}')
+        || raw_input.contains('\u{FEFF}');
+    let has_control_chars = raw_input.chars().any(|c| (c as u32) < 32 || (c as u32) == 127);
+
+    let mut hidden_details = Vec::new();
+    let mut sanitized_out = Vec::new();
+
+    if has_carriage_return {
+        hidden_details.push("Carriage Return (\\r / 0x0D)".to_string());
+        sanitized_out.push("Stripped carriage return (\\r)".to_string());
+    }
+    if has_newline {
+        hidden_details.push("Newline (\\n / 0x0A)".to_string());
+        sanitized_out.push("Stripped line break (\\n)".to_string());
+    }
+    if has_trailing_spaces {
+        hidden_details.push("Trailing whitespace at end of path".to_string());
+        sanitized_out.push("Trimmed trailing spaces".to_string());
+    }
+    if has_leading_spaces {
+        hidden_details.push("Leading whitespace at start of path".to_string());
+        sanitized_out.push("Trimmed leading spaces".to_string());
+    }
+    if has_non_breaking_spaces {
+        hidden_details.push("Non-breaking space (\\u00A0 / 0xC2 0xA0)".to_string());
+        sanitized_out.push("Normalized non-breaking space to regular space".to_string());
+    }
+    if has_zero_width_spaces {
+        hidden_details.push("Zero-width space (\\u200B / \\uFEFF)".to_string());
+        sanitized_out.push("Stripped invisible zero-width spaces".to_string());
+    }
+    if has_control_chars {
+        hidden_details.push("Unprintable ASCII control character (< 0x20)".to_string());
+        sanitized_out.push("Stripped non-printable control characters".to_string());
+    }
+
+    // Direct check of raw input as Path without sanitization
+    let raw_path_obj = Path::new(&raw_input);
+    let raw_path_exists = raw_path_obj.exists();
+
+    // Normalized resolution via resolve_absolute_samba_path
+    let std_path_buf = resolve_absolute_samba_path(&raw_input);
+    let normalized_string = std_path_buf.to_string_lossy().to_string();
+    let normalized_path_exists = std_path_buf.exists();
+
+    let is_dir = std_path_buf.is_dir();
+    let is_file = std_path_buf.is_file();
+    let parent = std_path_buf.parent().map(|p| p.to_string_lossy().to_string());
+    let parent_exists = std_path_buf.parent().map(|p| p.exists()).unwrap_or(false);
+
+    let mut permissions = String::new();
+    let mut file_count = 0;
+    let mut error = None;
+
+    if normalized_path_exists {
+        if let Ok(meta) = fs::metadata(&std_path_buf) {
+            permissions = format!("{:?}", meta.permissions());
+        }
+        if is_dir {
+            if let Ok(entries) = fs::read_dir(&std_path_buf) {
+                file_count = entries.filter_map(|e| e.ok()).count();
+            }
+        }
+    } else {
+        error = Some(format!(
+            "Path \"{}\" not found on filesystem. Parent directory \"{}\" exists: {}.",
+            normalized_string,
+            parent.as_deref().unwrap_or("none"),
+            parent_exists
+        ));
+    }
+
+    Ok(VerbosePathResolutionResult {
+        raw_input,
+        raw_bytes_hex,
+        has_carriage_return,
+        has_newline,
+        has_trailing_spaces,
+        has_leading_spaces,
+        has_non_breaking_spaces,
+        has_zero_width_spaces,
+        has_control_chars,
+        hidden_character_details: hidden_details,
+        sanitized_out,
+        normalized_string,
+        std_path: format!("{:?}", std_path_buf),
+        raw_path_exists,
+        normalized_path_exists,
+        is_dir,
+        is_file,
+        parent_path: parent,
+        parent_exists,
+        permissions,
+        file_count,
+        error,
+    })
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OsStringArtifactReport {
+    pub name: String,
+    pub raw_os_string: String,
+    pub is_valid_unicode: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub size_bytes: u64,
+    pub permissions: String,
+    pub hex_bytes: String,
+    pub has_hidden_control_chars: bool,
+    pub has_trailing_space: bool,
+    pub is_appledouble: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DebugPathResolutionReport {
+    pub target_path: String,
+    pub resolved_path: String,
+    pub exists: bool,
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub permissions: String,
+    pub size_bytes: u64,
+    pub file_count: usize,
+    pub metadata_error: Option<String>,
+    pub read_dir_error: Option<String>,
+    pub parent_path: Option<String>,
+    pub parent_exists: bool,
+    pub inspected_dir: String,
+    pub artifacts: Vec<OsStringArtifactReport>,
+    pub raw_input_hex: String,
+    pub encountered_artifacts_count: usize,
+    pub diagnostic_notes: Vec<String>,
+    pub timestamp: String,
+}
+
+#[tauri::command]
+async fn debug_path_resolution(path: String) -> Result<DebugPathResolutionReport, String> {
+    let target_path = path.clone();
+    let raw_bytes_hex = target_path
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let p = resolve_absolute_samba_path(&target_path);
+    let resolved_path = p.to_string_lossy().to_string();
+
+    let mut exists = false;
+    let mut is_dir = false;
+    let mut is_file = false;
+    let mut permissions = String::new();
+    let mut size_bytes = 0u64;
+    let mut metadata_error = None;
+    let mut read_dir_error = None;
+    let mut diagnostic_notes = Vec::new();
+
+    // 1. Full fs::metadata check on resolved path
+    match fs::metadata(&p) {
+        Ok(meta) => {
+            exists = true;
+            is_dir = meta.is_dir();
+            is_file = meta.is_file();
+            permissions = format!("{:?}", meta.permissions());
+            size_bytes = meta.len();
+            diagnostic_notes.push(format!(
+                "fs::metadata success: exists=true, is_dir={}, is_file={}, size={} bytes, permissions={}",
+                is_dir, is_file, size_bytes, permissions
+            ));
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            diagnostic_notes.push(format!("fs::metadata error on '{}': {}", resolved_path, err_str));
+            metadata_error = Some(err_str);
+        }
+    }
+
+    // 2. Parent directory analysis
+    let parent = p.parent().map(|par| par.to_path_buf());
+    let parent_path = parent.as_ref().map(|par| par.to_string_lossy().to_string());
+    let parent_exists = parent.as_ref().map(|par| par.exists()).unwrap_or(false);
+
+    if let Some(ref par_p) = parent_path {
+        diagnostic_notes.push(format!(
+            "Parent directory '{}': exists={}",
+            par_p, parent_exists
+        ));
+    }
+
+    // 3. Determine which directory to fs::read_dir:
+    // If target is an existing dir -> read target.
+    // If target is an existing file or does NOT exist -> read parent or nearest existing ancestor!
+    let dir_to_read = if is_dir {
+        p.clone()
+    } else if parent_exists {
+        parent.clone().unwrap_or_else(|| PathBuf::from("/"))
+    } else {
+        // Walk upwards to find nearest existing directory
+        let mut curr = p.parent();
+        let mut found = PathBuf::from("/");
+        while let Some(ancestor) = curr {
+            if ancestor.exists() {
+                found = ancestor.to_path_buf();
+                break;
+            }
+            curr = ancestor.parent();
+        }
+        found
+    };
+
+    let inspected_dir = dir_to_read.to_string_lossy().to_string();
+    diagnostic_notes.push(format!("Executing fs::read_dir on '{}'", inspected_dir));
+
+    let mut artifacts = Vec::new();
+    let mut file_count = 0;
+
+    // 4. Full fs::read_dir check & OsString artifacts capture
+    match fs::read_dir(&dir_to_read) {
+        Ok(entries) => {
+            for entry_res in entries {
+                file_count += 1;
+                match entry_res {
+                    Ok(entry) => {
+                        let os_name = entry.file_name();
+                        let raw_os_string = format!("{:?}", os_name);
+                        let is_valid_unicode = os_name.to_str().is_some();
+                        let name = os_name.to_string_lossy().to_string();
+                        let hex_bytes = name
+                            .as_bytes()
+                            .iter()
+                            .map(|b| format!("{:02X}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+
+                        let has_hidden_control_chars = name
+                            .chars()
+                            .any(|c| (c as u32) < 32 || (c as u32) == 127 || c == '\r' || c == '\n');
+                        let has_trailing_space = name.ends_with(' ');
+                        let is_appledouble = name.starts_with("._");
+
+                        let mut entry_is_dir = false;
+                        let mut entry_is_file = false;
+                        let mut entry_size = 0u64;
+                        let mut entry_perm = String::new();
+
+                        if let Ok(m) = entry.metadata() {
+                            entry_is_dir = m.is_dir();
+                            entry_is_file = m.is_file();
+                            entry_size = m.len();
+                            entry_perm = format!("{:?}", m.permissions());
+                        }
+
+                        // Collect up to 250 artifacts to prevent overwhelming the UI
+                        if artifacts.len() < 250 {
+                            artifacts.push(OsStringArtifactReport {
+                                name,
+                                raw_os_string,
+                                is_valid_unicode,
+                                is_dir: entry_is_dir,
+                                is_file: entry_is_file,
+                                size_bytes: entry_size,
+                                permissions: entry_perm,
+                                hex_bytes,
+                                has_hidden_control_chars,
+                                has_trailing_space,
+                                is_appledouble,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        diagnostic_notes.push(format!("Corrupt/inaccessible directory entry: {}", e));
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            diagnostic_notes.push(format!("fs::read_dir failed on '{}': {}", inspected_dir, err_str));
+            read_dir_error = Some(err_str);
+        }
+    }
+
+    // Check if target file/folder was spotted among artifacts
+    if let Some(target_file_name) = p.file_name().and_then(|n| n.to_str()) {
+        let exact_match = artifacts.iter().any(|a| a.name == target_file_name);
+        let case_insensitive = artifacts.iter().find(|a| a.name.eq_ignore_ascii_case(target_file_name));
+        let trimmed_match = artifacts.iter().find(|a| a.name.trim() == target_file_name.trim());
+
+        if exact_match {
+            diagnostic_notes.push(format!("Target filename '{}' is present in directory artifacts.", target_file_name));
+        } else if let Some(found_trimmed) = trimmed_match {
+            diagnostic_notes.push(format!(
+                "WARNING: Exact match failed, but found entry with whitespace artifact: '{}' (Raw OsString: {})",
+                found_trimmed.name, found_trimmed.raw_os_string
+            ));
+        } else if let Some(found_case) = case_insensitive {
+            diagnostic_notes.push(format!(
+                "WARNING: Case mismatch detected on filesystem: expected '{}', found '{}' on disk.",
+                target_file_name, found_case.name
+            ));
+        } else if !exists {
+            diagnostic_notes.push(format!(
+                "Target '{}' was NOT found among the {} items in '{}'.",
+                target_file_name, file_count, inspected_dir
+            ));
+        }
+    }
+
+    let encountered_artifacts_count = artifacts.len();
+    let timestamp = format!("{:?}", Instant::now());
+
+    Ok(DebugPathResolutionReport {
+        target_path,
+        resolved_path,
+        exists,
+        is_dir,
+        is_file,
+        permissions,
+        size_bytes,
+        file_count,
+        metadata_error,
+        read_dir_error,
+        parent_path,
+        parent_exists,
+        inspected_dir,
+        artifacts,
+        raw_input_hex: raw_bytes_hex,
+        has_os_artifacts: encountered_artifacts_count > 0,
+        diagnostic_notes,
+        timestamp,
+    })
 }
 
 #[tauri::command]
@@ -2002,6 +2378,9 @@ fn main() {
             open_in_iina,
             check_path_exists,
             checkPathExists,
+            check_path_integrity,
+            resolve_path_verbose,
+            debug_path_resolution,
             find_episode_media_file,
             vault_save_state,
             vault_get_state,

@@ -2022,6 +2022,245 @@ app.post('/api/samba/check-path', async (req: Request, res: Response) => {
   }
 });
 
+// Verbose path resolution diagnostics: captures raw input, normalized string, std::path object, and hidden chars
+app.post('/api/samba/verbose-path-resolution', async (req: Request, res: Response) => {
+  const { path: checkPath } = req.body;
+  const rawInput = typeof checkPath === 'string' ? checkPath : '';
+  if (!rawInput) {
+    return res.status(400).json({ error: 'Path is required' });
+  }
+
+  const rawBuffer = Buffer.from(rawInput, 'utf-8');
+  const rawBytesHex = Array.from(rawBuffer)
+    .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
+    .join(' ');
+
+  const hasCarriageReturn = rawInput.includes('\r');
+  const hasNewline = rawInput.includes('\n');
+  const hasTrailingSpaces = rawInput.endsWith(' ');
+  const hasLeadingSpaces = rawInput.startsWith(' ');
+  const hasNonBreakingSpaces = rawInput.includes('\u00A0');
+  const hasZeroWidthSpaces = /[\u200B\u200C\u200D\uFEFF]/.test(rawInput);
+  const hasControlChars = /[\x00-\x1F\x7F]/.test(rawInput);
+
+  const hiddenDetails: string[] = [];
+  const sanitizedOut: string[] = [];
+
+  if (hasCarriageReturn) {
+    hiddenDetails.push('Carriage Return (\\r / 0x0D)');
+    sanitizedOut.push('Stripped carriage return (\\r)');
+  }
+  if (hasNewline) {
+    hiddenDetails.push('Newline (\\n / 0x0A)');
+    sanitizedOut.push('Stripped line break (\\n)');
+  }
+  if (hasTrailingSpaces) {
+    hiddenDetails.push('Trailing whitespace at end of path');
+    sanitizedOut.push('Trimmed trailing spaces');
+  }
+  if (hasLeadingSpaces) {
+    hiddenDetails.push('Leading whitespace at start of path');
+    sanitizedOut.push('Trimmed leading spaces');
+  }
+  if (hasNonBreakingSpaces) {
+    hiddenDetails.push('Non-breaking space (\\u00A0 / 0xC2 0xA0)');
+    sanitizedOut.push('Normalized non-breaking space to regular space');
+  }
+  if (hasZeroWidthSpaces) {
+    hiddenDetails.push('Zero-width space (\\u200B / \\uFEFF)');
+    sanitizedOut.push('Stripped invisible zero-width spaces');
+  }
+  if (hasControlChars) {
+    hiddenDetails.push('Unprintable ASCII control character (< 0x20)');
+    sanitizedOut.push('Stripped non-printable control characters');
+  }
+
+  // Raw path check (without sanitization)
+  const rawPathExists = fs.existsSync(rawInput);
+
+  // Normalized path
+  const normalizedString = rawInput.trim().replace(/^file:\/\//, '').replace(/\\/g, '/');
+  const stdPath = path.resolve(normalizedString);
+  const normalizedPathExists = fs.existsSync(stdPath);
+
+  let isDir = false;
+  let isFile = false;
+  let permissions = '';
+  let fileCount = 0;
+  let error: string | null = null;
+  const parentPath = path.dirname(stdPath);
+  const parentExists = fs.existsSync(parentPath);
+
+  if (normalizedPathExists) {
+    try {
+      const st = fs.statSync(stdPath);
+      isDir = st.isDirectory();
+      isFile = st.isFile();
+      permissions = `Mode: ${(st.mode & 0o777).toString(8)}`;
+      if (isDir) {
+        fileCount = fs.readdirSync(stdPath).length;
+      }
+    } catch (err: any) {
+      error = err.message;
+    }
+  } else {
+    error = `Path "${stdPath}" not found on filesystem. Parent directory "${parentPath}" exists: ${parentExists}.`;
+  }
+
+  return res.json({
+    raw_input: rawInput,
+    raw_bytes_hex: rawBytesHex,
+    has_carriage_return: hasCarriageReturn,
+    has_newline: hasNewline,
+    has_trailing_spaces: hasTrailingSpaces,
+    has_leading_spaces: hasLeadingSpaces,
+    has_non_breaking_spaces: hasNonBreakingSpaces,
+    has_zero_width_spaces: hasZeroWidthSpaces,
+    has_control_chars: hasControlChars,
+    hidden_character_details: hiddenDetails,
+    sanitized_out: sanitizedOut,
+    normalized_string: normalizedString,
+    std_path: `PathBuf("${stdPath}")`,
+    raw_path_exists: rawPathExists,
+    normalized_path_exists: normalizedPathExists,
+    is_dir: isDir,
+    is_file: isFile,
+    parent_path: parentPath,
+    parent_exists: parentExists,
+    permissions,
+    file_count: fileCount,
+    error,
+  });
+});
+
+// Diagnostic endpoint: debug_path_resolution - performs full fs.stat and fs.readdir check with OsString artifact detection
+app.post('/api/samba/debug-path-resolution', async (req: Request, res: Response) => {
+  const { path: checkPath } = req.body;
+  const target_path = typeof checkPath === 'string' ? checkPath : '';
+  if (!target_path) {
+    return res.status(400).json({ error: 'Path is required' });
+  }
+
+  const rawBytesHex = Array.from(Buffer.from(target_path, 'utf-8'))
+    .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
+    .join(' ');
+
+  const clean = target_path.trim().replace(/^file:\/\//, '').replace(/\\/g, '/');
+  const resolved_path = path.resolve(clean);
+
+  let exists = false;
+  let is_dir = false;
+  let is_file = false;
+  let permissions = '';
+  let size_bytes = 0;
+  let metadata_error: string | null = null;
+  let read_dir_error: string | null = null;
+  const diagnostic_notes: string[] = [];
+
+  // Check stat on resolved path
+  try {
+    const st = fs.statSync(resolved_path);
+    exists = true;
+    is_dir = st.isDirectory();
+    is_file = st.isFile();
+    permissions = `Mode: ${(st.mode & 0o777).toString(8)}`;
+    size_bytes = st.size;
+    diagnostic_notes.push(`fs.stat success: exists=true, is_dir=${is_dir}, is_file=${is_file}, size=${size_bytes} bytes, permissions=${permissions}`);
+  } catch (err: any) {
+    metadata_error = err.message;
+    diagnostic_notes.push(`fs.stat error on '${resolved_path}': ${err.message}`);
+  }
+
+  const parent_path = path.dirname(resolved_path);
+  const parent_exists = fs.existsSync(parent_path);
+  diagnostic_notes.push(`Parent directory '${parent_path}': exists=${parent_exists}`);
+
+  const inspected_dir = is_dir ? resolved_path : (parent_exists ? parent_path : '/');
+  diagnostic_notes.push(`Executing fs.readdir on '${inspected_dir}'`);
+
+  const artifacts: any[] = [];
+  let file_count = 0;
+
+  try {
+    const entries = fs.readdirSync(inspected_dir, { withFileTypes: true });
+    file_count = entries.length;
+
+    for (const ent of entries) {
+      const name = ent.name;
+      const hex_bytes = Array.from(Buffer.from(name, 'utf-8'))
+        .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
+        .join(' ');
+      const has_hidden_control_chars = /[\x00-\x1F\x7F\r\n]/.test(name);
+      const has_trailing_space = name.endsWith(' ');
+      const is_appledouble = name.startsWith('._');
+
+      let entry_size = 0;
+      let entry_perm = '';
+      try {
+        const est = fs.statSync(path.join(inspected_dir, name));
+        entry_size = est.size;
+        entry_perm = `Mode: ${(est.mode & 0o777).toString(8)}`;
+      } catch {}
+
+      if (artifacts.length < 250) {
+        artifacts.push({
+          name,
+          raw_os_string: `OsString("${name}")`,
+          is_valid_unicode: true,
+          is_dir: ent.isDirectory(),
+          is_file: ent.isFile(),
+          size_bytes: entry_size,
+          permissions: entry_perm,
+          hex_bytes,
+          has_hidden_control_chars,
+          has_trailing_space,
+          is_appledouble,
+        });
+      }
+    }
+  } catch (e: any) {
+    read_dir_error = e.message;
+    diagnostic_notes.push(`fs.readdir failed on '${inspected_dir}': ${e.message}`);
+  }
+
+  const target_file_name = path.basename(resolved_path);
+  const exact_match = artifacts.some((a) => a.name === target_file_name);
+  const case_insensitive = artifacts.find((a) => a.name.toLowerCase() === target_file_name.toLowerCase());
+  const trimmed_match = artifacts.find((a) => a.name.trim() === target_file_name.trim());
+
+  if (exact_match) {
+    diagnostic_notes.push(`Target filename '${target_file_name}' is present in directory artifacts.`);
+  } else if (trimmed_match) {
+    diagnostic_notes.push(`WARNING: Exact match failed, but found entry with whitespace artifact: '${trimmed_match.name}'`);
+  } else if (case_insensitive) {
+    diagnostic_notes.push(`WARNING: Case mismatch detected on filesystem: expected '${target_file_name}', found '${case_insensitive.name}' on disk.`);
+  } else if (!exists) {
+    diagnostic_notes.push(`Target '${target_file_name}' was NOT found among the ${file_count} items in '${inspected_dir}'.`);
+  }
+
+  return res.json({
+    target_path,
+    resolved_path,
+    exists,
+    is_dir,
+    is_file,
+    permissions,
+    size_bytes,
+    file_count,
+    metadata_error,
+    read_dir_error,
+    parent_path,
+    parent_exists,
+    inspected_dir,
+    artifacts,
+    raw_input_hex: rawBytesHex,
+    has_os_artifacts: artifacts.length > 0,
+    encountered_artifacts_count: artifacts.length,
+    diagnostic_notes,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Explicit fs.access diagnostic endpoint
 app.post('/api/samba/fs-access', async (req: Request, res: Response) => {
   try {

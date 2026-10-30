@@ -282,7 +282,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           let absPath = activeFilePath.trim().replace(/\\/g, '/').replace(/^\/+/g, '/');
 
           // Ensure absolute filesystem path format if it's not already
-          if (!absPath.startsWith('/') && !absPath.match(/^[a-zA-Z]:/)) {
+          if (!absPath.startsWith('/') && !absPath.match(/^[a-zA-Z]:/) && !absPath.includes('://')) {
             const share = sambaConfig?.share || 'media';
             absPath = `/Volumes/${share}/${absPath.replace(/^\/+/, '')}`;
           }

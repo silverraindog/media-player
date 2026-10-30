@@ -85,6 +85,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   });
   const [isProbing, setIsProbing] = useState(false);
   const [showDiagnosticOverlay, setShowDiagnosticOverlay] = useState(false);
+  const [diagView, setDiagView] = useState<'stats' | 'protocol'>('stats');
+  const [pathHealth, setPathHealth] = useState<any>(null);
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -386,6 +388,32 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
   };
 
+  // Protocol Debugger Monitor
+  useEffect(() => {
+    if (!showDiagnosticOverlay || diagView !== 'protocol') return;
+
+    const tauri = (window as any).__TAURI__;
+    const convert = tauri?.convertFileSrc;
+    
+    if (!convert) {
+      setPathHealth({ error: 'convertFileSrc not found' });
+      return;
+    }
+
+    const result = convert(activeFilePath);
+    const isRelative = !result.startsWith('/');
+    const isTauriProtocol = result.startsWith('tauri://') || result.startsWith('asset://');
+    const startsInVolumes = activeFilePath.startsWith('/Volumes');
+
+    setPathHealth({
+      result,
+      isRelative,
+      isTauriProtocol,
+      startsInVolumes,
+      timestamp: Date.now()
+    });
+  }, [activeFilePath, showDiagnosticOverlay, diagView]);
+
   const toggleMute = () => {
     const el = media.type === 'album' ? audioRef.current : videoRef.current;
     if (el) {
@@ -557,35 +585,45 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         <div className="relative flex-1 flex flex-col md:flex-row min-h-[380px] sm:min-h-[480px] bg-black overflow-hidden">
           {/* Player Display Container */}
           <div className="relative flex-1 flex flex-col items-center justify-center bg-black overflow-hidden">
-            {/* Diagnostic Overlay */}
+  {/* Protocol Debugger Monitor Moved Out */}
+  {/* Diagnostic Overlay */}
             {showDiagnosticOverlay && (
-              <div className="absolute top-16 left-4 z-40 bg-black/80 backdrop-blur-md border border-slate-700 rounded-xl p-4 w-64 text-xs font-mono text-slate-300 shadow-2xl">
-                <h4 className="font-semibold text-white mb-2 flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-amber-400" />
-                  Live Diagnostics
-                </h4>
-                <div className="space-y-1.5">
-                  <div className="flex justify-between">
-                    <span>FPS:</span>
-                    <span className="text-emerald-400">{pipelineHealth.fps}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Latency:</span>
-                    <span className="text-amber-400">{pipelineHealth.latency}ms</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Buffer:</span>
-                    <span className="text-indigo-400">{bufferSecondsRemaining.toFixed(1)}s</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Status:</span>
-                    <span className="text-slate-100 truncate">{transcodeStatus.state}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Progress:</span>
-                    <span className="text-white">{transcodeStatus.progressPercent}%</span>
+              <div className="absolute top-16 left-4 z-40 bg-black/80 backdrop-blur-md border border-slate-700 rounded-xl p-4 w-72 text-xs font-mono text-slate-300 shadow-2xl">
+                <div className="flex items-center justify-between mb-3 border-b border-slate-700 pb-2">
+                  <h4 className="font-semibold text-white flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-amber-400" />
+                    {diagView === 'stats' ? 'Live Metrics' : 'Protocol Debugger'}
+                  </h4>
+                  <div className="flex gap-1 bg-slate-800 p-0.5 rounded-lg">
+                    <button onClick={() => setDiagView('stats')} className={`px-2 py-0.5 rounded ${diagView === 'stats' ? 'bg-slate-700 text-white' : ''}`}>Stats</button>
+                    <button onClick={() => setDiagView('protocol')} className={`px-2 py-0.5 rounded ${diagView === 'protocol' ? 'bg-slate-700 text-white' : ''}`}>Proto</button>
                   </div>
                 </div>
+
+                {diagView === 'stats' ? (
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between"><span>FPS:</span><span className="text-emerald-400">{pipelineHealth.fps}</span></div>
+                    <div className="flex justify-between"><span>Latency:</span><span className="text-amber-400">{pipelineHealth.latency}ms</span></div>
+                    <div className="flex justify-between"><span>Buffer:</span><span className="text-indigo-400">{bufferSecondsRemaining.toFixed(1)}s</span></div>
+                    <div className="flex justify-between"><span>Status:</span><span className="text-slate-100 truncate">{transcodeStatus.state}</span></div>
+                    <div className="flex justify-between"><span>Progress:</span><span className="text-white">{transcodeStatus.progressPercent}%</span></div>
+                  </div>
+                ) : (
+                  <div className="space-y-2 text-[11px]">
+                    {pathHealth ? (
+                      <>
+                        <div className="break-all">Result: {pathHealth.result}</div>
+                        <div className={pathHealth.isRelative ? 'text-rose-400' : 'text-emerald-400'}>
+                          Interpretation: {pathHealth.isRelative ? 'RELATIVE (Issue!)' : 'ABSOLUTE'}
+                        </div>
+                        <div>Protocol: {pathHealth.isTauriProtocol ? 'Tauri/Asset' : 'Other'}</div>
+                        <div>Source in /Volumes: {pathHealth.startsInVolumes ? 'Yes' : 'No'}</div>
+                      </>
+                    ) : (
+                      <div>Monitoring...</div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

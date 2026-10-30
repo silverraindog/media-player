@@ -98,16 +98,21 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [isForceStreamViaPipe, setIsForceStreamViaPipe] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
-  const handleNativeFallback = async () => {
+  const getSanitizedPath = (path: string) => {
+    return path.replace(/^\/Volumes\/[^\/]+\//i, '');
+  };
+
+  const handleNativeFallback = async (pathOverride?: string) => {
     try {
-      console.log('[MediaPlayerModal] Attempting native file fallback for:', activeFilePath);
+      const pathToUse = pathOverride || getSanitizedPath(activeFilePath);
+      console.log('[MediaPlayerModal] Attempting native file fallback for:', pathToUse);
       const tauri = (window as any).__TAURI__;
       if (!tauri || !tauri.fs) {
         throw new Error('Tauri filesystem API not available');
       }
 
       // Read the file as binary using Tauri
-      const binaryData = await tauri.fs.readBinaryFile(activeFilePath);
+      const binaryData = await tauri.fs.readBinaryFile(pathToUse);
       const blob = new Blob([binaryData], { type: 'video/mp4' }); 
       const url = URL.createObjectURL(blob);
       setBlobUrl(url);
@@ -282,13 +287,20 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           let absPath = activeFilePath.trim().replace(/\\/g, '/').replace(/^\/+/g, '/');
 
           // Ensure absolute filesystem path format if it's not already
-          if (!absPath.startsWith('/') && !absPath.match(/^[a-zA-Z]:/) && !absPath.includes('://')) {
+          if (!absPath.startsWith('/') && !absPath.match(/^[a-zA-Z]:/) && !/^[a-zA-Z]+:\//.test(absPath)) {
             const share = sambaConfig?.share || 'media';
             absPath = `/Volumes/${share}/${absPath.replace(/^\/+/, '')}`;
           }
-          console.log('[MediaPlayerModal] convertFileSrc input path:', absPath);
+          console.log('[Tauri Protocol Inspector] [INPUT] Absolute Path for transform:', absPath);
           const convertedUrl = convert(absPath);
-          console.log('[MediaPlayerModal] convertFileSrc output URL:', convertedUrl);
+          console.log('[Tauri Protocol Inspector] [OUTPUT] Resulting Asset URL:', convertedUrl);
+          
+          // Inspector Check: Validate the transformation
+          if (convertedUrl && (convertedUrl.includes('asset:') || convertedUrl.includes('tauri:'))) {
+             console.log('[Tauri Protocol Inspector] [VALIDATION] Transformation succeeded for:', convertedUrl);
+          } else {
+             console.error('[Tauri Protocol Inspector] [VALIDATION] Transformation returned unexpected URL format:', convertedUrl);
+          }
           return convertedUrl;
         }
       } catch (err) {
@@ -638,6 +650,24 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 <div className="flex-1 text-sm">
                   <p className="font-semibold">Playback Notice</p>
                   <p className="text-xs text-rose-300 mt-0.5">{playbackError}</p>
+                  
+                  {/* Automated Diagnostic Validator */}
+                  {(activeFilePath.includes('asset:/') || activeFilePath.includes('tauri:/') || activeFilePath.includes('localhost')) && (
+                    <div className="mt-2 p-2 bg-amber-950/50 border border-amber-800 rounded">
+                      <p className="text-xs text-amber-200 font-semibold">Diagnostic: Path looks malformed ({activeFilePath.substring(0, 40)}...)</p>
+                      <button
+                        onClick={() => {
+                          const sanitized = getSanitizedPath(activeFilePath);
+                          console.log('[Diagnostic Validator] Re-sanitized path:', sanitized);
+                          handleNativeFallback(sanitized);
+                        }}
+                        className="mt-1 px-2.5 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
+                      >
+                        Click to Re-Sanitize & Fallback
+                      </button>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-3 mt-2">
                     <button
                       onClick={handleNativeFallback}

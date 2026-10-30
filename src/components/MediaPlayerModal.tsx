@@ -612,12 +612,26 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <div className="space-y-2 text-[11px]">
                     {pathHealth ? (
                       <>
-                        <div className="break-all">Result: {pathHealth.result}</div>
+                        <div className="break-all p-1 bg-slate-950 rounded">
+                          Result: {pathHealth.result.split('/').map((seg: string, i: number) => (
+                            <span key={i} className={(seg === 'localhost' || seg === 'Volumes') ? 'text-rose-400 font-bold bg-rose-950/50' : ''}>{seg}/</span>
+                          ))}
+                        </div>
                         <div className={pathHealth.isRelative ? 'text-rose-400' : 'text-emerald-400'}>
                           Interpretation: {pathHealth.isRelative ? 'RELATIVE (Issue!)' : 'ABSOLUTE'}
                         </div>
                         <div>Protocol: {pathHealth.isTauriProtocol ? 'Tauri/Asset' : 'Other'}</div>
-                        <div>Source in /Volumes: {pathHealth.startsInVolumes ? 'Yes' : 'No'}</div>
+                        
+                        <button
+                          onClick={() => {
+                            const fixed = pathHealth.result.replace(/asset:\/localhost\//g, '').replace(/\/Volumes\/media\//g, '/');
+                            console.log('[Protocol Debugger] Fixed Path:', fixed);
+                            handleNativeFallback(fixed);
+                          }}
+                          className="w-full mt-2 px-2 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded font-medium"
+                        >
+                          Fix Path & Reload
+                        </button>
                       </>
                     ) : (
                       <div>Monitoring...</div>

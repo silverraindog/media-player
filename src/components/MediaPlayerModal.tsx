@@ -292,7 +292,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     const hwParam = hardwareAccel ? '&hwaccel=true' : '';
     if (useTranscode || transcodeStatus.state === 'ready') {
       const targetPath = transcodeStatus.outputPath || cleanLocalPath || activeFilePath;
-      return `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
+      const relativeTranscode = `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
+      if (typeof window !== 'undefined' && (
+        window.location.protocol === 'tauri:' ||
+        window.location.origin.includes('tauri.localhost') ||
+        window.location.origin.includes('localhost:1420') ||
+        Boolean((window as any).__TAURI__) ||
+        Boolean((window as any).__TAURI_IPC__)
+      )) {
+        const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+        return `http://localhost:${backendPort}${relativeTranscode}`;
+      }
+      return relativeTranscode;
     }
 
     // 2. THREADING & DEADLOCK FIX (macOS Stackshots diagnostic resolution):
@@ -318,7 +329,18 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     if (isNetworkPath(activeFilePath) || isNetworkPath(cleanLocalPath)) {
       console.log('[MediaPlayerModal] Network share detected, bypassing Tauri asset_protocol_handler to avoid main-thread block_on deadlock. Offloading to Express stream proxy:', cleanLocalPath);
       // Immediately return standard proxy streaming path to offload I/O operations asynchronously to Express backend
-      return `/api/samba/stream?path=${encodeURIComponent(cleanLocalPath)}`;
+      const relativeProxy = `/api/samba/stream?path=${encodeURIComponent(cleanLocalPath)}`;
+      if (typeof window !== 'undefined' && (
+        window.location.protocol === 'tauri:' ||
+        window.location.origin.includes('tauri.localhost') ||
+        window.location.origin.includes('localhost:1420') ||
+        Boolean((window as any).__TAURI__) ||
+        Boolean((window as any).__TAURI_IPC__)
+      )) {
+        const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+        return `http://localhost:${backendPort}${relativeProxy}`;
+      }
+      return relativeProxy;
     }
 
     // 3. Check if running inside a Tauri container for strictly local, non-network disk files
@@ -654,26 +676,50 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <div className="space-y-2 text-[11px]">
                     {pathHealth ? (
                       <>
-                        <div className="break-all p-1 bg-slate-950 rounded">
-                          Result: {pathHealth.result.split('/').map((seg: string, i: number) => (
-                            <span key={i} className={(seg === 'localhost' || seg === 'Volumes') ? 'text-rose-400 font-bold bg-rose-950/50' : ''}>{seg}/</span>
+                        <div className="break-all p-1.5 bg-slate-950 rounded border border-slate-800 font-mono text-[10px]">
+                          <span className="text-slate-400 block mb-0.5 font-semibold">Tauri Asset Result:</span>
+                          {pathHealth.result.split('/').map((seg: string, i: number, arr: string[]) => (
+                            <span key={i} className={(seg === 'localhost' || seg === 'Volumes') ? 'text-rose-400 font-bold bg-rose-950/50 px-0.5 rounded' : 'text-slate-200'}>
+                              {seg}{i < arr.length - 1 ? '/' : ''}
+                            </span>
                           ))}
                         </div>
-                        <div className={pathHealth.isRelative ? 'text-rose-400' : 'text-emerald-400'}>
-                          Interpretation: {pathHealth.isRelative ? 'RELATIVE (Issue!)' : 'ABSOLUTE'}
+                        <div className="flex justify-between items-center text-[10px]">
+                          <span className="text-slate-400">Interpretation:</span>
+                          <span className={pathHealth.isRelative ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>
+                            {pathHealth.isRelative ? 'RELATIVE (Error)' : 'ABSOLUTE (Valid)'}
+                          </span>
                         </div>
-                        <div>Protocol: {pathHealth.isTauriProtocol ? 'Tauri/Asset' : 'Other'}</div>
-                        
-                        <button
-                          onClick={() => {
-                            const fixed = extractCleanLocalPath(pathHealth?.result || activeFilePath, sambaConfig?.share || 'media');
-                            console.log('[Protocol Debugger] Fixed Path:', fixed);
-                            handleNativeFallback(fixed);
-                          }}
-                          className="w-full mt-2 px-2 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded font-medium"
-                        >
-                          Fix Path & Reload
-                        </button>
+                        <div className="flex justify-between items-center text-[10px]">
+                          <span className="text-slate-400">Protocol:</span>
+                          <span className="text-cyan-400">{pathHealth.isTauriProtocol ? 'Tauri/Asset' : 'Direct HTTP'}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px]">
+                          <span className="text-slate-400">Network Bypass:</span>
+                          <span className="text-emerald-400 font-medium">Express Stream (Non-blocking)</span>
+                        </div>
+
+                        <div className="flex flex-col gap-1.5 mt-2">
+                          <button
+                            onClick={() => {
+                              const fixed = extractCleanLocalPath(pathHealth?.result || activeFilePath, sambaConfig?.share || 'media');
+                              console.log('[Protocol Debugger] Re-sanitized local path:', fixed);
+                              handleNativeFallback(fixed);
+                            }}
+                            className="w-full px-2 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded font-medium text-xs transition-colors"
+                          >
+                            Re-Sanitize & Test Fallback
+                          </button>
+                          <button
+                            onClick={() => {
+                              setUseTranscode(true);
+                              setPlaybackError(null);
+                            }}
+                            className="w-full px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded font-medium text-xs transition-colors"
+                          >
+                            Force Transcode (H.264 / AAC)
+                          </button>
+                        </div>
                       </>
                     ) : (
                       <div>Monitoring...</div>

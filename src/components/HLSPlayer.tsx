@@ -354,7 +354,22 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
-    return `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
+    const relativeUrl = `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
+
+    // In Tauri desktop environment where window.location.origin is tauri:// or tauri.localhost,
+    // Hls.js XMLHttpRequest must target the Express backend HTTP port directly
+    if (typeof window !== 'undefined' && (
+      window.location.protocol === 'tauri:' ||
+      window.location.origin.includes('tauri.localhost') ||
+      window.location.origin.includes('localhost:1420') ||
+      Boolean((window as any).__TAURI__) ||
+      Boolean((window as any).__TAURI_IPC__)
+    )) {
+      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+      return `http://localhost:${backendPort}${relativeUrl}`;
+    }
+
+    return relativeUrl;
   }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, forceTranscode, retryCount, activeAudioTrack, restartNonce]);
 
   // 3. Initialize HLS.js or native HLS video playback

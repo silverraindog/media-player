@@ -7048,6 +7048,9 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     console.log(`[FFmpeg HLS] Session dir: ${sessionDir}, Playlist: ${playlistPath}`);
 
     const ffmpegBin = resolveFfmpegBinary();
+    const isDarwin = os.platform() === 'darwin';
+    const isLinux = os.platform() === 'linux';
+
     const args: string[] = [
       '-nostdin',
       '-hide_banner',
@@ -7055,14 +7058,31 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       '-y',
     ];
 
-    // Hardware acceleration flags (opt-in for maximum decoding stability across environments)
-    if (hwaccel === 'auto' || hwaccel === 'true') {
-      args.push('-hwaccel', 'auto');
-    } else if (hwaccel === 'videotoolbox') {
-      args.push('-hwaccel', 'videotoolbox');
-    } else if (hwaccel === 'nvenc') {
+    // Determine video encoder and hardware acceleration compatibility:
+    // If software libx264 is used, DO NOT pass -hwaccel auto before -i as hardware surface
+    // decoders (like videotoolbox_vld on macOS) cannot be fed into libx264 without failure.
+    let vEncoder = 'libx264';
+    if (codec === 'hevc') {
+      if (hwaccel === 'videotoolbox' || (hwaccel && isDarwin)) vEncoder = 'hevc_videotoolbox';
+      else if (hwaccel === 'nvenc') vEncoder = 'hevc_nvenc';
+      else if (hwaccel === 'vaapi') vEncoder = 'hevc_vaapi';
+      else vEncoder = 'libx265';
+    } else if (codec === 'av1') {
+      if (hwaccel === 'videotoolbox' || (hwaccel && isDarwin)) vEncoder = 'av1_videotoolbox';
+      else if (hwaccel === 'nvenc') vEncoder = 'av1_nvenc';
+      else if (hwaccel === 'vaapi') vEncoder = 'av1_vaapi';
+      else vEncoder = 'libx264';
+    } else {
+      if (hwaccel === 'videotoolbox') vEncoder = 'h264_videotoolbox';
+      else if (hwaccel === 'nvenc') vEncoder = 'h264_nvenc';
+      else if (hwaccel === 'vaapi') vEncoder = 'h264_vaapi';
+      else vEncoder = 'libx264';
+    }
+
+    // Only apply hardware decode flags if matching dedicated hardware encoder pipeline is active
+    if (vEncoder.includes('nvenc')) {
       args.push('-hwaccel', 'cuda');
-    } else if (hwaccel === 'vaapi') {
+    } else if (vEncoder.includes('vaapi')) {
       args.push('-hwaccel', 'vaapi');
     }
 
@@ -7086,27 +7106,10 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       const shouldTranscodeVideo = probeResult.needsVideoTranscode || isMkvFile || isHevcVideo || forceTranscode || Boolean(preset) || Boolean(hwaccel) || codec !== 'h264';
 
       if (shouldTranscodeVideo) {
-        let vEncoder = 'libx264';
-        const isLinux = os.platform() === 'linux';
-        if (codec === 'hevc') {
-          if (hwaccel === 'videotoolbox' && !isLinux) vEncoder = 'hevc_videotoolbox';
-          else if (hwaccel === 'nvenc') vEncoder = 'hevc_nvenc';
-          else if (hwaccel === 'vaapi') vEncoder = 'hevc_vaapi';
-          else vEncoder = 'libx265';
-        } else if (codec === 'av1') {
-          if (hwaccel === 'videotoolbox' && !isLinux) vEncoder = 'av1_videotoolbox';
-          else if (hwaccel === 'nvenc') vEncoder = 'av1_nvenc';
-          else if (hwaccel === 'vaapi') vEncoder = 'av1_vaapi';
-          else vEncoder = 'libx264'; // fallback to universal libx264 if av1 software encoder is missing
-        } else {
-          if (hwaccel === 'videotoolbox' && !isLinux) vEncoder = 'h264_videotoolbox';
-          else if (hwaccel === 'nvenc') vEncoder = 'h264_nvenc';
-          else if (hwaccel === 'vaapi') vEncoder = 'h264_vaapi';
-          else vEncoder = 'libx264';
-        }
-
         args.push('-c:v', vEncoder);
-        if (vEncoder === 'libx264' || vEncoder.includes('h264')) {
+        if (vEncoder === 'h264_videotoolbox') {
+          args.push('-b:v', '4500k', '-pix_fmt', 'yuv420p', '-g', '48');
+        } else if (vEncoder === 'libx264' || vEncoder.includes('h264')) {
           args.push('-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24', '-sc_threshold', '0');
         } else if (vEncoder === 'libx265' || vEncoder.includes('hevc')) {
           args.push('-preset', 'medium', '-crf', '28', '-pix_fmt', 'yuv420p', '-g', '48', '-keyint_min', '24');
@@ -7166,6 +7169,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     console.log(`[FFmpeg HLS] Spawning transcode for "${resolvedPath}" -> ${playlistPath}`);
     const proc = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
+    let procClosed = false;
+    let procExitCode: number | null = null;
 
     proc.stderr.on('data', (d) => {
       const msg = d.toString();
@@ -7174,6 +7179,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     });
 
     proc.on('close', (code) => {
+      procClosed = true;
+      procExitCode = code;
       console.log(`[FFmpeg HLS Process Exited] code=${code} for session ${sessionKey}`);
       if (code !== 0 && code !== null) {
         pushFfmpegLog(`[FFmpeg HLS ERROR] Process exited abnormally with code ${code} for session ${sessionKey}`);
@@ -7183,6 +7190,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     });
 
     proc.on('error', (err) => {
+      procClosed = true;
       console.error(`[FFmpeg HLS Process Error]:`, err);
       pushFfmpegLog(`[FFmpeg HLS FATAL ERROR] Failed to spawn or execute FFmpeg binary: ${err.message}`);
     });
@@ -7206,6 +7214,9 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     const startWait = Date.now();
     let ready = false;
     while (Date.now() - startWait < 12000) {
+      if (procClosed && !ready) {
+        break; // Do not wait the full 12s if the FFmpeg process already exited
+      }
       if (fs.existsSync(playlistPath)) {
         try {
           const content = fs.readFileSync(playlistPath, 'utf8');
@@ -7229,8 +7240,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
 
     if (!ready) {
       return res.status(500).json({
-        error: 'FFmpeg HLS generation failed to initialize or timed out',
-        details: stderr || 'Timeout waiting for initial HLS playlist chunk and segment',
+        error: `FFmpeg HLS generation failed to initialize (exit code ${procExitCode ?? 'timeout'})`,
+        details: stderr || 'Process exited before generating initial HLS playlist chunk and segment',
       });
     }
 

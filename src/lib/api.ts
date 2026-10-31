@@ -13,7 +13,17 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
     }
 
     // Map REST endpoints to native Tauri commands writing to ~/.media-player
-    if ((endpoint.startsWith('/api/db/media') || endpoint.startsWith('/api/media')) && (!options.method || options.method === 'GET')) {
+    const isLibraryMediaEndpoint = (
+      endpoint === '/api/media' ||
+      endpoint.startsWith('/api/media?') ||
+      endpoint.startsWith('/api/db/media') ||
+      endpoint.startsWith('/api/media/movies') ||
+      endpoint.startsWith('/api/media/series') ||
+      endpoint.startsWith('/api/media/music') ||
+      endpoint.startsWith('/api/media/albums')
+    );
+
+    if (isLibraryMediaEndpoint && (!options.method || options.method === 'GET')) {
       let typeParam = '';
       if (endpoint.includes('?')) {
         try {
@@ -113,7 +123,12 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
 
   // Fallback to fetch for Node/Express dev server / web
   try {
-    const res = await fetch(endpoint, options);
+    let effectiveUrl = endpoint;
+    if (isTauri && effectiveUrl.startsWith('/')) {
+      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+      effectiveUrl = `http://localhost:${backendPort}${effectiveUrl}`;
+    }
+    const res = await window.fetch(effectiveUrl, options);
     if (!res.ok) throw new Error(`API error: ${res.statusText}`);
     return res.json();
   } catch (err) {

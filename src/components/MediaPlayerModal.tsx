@@ -73,6 +73,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [playerEngine, setPlayerEngine] = useState<'hls' | 'direct' | 'matroska'>('hls');
   const [useMatroskaEngine, setUseMatroskaEngine] = useState(false);
   const [useTranscode, setUseTranscode] = useState(false);
   const [showPlaylistSidebar, setShowPlaylistSidebar] = useState(false);
@@ -120,6 +121,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         setBlobUrl(url);
+        setPlayerEngine('direct');
+        setPlaybackError(null);
         console.log('[MediaPlayerModal] Native fallback URL created via async stream proxy:', url);
         return;
       }
@@ -134,6 +137,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       const blob = new Blob([binaryData], { type: 'video/mp4' }); 
       const url = URL.createObjectURL(blob);
       setBlobUrl(url);
+      setPlayerEngine('direct');
+      setPlaybackError(null);
       console.log('[MediaPlayerModal] Native fallback URL created:', url);
     } catch (err) {
       console.error('[MediaPlayerModal] Native fallback failed:', err);
@@ -584,17 +589,41 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               </button>
             ) : null}
 
-            {/* Matroska / Transcode mode toggle */}
-            {isMkv && (
+            {/* Playback Engine Switcher */}
+            <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5 text-xs">
               <button
-                onClick={() => setUseMatroskaEngine(!useMatroskaEngine)}
-                className={`p-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${useMatroskaEngine ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                title="Toggle Matroska container analyzer"
+                onClick={() => {
+                  setPlayerEngine('hls');
+                  setUseMatroskaEngine(false);
+                }}
+                className={`px-2 py-1 rounded font-medium transition-colors ${playerEngine === 'hls' && !useMatroskaEngine ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                title="HLS On-The-Fly FFmpeg Transcode Engine"
               >
-                <FileVideo className="w-4 h-4" />
-                <span className="hidden md:inline">MKV Inspector</span>
+                HLS
               </button>
-            )}
+              <button
+                onClick={() => {
+                  setPlayerEngine('direct');
+                  setUseMatroskaEngine(false);
+                }}
+                className={`px-2 py-1 rounded font-medium transition-colors ${playerEngine === 'direct' && !useMatroskaEngine ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                title="Direct / Express Chunk Stream Engine (Zero-stall)"
+              >
+                Direct
+              </button>
+              {isMkv && (
+                <button
+                  onClick={() => {
+                    setUseMatroskaEngine(true);
+                    setPlayerEngine('matroska');
+                  }}
+                  className={`px-2 py-1 rounded font-medium transition-colors ${useMatroskaEngine || playerEngine === 'matroska' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                  title="Matroska (.MKV) Analyzer Engine"
+                >
+                  MKV
+                </button>
+              )}
+            </div>
 
             <button
               onClick={() => setHardwareAccel(!hardwareAccel)}
@@ -818,6 +847,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     <button
                       onClick={() => {
                         setIsForceStreamViaPipe(true);
+                        setPlayerEngine('direct');
                         setPlaybackError(null);
                       }}
                       className="px-2.5 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
@@ -827,6 +857,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     <button
                       onClick={() => {
                         setUseTranscode(true);
+                        setPlayerEngine('hls');
                         setPlaybackError(null);
                       }}
                       className="px-2.5 py-1 bg-rose-700 hover:bg-rose-600 text-white rounded text-xs font-medium transition-colors"
@@ -849,17 +880,58 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               </div>
             )}
 
-            {useMatroskaEngine ? (
+            {useMatroskaEngine || playerEngine === 'matroska' ? (
               <div className="w-full h-full p-4 flex flex-col">
                 <MatroskaPlayer
                   streamUrl={streamUrl}
                   title={media.title}
-                  onClose={() => setUseMatroskaEngine(false)}
+                  onClose={() => {
+                    setUseMatroskaEngine(false);
+                    setPlayerEngine('hls');
+                  }}
                   onFallbackToTranscode={() => {
                     setUseTranscode(true);
                     setUseMatroskaEngine(false);
+                    setPlayerEngine('hls');
                   }}
                 />
+              </div>
+            ) : playerEngine === 'direct' ? (
+              <div className="relative w-full h-full flex flex-col items-center justify-center bg-black p-4">
+                <div className="w-full max-w-5xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl relative flex items-center justify-center border border-slate-800">
+                  <video
+                    ref={videoRef}
+                    src={blobUrl || streamUrl}
+                    controls
+                    autoPlay
+                    playsInline
+                    className="w-full h-full object-contain bg-black"
+                    poster={media.fanartUrl || media.posterUrl}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onTimeUpdate={(e) => handleTimeUpdate(e.currentTarget.currentTime)}
+                    onError={(e) => {
+                      console.warn('[MediaPlayerModal Direct Video] Error:', e);
+                      setPlaybackError('Direct video stream encountered an error. Switch to FFmpeg HLS transcode engine.');
+                    }}
+                  />
+                </div>
+                <div className="mt-3 flex items-center gap-3 text-xs text-slate-400">
+                  <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Direct Express Stream ({blobUrl ? 'Local Blob' : 'Express Async Stream'})</span>
+                  </span>
+                  <span>•</span>
+                  <button
+                    onClick={() => {
+                      setPlayerEngine('hls');
+                      setPlaybackError(null);
+                    }}
+                    className="text-indigo-400 hover:text-indigo-300 font-semibold underline underline-offset-2 transition-colors cursor-pointer"
+                  >
+                    Switch to FFmpeg HLS Transcoder
+                  </button>
+                </div>
               </div>
             ) : (
               <HLSPlayer
@@ -873,9 +945,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 initialHwAccel={hardwareAccel}
                 initialCodec={selectedCodec}
                 initialForceTranscode={useTranscode || transcodeStatus.state === 'ready'}
+                fallbackStreamUrl={streamUrl}
                 onClose={onClose}
                 onFallbackDirect={() => {
-                  setUseTranscode(false);
+                  setPlayerEngine('direct');
+                }}
+                onSwitchToDirect={() => {
+                  setPlayerEngine('direct');
                 }}
               />
             )}

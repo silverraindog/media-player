@@ -104,6 +104,8 @@ interface HLSPlayerProps {
   initialForceTranscode?: boolean;
   onClose?: () => void;
   onFallbackDirect?: () => void;
+  fallbackStreamUrl?: string;
+  onSwitchToDirect?: () => void;
 }
 
 export const HLSPlayer: React.FC<HLSPlayerProps> = ({
@@ -120,10 +122,13 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   initialForceTranscode = false,
   onClose,
   onFallbackDirect,
+  fallbackStreamUrl,
+  onSwitchToDirect,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsInstanceRef = useRef<Hls | null>(null);
+  const [isSlowInitializing, setIsSlowInitializing] = useState(false);
 
   // Stream & probe state
   const [probeData, setProbeData] = useState<StreamProbeData | null>(null);
@@ -380,10 +385,11 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     setHlsStatus('initializing');
     setStreamError(null);
 
-    // Timeout safety: if stuck in 'initializing' for > 4.5s, transition to 'streaming'
-    const initTimer = setTimeout(() => {
-      setHlsStatus((prev) => (prev === 'initializing' ? 'streaming' : prev));
-    }, 4500);
+    setIsSlowInitializing(false);
+    // Show slow initialization helper if transcode startup takes longer than 6 seconds
+    const slowInitTimer = setTimeout(() => {
+      setIsSlowInitializing(true);
+    }, 6000);
 
     // Destroy existing instance if preset or params changed
     if (hlsInstanceRef.current) {
@@ -576,7 +582,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
 
     return () => {
-      clearTimeout(initTimer);
+      clearTimeout(slowInitTimer);
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
@@ -1022,7 +1028,35 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             <div className="text-xs text-slate-400 mt-1 max-w-sm">
               {isRecovering ? 'Auto-recovering from stream decode or network interruption' : 'Analyzing media format via ffprobe and dynamically generating MPEG-TS chunks'}
             </div>
-            {hlsStatus === 'initializing' && (
+            {isSlowInitializing && (
+              <div className="mt-4 p-3 bg-indigo-950/80 border border-indigo-700/60 rounded-xl max-w-sm flex flex-col items-center gap-2">
+                <span className="text-xs text-indigo-200 font-medium">
+                  Transcoding high-bitrate media into HLS stream chunks...
+                </span>
+                <div className="flex items-center gap-2 flex-wrap justify-center">
+                  {(onSwitchToDirect || onFallbackDirect) && (
+                    <button
+                      onClick={onSwitchToDirect || onFallbackDirect}
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow transition-colors flex items-center gap-1"
+                    >
+                      <span>⚡ Switch to Direct / Express Stream</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setHwAccel(false);
+                      setActiveCodec('h264');
+                      setForceTranscode(true);
+                      setRestartNonce((p) => p + 1);
+                    }}
+                    className="px-2.5 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg text-xs font-medium transition-colors"
+                  >
+                    Force Software H.264
+                  </button>
+                </div>
+              </div>
+            )}
+            {hlsStatus === 'initializing' && !isSlowInitializing && (
               <button
                 onClick={() => {
                   setHlsStatus('streaming');
@@ -1045,18 +1079,28 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             <div className="flex-1 text-xs">
               <div className="font-bold text-sm text-white">HLS Playback Interruption</div>
               <p className="mt-1">{streamError}</p>
-              <div className="flex items-center gap-2 mt-3">
+              <div className="flex items-center gap-2 mt-3 flex-wrap">
+                {(onSwitchToDirect || onFallbackDirect) && (
+                  <button
+                    onClick={onSwitchToDirect || onFallbackDirect}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow transition-colors flex items-center gap-1"
+                  >
+                    <span>⚡ Switch to Direct / Express Stream</span>
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setRetryCount(0);
                     setStreamError(null);
+                    setHwAccel(false);
+                    setActiveCodec('h264');
                     setForceRemount((prev) => prev + 1);
                     fetchProbeData();
                     setRestartNonce((prev) => prev + 1);
                   }}
                   className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> Retry Transcode
+                  <RefreshCw className="w-3.5 h-3.5" /> Retry Transcode (Software H.264)
                 </button>
                 <button
                   onClick={async () => {
@@ -1074,14 +1118,6 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
                 >
                   <RotateCcw className="w-3.5 h-3.5" /> Force Restart Stream
                 </button>
-                {onFallbackDirect && (
-                  <button
-                    onClick={onFallbackDirect}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium"
-                  >
-                    Switch to Direct Stream
-                  </button>
-                )}
               </div>
             </div>
           </div>

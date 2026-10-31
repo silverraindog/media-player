@@ -105,6 +105,8 @@ const isTauri = typeof window !== 'undefined' && (
   window.location.origin.includes('localhost:1420')
 );
 
+const originalWindowFetch = typeof window !== 'undefined' ? window.fetch.bind(window) : globalThis.fetch;
+
 const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   let urlStr = '';
   if (typeof input === 'string') {
@@ -118,7 +120,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
   // THREADING & IPC BYPASS FIX (macOS Stackshots diagnostic resolution):
   // Any request containing /api/media/stream or /api/samba/stream must immediately skip
   // native Tauri IPC handlers to prevent Tokio synchronous block_on main-thread deadlocks.
-  // Force it to return regular window.fetch(streamingUrl, init) directly so the webview
+  // Force it to return regular fetch(streamingUrl, init) directly so the webview
   // relies safely on the Express backend chunk streaming engine.
   const isStreamingRoute =
     urlStr.includes('/api/media/stream') ||
@@ -155,8 +157,8 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
       }
     }
 
-    // Immediately return standard window.fetch, skipping all native Tauri IPC handlers
-    return window.fetch(streamingUrl, init);
+    // Immediately return standard fetch, skipping all native Tauri IPC handlers
+    return originalWindowFetch(streamingUrl, init);
   }
 
   // In Tauri desktop environment, route internal API calls directly via native IPC
@@ -183,8 +185,17 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
   }
 
   let modifiedInput = input;
-  return window.fetch(modifiedInput, init);
+  if (isTauri && typeof modifiedInput === 'string' && modifiedInput.startsWith('/api/')) {
+    const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+    modifiedInput = `http://localhost:${backendPort}${modifiedInput}`;
+  }
+  return originalWindowFetch(modifiedInput, init);
 };
+
+if (typeof window !== 'undefined') {
+  (window as any).customFetch = customFetch;
+  (window as any).fetch = customFetch;
+}
 
 // Robust global fetch wrapper with retry logic, 5s timeout for metadata/vault calls, request prioritization, and detailed stage logging
 const fetchWithRetry = async (

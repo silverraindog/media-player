@@ -722,7 +722,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
                   <div className="flex items-center gap-3 mt-2">
                     <button
-                      onClick={handleNativeFallback}
+                      onClick={() => handleNativeFallback()}
                       className="px-2.5 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded text-xs font-medium transition-colors"
                     >
                       Native Fallback (Blob URL)

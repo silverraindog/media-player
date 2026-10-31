@@ -5317,7 +5317,21 @@ app.use(express.static(SAMBA_SHARE_ROOT, {
 }));
 
 // Dedicated Samba Network Share video/audio streaming endpoint with full HTTP 206 Partial Content / Range support
-app.get('/api/samba/stream', (req: Request, res: Response) => {
+app.options('/api/samba/stream', (req: Request, res: Response) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.sendStatus(204);
+});
+
+app.get('/api/samba/stream', async (req: Request, res: Response) => {
+  // Explicitly allow cross-origin requests and range streaming headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+  res.setHeader('Accept-Ranges', 'bytes');
+
   try {
     const rawPath = ((req.query.path || req.query.file) as string || '').trim();
     if (!rawPath) {
@@ -5642,6 +5656,78 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
       '.ogg': 'audio/ogg',
     };
 
+    // Detect browser incompatibility: MKV containers or H.265/HEVC codecs cannot be decoded natively by most browsers
+    const isMkv = ext === '.mkv' || fullPath.toLowerCase().endsWith('.mkv');
+    let probe: StreamProbeResult | null = null;
+    try {
+      probe = await probeMediaFile(fullPath);
+    } catch (e) {
+      console.warn(`[Samba Stream Proxy] ffprobe warning for "${fullPath}":`, e);
+    }
+
+    const vCodec = (probe?.video?.codec_name || '').toLowerCase();
+    const aCodec = (probe?.audio?.codec_name || '').toLowerCase();
+    const pixFmt = (probe?.video?.pix_fmt || '').toLowerCase();
+
+    const isHevc = vCodec === 'hevc' || vCodec === 'h265' || vCodec.includes('hevc');
+    const isUnsupportedVideo = isMkv || isHevc || vCodec === 'vp9' || vCodec === 'av1' || pixFmt.includes('10le') || pixFmt.includes('444');
+    const isUnsupportedAudio = Boolean(aCodec && !['aac', 'mp3', 'opus'].includes(aCodec));
+    const requiresTranscode = (isMkv || isHevc || isUnsupportedVideo || isUnsupportedAudio || (probe?.needsTranscoding ?? false)) && req.query.raw !== 'true';
+
+    // Gracefully force FFmpeg transcoding pipeline when browser incompatibility is detected
+    if (requiresTranscode) {
+      console.log(`[Samba Stream Proxy] Browser incompatibility detected for "${fullPath}" (MKV: ${isMkv}, vCodec: ${vCodec || 'unknown'}, aCodec: ${aCodec || 'unknown'}). Gracefully forcing FFmpeg transcoder pipeline.`);
+
+      const ffmpegBin = resolveFfmpegBinary();
+      const transcodeArgs = [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel', 'warning',
+        '-y',
+        '-fflags', '+genpts+fastseek',
+        '-err_detect', 'ignore_err',
+        '-i', fullPath,
+        '-map', '0:v:0?',
+        '-map', '0:a:0?',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-ac', '2',
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+        '-f', 'mp4',
+        'pipe:1',
+      ];
+
+      const ffmpegProc = spawn(ffmpegBin, transcodeArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+      res.writeHead(200, {
+        'Content-Type': 'video/mp4',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Range, Content-Type',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length',
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache, no-store',
+      });
+
+      ffmpegProc.stdout.pipe(res);
+
+      ffmpegProc.stderr.on('data', (d) => {
+        const msg = d.toString();
+        if (msg.includes('error') || msg.includes('Error')) {
+          console.warn('[Samba Stream FFmpeg Transcode Stderr]:', msg.trim());
+        }
+      });
+
+      req.on('close', () => {
+        if (!res.writableEnded) {
+          ffmpegProc.kill('SIGTERM');
+        }
+      });
+      return;
+    }
+
     // Force video/mp4 for video extensions for better browser compatibility
     const videoExtensions = ['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.ts', '.m2ts', '.wmv', '.flv'];
     const contentType = videoExtensions.includes(ext) ? 'video/mp4' : (mimeMap[ext] || 'video/mp4');
@@ -5654,6 +5740,9 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
 
       if (start >= fileSize || end >= fileSize) {
         res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
         return res.end();
       }
 
@@ -5665,6 +5754,8 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
         'Content-Length': chunksize,
         'Content-Type': contentType,
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Range, Content-Type',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length',
       };
       res.writeHead(206, head);
       file.pipe(res);
@@ -5674,6 +5765,8 @@ app.get('/api/samba/stream', (req: Request, res: Response) => {
         'Content-Type': contentType,
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Range, Content-Type',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length',
       };
       res.writeHead(200, head);
       fs.createReadStream(fullPath).pipe(res);
@@ -6434,9 +6527,11 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
             bit_rate: videoStream.bit_rate ? parseInt(videoStream.bit_rate, 10) : undefined,
           };
 
-          if (vCodec !== 'h264' || (pixFmt && pixFmt.includes('10le')) || (pixFmt && pixFmt.includes('444'))) {
+          const isHevc = vCodec === 'hevc' || vCodec === 'h265' || vCodec.includes('hevc');
+          const isMkvPath = filePath.toLowerCase().endsWith('.mkv');
+          if (vCodec !== 'h264' || isHevc || isMkvPath || (pixFmt && (pixFmt.includes('10le') || pixFmt.includes('444')))) {
             needsVideoTranscode = true;
-            reasons.push(`Video codec "${vCodec}" (${pixFmt || 'unknown format'}) requires transcoding to H.264 (yuv420p)`);
+            reasons.push(`Video codec "${vCodec}" (${pixFmt || 'unknown format'}) requires transcoding to H.264 (yuv420p) for universal browser support`);
           }
         }
 
@@ -6452,14 +6547,20 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
             channel_layout: audioStream.channel_layout,
           };
 
-          if (aCodec !== 'aac' && aCodec !== 'mp3') {
+          const isUnsupportedAudio = aCodec !== 'aac' && aCodec !== 'mp3';
+          if (isUnsupportedAudio || filePath.toLowerCase().endsWith('.mkv')) {
             needsAudioTranscode = true;
             reasons.push(`Audio codec "${aCodec}" requires transcoding to AAC stereo`);
           }
         }
 
         const container = (format.format_name || '').toLowerCase();
-        if (container.includes('matroska') || container.includes('webm') || container.includes('avi') || container.includes('flv')) {
+        const isMkvContainer = container.includes('matroska') || container.includes('mkv') || filePath.toLowerCase().endsWith('.mkv');
+        if (isMkvContainer) {
+          needsVideoTranscode = true;
+          needsAudioTranscode = true;
+          reasons.push(`MKV container format "${container}" with variable timestamps requires transcoding to H.264 / AAC for browser playback`);
+        } else if (container.includes('webm') || container.includes('avi') || container.includes('flv')) {
           reasons.push(`Container format "${container}" repackaged into HLS MPEG-TS segments`);
         }
 
@@ -6727,8 +6828,21 @@ app.post('/api/media/settings/:id', async (req: Request, res: Response) => {
   }
 });
 
+// Options preflight for media streaming endpoints
+app.options(['/api/media/stream/:id', '/api/media/stream/:id/:segment', '/api/media/stream/:id/probe', '/api/media/stream/:id/index.m3u8'], (req: Request, res: Response) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.sendStatus(204);
+});
+
 // Endpoint 1: Probe media file format via ffprobe
 app.get('/api/media/stream/:id/probe', async (req: Request, res: Response) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+
   try {
     const rawPath = ((req.query.path || req.query.file || req.params.id) as string || '').trim();
     const resolvedPath = resolveStreamSourceFile(rawPath, req.query);
@@ -6759,6 +6873,10 @@ app.get('/api/media/stream/:id/probe', async (req: Request, res: Response) => {
 
 // Endpoint 2: Stop stream session and release ffmpeg child process
 app.post('/api/media/stream/:id/stop', (req: Request, res: Response) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+
   try {
     const id = req.params.id;
     let stoppedCount = 0;
@@ -6784,6 +6902,11 @@ app.post('/api/media/stream/:id/stop', (req: Request, res: Response) => {
 
 // Endpoint 3: Segment / sub-resource delivery (*.ts or index.m3u8)
 app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+  res.setHeader('Accept-Ranges', 'bytes');
+
   const { id, segment } = req.params;
 
   if (segment === 'index.m3u8' || segment.endsWith('.m3u8')) {
@@ -6848,12 +6971,17 @@ app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) =>
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Cache-Control', 'public, max-age=3600');
   }
-  res.setHeader('Access-Control-Allow-Origin', '*');
   res.sendFile(filePath);
 });
 
 // Endpoint 4: Master HLS stream endpoint (/api/media/stream/:id or /api/media/stream/:id/index.m3u8)
 const handleHlsMasterStream = async (req: Request, res: Response) => {
+  // Explicitly allow cross-origin requests and range streaming headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+  res.setHeader('Accept-Ranges', 'bytes');
+
   console.log(`[handleHlsMasterStream] Called for media: ${req.params.id}, query: ${JSON.stringify(req.query)}`);
   try {
     const mediaId = req.params.id;
@@ -6869,6 +6997,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
           else res.setHeader('Content-Type', 'video/mp2t');
           res.setHeader('Cache-Control', 'public, max-age=3600');
           res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+          res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
           return res.sendFile(segPath);
         }
       }
@@ -6901,6 +7031,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
           res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
           res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+          res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
           return res.sendFile(session.playlistPath);
         }
       } catch {}
@@ -6949,7 +7081,11 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
 
     if (hasVideo) {
       args.push('-map', '0:v:0?');
-      if (probeResult.needsVideoTranscode || forceTranscode || preset || hwaccel || codec !== 'h264') {
+      const isMkvFile = resolvedPath.toLowerCase().endsWith('.mkv') || (probeResult.format.format_name || '').toLowerCase().includes('matroska');
+      const isHevcVideo = (probeResult.video?.codec_name || '').toLowerCase() === 'hevc' || (probeResult.video?.codec_name || '').toLowerCase() === 'h265' || (probeResult.video?.codec_name || '').toLowerCase().includes('hevc');
+      const shouldTranscodeVideo = probeResult.needsVideoTranscode || isMkvFile || isHevcVideo || forceTranscode || Boolean(preset) || Boolean(hwaccel) || codec !== 'h264';
+
+      if (shouldTranscodeVideo) {
         let vEncoder = 'libx264';
         const isLinux = os.platform() === 'linux';
         if (codec === 'hevc') {
@@ -7101,6 +7237,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
     res.sendFile(playlistPath);
   } catch (err: any) {
     console.error('[FFmpeg Master Stream Error]:', err);

@@ -5,6 +5,13 @@ export const isTauri = typeof window !== 'undefined' && Boolean((window as any).
 
 export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T> {
   if (isTauri) {
+    // Never intercept streaming media endpoints with native database commands
+    if (endpoint.startsWith('/api/media/stream') || endpoint.startsWith('/api/samba/stream') || endpoint.includes('/stream')) {
+      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+      const url = endpoint.startsWith('/') ? `http://localhost:${backendPort}${endpoint}` : endpoint;
+      return window.fetch(url, options).then((r) => r.json()) as any;
+    }
+
     // Map REST endpoints to native Tauri commands writing to ~/.media-player
     if ((endpoint.startsWith('/api/db/media') || endpoint.startsWith('/api/media')) && (!options.method || options.method === 'GET')) {
       let typeParam = '';

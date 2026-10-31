@@ -115,6 +115,51 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     urlStr = (input as any).url;
   }
 
+  // Detect video/audio streaming resource endpoints
+  const isStreamingRoute =
+    urlStr.startsWith('/api/media/stream') ||
+    urlStr.includes('/api/media/stream') ||
+    urlStr.startsWith('/api/samba/stream') ||
+    urlStr.includes('/api/samba/stream') ||
+    urlStr.includes('/api/transcode') ||
+    urlStr.includes('/index.m3u8') ||
+    /\.(m3u8|ts|m4s)(\?.*)?$/i.test(urlStr);
+
+  // FIX 1: Streaming resource paths matching /api/media/stream or /api/samba/stream
+  // must NEVER be converted using Tauri's convertFileSrc or intercepted by Tauri IPC.
+  // They must remain standard HTTP URLs routed directly to the Express backend port
+  // so that HTTP 206 Partial Content / Range headers are correctly processed by the browser player.
+  if (isStreamingRoute) {
+    let streamingUrl = urlStr;
+
+    // Strip accidental Tauri asset:// or tauri:// protocol schemes if prepended by custom loaders
+    if (streamingUrl.includes('asset://') || streamingUrl.includes('tauri://') || streamingUrl.startsWith('asset:/') || streamingUrl.startsWith('tauri:/')) {
+      streamingUrl = streamingUrl.replace(/^(?:asset|tauri):\/\/(?:localhost\/?)?/i, '/').replace(/^(?:asset|tauri):\/?/i, '/');
+      try {
+        if (streamingUrl.includes('%')) {
+          streamingUrl = decodeURIComponent(streamingUrl);
+        }
+      } catch {}
+    }
+
+    // In Tauri desktop environment where window.location.origin is tauri:// or tauri.localhost,
+    // relative paths like /api/media/stream... must target the Express backend HTTP port
+    if (typeof window !== 'undefined' && (
+      window.location.protocol === 'tauri:' ||
+      window.location.origin.includes('tauri.localhost') ||
+      window.location.origin.includes('localhost:1420') ||
+      Boolean((window as any).__TAURI__) ||
+      Boolean((window as any).__TAURI_IPC__)
+    )) {
+      if (streamingUrl.startsWith('/')) {
+        const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+        streamingUrl = `http://localhost:${backendPort}${streamingUrl}`;
+      }
+    }
+
+    return window.fetch(streamingUrl, init);
+  }
+
   // In Tauri desktop environment, route internal API calls directly via native IPC
   if (isTauri && urlStr.startsWith('/api/')) {
     try {
@@ -151,13 +196,37 @@ const fetchWithRetry = async (
   ): Promise<Response> => {
     let lastError: any;
 
+    // Normalize streaming URLs: ensure no Tauri custom asset schemes and preserve Express HTTP port
+    let effectiveUrl = url;
     const isMedia = isMediaSegment ||
-      url.includes('/api/media/stream') ||
-      url.includes('/api/transcode') ||
-      url.includes('/stream') ||
-      /\.(m3u8|ts|m4s|mp4|webm)(\?.*)?$/i.test(url);
+      effectiveUrl.includes('/api/media/stream') ||
+      effectiveUrl.includes('/api/samba/stream') ||
+      effectiveUrl.includes('/api/transcode') ||
+      effectiveUrl.includes('/stream') ||
+      /\.(m3u8|ts|m4s|mp4|webm)(\?.*)?$/i.test(effectiveUrl);
 
-    const isTranscodeStream = isMedia || url.includes('/api/media/stream') || url.includes('/api/transcode') || url.includes('/index.m3u8') || url.includes('.ts');
+    if (effectiveUrl.includes('/api/media/stream') || effectiveUrl.includes('/api/samba/stream')) {
+      if (effectiveUrl.includes('asset://') || effectiveUrl.includes('tauri://') || effectiveUrl.startsWith('asset:/') || effectiveUrl.startsWith('tauri:/')) {
+        effectiveUrl = effectiveUrl.replace(/^(?:asset|tauri):\/\/(?:localhost\/?)?/i, '/').replace(/^(?:asset|tauri):\/?/i, '/');
+        try {
+          if (effectiveUrl.includes('%')) {
+            effectiveUrl = decodeURIComponent(effectiveUrl);
+          }
+        } catch {}
+      }
+      if (typeof window !== 'undefined' && (
+        window.location.protocol === 'tauri:' ||
+        window.location.origin.includes('tauri.localhost') ||
+        window.location.origin.includes('localhost:1420')
+      )) {
+        if (effectiveUrl.startsWith('/')) {
+          const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+          effectiveUrl = `http://localhost:${backendPort}${effectiveUrl}`;
+        }
+      }
+    }
+
+    const isTranscodeStream = isMedia || effectiveUrl.includes('/api/media/stream') || effectiveUrl.includes('/api/transcode') || effectiveUrl.includes('/index.m3u8') || effectiveUrl.includes('.ts');
 
     // Apply Request Priority headers:
     // - High priority & 'Cache-Control: no-cache' for media streaming segments to prevent buffering/stalls
@@ -184,20 +253,20 @@ const fetchWithRetry = async (
       priority: isMedia ? 'high' : 'low',
     } as RequestInit;
 
-    const isSpecialCall = url.includes('/api/metadata/categorize') || url.includes('/api/vault/state') || url.includes('/api/samba/');
+    const isSpecialCall = effectiveUrl.includes('/api/metadata/categorize') || effectiveUrl.includes('/api/vault/state') || effectiveUrl.includes('/api/samba/');
     const timeoutMs = isTranscodeStream ? 45000 : (isSpecialCall ? 5000 : (isMedia ? 30000 : 15000));
     const reqId = Math.random().toString(36).substring(2, 7);
 
     for (let i = 0; i < maxRetries; i++) {
       const startTime = performance.now();
-      console.log(`[FetchStage][${reqId}] 🚀 REQUEST SENT: [Attempt ${i + 1}/${maxRetries}] ${priorityOptions.method || 'GET'} ${url} [Priority: ${isMedia ? 'HIGH' : 'LOW'}]`, { body: priorityOptions.body });
+      console.log(`[FetchStage][${reqId}] 🚀 REQUEST SENT: [Attempt ${i + 1}/${maxRetries}] ${priorityOptions.method || 'GET'} ${effectiveUrl} [Priority: ${isMedia ? 'HIGH' : 'LOW'}]`, { body: priorityOptions.body });
 
       try {
         const controller = new AbortController();
-        console.log(`[FetchStage][${reqId}] ⏳ TIMEOUT WAITING: Started ${timeoutMs}ms timer for ${url} (Priority: ${isMedia ? 'HIGH' : 'LOW'})`);
+        console.log(`[FetchStage][${reqId}] ⏳ TIMEOUT WAITING: Started ${timeoutMs}ms timer for ${effectiveUrl} (Priority: ${isMedia ? 'HIGH' : 'LOW'})`);
 
         const timer = setTimeout(() => {
-          console.warn(`[FetchStage][${reqId}] ⏰ TIMEOUT REACHED: Request to ${url} exceeded ${timeoutMs}ms limit.`);
+          console.warn(`[FetchStage][${reqId}] ⏰ TIMEOUT REACHED: Request to ${effectiveUrl} exceeded ${timeoutMs}ms limit.`);
           controller.abort();
         }, timeoutMs);
 
@@ -207,24 +276,24 @@ const fetchWithRetry = async (
           else priorityOptions.signal.addEventListener('abort', () => controller.abort());
         }
 
-        const response = await customFetch(url, { ...priorityOptions, signal });
+        const response = await customFetch(effectiveUrl, { ...priorityOptions, signal });
         clearTimeout(timer);
         const elapsed = Math.round(performance.now() - startTime);
 
         if (response.ok) {
-          console.log(`[FetchStage][${reqId}] ✅ RESPONSE RECEIVED (OK): ${url} in ${elapsed}ms (Status: ${response.status})`);
+          console.log(`[FetchStage][${reqId}] ✅ RESPONSE RECEIVED (OK): ${effectiveUrl} in ${elapsed}ms (Status: ${response.status})`);
           return response;
         }
 
-        console.warn(`[FetchStage][${reqId}] ⚠️ RESPONSE RECEIVED (HTTP ERROR): ${url} in ${elapsed}ms (Status: ${response.status})`);
+        console.warn(`[FetchStage][${reqId}] ⚠️ RESPONSE RECEIVED (HTTP ERROR): ${effectiveUrl} in ${elapsed}ms (Status: ${response.status})`);
         throw new Error(`HTTP ${response.status}`);
       } catch (err: any) {
         lastError = err;
         const elapsed = Math.round(performance.now() - startTime);
-        console.error(`[FetchStage][${reqId}] ❌ REQUEST FAILED/STALLED: ${url} after ${elapsed}ms on attempt ${i + 1}:`, err);
+        console.error(`[FetchStage][${reqId}] ❌ REQUEST FAILED/STALLED: ${effectiveUrl} after ${elapsed}ms on attempt ${i + 1}:`, err);
 
         if (isSpecialCall && (err.name === 'AbortError' || err.message?.includes('aborted') || err.message?.includes('timeout') || i === maxRetries - 1)) {
-          window.dispatchEvent(new CustomEvent('sambavault-api-timeout', { detail: { url, message: `Request exceeded ${timeoutMs}ms timeout or failed after ${elapsed}ms.` } }));
+          window.dispatchEvent(new CustomEvent('sambavault-api-timeout', { detail: { url: effectiveUrl, message: `Request exceeded ${timeoutMs}ms timeout or failed after ${elapsed}ms.` } }));
         }
 
         await new Promise((r) => setTimeout(r, 500 * Math.pow(2, i))); // Exponential backoff
@@ -232,7 +301,7 @@ const fetchWithRetry = async (
     }
 
     // Fallback for API routes if all retries fail
-    if (url.includes('/api/')) {
+    if (effectiveUrl.includes('/api/')) {
       let bodyObj: any = null;
       if (priorityOptions.body && typeof priorityOptions.body === 'string') {
         try { bodyObj = JSON.parse(priorityOptions.body as string); } catch {}
@@ -629,11 +698,21 @@ function App() {
 
     if (isTauri && (m.path || m.playbackUrl)) {
       try {
-        const tauriGlobal = (window as any).__TAURI__;
-        const convert = tauriGlobal?.convertFileSrc || (window as any).__TAURI_IPC__?.convertFileSrc;
-        const rawP = m.path || m.playbackUrl || '';
-        if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
-          resolvedUrl = convert(rawP);
+        const rawP = m.playbackUrl || m.path || '';
+        // Ensure streaming resource paths matching /api/media/stream or /api/samba/stream
+        // are NEVER converted using Tauri's convertFileSrc; they must remain standard HTTP URLs.
+        const isStreamingRoute =
+          rawP.includes('/api/media/stream') ||
+          rawP.includes('/api/samba/stream') ||
+          rawP.includes('/api/transcode') ||
+          rawP.includes('/stream');
+
+        if (!isStreamingRoute) {
+          const tauriGlobal = (window as any).__TAURI__;
+          const convert = tauriGlobal?.convertFileSrc || (window as any).__TAURI_IPC__?.convertFileSrc;
+          if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
+            resolvedUrl = convert(rawP);
+          }
         }
       } catch {}
     }
@@ -654,11 +733,20 @@ function App() {
 
     if (isTauri && (ep.filePath || ep.playbackUrl)) {
       try {
-        const tauriGlobal = (window as any).__TAURI__;
-        const convert = tauriGlobal?.convertFileSrc || (window as any).__TAURI_IPC__?.convertFileSrc;
-        const rawP = ep.filePath || ep.playbackUrl || '';
-        if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
-          resolvedUrl = convert(rawP);
+        const rawP = ep.playbackUrl || ep.filePath || '';
+        // Ensure streaming resource paths are NEVER converted using Tauri's convertFileSrc
+        const isStreamingRoute =
+          rawP.includes('/api/media/stream') ||
+          rawP.includes('/api/samba/stream') ||
+          rawP.includes('/api/transcode') ||
+          rawP.includes('/stream');
+
+        if (!isStreamingRoute) {
+          const tauriGlobal = (window as any).__TAURI__;
+          const convert = tauriGlobal?.convertFileSrc || (window as any).__TAURI_IPC__?.convertFileSrc;
+          if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
+            resolvedUrl = convert(rawP);
+          }
         }
       } catch {}
     }

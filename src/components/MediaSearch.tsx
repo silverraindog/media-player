@@ -650,6 +650,25 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     }
   };
 
+  const getSafeGenres = (genres: any): string[] => {
+    if (Array.isArray(genres)) return genres;
+    if (typeof genres === 'string') {
+      try {
+        const parsed = JSON.parse(genres);
+        if (Array.isArray(parsed)) return parsed;
+        return genres.split(',').map((g) => g.trim()).filter(Boolean);
+      } catch {
+        return genres.split(',').map((g) => g.trim()).filter(Boolean);
+      }
+    }
+    return [];
+  };
+
+  const getSafeRating = (rating: any): number => {
+    const num = Number(rating);
+    return !isNaN(num) ? num : 8.0;
+  };
+
   // Compute live counts across the library
   const allCount = mediaLibrary.length;
   const seriesCount = mediaLibrary.filter((m) => m.type === 'series').length;
@@ -848,7 +867,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   // Helper to compute media affinity for a specific item
   const getMediaAffinity = (media: MediaMetadata) => {
-    if (!media.genres || media.genres.length === 0 || topAffinityGenres.length === 0) {
+    const safeGenres = getSafeGenres(media.genres);
+    if (safeGenres.length === 0 || topAffinityGenres.length === 0) {
       return { score: 0, percentage: 0, topMatchingGenre: null, matchingGenres: [] };
     }
 
@@ -857,7 +877,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     let bestScore = -1;
     const matching: string[] = [];
 
-    media.genres.forEach((g) => {
+    safeGenres.forEach((g) => {
       const entry = genreAffinityMap[g.trim().toLowerCase()];
       if (entry && entry.score > 0) {
         totalScore += entry.score;
@@ -946,7 +966,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         const genreTagMatch = q.match(/^genre[:=]\s*(.+)$/i);
         if (genreTagMatch) {
           const targetG = genreTagMatch[1].trim();
-          return media.genres?.some((g) => g.toLowerCase().includes(targetG));
+          return getSafeGenres(media.genres).some((g) => g.toLowerCase().includes(targetG));
         }
 
         // Check if query is an explicit year tag
@@ -957,7 +977,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
         const matchesTitle = media.title.toLowerCase().includes(q);
         const matchesOriginalTitle = media.originalTitle?.toLowerCase().includes(q);
-        const matchesGenre = media.genres.some((g) => g.toLowerCase().includes(q));
+        const matchesGenre = getSafeGenres(media.genres).some((g) => g.toLowerCase().includes(q));
         const matchesYear = media.year ? String(media.year).includes(q) : false;
         const matchesArtist = media.artists?.some((a) => a.toLowerCase().includes(q));
         const matchesDirector = media.directors?.some((d) => d.toLowerCase().includes(q));
@@ -2948,8 +2968,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     {/* Hover Tooltip - delayed by 10s as requested to prevent obstructing action buttons */}
                     <div className="absolute inset-0 z-10 p-4 bg-slate-950/90 backdrop-blur-sm opacity-0 group-hover/poster:opacity-100 transition-opacity duration-500 delay-0 group-hover/poster:delay-[10000ms] flex flex-col justify-start pointer-events-none">
                       <div className="text-white text-xs font-semibold mb-1 flex items-center justify-between">
-                        <span>{media.rating.toFixed(1)} / 10</span>
-                        <span className="text-slate-400 font-normal">{media.genres.slice(0, 2).join(', ')}</span>
+                        <span>{getSafeRating(media.rating).toFixed(1)} / 10</span>
+                        <span className="text-slate-400 font-normal">{getSafeGenres(media.genres).slice(0, 2).join(', ')}</span>
                       </div>
                       <p className="text-[11px] text-slate-300 leading-tight line-clamp-4">
                         {media.overview}
@@ -3070,7 +3090,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
                       <div className="flex items-center gap-1 bg-slate-900/90 border border-amber-500/30 px-2 py-1 rounded-lg text-amber-400 text-xs font-bold shadow-md">
                         <Star className="w-3.5 h-3.5 fill-amber-400" />
-                        <span>{media.rating.toFixed(1)}</span>
+                        <span>{getSafeRating(media.rating).toFixed(1)}</span>
                       </div>
                     </div>
 
@@ -3112,7 +3132,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   <div className="p-4 flex-1 flex flex-col justify-between space-y-4">
                     {/* Categories & Genres Pills (with Affinity highlights) */}
                     <div className="flex flex-wrap gap-1.5">
-                      {media.genres.slice(0, 4).map((g, idx) => {
+                      {getSafeGenres(media.genres).slice(0, 4).map((g, idx) => {
                         const isAffinityMatched = (genreAffinityMap[g.trim().toLowerCase()]?.score || 0) > 0;
                         return (
                           <button

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   X,
   Play,
@@ -22,6 +22,14 @@ import {
   Cpu,
   Zap,
   Activity,
+  CheckCircle2,
+  XCircle,
+  Network,
+  Copy,
+  Check,
+  Eye,
+  Server,
+  Globe,
 } from 'lucide-react';
 import {
   MediaMetadata,
@@ -36,6 +44,38 @@ import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
 import { getMountedDisplayPath, extractCleanLocalPath } from '../utils/pathSanitizer';
 import { transcodeService, TranscodeStatusInfo, MediaInfo } from '../services/TranscodeService';
+
+export interface NetworkProbeStats {
+  timestamp: number;
+  testedUrl: string;
+  httpStatus: number | null;
+  statusText: string;
+  acceptRanges: string | null;
+  contentRange: string | null;
+  contentLength: string | null;
+  contentType: string | null;
+  accessControlAllowOrigin: string | null;
+  latencyMs: number | null;
+  isPartialContent: boolean;
+  hasAcceptRangesBytes: boolean;
+  hasValidContentRange: boolean;
+  corsHeadersExposed: boolean;
+  error?: string | null;
+}
+
+export interface VideoSrcDiagnostic {
+  domSrc: string;
+  currentSrc: string;
+  resolvedProtocol: string;
+  isBlob: boolean;
+  isMalformedAsset: boolean;
+  isDoublePrefixed: boolean;
+  isExpressStream: boolean;
+  isHlsPlaylist: boolean;
+  healthStatus: 'healthy' | 'warning' | 'error';
+  diagnosisNotes: string[];
+  lastChecked: number;
+}
 
 export interface MediaPlayerModalProps {
   isOpen: boolean;
@@ -86,9 +126,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   });
   const [isProbing, setIsProbing] = useState(false);
   const [showDiagnosticOverlay, setShowDiagnosticOverlay] = useState(false);
-  const [diagView, setDiagView] = useState<'stats' | 'protocol'>('stats');
+  const [diagView, setDiagView] = useState<'stats' | 'protocol' | 'network' | 'videosrc'>('stats');
   const [pathHealth, setPathHealth] = useState<any>(null);
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
+  const [networkStats, setNetworkStats] = useState<NetworkProbeStats | null>(null);
+  const [isProbingNetwork, setIsProbingNetwork] = useState(false);
+  const [videoSrcReport, setVideoSrcReport] = useState<VideoSrcDiagnostic | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -483,6 +527,201 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     });
   }, [activeFilePath, showDiagnosticOverlay, diagView, sambaConfig]);
 
+  // Clipboard copy helper with visual acknowledgment
+  const copyToClipboard = (text: string, key: string) => {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setCopiedKey(key);
+    setTimeout(() => {
+      setCopiedKey((curr) => (curr === key ? null : curr));
+    }, 2000);
+  };
+
+  // Helper to retrieve active mounted <video> element (Direct Video ref or HLS Player child element)
+  const getActiveVideoElement = useCallback((): HTMLVideoElement | null => {
+    if (videoRef.current) return videoRef.current;
+    if (playerContainerRef.current) {
+      const v = playerContainerRef.current.querySelector('video');
+      if (v) return v as HTMLVideoElement;
+    }
+    return null;
+  }, []);
+
+  // NETWORK MONITOR PROBE:
+  // Verifies that the Express server responds correctly to HTTP range requests
+  // Specifically checks Content-Range, Accept-Ranges, Content-Length, Content-Type, and HTTP 206 Partial Content
+  const runNetworkProbe = useCallback(async (targetUrl?: string) => {
+    let urlToProbe = targetUrl || streamUrl;
+    if (!urlToProbe && activeFilePath) {
+      const clean = extractCleanLocalPath(activeFilePath, sambaConfig?.share || 'media');
+      urlToProbe = `/api/samba/stream?path=${encodeURIComponent(clean)}`;
+    }
+    if (!urlToProbe) return;
+
+    // Resolve relative path to localhost backend if inside a Tauri custom scheme container
+    if (typeof window !== 'undefined' && urlToProbe.startsWith('/') && (
+      window.location.protocol === 'tauri:' ||
+      window.location.origin.includes('tauri.localhost') ||
+      Boolean((window as any).__TAURI__) ||
+      Boolean((window as any).__TAURI_IPC__)
+    )) {
+      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+      urlToProbe = `http://localhost:${backendPort}${urlToProbe}`;
+    }
+
+    setIsProbingNetwork(true);
+    const start = performance.now();
+
+    try {
+      // Send HTTP Range request requesting the first 1KB (bytes=0-1023)
+      const res = await window.fetch(urlToProbe, {
+        method: 'GET',
+        headers: {
+          Range: 'bytes=0-1023',
+        },
+      });
+
+      const elapsed = Math.round(performance.now() - start);
+      const acceptRanges = res.headers.get('accept-ranges');
+      const contentRange = res.headers.get('content-range');
+      const contentLength = res.headers.get('content-length');
+      const contentType = res.headers.get('content-type');
+      const allowOrigin = res.headers.get('access-control-allow-origin');
+
+      // Cancel reader to avoid continuing download
+      try {
+        res.body?.cancel();
+      } catch {}
+
+      const is206 = res.status === 206;
+      const hasAcceptRangesBytes = acceptRanges?.toLowerCase().includes('bytes') ?? false;
+      const hasValidContentRange = Boolean(contentRange && contentRange.toLowerCase().startsWith('bytes'));
+
+      setNetworkStats({
+        timestamp: Date.now(),
+        testedUrl: urlToProbe,
+        httpStatus: res.status,
+        statusText: res.statusText || (res.status === 206 ? 'Partial Content' : res.status === 200 ? 'OK' : ''),
+        acceptRanges,
+        contentRange,
+        contentLength,
+        contentType,
+        accessControlAllowOrigin: allowOrigin,
+        latencyMs: elapsed,
+        isPartialContent: is206,
+        hasAcceptRangesBytes,
+        hasValidContentRange,
+        corsHeadersExposed: Boolean(contentRange || acceptRanges),
+        error: !is206 && res.status !== 200 ? `Express returned HTTP ${res.status} (${res.statusText || 'Error'})` : null,
+      });
+    } catch (err: any) {
+      const elapsed = Math.round(performance.now() - start);
+      setNetworkStats({
+        timestamp: Date.now(),
+        testedUrl: urlToProbe,
+        httpStatus: null,
+        statusText: 'Network Probe Failed',
+        acceptRanges: null,
+        contentRange: null,
+        contentLength: null,
+        contentType: null,
+        accessControlAllowOrigin: null,
+        latencyMs: elapsed,
+        isPartialContent: false,
+        hasAcceptRangesBytes: false,
+        hasValidContentRange: false,
+        corsHeadersExposed: false,
+        error: err?.message || 'Connection refused or CORS headers blocking range response inspection',
+      });
+    } finally {
+      setIsProbingNetwork(false);
+    }
+  }, [streamUrl, activeFilePath, sambaConfig]);
+
+  // RESOLVED HTML <video> src LOGGER & DIAGNOSTIC:
+  // Inspects the active <video> element's DOM src and currentSrc attributes.
+  // Specifically catches if it defaulted to blob: or a malformed asset:/ URL after sanitization.
+  const inspectVideoSrc = useCallback(() => {
+    const el = getActiveVideoElement();
+    const domSrc = el?.getAttribute('src') || el?.src || blobUrl || streamUrl || '';
+    const currentSrc = el?.currentSrc || domSrc;
+
+    const isBlob = domSrc.startsWith('blob:') || currentSrc.startsWith('blob:');
+    const isMalformedAsset = (
+      domSrc.includes('asset:/') ||
+      domSrc.includes('tauri:/') ||
+      domSrc.includes('asset://') ||
+      domSrc.includes('tauri://') ||
+      domSrc.includes('%2FVolumes%2F') ||
+      /^\/Volumes\/.*asset:\//i.test(domSrc)
+    );
+    const isDoublePrefixed = (
+      domSrc.includes('/Volumes/Media/asset:') ||
+      domSrc.includes('/Volumes/media/asset:') ||
+      domSrc.includes('localhost/%2F')
+    );
+    const isExpressStream = domSrc.includes('/api/samba/stream') || domSrc.includes('/api/media/stream');
+    const isHlsPlaylist = domSrc.includes('.m3u8') || currentSrc.includes('.m3u8');
+
+    const notes: string[] = [];
+    let status: 'healthy' | 'warning' | 'error' = 'healthy';
+
+    if (isMalformedAsset || isDoublePrefixed) {
+      status = 'error';
+      notes.push('CRITICAL: Malformed asset URI or duplicated /Volumes/ prefix detected in video src.');
+      notes.push('Tauri asset protocol cannot parse repeated root path segments or nested schemes.');
+    } else if (isBlob) {
+      status = 'warning';
+      notes.push('WARNING: Video element is playing from an in-memory blob: URL fallback.');
+      notes.push('HTTP 206 range seeking may be limited and consumes high browser RAM.');
+    } else if (isExpressStream) {
+      status = 'healthy';
+      notes.push('OPTIMAL: Streaming directly via Express HTTP 206 partial content proxy.');
+      notes.push('Native Tauri convertFileSrc bypassed to prevent macOS main-thread IPC locks.');
+    } else if (isHlsPlaylist) {
+      status = 'healthy';
+      notes.push('OPTIMAL: Active FFmpeg HLS segmented playlist stream (.m3u8).');
+    } else if (domSrc) {
+      notes.push(`INFO: Video source resolved to: ${domSrc.substring(0, 35)}...`);
+    } else {
+      notes.push('WARNING: No media src loaded into DOM <video> element yet.');
+    }
+
+    setVideoSrcReport({
+      domSrc,
+      currentSrc,
+      resolvedProtocol: domSrc ? (domSrc.split(':')[0] + ':') : 'none',
+      isBlob,
+      isMalformedAsset,
+      isDoublePrefixed,
+      isExpressStream,
+      isHlsPlaylist,
+      healthStatus: status,
+      diagnosisNotes: notes,
+      lastChecked: Date.now(),
+    });
+  }, [getActiveVideoElement, blobUrl, streamUrl]);
+
+  // Periodic DOM video src inspection and initial network probe
+  useEffect(() => {
+    inspectVideoSrc();
+    if (streamUrl) {
+      runNetworkProbe(streamUrl);
+    }
+  }, [streamUrl, blobUrl, playerEngine, inspectVideoSrc, runNetworkProbe]);
+
+  // Live sampling when Diagnostic Overlay is open
+  useEffect(() => {
+    if (!showDiagnosticOverlay) return;
+    inspectVideoSrc();
+    if (diagView === 'network' && !networkStats) {
+      runNetworkProbe();
+    }
+    const interval = setInterval(inspectVideoSrc, 2000);
+    return () => clearInterval(interval);
+  }, [showDiagnosticOverlay, diagView, inspectVideoSrc, runNetworkProbe, networkStats]);
+
   const toggleMute = () => {
     const el = media.type === 'album' ? audioRef.current : videoRef.current;
     if (el) {
@@ -647,6 +886,23 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             </select>
 
             <button
+              onClick={() => {
+                if (showDiagnosticOverlay && diagView === 'network') {
+                  setShowDiagnosticOverlay(false);
+                } else {
+                  setShowDiagnosticOverlay(true);
+                  setDiagView('network');
+                  runNetworkProbe();
+                }
+              }}
+              className={`p-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${showDiagnosticOverlay && diagView === 'network' ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              title="Toggle Network Range Request Monitor (HTTP 206 Content-Range)"
+            >
+              <Network className="w-4 h-4" />
+              <span className="hidden md:inline">Net Monitor</span>
+            </button>
+
+            <button
               onClick={() => setShowDiagnosticOverlay(!showDiagnosticOverlay)}
               className={`p-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${showDiagnosticOverlay ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
               title="Toggle Diagnostic Overlay"
@@ -678,22 +934,60 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         <div className="relative flex-1 flex flex-col md:flex-row min-h-[380px] sm:min-h-[480px] bg-black overflow-hidden">
           {/* Player Display Container */}
           <div className="relative flex-1 flex flex-col items-center justify-center bg-black overflow-hidden">
-  {/* Protocol Debugger Monitor Moved Out */}
-  {/* Diagnostic Overlay */}
+            {/* Diagnostic Overlay */}
             {showDiagnosticOverlay && (
-              <div className="absolute top-16 left-4 z-40 bg-black/80 backdrop-blur-md border border-slate-700 rounded-xl p-4 w-72 text-xs font-mono text-slate-300 shadow-2xl">
-                <div className="flex items-center justify-between mb-3 border-b border-slate-700 pb-2">
-                  <h4 className="font-semibold text-white flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-amber-400" />
-                    {diagView === 'stats' ? 'Live Metrics' : 'Protocol Debugger'}
+              <div className="absolute top-16 left-4 z-40 bg-black/85 backdrop-blur-md border border-slate-700/80 rounded-xl p-3 sm:p-4 w-80 sm:w-96 md:w-[450px] max-h-[82vh] overflow-y-auto text-xs font-mono text-slate-300 shadow-2xl">
+                {/* Overlay Header & Tabs */}
+                <div className="flex items-center justify-between mb-3 border-b border-slate-700/80 pb-2">
+                  <h4 className="font-semibold text-white flex items-center gap-1.5 truncate">
+                    <Activity className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span className="truncate">
+                      {diagView === 'stats' && 'Live Playback Metrics'}
+                      {diagView === 'protocol' && 'Tauri Protocol Debugger'}
+                      {diagView === 'network' && 'HTTP 206 Network Monitor'}
+                      {diagView === 'videosrc' && 'HTML <video src> Inspector'}
+                    </span>
                   </h4>
-                  <div className="flex gap-1 bg-slate-800 p-0.5 rounded-lg">
-                    <button onClick={() => setDiagView('stats')} className={`px-2 py-0.5 rounded ${diagView === 'stats' ? 'bg-slate-700 text-white' : ''}`}>Stats</button>
-                    <button onClick={() => setDiagView('protocol')} className={`px-2 py-0.5 rounded ${diagView === 'protocol' ? 'bg-slate-700 text-white' : ''}`}>Proto</button>
+                  <div className="flex gap-1 bg-slate-900 border border-slate-800 p-0.5 rounded-lg shrink-0">
+                    <button
+                      onClick={() => setDiagView('stats')}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${diagView === 'stats' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                      Stats
+                    </button>
+                    <button
+                      onClick={() => setDiagView('protocol')}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${diagView === 'protocol' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                      Proto
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDiagView('network');
+                        if (!networkStats) runNetworkProbe();
+                      }}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${diagView === 'network' ? 'bg-cyan-600/40 text-cyan-200 border border-cyan-500/50' : 'text-slate-400 hover:text-slate-200'}`}
+                      title="Network Monitor: Content-Range and Accept-Ranges"
+                    >
+                      <Network className="w-3 h-3" />
+                      <span>Net</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDiagView('videosrc');
+                        inspectVideoSrc();
+                      }}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${diagView === 'videosrc' ? 'bg-amber-600/40 text-amber-200 border border-amber-500/50' : 'text-slate-400 hover:text-slate-200'}`}
+                      title="Resolved DOM video element src logger"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>DOM Src</span>
+                    </button>
                   </div>
                 </div>
 
-                {diagView === 'stats' ? (
+                {/* 1. Stats View */}
+                {diagView === 'stats' && (
                   <div className="space-y-1.5">
                     <div className="flex justify-between"><span>FPS:</span><span className="text-emerald-400">{pipelineHealth.fps}</span></div>
                     <div className="flex justify-between"><span>Latency:</span><span className="text-amber-400">{pipelineHealth.latency}ms</span></div>
@@ -701,7 +995,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     <div className="flex justify-between"><span>Status:</span><span className="text-slate-100 truncate">{transcodeStatus.state}</span></div>
                     <div className="flex justify-between"><span>Progress:</span><span className="text-white">{transcodeStatus.progressPercent}%</span></div>
                   </div>
-                ) : (
+                )}
+
+                {/* 2. Protocol Debugger View */}
+                {diagView === 'protocol' && (
                   <div className="space-y-2 text-[11px]">
                     {pathHealth ? (
                       <>
@@ -752,6 +1049,304 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       </>
                     ) : (
                       <div>Monitoring...</div>
+                    )}
+                  </div>
+                )}
+
+                {/* 3. Network Monitor View: HTTP Range & Response Headers Inspector */}
+                {diagView === 'network' && (
+                  <div className="space-y-2.5 text-[11px]">
+                    {/* Action Header */}
+                    <div className="flex items-center justify-between pb-1 border-b border-slate-800">
+                      <div className="flex items-center gap-1.5 text-slate-300 font-semibold">
+                        <Server className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Range Headers Probe</span>
+                      </div>
+                      <button
+                        onClick={() => runNetworkProbe()}
+                        disabled={isProbingNetwork}
+                        className="px-2 py-0.5 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white rounded text-[10px] flex items-center gap-1 font-medium transition-colors"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isProbingNetwork ? 'animate-spin' : ''}`} />
+                        <span>{isProbingNetwork ? 'Testing...' : 'Probe Range Now'}</span>
+                      </button>
+                    </div>
+
+                    {/* Target Endpoint Box */}
+                    <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[10px] break-all">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-slate-400 font-semibold">Target Streaming Endpoint:</span>
+                        <button
+                          onClick={() => copyToClipboard(networkStats?.testedUrl || streamUrl, 'targetUrl')}
+                          className="text-slate-400 hover:text-white flex items-center gap-0.5 text-[9px]"
+                          title="Copy URL"
+                        >
+                          {copiedKey === 'targetUrl' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedKey === 'targetUrl' ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+                      <span className="text-cyan-300">{networkStats?.testedUrl || streamUrl || 'No active stream URL'}</span>
+                    </div>
+
+                    {networkStats ? (
+                      <>
+                        {/* HTTP Status & Range Verification Badge */}
+                        <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex flex-col gap-0.5">
+                            <span className="text-slate-400">HTTP Status:</span>
+                            <span className={`font-bold flex items-center gap-1 ${networkStats.isPartialContent ? 'text-emerald-400' : networkStats.httpStatus === 200 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {networkStats.isPartialContent ? <CheckCircle2 className="w-3 h-3 text-emerald-400" /> : <AlertTriangle className="w-3 h-3" />}
+                              {networkStats.httpStatus ? `${networkStats.httpStatus} ${networkStats.statusText}` : 'Unreachable'}
+                            </span>
+                          </div>
+
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex flex-col gap-0.5">
+                            <span className="text-slate-400">Range Slicing:</span>
+                            <span className={`font-bold ${networkStats.isPartialContent ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {networkStats.isPartialContent ? '206 Partial Content (OK)' : '200 OK (Full File / Unsliced)'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Specific Headers Inspection */}
+                        <div className="space-y-1 p-2 bg-slate-950 rounded border border-slate-800 text-[10px] font-mono">
+                          <div className="flex justify-between items-center py-0.5 border-b border-slate-800/60">
+                            <span className="text-slate-400">Accept-Ranges:</span>
+                            <span className={networkStats.hasAcceptRangesBytes ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                              {networkStats.acceptRanges || 'MISSING (Seeking Disabled)'}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center py-0.5 border-b border-slate-800/60">
+                            <span className="text-slate-400">Content-Range:</span>
+                            <span className={networkStats.hasValidContentRange ? 'text-emerald-400 font-bold truncate max-w-[200px]' : 'text-rose-400 font-bold'}>
+                              {networkStats.contentRange || 'MISSING (Header Blocked)'}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center py-0.5 border-b border-slate-800/60">
+                            <span className="text-slate-400">Content-Length:</span>
+                            <span className="text-slate-200">
+                              {networkStats.contentLength ? `${networkStats.contentLength} bytes` : 'Unknown'}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center py-0.5 border-b border-slate-800/60">
+                            <span className="text-slate-400">Content-Type:</span>
+                            <span className="text-slate-200 truncate max-w-[200px]">
+                              {networkStats.contentType || 'application/octet-stream'}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center py-0.5 border-b border-slate-800/60">
+                            <span className="text-slate-400">Roundtrip Latency:</span>
+                            <span className="text-cyan-300 font-semibold">{networkStats.latencyMs ?? '--'} ms</span>
+                          </div>
+
+                          <div className="flex justify-between items-center py-0.5">
+                            <span className="text-slate-400">CORS Expose:</span>
+                            <span className={networkStats.corsHeadersExposed ? 'text-emerald-400' : 'text-amber-400'}>
+                              {networkStats.corsHeadersExposed ? 'Range Headers Exposed' : 'Check Access-Control-Expose-Headers'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Diagnostic Assessment Banner */}
+                        {networkStats.isPartialContent && networkStats.hasAcceptRangesBytes ? (
+                          <div className="p-2 bg-emerald-950/50 border border-emerald-800/80 rounded text-[10px] text-emerald-300 flex items-start gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-semibold">Range Slicing Confirmed Healthy</p>
+                              <p className="text-emerald-400/80 mt-0.5">
+                                Express server is accepting <code className="text-emerald-200">Range: bytes=0-1023</code> and returning HTTP 206 with correct Content-Range and Accept-Ranges headers. Browser video timeline seeking is enabled.
+                              </p>
+                            </div>
+                          </div>
+                        ) : networkStats.error ? (
+                          <div className="p-2 bg-rose-950/60 border border-rose-800 rounded text-[10px] text-rose-300 flex items-start gap-1.5">
+                            <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-semibold">Range Request Warning</p>
+                              <p className="text-rose-400/80 mt-0.5">{networkStats.error}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-2 bg-amber-950/60 border border-amber-800 rounded text-[10px] text-amber-300 flex items-start gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-semibold">Non-Range Response (HTTP 200)</p>
+                              <p className="text-amber-300/80 mt-0.5">
+                                Server returned the full file rather than partial chunk. Ensure the Express endpoint handles the <code>Range</code> header with status 206.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="p-4 bg-slate-950 rounded border border-slate-800 text-center text-slate-400">
+                        <RefreshCw className="w-4 h-4 mx-auto mb-1 animate-spin text-cyan-400" />
+                        <p>Probing streaming endpoint range headers...</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 4. Resolved HTML <video> src Inspector Tab */}
+                {diagView === 'videosrc' && (
+                  <div className="space-y-2.5 text-[11px]">
+                    {/* Header & Refresh */}
+                    <div className="flex items-center justify-between pb-1 border-b border-slate-800">
+                      <div className="flex items-center gap-1.5 text-slate-300 font-semibold">
+                        <Eye className="w-3.5 h-3.5 text-amber-400" />
+                        <span>HTML &lt;video&gt; DOM Inspector</span>
+                      </div>
+                      <button
+                        onClick={() => inspectVideoSrc()}
+                        className="px-2 py-0.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-[10px] flex items-center gap-1 font-medium transition-colors"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Re-inspect DOM</span>
+                      </button>
+                    </div>
+
+                    {videoSrcReport ? (
+                      <>
+                        {/* Status Warning or Health Banner */}
+                        {videoSrcReport.isMalformedAsset ? (
+                          <div className="p-2.5 bg-rose-950/80 border border-rose-700 rounded-lg text-rose-200">
+                            <div className="flex items-center gap-1.5 font-bold text-rose-300 text-[11px]">
+                              <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                              <span>MALFORMED ASSET URL DETECTED</span>
+                            </div>
+                            <p className="text-[10px] text-rose-300 mt-1">
+                              The DOM <code>&lt;video&gt;</code> element received an invalid or double-prefixed URI (e.g., <code>/Volumes/Media/asset:...</code> or repeated <code>localhost</code>/<code>%2F</code>). This triggers Tauri main-thread tokio deadlocks and causes playback failure.
+                            </p>
+                            <button
+                              onClick={() => {
+                                const sanitized = extractCleanLocalPath(videoSrcReport.domSrc || activeFilePath, sambaConfig?.share || 'media');
+                                console.log('[DOM Src Inspector] Stripping prefixes and forcing clean Express stream proxy:', sanitized);
+                                setBlobUrl(null);
+                                setPlayerEngine('direct');
+                                setPlaybackError(null);
+                                runNetworkProbe(`/api/samba/stream?path=${encodeURIComponent(sanitized)}`);
+                                setTimeout(inspectVideoSrc, 300);
+                              }}
+                              className="mt-2 w-full px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded font-semibold text-[10px] transition-colors"
+                            >
+                              Strip Prefixes & Switch to Express Stream
+                            </button>
+                          </div>
+                        ) : videoSrcReport.isBlob ? (
+                          <div className="p-2.5 bg-amber-950/70 border border-amber-700/80 rounded-lg text-amber-200">
+                            <div className="flex items-center gap-1.5 font-bold text-amber-300 text-[11px]">
+                              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                              <span>LOCAL BLOB FALLBACK ACTIVE</span>
+                            </div>
+                            <p className="text-[10px] text-amber-300 mt-1">
+                              The player defaulted to a <code>blob:</code> in-memory buffer URL. Seeking may be constrained by buffer size and uses client RAM.
+                            </p>
+                            <button
+                              onClick={() => {
+                                setBlobUrl(null);
+                                setPlayerEngine('direct');
+                                setPlaybackError(null);
+                                setTimeout(inspectVideoSrc, 300);
+                              }}
+                              className="mt-2 w-full px-2.5 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded font-medium text-[10px] transition-colors"
+                            >
+                              Reset Blob & Use Native Express Stream Proxy
+                            </button>
+                          </div>
+                        ) : videoSrcReport.isExpressStream ? (
+                          <div className="p-2 bg-emerald-950/60 border border-emerald-800 rounded-lg text-emerald-200">
+                            <div className="flex items-center gap-1.5 font-bold text-emerald-300 text-[11px]">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span>OPTIMAL ASYNC STREAM PROXY</span>
+                            </div>
+                            <p className="text-[10px] text-emerald-400/80 mt-0.5">
+                              Targeting <code>/api/samba/stream</code>. Tauri asset protocol bypassed to protect macOS main thread from Samba I/O latency.
+                            </p>
+                          </div>
+                        ) : videoSrcReport.isHlsPlaylist ? (
+                          <div className="p-2 bg-indigo-950/60 border border-indigo-800 rounded-lg text-indigo-200">
+                            <div className="flex items-center gap-1.5 font-bold text-indigo-300 text-[11px]">
+                              <CheckCircle2 className="w-4 h-4 text-indigo-400 shrink-0" />
+                              <span>FFMPEG HLS STREAM PLAYLIST</span>
+                            </div>
+                            <p className="text-[10px] text-indigo-400/80 mt-0.5">
+                              Streaming transcoded H.264/AAC segments on the fly.
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {/* Raw Resolved DOM src Attribute */}
+                        <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[10px] break-all">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-slate-400 font-semibold">Resolved &lt;video src&gt;:</span>
+                            <button
+                              onClick={() => copyToClipboard(videoSrcReport.domSrc, 'domSrc')}
+                              className="text-slate-400 hover:text-white flex items-center gap-0.5 text-[9px]"
+                              title="Copy URL"
+                            >
+                              {copiedKey === 'domSrc' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedKey === 'domSrc' ? 'Copied' : 'Copy'}</span>
+                            </button>
+                          </div>
+                          {videoSrcReport.domSrc ? (
+                            <div>
+                              {videoSrcReport.domSrc.split('/').map((seg, i, arr) => {
+                                const isBad = seg.includes('asset:') || seg.includes('localhost') || (seg === 'Volumes' && i > 1);
+                                return (
+                                  <span
+                                    key={i}
+                                    className={isBad ? 'text-rose-400 font-bold bg-rose-950/60 px-0.5 rounded' : 'text-slate-200'}
+                                  >
+                                    {seg}{i < arr.length - 1 ? '/' : ''}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <span className="text-slate-500 italic">No src attribute found on video DOM element</span>
+                          )}
+                        </div>
+
+                        {/* DOM currentSrc */}
+                        {videoSrcReport.currentSrc && videoSrcReport.currentSrc !== videoSrcReport.domSrc && (
+                          <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[10px] break-all">
+                            <span className="text-slate-400 block mb-0.5 font-semibold">DOM currentSrc:</span>
+                            <span className="text-slate-300">{videoSrcReport.currentSrc}</span>
+                          </div>
+                        )}
+
+                        {/* Protocol Scheme & Attributes Summary */}
+                        <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between">
+                            <span className="text-slate-400">Scheme:</span>
+                            <span className="text-cyan-300 font-mono font-semibold">{videoSrcReport.resolvedProtocol}</span>
+                          </div>
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between">
+                            <span className="text-slate-400">Engine:</span>
+                            <span className="text-indigo-300 font-semibold">{playerEngine.toUpperCase()}</span>
+                          </div>
+                        </div>
+
+                        {/* Diagnostic Notes */}
+                        <div className="space-y-1 p-2 bg-slate-950 rounded border border-slate-800 text-[10px]">
+                          <span className="text-slate-400 font-semibold block mb-0.5">Sanitization & Diagnostics:</span>
+                          {videoSrcReport.diagnosisNotes.map((note, idx) => (
+                            <div key={idx} className="text-slate-300 flex items-start gap-1">
+                              <span className="text-cyan-400 shrink-0">•</span>
+                              <span>{note}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="p-3 bg-slate-950 rounded border border-slate-800 text-center text-slate-400">
+                        <RefreshCw className="w-4 h-4 mx-auto mb-1 animate-spin text-amber-400" />
+                        <p>Inspecting active DOM &lt;video&gt; element...</p>
+                      </div>
                     )}
                   </div>
                 )}

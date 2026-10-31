@@ -149,7 +149,7 @@ export function useDebounce<T>(value: T, delay = 300): T {
  * Extracts all file extensions associated with a media item across matchedFilename,
  * recommendedFilenames, recommendedFolderStructure, episodes, and tracks.
  */
-export const getMediaFileExtensions = (media: MediaMetadata): string[] => {
+export function getMediaFileExtensions(media: MediaMetadata): string[] {
   const exts = new Set<string>();
 
   const extract = (str?: string) => {
@@ -196,10 +196,9 @@ export const getMediaFileExtensions = (media: MediaMetadata): string[] => {
   }
 
   return Array.from(exts);
-};
+}
 
-
-export const getSafeGenres = (genres: any): string[] => {
+export function getSafeGenres(genres: any): string[] {
   if (Array.isArray(genres)) return genres;
   if (typeof genres === 'string') {
     try {
@@ -211,12 +210,12 @@ export const getSafeGenres = (genres: any): string[] => {
     }
   }
   return [];
-};
+}
 
-export const getSafeRating = (rating: any): number => {
+export function getSafeRating(rating: any): number {
   const num = Number(rating);
   return !isNaN(num) ? num : 8.0;
-};
+}
 
 export const MediaSearch: React.FC<MediaSearchProps> = ({
   mediaLibrary = [],

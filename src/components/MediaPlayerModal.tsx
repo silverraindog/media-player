@@ -367,17 +367,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     // We implement a robust check to identify network paths (strings starting with //, \\, /Volumes/, or smb:)
     // and completely bypass Tauri's native convertFileSrc or asset protocol transformations.
     const isNetworkPath = (p: string): boolean => {
-      if (!p) return false;
-      const lower = p.trim().toLowerCase();
-      return (
-        lower.startsWith('//') ||
-        lower.startsWith('\\\\') ||
-        lower.startsWith('/volumes/') ||
-        lower.startsWith('volumes/') ||
-        lower.startsWith('smb:') ||
-        lower.startsWith('/mnt/') ||
-        lower.startsWith('/media/')
-      );
+      return true; // Force proxy for all paths to ensure robust streaming
     };
 
     if (isNetworkPath(activeFilePath) || isNetworkPath(cleanLocalPath)) {
@@ -729,6 +719,38 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     });
   }, [getActiveVideoElement, blobUrl, streamUrl]);
 
+  // Video playback error and stall monitoring
+  const handleVideoError = useCallback((e: Event) => {
+    const videoEl = e.currentTarget as HTMLVideoElement;
+    const err = videoEl.error;
+    const errCode = err ? err.code : null;
+    const errMsg = err ? err.message : 'Unknown error';
+    console.error(`[Video Source Monitor] ❌ MEDIA ENGINE ERROR EVENT: Code ${errCode} (${errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED' : errCode === 3 ? 'MEDIA_ERR_DECODE' : errCode === 2 ? 'MEDIA_ERR_NETWORK' : 'OTHER'}) - Message: "${errMsg}". Current src: "${videoEl.src}". Protocol may have misinterpreted file path or unsupported scheme!`, e);
+    if (errCode === 4) {
+      setPlaybackError(`MEDIA_ERR_SRC_NOT_SUPPORTED (Error 4): The media engine could not load source ("${videoEl.src}"). Protocol or file path was misinterpreted.`);
+    } else {
+      setPlaybackError(`Video playback error (Code ${errCode}): ${errMsg}`);
+    }
+    inspectVideoSrc();
+  }, [setPlaybackError, inspectVideoSrc]);
+
+  const handleVideoStalled = useCallback((e: Event) => {
+    const videoEl = e.currentTarget as HTMLVideoElement;
+    console.warn(`[Video Source Monitor] ⚠️ STALLED EVENT: src: "${videoEl.src}", currentSrc: "${videoEl.currentSrc}"`);
+  }, []);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (playerEngine === 'direct' && el) {
+      el.addEventListener('error', handleVideoError);
+      el.addEventListener('stalled', handleVideoStalled);
+      return () => {
+        el.removeEventListener('error', handleVideoError);
+        el.removeEventListener('stalled', handleVideoStalled);
+      };
+    }
+  }, [playerEngine, handleVideoError, handleVideoStalled]);
+
   // Periodic DOM video src inspection and initial network probe
   useEffect(() => {
     inspectVideoSrc();
@@ -740,13 +762,19 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Live sampling when Diagnostic Overlay is open
   useEffect(() => {
     if (!showDiagnosticOverlay) return;
+    
+    // Initial probe
     inspectVideoSrc();
-    if (diagView === 'network' && !networkStats) {
+    if (diagView === 'network') {
       runNetworkProbe();
     }
-    const interval = setInterval(inspectVideoSrc, 2000);
+    
+    const interval = setInterval(() => {
+      inspectVideoSrc();
+    }, 2000);
+    
     return () => clearInterval(interval);
-  }, [showDiagnosticOverlay, diagView, inspectVideoSrc, runNetworkProbe, networkStats]);
+  }, [showDiagnosticOverlay, diagView]); // Dependencies are stable via useCallback
 
   const toggleMute = () => {
     const el = media.type === 'album' ? audioRef.current : videoRef.current;
@@ -1567,19 +1595,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
                     onTimeUpdate={(e) => handleTimeUpdate(e.currentTarget.currentTime)}
-                    onError={(e) => {
-                      const videoEl = e.currentTarget;
-                      const err = videoEl.error;
-                      const errCode = err ? err.code : null;
-                      const errMsg = err ? err.message : 'Unknown error';
-                      console.error(`[Video Source Monitor] ❌ MEDIA ENGINE ERROR EVENT: Code ${errCode} (${errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED' : errCode === 3 ? 'MEDIA_ERR_DECODE' : errCode === 2 ? 'MEDIA_ERR_NETWORK' : 'OTHER'}) - Message: "${errMsg}". Current src: "${videoEl.src}". Protocol may have misinterpreted file path or unsupported scheme!`, e);
-                      if (errCode === 4) {
-                        setPlaybackError(`MEDIA_ERR_SRC_NOT_SUPPORTED (Error 4): The media engine could not load source ("${videoEl.src}"). Protocol or file path was misinterpreted.`);
-                      } else {
-                        setPlaybackError(`Video playback error (Code ${errCode}): ${errMsg}`);
-                      }
-                      inspectVideoSrc();
-                    }}
                   />
                 </div>
                 <div className="mt-3 flex items-center gap-3 text-xs text-slate-400">

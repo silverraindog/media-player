@@ -115,24 +115,22 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     urlStr = (input as any).url;
   }
 
-  // Detect video/audio streaming resource endpoints
+  // THREADING & IPC BYPASS FIX (macOS Stackshots diagnostic resolution):
+  // Any request containing /api/media/stream or /api/samba/stream must immediately skip
+  // native Tauri IPC handlers to prevent Tokio synchronous block_on main-thread deadlocks.
+  // Force it to return regular window.fetch(streamingUrl, init) directly so the webview
+  // relies safely on the Express backend chunk streaming engine.
   const isStreamingRoute =
-    urlStr.startsWith('/api/media/stream') ||
     urlStr.includes('/api/media/stream') ||
-    urlStr.startsWith('/api/samba/stream') ||
     urlStr.includes('/api/samba/stream') ||
     urlStr.includes('/api/transcode') ||
     urlStr.includes('/index.m3u8') ||
     /\.(m3u8|ts|m4s)(\?.*)?$/i.test(urlStr);
 
-  // FIX 1: Streaming resource paths matching /api/media/stream or /api/samba/stream
-  // must NEVER be converted using Tauri's convertFileSrc or intercepted by Tauri IPC.
-  // They must remain standard HTTP URLs routed directly to the Express backend port
-  // so that HTTP 206 Partial Content / Range headers are correctly processed by the browser player.
   if (isStreamingRoute) {
     let streamingUrl = urlStr;
 
-    // Strip accidental Tauri asset:// or tauri:// protocol schemes if prepended by custom loaders
+    // Strip accidental Tauri asset://, tauri://, or asset:/ protocol schemes if prepended
     if (streamingUrl.includes('asset://') || streamingUrl.includes('tauri://') || streamingUrl.startsWith('asset:/') || streamingUrl.startsWith('tauri:/')) {
       streamingUrl = streamingUrl.replace(/^(?:asset|tauri):\/\/(?:localhost\/?)?/i, '/').replace(/^(?:asset|tauri):\/?/i, '/');
       try {
@@ -157,6 +155,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
       }
     }
 
+    // Immediately return standard window.fetch, skipping all native Tauri IPC handlers
     return window.fetch(streamingUrl, init);
   }
 

@@ -110,12 +110,26 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       const raw = pathOverride || activeFilePath;
       const pathToUse = extractCleanLocalPath(raw, sambaConfig?.share || 'media');
       console.log('[MediaPlayerModal] Attempting native file fallback with sanitized local path:', pathToUse);
+
+      const isNetwork = pathToUse.toLowerCase().startsWith('/volumes/') || pathToUse.startsWith('//') || pathToUse.startsWith('\\\\');
+      if (isNetwork) {
+        console.log('[MediaPlayerModal] Network path detected in fallback, fetching blob via async Express stream to prevent tokio block_on hang...');
+        const streamEndpoint = `/api/samba/stream?path=${encodeURIComponent(pathToUse)}`;
+        const res = await fetch(streamEndpoint);
+        if (!res.ok) throw new Error(`Stream proxy returned HTTP ${res.status}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        setBlobUrl(url);
+        console.log('[MediaPlayerModal] Native fallback URL created via async stream proxy:', url);
+        return;
+      }
+
       const tauri = (window as any).__TAURI__;
       if (!tauri || !tauri.fs) {
         throw new Error('Tauri filesystem API not available');
       }
 
-      // Read the file as binary using Tauri
+      // Read the file as binary using Tauri (for strictly local disk files)
       const binaryData = await tauri.fs.readBinaryFile(pathToUse);
       const blob = new Blob([binaryData], { type: 'video/mp4' }); 
       const url = URL.createObjectURL(blob);
@@ -271,7 +285,43 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const streamUrl = useMemo(() => {
     if (!activeFilePath) return '';
 
-    // Check if running inside a Tauri container
+    // Extract normalized filesystem path stripped of any mangled asset/tauri/volume duplicates
+    const cleanLocalPath = extractCleanLocalPath(activeFilePath, sambaConfig?.share || 'media');
+
+    // 1. If explicit transcoding is required or transcode cache is ready, route via transcode endpoint
+    const hwParam = hardwareAccel ? '&hwaccel=true' : '';
+    if (useTranscode || transcodeStatus.state === 'ready') {
+      const targetPath = transcodeStatus.outputPath || cleanLocalPath || activeFilePath;
+      return `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
+    }
+
+    // 2. THREADING & DEADLOCK FIX (macOS Stackshots diagnostic resolution):
+    // Tauri's asset_protocol_handler invokes `tokio::runtime::Runtime::block_on` synchronously
+    // directly on the user interactive main thread. Under Samba (smbfs) latency spikes,
+    // this deadlocks the window event loop and causes beachballs/application crashes.
+    // We implement a robust check to identify network paths (strings starting with //, \\, /Volumes/, or smb:)
+    // and completely bypass Tauri's native convertFileSrc or asset protocol transformations.
+    const isNetworkPath = (p: string): boolean => {
+      if (!p) return false;
+      const lower = p.trim().toLowerCase();
+      return (
+        lower.startsWith('//') ||
+        lower.startsWith('\\\\') ||
+        lower.startsWith('/volumes/') ||
+        lower.startsWith('volumes/') ||
+        lower.startsWith('smb:') ||
+        lower.startsWith('/mnt/') ||
+        lower.startsWith('/media/')
+      );
+    };
+
+    if (isNetworkPath(activeFilePath) || isNetworkPath(cleanLocalPath)) {
+      console.log('[MediaPlayerModal] Network share detected, bypassing Tauri asset_protocol_handler to avoid main-thread block_on deadlock. Offloading to Express stream proxy:', cleanLocalPath);
+      // Immediately return standard proxy streaming path to offload I/O operations asynchronously to Express backend
+      return `/api/samba/stream?path=${encodeURIComponent(cleanLocalPath)}`;
+    }
+
+    // 3. Check if running inside a Tauri container for strictly local, non-network disk files
     const isTauriContainer = typeof window !== 'undefined' && (
       Boolean((window as any).__TAURI__) ||
       Boolean((window as any).__TAURI_IPC__) ||
@@ -279,9 +329,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       window.location.origin.includes('tauri.localhost')
     );
 
-    // If running inside a Tauri container and not explicitly forcing server-side transcode,
-    // and not forced to stream via pipe fallback, utilize Tauri's native asset converter
-    if (isTauriContainer && !useTranscode && !isForceStreamViaPipe) {
+    // Only for truly local offline files (e.g. $HOME, /tmp, C:\...), utilize Tauri convertFileSrc
+    if (isTauriContainer && !isForceStreamViaPipe) {
       try {
         const tauriGlobal = (window as any).__TAURI__;
         const convert = tauriGlobal?.convertFileSrc ||
@@ -289,16 +338,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           (window as any).convertFileSrc;
 
         if (typeof convert === 'function') {
-          // STRICT FIX 1: Before passing ANY path to convertFileSrc,
-          // ensure it is stripped of any existing asset://, tauri://, localhost,
-          // or /Volumes/Media/ duplication, and normalized to a clean absolute local path.
-          const cleanLocalPath = extractCleanLocalPath(activeFilePath, sambaConfig?.share || 'media');
-
-          console.log('[Tauri Protocol Inspector] [INPUT] Clean Absolute Path for transform:', cleanLocalPath);
+          console.log('[Tauri Protocol Inspector] [INPUT] Clean Local Path for transform:', cleanLocalPath);
           const convertedUrl = convert(cleanLocalPath);
           console.log('[Tauri Protocol Inspector] [OUTPUT] Resulting Asset URL:', convertedUrl);
           
-          // Inspector Check: Validate the transformation
           if (convertedUrl && (convertedUrl.includes('asset:') || convertedUrl.includes('tauri:'))) {
              console.log('[Tauri Protocol Inspector] [VALIDATION] Transformation succeeded for:', convertedUrl);
           } else {
@@ -311,12 +354,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       }
     }
 
-    const hwParam = hardwareAccel ? '&hwaccel=true' : '';
-    if (useTranscode || transcodeStatus.state === 'ready') {
-      const targetPath = transcodeStatus.outputPath || activeFilePath;
-      return `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
-    }
-    return getDirectMediaPlayUrl(activeFilePath, sambaConfig);
+    return getDirectMediaPlayUrl(cleanLocalPath || activeFilePath, sambaConfig);
   }, [activeFilePath, sambaConfig, useTranscode, isForceStreamViaPipe, transcodeStatus, hardwareAccel]);
 
   // Diagnostic: Check if streamUrl is blocked

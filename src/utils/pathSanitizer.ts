@@ -230,6 +230,94 @@ export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsoluteP
   return result;
 }
 
+/**
+ * Strips any Tauri asset/tauri protocol wrappers, URI encoding, host/localhost prefixes,
+ * and duplicate volume mounts, returning a clean, normalized absolute filesystem path.
+ * e.g.:
+ * '/Volumes/Media/asset:/localhost/%2FVolumes%2Fmedia%2FFoo.mkv' -> '/Volumes/media/Foo.mkv'
+ * 'asset:/localhost/%2FVolumes%2Fmedia%2FFoo.mkv' -> '/Volumes/media/Foo.mkv'
+ * 'asset://localhost/Volumes/media/Foo.mkv' -> '/Volumes/media/Foo.mkv'
+ */
+export function extractCleanLocalPath(rawPath: string, defaultShare = 'media'): string {
+  if (!rawPath) return '';
+  let path = rawPath.trim();
+
+  // 1. Recursive percent-decoding (up to 4 passes)
+  let prev = '';
+  let count = 0;
+  while (path.includes('%') && prev !== path && count < 4) {
+    prev = path;
+    count++;
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      break;
+    }
+  }
+
+  // 2. Normalize Windows backslashes
+  path = path.replace(/\\/g, '/');
+
+  // 3. Intercept any embedded asset: or tauri: scheme or localhost anywhere in string
+  // Handles: /Volumes/Media/asset:/localhost//Volumes/media/... or asset://localhost//Volumes/...
+  if (/(?:asset|tauri):\/?/i.test(path) || /(?:localhost)/i.test(path)) {
+    // Look for /Volumes/ or /mnt/ or /media/ after the scheme/host
+    const volumesMatch = path.match(/(?:asset|tauri):.*?(?:\/|^)(Volumes\/.*)$/i) ||
+                         path.match(/localhost.*?(?:\/|^)(Volumes\/.*)$/i);
+    if (volumesMatch && volumesMatch[1]) {
+      path = `/${volumesMatch[1]}`;
+    } else {
+      // General match: strip scheme + host
+      const generalMatch = path.match(/(?:asset|tauri):(?:\/*[^\/]+)?\/?(.*)$/i);
+      if (generalMatch && generalMatch[1]) {
+        path = generalMatch[1];
+      } else {
+        path = path.replace(/^.*?(?:asset|tauri):(?:\/*localhost)?\/*/i, '');
+      }
+    }
+  }
+
+  // 4. Strip any leading localhost/ if still present
+  path = path.replace(/^\/*localhost\//i, '/');
+
+  // 5. If duplicate /Volumes/.../Volumes/... exists, take the last true /Volumes/
+  // e.g. /Volumes/Media/Volumes/media/... -> /Volumes/media/...
+  const volumesIdx = path.lastIndexOf('/Volumes/');
+  if (volumesIdx > 0) {
+    path = path.substring(volumesIdx);
+  }
+
+  // 6. Handle SMB UNC network paths (//server/share/...)
+  if (path.startsWith('//') || path.startsWith('\\\\')) {
+    const parts = path.replace(/^[\\\/]+/, '').split('/');
+    if (parts.length >= 2) {
+      const share = parts[1] || defaultShare;
+      const rest = parts.slice(2).join('/');
+      path = `/Volumes/${share}${rest ? `/${rest}` : ''}`;
+    }
+  }
+
+  // 7. Normalize duplicate slashes
+  path = path.replace(/\/+/g, '/');
+
+  // 8. Ensure absolute path starting with /
+  if (!path.startsWith('/') && !/^[a-zA-Z]:/.test(path)) {
+    path = `/${path}`;
+  }
+
+  // 9. If path does not start with /Volumes or /mnt or drive letter, prefix with /Volumes/<defaultShare>
+  if (!path.toLowerCase().startsWith('/volumes/') && !path.toLowerCase().startsWith('/mnt/') && !/^[a-zA-Z]:/.test(path)) {
+    const cleanRest = path.replace(/^\/+/, '');
+    const cleanShare = (defaultShare || 'media').replace(/^\/+|\/+$/g, '');
+    path = `/Volumes/${cleanShare}/${cleanRest}`;
+  }
+
+  // 10. Clean duplicate slashes once more
+  path = path.replace(/\/+/g, '/');
+
+  return path;
+}
+
 export function getMountedDisplayPath(rawPath: string, mountRootPath: string, shareName = 'media'): string {
   if (!rawPath) return '';
   const trimmed = rawPath.trim();
@@ -238,6 +326,11 @@ export function getMountedDisplayPath(rawPath: string, mountRootPath: string, sh
   if (/^(https?|blob|data):/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
     const match = trimmed.match(/https?:\/\/.+/i) || trimmed.match(/https?:.+/i);
     return match ? match[0].replace(/^(https?):\/+([^\/])/i, '$1://$2') : trimmed;
+  }
+
+  // Intercept and sanitize any embedded asset/tauri protocol schemes (e.g. asset:/localhost/%2FVolumes%2F...)
+  if (trimmed.includes('asset:') || trimmed.includes('tauri:') || trimmed.includes('localhost') || trimmed.includes('%2F')) {
+    return extractCleanLocalPath(trimmed, shareName);
   }
 
   const share = (shareName || 'media').replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'media';

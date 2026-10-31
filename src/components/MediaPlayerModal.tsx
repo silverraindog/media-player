@@ -34,7 +34,7 @@ import {
 import { MatroskaPlayer } from './MatroskaPlayer';
 import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
-import { getMountedDisplayPath } from '../utils/pathSanitizer';
+import { getMountedDisplayPath, extractCleanLocalPath } from '../utils/pathSanitizer';
 import { transcodeService, TranscodeStatusInfo, MediaInfo } from '../services/TranscodeService';
 
 export interface MediaPlayerModalProps {
@@ -101,13 +101,15 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
   const getSanitizedPath = (path: string) => {
-    return path.replace(/^\/Volumes\/[^\/]+\//i, '');
+    return extractCleanLocalPath(path, sambaConfig?.share || 'media');
   };
 
   const handleNativeFallback = async (pathOverride?: string) => {
     try {
-      const pathToUse = pathOverride || getSanitizedPath(activeFilePath);
-      console.log('[MediaPlayerModal] Attempting native file fallback for:', pathToUse);
+      // Intercept any path containing 'asset:/' or 'localhost' and completely strip out everything prior to true root
+      const raw = pathOverride || activeFilePath;
+      const pathToUse = extractCleanLocalPath(raw, sambaConfig?.share || 'media');
+      console.log('[MediaPlayerModal] Attempting native file fallback with sanitized local path:', pathToUse);
       const tauri = (window as any).__TAURI__;
       if (!tauri || !tauri.fs) {
         throw new Error('Tauri filesystem API not available');
@@ -214,8 +216,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       resolved = `//${server}/${share}/${cleanFolder ? `${cleanFolder}/` : ''}${filename}`;
     }
 
-    const mountRoot = sambaConfig?.mountPath || sambaConfig?.baseMountPath || `/Volumes/${sambaConfig?.share || 'media'}`;
-    return getMountedDisplayPath(resolved, mountRoot, sambaConfig?.share || 'media');
+    const share = sambaConfig?.share || 'media';
+    const mountRoot = sambaConfig?.mountPath || sambaConfig?.baseMountPath || `/Volumes/${share}`;
+    const mounted = getMountedDisplayPath(resolved, mountRoot, share);
+    return extractCleanLocalPath(mounted, share);
   }, [media, currentEpisode, currentTrack, sambaConfig]);
 
   const isMkv = useMemo(() => {
@@ -285,16 +289,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
           (window as any).convertFileSrc;
 
         if (typeof convert === 'function') {
-          // Clean path, remove network-style leading slashes (e.g., //Volumes -> /Volumes)
-          let absPath = activeFilePath.trim().replace(/\\/g, '/').replace(/^\/+/g, '/');
+          // STRICT FIX 1: Before passing ANY path to convertFileSrc,
+          // ensure it is stripped of any existing asset://, tauri://, localhost,
+          // or /Volumes/Media/ duplication, and normalized to a clean absolute local path.
+          const cleanLocalPath = extractCleanLocalPath(activeFilePath, sambaConfig?.share || 'media');
 
-          // Ensure absolute filesystem path format if it's not already
-          if (!absPath.startsWith('/') && !absPath.match(/^[a-zA-Z]:/) && !/^[a-zA-Z]+:\//.test(absPath)) {
-            const share = sambaConfig?.share || 'media';
-            absPath = `/Volumes/${share}/${absPath.replace(/^\/+/, '')}`;
-          }
-          console.log('[Tauri Protocol Inspector] [INPUT] Absolute Path for transform:', absPath);
-          const convertedUrl = convert(absPath);
+          console.log('[Tauri Protocol Inspector] [INPUT] Clean Absolute Path for transform:', cleanLocalPath);
+          const convertedUrl = convert(cleanLocalPath);
           console.log('[Tauri Protocol Inspector] [OUTPUT] Resulting Asset URL:', convertedUrl);
           
           // Inspector Check: Validate the transformation
@@ -316,7 +317,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       return `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
     }
     return getDirectMediaPlayUrl(activeFilePath, sambaConfig);
-  }, [activeFilePath, sambaConfig, useTranscode, transcodeStatus, hardwareAccel]);
+  }, [activeFilePath, sambaConfig, useTranscode, isForceStreamViaPipe, transcodeStatus, hardwareAccel]);
 
   // Diagnostic: Check if streamUrl is blocked
   useEffect(() => {
@@ -400,19 +401,22 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       return;
     }
 
-    const result = convert(activeFilePath);
-    const isRelative = !result.startsWith('/');
-    const isTauriProtocol = result.startsWith('tauri://') || result.startsWith('asset://');
-    const startsInVolumes = activeFilePath.startsWith('/Volumes');
+    const cleanInput = extractCleanLocalPath(activeFilePath, sambaConfig?.share || 'media');
+    const result = convert(cleanInput);
+    const isRelative = !result.startsWith('/') && !result.includes('://') && !result.startsWith('asset:');
+    const isTauriProtocol = result.startsWith('tauri://') || result.startsWith('asset://') || result.startsWith('asset:');
+    const startsInVolumes = cleanInput.startsWith('/Volumes');
 
     setPathHealth({
+      rawInput: activeFilePath,
+      cleanInput,
       result,
       isRelative,
       isTauriProtocol,
       startsInVolumes,
       timestamp: Date.now()
     });
-  }, [activeFilePath, showDiagnosticOverlay, diagView]);
+  }, [activeFilePath, showDiagnosticOverlay, diagView, sambaConfig]);
 
   const toggleMute = () => {
     const el = media.type === 'album' ? audioRef.current : videoRef.current;
@@ -624,7 +628,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                         
                         <button
                           onClick={() => {
-                            const fixed = pathHealth.result.replace(/asset:\/localhost\//g, '').replace(/\/Volumes\/media\//g, '/');
+                            const fixed = extractCleanLocalPath(pathHealth?.result || activeFilePath, sambaConfig?.share || 'media');
                             console.log('[Protocol Debugger] Fixed Path:', fixed);
                             handleNativeFallback(fixed);
                           }}
@@ -704,12 +708,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <p className="text-xs text-rose-300 mt-0.5">{playbackError}</p>
                   
                   {/* Automated Diagnostic Validator */}
-                  {(activeFilePath.includes('asset:/') || activeFilePath.includes('tauri:/') || activeFilePath.includes('localhost')) && (
+                  {(activeFilePath.includes('asset:') || activeFilePath.includes('tauri:') || activeFilePath.includes('localhost') || activeFilePath.includes('%2F')) && (
                     <div className="mt-2 p-2 bg-amber-950/50 border border-amber-800 rounded">
-                      <p className="text-xs text-amber-200 font-semibold">Diagnostic: Path looks malformed ({activeFilePath.substring(0, 40)}...)</p>
+                      <p className="text-xs text-amber-200 font-semibold">Diagnostic: Path contains URI or scheme wrappers ({activeFilePath.substring(0, 45)}...)</p>
                       <button
                         onClick={() => {
-                          const sanitized = getSanitizedPath(activeFilePath);
+                          const sanitized = extractCleanLocalPath(activeFilePath, sambaConfig?.share || 'media');
                           console.log('[Diagnostic Validator] Re-sanitized path:', sanitized);
                           handleNativeFallback(sanitized);
                         }}

@@ -198,8 +198,28 @@ export const getMediaFileExtensions = (media: MediaMetadata): string[] => {
   return Array.from(exts);
 };
 
+
+export const getSafeGenres = (genres: any): string[] => {
+  if (Array.isArray(genres)) return genres;
+  if (typeof genres === 'string') {
+    try {
+      const parsed = JSON.parse(genres);
+      if (Array.isArray(parsed)) return parsed;
+      return genres.split(',').map((g) => g.trim()).filter(Boolean);
+    } catch {
+      return genres.split(',').map((g) => g.trim()).filter(Boolean);
+    }
+  }
+  return [];
+};
+
+export const getSafeRating = (rating: any): number => {
+  const num = Number(rating);
+  return !isNaN(num) ? num : 8.0;
+};
+
 export const MediaSearch: React.FC<MediaSearchProps> = ({
-  mediaLibrary,
+  mediaLibrary = [],
   sambaTree,
   onPushToSamba,
   onOpenDetails,
@@ -217,6 +237,21 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   onOpenApiDebugger,
   onOpenClassifierModal,
 }) => {
+  const safeMediaLibrary = useMemo(() => {
+    if (!Array.isArray(mediaLibrary)) return [];
+    return mediaLibrary.map((m) => ({
+      ...m,
+      genres: getSafeGenres(m.genres),
+      rating: getSafeRating(m.rating),
+      title: m.title || 'Untitled',
+      type: m.type || 'series',
+      year: m.year || 2024,
+      posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
+      overview: m.overview || '',
+      recommendedFolderStructure: m.recommendedFolderStructure || '',
+    }));
+  }, [mediaLibrary]);
+
   const [rawSearchInput, setRawSearchInput] = useState('');
   // Debounce search input by 300ms to throttle API queries to local database & heavy indexer
   const debouncedSearchQuery = useDebounce(rawSearchInput, 300);
@@ -650,40 +685,22 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     }
   };
 
-  const getSafeGenres = (genres: any): string[] => {
-    if (Array.isArray(genres)) return genres;
-    if (typeof genres === 'string') {
-      try {
-        const parsed = JSON.parse(genres);
-        if (Array.isArray(parsed)) return parsed;
-        return genres.split(',').map((g) => g.trim()).filter(Boolean);
-      } catch {
-        return genres.split(',').map((g) => g.trim()).filter(Boolean);
-      }
-    }
-    return [];
-  };
-
-  const getSafeRating = (rating: any): number => {
-    const num = Number(rating);
-    return !isNaN(num) ? num : 8.0;
-  };
 
   // Compute live counts across the library
-  const allCount = mediaLibrary.length;
-  const seriesCount = mediaLibrary.filter((m) => m.type === 'series').length;
-  const moviesCount = mediaLibrary.filter((m) => m.type === 'movie').length;
-  const albumsCount = mediaLibrary.filter((m) => m.type === 'album').length;
-  const importedCount = mediaLibrary.filter(
+  const allCount = safeMediaLibrary.length;
+  const seriesCount = safeMediaLibrary.filter((m) => m.type === 'series').length;
+  const moviesCount = safeMediaLibrary.filter((m) => m.type === 'movie').length;
+  const albumsCount = safeMediaLibrary.filter((m) => m.type === 'album').length;
+  const importedCount = safeMediaLibrary.filter(
     (m) => m.id.startsWith('imported-') || m.id.startsWith('batch-') || m.matchedFilename
   ).length;
 
   // Compute category counts for Movies & Series
   const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: mediaLibrary.length };
+    const counts: Record<string, number> = { all: safeMediaLibrary.length };
     MOVIE_SERIES_CATEGORIES.forEach((cat) => {
       if (cat.id === 'all') return;
-      const matching = mediaLibrary.filter((m) => {
+      const matching = safeMediaLibrary.filter((m) => {
         if (selectedType !== 'all' && m.type !== selectedType) return false;
         const genresJoined = (m.genres || []).join(' ').toLowerCase();
         const overviewJoined = (m.overview || '').toLowerCase();
@@ -694,12 +711,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       counts[cat.id] = matching.length;
     });
     return counts;
-  }, [mediaLibrary, selectedType]);
+  }, [safeMediaLibrary, selectedType]);
 
-  // Extract all available genres with item counts directly from mediaLibrary state
+  // Extract all available genres with item counts directly from safeMediaLibrary state
   const availableGenres = useMemo(() => {
     const genreMap = new Map<string, number>();
-    mediaLibrary.forEach((m) => {
+    safeMediaLibrary.forEach((m) => {
       if (selectedType !== 'all' && m.type !== selectedType) return;
       let genresList: string[] = [];
       if (Array.isArray(m.genres)) {
@@ -725,7 +742,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     return Array.from(genreMap.entries())
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([name, count]) => ({ name, count }));
-  }, [mediaLibrary, selectedType]);
+  }, [safeMediaLibrary, selectedType]);
 
   // Dynamic filter chips to display based on search filter & expand state
   const displayedGenreChips = useMemo(() => {
@@ -793,7 +810,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
     rawHistory.forEach((h: any) => {
       // Find matching media in library to discover genres
-      const matched = mediaLibrary.find(
+      const matched = safeMediaLibrary.find(
         (m) =>
           m.id === h.media_id ||
           m.id === h.series_id ||
@@ -849,7 +866,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
     // Calculate maximum affinity score among items in library for percentage scaling
     let maxPossible = 0;
-    mediaLibrary.forEach((m) => {
+    safeMediaLibrary.forEach((m) => {
       const score = (m.genres || []).reduce(
         (sum, g) => sum + (affinityMap[g.trim().toLowerCase()]?.score || 0),
         0
@@ -863,7 +880,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       maxPossibleAffinityScore: maxPossible,
       totalWatchEventsCount: validEvents,
     };
-  }, [rawHistory, mediaLibrary]);
+  }, [rawHistory, safeMediaLibrary]);
 
   // Helper to compute media affinity for a specific item
   const getMediaAffinity = (media: MediaMetadata) => {
@@ -904,7 +921,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   // Filter items based on type, origin, category, multi-genres, date-range, and search query
   const filteredMedia = useMemo(() => {
-    return mediaLibrary.filter((media) => {
+    return safeMediaLibrary.filter((media) => {
       // Type filter
       if (selectedType !== 'all' && media.type !== selectedType) {
         return false;
@@ -1000,7 +1017,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
       return true;
     });
-  }, [mediaLibrary, selectedType, originFilter, activeCategory, selectedGenres, yearRange, debouncedSearchQuery]);
+  }, [safeMediaLibrary, selectedType, originFilter, activeCategory, selectedGenres, yearRange, debouncedSearchQuery]);
 
   // Apply Sort to Filtered Media (prioritizing Genre Affinity when active)
   useEffect(() => {

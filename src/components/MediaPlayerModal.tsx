@@ -61,6 +61,7 @@ export interface NetworkProbeStats {
   hasValidContentRange: boolean;
   corsHeadersExposed: boolean;
   error?: string | null;
+  rawHeaders?: Record<string, string>;
 }
 
 export interface VideoSrcDiagnostic {
@@ -75,6 +76,10 @@ export interface VideoSrcDiagnostic {
   healthStatus: 'healthy' | 'warning' | 'error';
   diagnosisNotes: string[];
   lastChecked: number;
+  videoErrorCode?: number | null;
+  videoErrorMessage?: string | null;
+  isSrcNotSupported?: boolean;
+  incorrectBlobUsage?: boolean;
 }
 
 export interface MediaPlayerModalProps {
@@ -614,7 +619,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         hasValidContentRange,
         corsHeadersExposed: Boolean(contentRange || acceptRanges),
         error: !is206 && res.status !== 200 ? `Express returned HTTP ${res.status} (${res.statusText || 'Error'})` : null,
+        rawHeaders: Object.fromEntries(res.headers.entries()),
       });
+      console.log('[Network Stream Inspector] Raw Headers:', Object.fromEntries(res.headers.entries()));
     } catch (err: any) {
       const elapsed = Math.round(performance.now() - start);
       setNetworkStats({
@@ -639,35 +646,51 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
   }, [streamUrl, activeFilePath, sambaConfig]);
 
-  // RESOLVED HTML <video> src LOGGER & DIAGNOSTIC:
-  // Inspects the active <video> element's DOM src and currentSrc attributes.
-  // Specifically catches if it defaulted to blob: or a malformed asset:/ URL after sanitization.
+  // RESOLVED HTML <video> src LOGGER & DIAGNOSTIC (Video Source Monitor):
+  // Inspects the active <video> element's DOM src, currentSrc properties and error events during playback.
+  // Specifically logs if the browser is attempting to use a blob: scheme incorrectly or if MEDIA_ERR_SRC_NOT_SUPPORTED occurs.
   const inspectVideoSrc = useCallback(() => {
     const el = getActiveVideoElement();
     const domSrc = el?.getAttribute('src') || el?.src || blobUrl || streamUrl || '';
     const currentSrc = el?.currentSrc || domSrc;
+    const videoError = el?.error;
+    const videoErrorCode = videoError ? videoError.code : null;
+    const videoErrorMessage = videoError ? videoError.message : null;
+    const isSrcNotSupported = videoErrorCode === 4;
 
     const isBlob = domSrc.startsWith('blob:') || currentSrc.startsWith('blob:');
+    const incorrectBlobUsage = isBlob && (!blobUrl || blobUrl.length < 10 || Boolean(videoError));
+    const isAsset = domSrc.includes('asset:/') || domSrc.includes('tauri:/') || domSrc.includes('asset://') || domSrc.includes('tauri://');
+    const isHttp = domSrc.startsWith('http://') || domSrc.startsWith('https://');
     const isMalformedAsset = (
-      domSrc.includes('asset:/') ||
-      domSrc.includes('tauri:/') ||
-      domSrc.includes('asset://') ||
-      domSrc.includes('tauri://') ||
+      isAsset ||
       domSrc.includes('%2FVolumes%2F') ||
-      /^\/Volumes\/.*asset:\//i.test(domSrc)
-    );
-    const isDoublePrefixed = (
+      /^\/Volumes\/.*asset:\//i.test(domSrc) ||
       domSrc.includes('/Volumes/Media/asset:') ||
       domSrc.includes('/Volumes/media/asset:') ||
       domSrc.includes('localhost/%2F')
     );
+    const isDoublePrefixed = isMalformedAsset;
     const isExpressStream = domSrc.includes('/api/samba/stream') || domSrc.includes('/api/media/stream');
     const isHlsPlaylist = domSrc.includes('.m3u8') || currentSrc.includes('.m3u8');
+
+    // Pre-playback & Error Monitoring console log:
+    const schemeLabel = isBlob ? (incorrectBlobUsage ? 'blob: (INCORRECT / FAILED)' : 'blob:') : isAsset ? (isMalformedAsset ? 'asset:/ (MALFORMED)' : 'asset:/ (Valid)') : isHttp ? 'http(s)://' : 'other';
+    console.log(`[Video Source Monitor] 🎬 RESOLVED VIDEO SRC: "${domSrc}" | Scheme: ${schemeLabel} | Malformed: ${isMalformedAsset} | ErrorCode: ${videoErrorCode || 'None'} (${isSrcNotSupported ? 'MEDIA_ERR_SRC_NOT_SUPPORTED' : 'OK'})`);
 
     const notes: string[] = [];
     let status: 'healthy' | 'warning' | 'error' = 'healthy';
 
-    if (isMalformedAsset || isDoublePrefixed) {
+    if (isSrcNotSupported) {
+      status = 'error';
+      notes.push(`CRITICAL: MEDIA_ERR_SRC_NOT_SUPPORTED (Error Code 4). Browser protocol misinterpreted file path or URI scheme ("${domSrc}").`);
+    } else if (incorrectBlobUsage) {
+      status = 'error';
+      notes.push('CRITICAL: Incorrect blob: scheme usage detected. Blob URL is missing or failed to decode binary stream.');
+    } else if (videoErrorCode) {
+      status = 'error';
+      notes.push(`PLAYBACK ERROR (Code ${videoErrorCode}): ${videoErrorMessage || 'Media engine error'}`);
+    } else if (isMalformedAsset) {
       status = 'error';
       notes.push('CRITICAL: Malformed asset URI or duplicated /Volumes/ prefix detected in video src.');
       notes.push('Tauri asset protocol cannot parse repeated root path segments or nested schemes.');
@@ -675,10 +698,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       status = 'warning';
       notes.push('WARNING: Video element is playing from an in-memory blob: URL fallback.');
       notes.push('HTTP 206 range seeking may be limited and consumes high browser RAM.');
-    } else if (isExpressStream) {
+    } else if (isExpressStream || isHttp) {
       status = 'healthy';
-      notes.push('OPTIMAL: Streaming directly via Express HTTP 206 partial content proxy.');
-      notes.push('Native Tauri convertFileSrc bypassed to prevent macOS main-thread IPC locks.');
+      notes.push('OPTIMAL: Streaming directly via Express HTTP 206 partial content proxy or HTTP network route.');
     } else if (isHlsPlaylist) {
       status = 'healthy';
       notes.push('OPTIMAL: Active FFmpeg HLS segmented playlist stream (.m3u8).');
@@ -700,6 +722,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       healthStatus: status,
       diagnosisNotes: notes,
       lastChecked: Date.now(),
+      videoErrorCode,
+      videoErrorMessage,
+      isSrcNotSupported,
+      incorrectBlobUsage,
     });
   }, [getActiveVideoElement, blobUrl, streamUrl]);
 
@@ -900,6 +926,19 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
             >
               <Network className="w-4 h-4" />
               <span className="hidden md:inline">Net Monitor</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setShowDiagnosticOverlay(true);
+                setDiagView('videosrc');
+                inspectVideoSrc();
+              }}
+              className={`p-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${showDiagnosticOverlay && diagView === 'videosrc' ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+              title="Video Source Monitor: Inspect resolved video tag src scheme (blob vs asset vs http)"
+            >
+              <Eye className="w-4 h-4 text-amber-400" />
+              <span className="hidden md:inline">Video Src Monitor</span>
             </button>
 
             <button
@@ -1143,11 +1182,24 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                             <span className="text-cyan-300 font-semibold">{networkStats.latencyMs ?? '--'} ms</span>
                           </div>
 
+
                           <div className="flex justify-between items-center py-0.5">
                             <span className="text-slate-400">CORS Expose:</span>
                             <span className={networkStats.corsHeadersExposed ? 'text-emerald-400' : 'text-amber-400'}>
                               {networkStats.corsHeadersExposed ? 'Range Headers Exposed' : 'Check Access-Control-Expose-Headers'}
                             </span>
+                          </div>
+                        </div>
+
+                        {/* Raw Headers Inspector */}
+                        <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[10px]">
+                          <span className="text-slate-400 font-semibold block mb-1">Raw Response Headers:</span>
+                          <div className="max-h-40 overflow-y-auto">
+                            {Object.entries(networkStats.rawHeaders || {}).map(([key, value]) => (
+                              <div key={key} className="py-0.5 border-b border-slate-800/50">
+                                <span className="text-indigo-400">{key}:</span> <span className="text-slate-200">{value}</span>
+                              </div>
+                            ))}
                           </div>
                         </div>
 
@@ -1212,7 +1264,17 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     {videoSrcReport ? (
                       <>
                         {/* Status Warning or Health Banner */}
-                        {videoSrcReport.isMalformedAsset ? (
+                        {videoSrcReport.isSrcNotSupported ? (
+                          <div className="p-2.5 bg-rose-950/90 border border-rose-700 rounded-lg text-rose-200">
+                            <div className="flex items-center gap-1.5 font-bold text-rose-300 text-[11px]">
+                              <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                              <span>MEDIA_ERR_SRC_NOT_SUPPORTED (ERROR 4)</span>
+                            </div>
+                            <p className="text-[10px] text-rose-300 mt-1">
+                              The media engine triggered an error because the protocol misinterpreted the file path or encountered an unsupported scheme / codec (e.g. incorrect blob usage or malformed asset URI).
+                            </p>
+                          </div>
+                        ) : videoSrcReport.isMalformedAsset ? (
                           <div className="p-2.5 bg-rose-950/80 border border-rose-700 rounded-lg text-rose-200">
                             <div className="flex items-center gap-1.5 font-bold text-rose-300 text-[11px]">
                               <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
@@ -1506,8 +1568,17 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     onPause={() => setIsPlaying(false)}
                     onTimeUpdate={(e) => handleTimeUpdate(e.currentTarget.currentTime)}
                     onError={(e) => {
-                      console.warn('[MediaPlayerModal Direct Video] Error:', e);
-                      setPlaybackError('Direct video stream encountered an error. Switch to FFmpeg HLS transcode engine.');
+                      const videoEl = e.currentTarget;
+                      const err = videoEl.error;
+                      const errCode = err ? err.code : null;
+                      const errMsg = err ? err.message : 'Unknown error';
+                      console.error(`[Video Source Monitor] ❌ MEDIA ENGINE ERROR EVENT: Code ${errCode} (${errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED' : errCode === 3 ? 'MEDIA_ERR_DECODE' : errCode === 2 ? 'MEDIA_ERR_NETWORK' : 'OTHER'}) - Message: "${errMsg}". Current src: "${videoEl.src}". Protocol may have misinterpreted file path or unsupported scheme!`, e);
+                      if (errCode === 4) {
+                        setPlaybackError(`MEDIA_ERR_SRC_NOT_SUPPORTED (Error 4): The media engine could not load source ("${videoEl.src}"). Protocol or file path was misinterpreted.`);
+                      } else {
+                        setPlaybackError(`Video playback error (Code ${errCode}): ${errMsg}`);
+                      }
+                      inspectVideoSrc();
                     }}
                   />
                 </div>

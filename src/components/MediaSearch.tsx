@@ -334,7 +334,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   // Recently Added state (loaded from SQLite)
   const [recentlyAdded, setRecentlyAdded] = useState<MediaMetadata[]>([]);
-  const [isRecentLoading, setIsRecentLoading] = useState(false);
+  const [isRecentLoading, setIsRecentLoading] = useState(true);
+  const [recentMediaError, setRecentMediaError] = useState<string | null>(null);
   const recentScrollRef = useRef<HTMLDivElement>(null);
 
   // Web Search Categorizer Modal State
@@ -467,8 +468,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   // Fetch Top 10 Recently Added from SQLite
   const fetchRecentMedia = async () => {
     setIsRecentLoading(true);
+    setRecentMediaError(null);
     try {
       const res = await fetch('/api/db/media/recent?limit=50');
+      if (!res.ok) {
+        throw new Error(`Recent media request failed with HTTP ${res.status}`);
+      }
       const data = await res.json();
       if (data.success && Array.isArray(data.items)) {
         // Map SQLite db rows to MediaMetadata
@@ -500,9 +505,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
           };
         });
         setRecentlyAdded(mapped);
+      } else {
+        throw new Error('Recent media response was not in the expected format');
       }
     } catch (err) {
       console.error('Failed to fetch recent media from SQLite:', err);
+      setRecentMediaError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsRecentLoading(false);
     }
@@ -1627,6 +1635,20 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       alt={item.title}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      onError={(event) => {
+                        const image = event.currentTarget;
+                        if (
+                          item.fanartUrl &&
+                          item.posterUrl &&
+                          item.posterUrl !== item.fanartUrl &&
+                          image.dataset.fallback !== 'used'
+                        ) {
+                          image.dataset.fallback = 'used';
+                          image.src = item.posterUrl;
+                        } else {
+                          image.style.display = 'none';
+                        }
+                      }}
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
 
@@ -1738,9 +1760,15 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                 </div>
               );
             })
-          ) : (
+          ) : isRecentLoading ? (
             <div className="w-full py-8 text-center text-xs text-slate-400 font-mono">
               Loading recent media from SQLite database...
+            </div>
+          ) : (
+            <div className="w-full py-4 text-center text-xs text-slate-400 font-mono">
+              {recentMediaError
+                ? 'Recently added media could not be loaded.'
+                : 'No recently added media is available yet.'}
             </div>
           )}
         </div>
@@ -2979,6 +3007,20 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       alt={media.title}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-70 group-hover:opacity-85"
+                      onError={(event) => {
+                        const image = event.currentTarget;
+                        if (
+                          media.fanartUrl &&
+                          media.posterUrl &&
+                          media.posterUrl !== media.fanartUrl &&
+                          image.dataset.fallback !== 'used'
+                        ) {
+                          image.dataset.fallback = 'used';
+                          image.src = media.posterUrl;
+                        } else {
+                          image.style.display = 'none';
+                        }
+                      }}
                     />
 
                     {/* Hover Tooltip - delayed by 10s as requested to prevent obstructing action buttons */}

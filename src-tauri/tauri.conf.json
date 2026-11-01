@@ -1,6 +1,9 @@
 {
   "build": {
-    "beforeBuildCommand": "npm --prefix .. run build:tauri",
+    "beforeBuildCommand": {
+      "script": "npm run build:tauri",
+      "cwd": ".."
+    },
     "beforeDevCommand": "npm run dev",
     "devPath": "http://localhost:3000",
     "distDir": "../dist-frontend",

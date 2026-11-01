@@ -5720,7 +5720,7 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
         }
       });
 
-      req.on('close', () => {
+      res.on('close', () => {
         if (!res.writableEnded) {
           ffmpegProc.kill('SIGTERM');
         }

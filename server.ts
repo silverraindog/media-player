@@ -5521,39 +5521,6 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
     }
 
     if (!fullPath || !fs.existsSync(fullPath)) {
-      // If the media file is not mounted locally (e.g. cloud preview environment),
-      // generate a valid lightweight H.264 / AAC MP4 stream so HTML5 browser players don't crash
-      try {
-        const titleLabel = path.basename(cleanRawStripped) || (fileQuery ? path.parse(fileQuery).name : 'Media Stream');
-        const seasonInfo = seasonQuery !== undefined ? `Season ${seasonQuery}${episodeQuery !== undefined ? ` Ep ${episodeQuery}` : ''}` : '';
-        const previewKey = `${titleLabel}_${seasonInfo}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-        const previewFile = path.join(os.tmpdir(), `sambavault_preview_${previewKey}.mp4`);
-
-        if (!fs.existsSync(previewFile) || fs.statSync(previewFile).size < 1000) {
-          const ffmpegBin = resolveFfmpegBinary();
-          const genCmd = [
-            '-nostdin', '-y',
-            '-f', 'lavfi', '-i', 'testsrc=duration=20:size=854x480:rate=24',
-            '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
-            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
-            '-c:a', 'aac', '-b:a', '96k',
-            '-movflags', '+faststart',
-            previewFile
-          ];
-          const spawned = spawnSync(ffmpegBin, genCmd, { timeout: 4000 });
-          if (spawned.status === 0 && fs.existsSync(previewFile)) {
-            fullPath = previewFile;
-            console.log(`[Samba Stream Proxy] Generated placeholder stream for unmounted media: ${previewFile}`);
-          }
-        } else {
-          fullPath = previewFile;
-        }
-      } catch (genErr) {
-        console.warn('[Samba Stream Proxy] Fallback preview generation error:', genErr);
-      }
-    }
-
-    if (!fullPath || !fs.existsSync(fullPath)) {
       const searchedRoots = candidateRoots.slice(0, 4).map((p) => `"${p}"`).join(', ');
       console.warn(`[Samba Stream Proxy] File not found or mounted for: "${rawPath}". Searched candidate roots: ${searchedRoots}`);
       return res.status(404).json({

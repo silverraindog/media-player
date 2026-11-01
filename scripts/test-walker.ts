@@ -2,7 +2,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { walkDirectoryRecursiveAsync } from '../server';
-import { getDirectPlaybackUrl, nodeToMediaMetadata } from '../src/utils/mediaExtractor';
+import {
+  extractAllMediaFromSambaTree,
+  extractAllMediaFromSambaTreeAsync,
+  getDirectPlaybackUrl,
+  nodeToMediaMetadata,
+} from '../src/utils/mediaExtractor';
 
 // Simple minimal testing harness
 async function runTests() {
@@ -91,15 +96,13 @@ async function runTests() {
       }
     }
     const playbackUrl = getDirectPlaybackUrl(spacedFile.path);
-    const playbackPath = new URL(playbackUrl!, 'http://localhost').searchParams.get('path');
-    if (playbackPath !== spacedFilePath) {
-      throw new Error(`Assertion failed: Playback URL changed the source path to "${playbackPath}"`);
+    if (playbackUrl !== spacedFilePath) {
+      throw new Error(`Assertion failed: Playback URL changed the source path to "${playbackUrl}"`);
     }
     const windowsPath = 'D:\\Media Library\\Films\\Movie Title [1080p].mkv';
     const windowsPlaybackUrl = getDirectPlaybackUrl(windowsPath);
-    const decodedWindowsPath = new URL(windowsPlaybackUrl!, 'http://localhost').searchParams.get('path');
-    if (decodedWindowsPath !== windowsPath) {
-      throw new Error(`Assertion failed: Playback URL changed the Windows source path to "${decodedWindowsPath}"`);
+    if (windowsPlaybackUrl !== windowsPath) {
+      throw new Error(`Assertion failed: Playback URL changed the Windows source path to "${windowsPlaybackUrl}"`);
     }
     const extractedMedia = nodeToMediaMetadata({
       id: 'scanned-episode',
@@ -111,6 +114,62 @@ async function runTests() {
     });
     if (extractedMedia?.path !== spacedFilePath || extractedMedia.seasons?.[0]?.episodes?.[0]?.filePath !== spacedFilePath) {
       throw new Error('Assertion failed: Extracted media or episode metadata did not retain the scanned source path.');
+    }
+
+    const seriesTree = [{
+      id: 'series-root',
+      name: 'Example Show',
+      path: 'TV/Example Show',
+      type: 'folder' as const,
+      children: [
+        {
+          id: 'season-one',
+          name: 'S01',
+          path: 'TV/Example Show/S01',
+          type: 'folder' as const,
+          children: [
+            { id: 'episode-one', name: 'Episode 1.mkv', path: 'TV/Example Show/S01/Episode 1.mkv', type: 'file' as const },
+            { id: 'episode-two', name: 'Episode 2.mkv', path: 'TV/Example Show/S01/Episode 2.mkv', type: 'file' as const },
+          ],
+        },
+        {
+          id: 'season-two',
+          name: 'Season 2',
+          path: 'TV/Example Show/Season 2',
+          type: 'folder' as const,
+          children: [
+            { id: 'episode-three', name: 'Example Show S02E03.mkv', path: 'TV/Example Show/Season 2/Example Show S02E03.mkv', type: 'file' as const },
+          ],
+        },
+        {
+          id: 'specials',
+          name: 'Specials',
+          path: 'TV/Example Show/Specials',
+          type: 'folder' as const,
+          children: [
+            { id: 'special-one', name: 'Behind the Scenes.mkv', path: 'TV/Example Show/Specials/Behind the Scenes.mkv', type: 'file' as const },
+          ],
+        },
+      ],
+    }];
+    const extractedCatalogs = [
+      extractAllMediaFromSambaTree(seriesTree),
+      await extractAllMediaFromSambaTreeAsync(seriesTree),
+    ];
+    for (const catalog of extractedCatalogs) {
+      const importedSeries = catalog.find((item) => item.type === 'series' && item.title === 'Example Show');
+      const importedSeasons = importedSeries?.seasons || [];
+      if (
+        !importedSeries ||
+        importedSeasons.map((season) => season.seasonNumber).join(',') !== '0,1,2' ||
+        importedSeasons.find((season) => season.seasonNumber === 1)?.episodes?.length !== 2 ||
+        importedSeasons.find((season) => season.seasonNumber === 2)?.episodes?.[0]?.filePath !==
+          'TV/Example Show/Season 2/Example Show S02E03.mkv' ||
+        importedSeasons.find((season) => season.seasonNumber === 0)?.episodes?.[0]?.filePath !==
+          'TV/Example Show/Specials/Behind the Scenes.mkv'
+      ) {
+        throw new Error('Assertion failed: Series root did not group S01, Season 2, and Specials as sibling seasons.');
+      }
     }
 
     const moviesDir = items.find(it => it.rel_path === 'Movies');

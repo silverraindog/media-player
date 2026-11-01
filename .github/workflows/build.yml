@@ -1,5 +1,7 @@
 name: Build and Package Desktop App
 on:
+  push:
+    branches: [ main ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -30,7 +32,7 @@ jobs:
 
       - name: Upload Browser Diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: startup-smoke-diagnostics
           path: |
@@ -108,14 +110,14 @@ jobs:
           node scripts/download-ffmpeg.cjs
 
       - name: Build Tauri Desktop Application
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v0.5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: "./"
 
       - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: SambaVault-v${{ steps.ver.outputs.version }}-${{ matrix.platform }}
           path: |
@@ -123,3 +125,41 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
+          archive: false
+
+  deploy-release:
+    name: Create GitHub Release
+    needs: build-desktop
+    # Only run this step when code is pushed to the main branch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
+      - name: Determine Version
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download All Installers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: SambaVault-v*
+          merge-multiple: true
+          path: dist-release/
+
+      - name: Create Release Draft
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: SambaVault v${{ steps.ver.outputs.version }}
+          draft: true
+          prerelease: false
+          files: dist-release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5637,13 +5637,17 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
     const pixFmt = (probe?.video?.pix_fmt || '').toLowerCase();
 
     const isHevc = vCodec === 'hevc' || vCodec === 'h265' || vCodec.includes('hevc');
-    const isUnsupportedVideo = isMkv || isHevc || vCodec === 'vp9' || vCodec === 'av1' || pixFmt.includes('10le') || pixFmt.includes('444');
-    const isUnsupportedAudio = Boolean(aCodec && !['aac', 'mp3', 'opus'].includes(aCodec));
-    const requiresTranscode = (isMkv || isHevc || isUnsupportedVideo || isUnsupportedAudio || (probe?.needsTranscoding ?? false)) && req.query.raw !== 'true';
+    const canCopyVideo = vCodec === 'h264' && (!pixFmt || ['yuv420p', 'yuvj420p'].includes(pixFmt));
+    const canCopyAudio = !aCodec || aCodec === 'aac';
+    const isUnsupportedVideo = isHevc || vCodec === 'vp9' || vCodec === 'av1' || (Boolean(vCodec) && !canCopyVideo);
+    const isUnsupportedAudio = Boolean(aCodec && !canCopyAudio);
+    const requiresTranscode = (isMkv || isUnsupportedVideo || isUnsupportedAudio || (probe?.needsTranscoding ?? false)) && req.query.raw !== 'true';
 
-    // Gracefully force FFmpeg transcoding pipeline when browser incompatibility is detected
+    // Remux compatible MKV streams; only re-encode codecs the browser cannot play.
     if (requiresTranscode) {
-      console.log(`[Samba Stream Proxy] Browser incompatibility detected for "${fullPath}" (MKV: ${isMkv}, vCodec: ${vCodec || 'unknown'}, aCodec: ${aCodec || 'unknown'}). Gracefully forcing FFmpeg transcoder pipeline.`);
+      const remuxVideo = isMkv && canCopyVideo;
+      const remuxAudio = isMkv && canCopyAudio;
+      console.log(`[Samba Stream Proxy] Preparing browser-compatible stream for "${fullPath}" (MKV: ${isMkv}, vCodec: ${vCodec || 'unknown'}, aCodec: ${aCodec || 'unknown'}, video: ${remuxVideo ? 'copy' : 'encode'}, audio: ${remuxAudio ? 'copy' : 'encode'}).`);
 
       const ffmpegBin = resolveFfmpegBinary();
       const transcodeArgs = [
@@ -5656,13 +5660,10 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
         '-i', fullPath,
         '-map', '0:v:0?',
         '-map', '0:a:0?',
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '23',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        '-ac', '2',
+        '-c:v', remuxVideo ? 'copy' : 'libx264',
+        ...(remuxVideo ? [] : ['-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '25', '-pix_fmt', 'yuv420p']),
+        '-c:a', remuxAudio ? 'copy' : 'aac',
+        ...(remuxAudio ? [] : ['-b:a', '192k', '-ac', '2']),
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
         '-f', 'mp4',
         'pipe:1',

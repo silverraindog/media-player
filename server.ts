@@ -7103,7 +7103,8 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       args.push('-map', '0:v:0?');
       const isMkvFile = resolvedPath.toLowerCase().endsWith('.mkv') || (probeResult.format.format_name || '').toLowerCase().includes('matroska');
       const isHevcVideo = (probeResult.video?.codec_name || '').toLowerCase() === 'hevc' || (probeResult.video?.codec_name || '').toLowerCase() === 'h265' || (probeResult.video?.codec_name || '').toLowerCase().includes('hevc');
-      const shouldTranscodeVideo = probeResult.needsVideoTranscode || isMkvFile || isHevcVideo || forceTranscode || Boolean(preset) || Boolean(hwaccel) || codec !== 'h264';
+      const hasExplicitHardwareEncoder = ['videotoolbox', 'nvenc', 'vaapi'].includes(hwaccel);
+      const shouldTranscodeVideo = probeResult.needsVideoTranscode || isMkvFile || isHevcVideo || forceTranscode || Boolean(preset) || hasExplicitHardwareEncoder || codec !== 'h264';
 
       if (shouldTranscodeVideo) {
         args.push('-c:v', vEncoder);

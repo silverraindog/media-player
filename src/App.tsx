@@ -1008,18 +1008,6 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setActiveTab]);
 
-  // Temporarily add pointer-events-none class to #root for 500ms after major state updates to force event loop refresh
-  useEffect(() => {
-    const rootEl = document.getElementById('root');
-    if (rootEl) {
-      rootEl.classList.add('pointer-events-none');
-      const timer = setTimeout(() => {
-        rootEl.classList.remove('pointer-events-none');
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [isFdaOverlayOpen, isApiDebuggerOpen, activeTab]);
-
   const [isImportingShare, setIsImportingShare] = useState(false);
 
   const handleOpenManualMatch = (rawPathOrName?: string, mediaType?: MediaType) => {

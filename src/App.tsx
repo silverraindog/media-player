@@ -1360,29 +1360,40 @@ function App() {
     };
   }, []);
 
-  // Sync state to persistent disk storage (~/.media-player) on change
+  // Persist the smaller vault state without duplicating the media library.
   useEffect(() => {
     if (!isVaultLoaded) return;
 
-    fetchWithRetry('/api/vault/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sambaTree,
-        syncLogs,
-        sambaConfig,
-        classifierSettings,
-        mediaLibrary
-      })
-    }).catch(console.error);
+    const timeoutId = window.setTimeout(() => {
+      fetchWithRetry('/api/vault/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sambaTree,
+          syncLogs,
+          sambaConfig,
+          classifierSettings,
+        })
+      }).catch(console.error);
+    }, 500);
 
-    // Keep local cache copy in sync for instant recovery
-    try {
-      if (mediaLibrary.length > 0) {
+    return () => window.clearTimeout(timeoutId);
+  }, [sambaTree, syncLogs, sambaConfig, classifierSettings, isVaultLoaded]);
+
+  // Keep the legacy media backup in sync only when the library itself changes.
+  useEffect(() => {
+    if (!isVaultLoaded || mediaLibrary.length === 0) return;
+
+    const timeoutId = window.setTimeout(() => {
+      try {
         localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
+      } catch (error) {
+        console.warn('Could not update the media library recovery cache:', error);
       }
-    } catch {}
-  }, [sambaTree, syncLogs, sambaConfig, classifierSettings, mediaLibrary, isVaultLoaded]);
+    }, 1000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [mediaLibrary, isVaultLoaded]);
 
 
   // Background SQLite persistent caching reconciliation

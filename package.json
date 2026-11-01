@@ -13,6 +13,7 @@
     "lint": "tsc --noEmit",
     "pretest": "npm run lint",
     "test": "tsx scripts/test-walker.ts",
+    "test:e2e": "playwright test",
     "bump:patch": "node scripts/bump-version.cjs patch",
     "bump:minor": "node scripts/bump-version.cjs minor",
     "bump:major": "node scripts/bump-version.cjs major",
@@ -43,6 +44,7 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/d3": "^7.4.3",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",

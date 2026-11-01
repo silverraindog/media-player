@@ -5,6 +5,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  startup-smoke-test:
+    name: Browser Startup Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install Frontend Dependencies
+        run: npm install --include=optional --force --no-package-lock
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Browser Startup Smoke Test
+        run: npm run test:e2e
+        env:
+          CI: true
+
+      - name: Upload Browser Diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-smoke-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+
   build-desktop:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}

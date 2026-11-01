@@ -532,4 +532,3 @@ export function cleanPathValue(rawPath: string): string {
   let cleaned = rawPath.replace(/%20/g, ' ').replace(/\/{2,}/g, '/');
   return sanitizeSambaPath(cleaned);
 }
-

@@ -155,13 +155,9 @@ pub fn init_db(app_handle: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_all_media(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
-    let path = get_db_path(&app_handle);
+fn get_media_for_query(path: PathBuf, query: &'static str) -> Result<Vec<MediaItem>, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT * FROM media_items ORDER BY updated_at DESC")
-        .map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
 
     let media_iter = stmt
         .query_map([], |row| {
@@ -194,131 +190,60 @@ pub fn get_all_media(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
     Ok(results)
 }
 
-#[tauri::command]
-pub fn get_movies(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
-    let path = get_db_path(&app_handle);
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT * FROM media_items WHERE media_type = 'movie' ORDER BY updated_at DESC")
-        .map_err(|e| e.to_string())?;
-
-    let media_iter = stmt
-        .query_map([], |row| {
-            Ok(MediaItem {
-                id: row.get(0)?,
-                media_type: row.get(1)?,
-                title: row.get(2)?,
-                original_title: row.get(3)?,
-                synopsis: row.get(4)?,
-                year: row.get(5)?,
-                rating: row.get(6)?,
-                poster_url: row.get(7)?,
-                fanart_url: row.get(8)?,
-                genres: row.get(9)?,
-                cast: row.get(10)?,
-                recommended_folder: row.get(11)?,
-                raw_data: row.get(12)?,
-                file_size_bytes: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-                file_path: row.get("file_path")?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut results = Vec::new();
-    for item in media_iter {
-        results.push(item.map_err(|e| e.to_string())?);
-    }
-    Ok(results)
+async fn load_media_for_query(
+    app_handle: AppHandle,
+    query: &'static str,
+) -> Result<Vec<MediaItem>, String> {
+    tokio::task::spawn_blocking(move || {
+        get_media_for_query(get_db_path(&app_handle), query)
+    })
+    .await
+    .map_err(|error| format!("Media query task failed: {}", error))?
 }
 
 #[tauri::command]
-pub fn get_series(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
-    let path = get_db_path(&app_handle);
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT * FROM media_items WHERE media_type = 'series' ORDER BY updated_at DESC")
-        .map_err(|e| e.to_string())?;
-
-    let media_iter = stmt
-        .query_map([], |row| {
-            Ok(MediaItem {
-                id: row.get(0)?,
-                media_type: row.get(1)?,
-                title: row.get(2)?,
-                original_title: row.get(3)?,
-                synopsis: row.get(4)?,
-                year: row.get(5)?,
-                rating: row.get(6)?,
-                poster_url: row.get(7)?,
-                fanart_url: row.get(8)?,
-                genres: row.get(9)?,
-                cast: row.get(10)?,
-                recommended_folder: row.get(11)?,
-                raw_data: row.get(12)?,
-                file_size_bytes: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-                file_path: row.get("file_path")?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut results = Vec::new();
-    for item in media_iter {
-        results.push(item.map_err(|e| e.to_string())?);
-    }
-    Ok(results)
+pub async fn get_all_media(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
+    load_media_for_query(app_handle, "SELECT * FROM media_items ORDER BY updated_at DESC").await
 }
 
 #[tauri::command]
-pub fn get_albums(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
-    let path = get_db_path(&app_handle);
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT * FROM media_items WHERE media_type IN ('album', 'music', 'audio') ORDER BY updated_at DESC")
-        .map_err(|e| e.to_string())?;
-
-    let media_iter = stmt
-        .query_map([], |row| {
-            Ok(MediaItem {
-                id: row.get(0)?,
-                media_type: row.get(1)?,
-                title: row.get(2)?,
-                original_title: row.get(3)?,
-                synopsis: row.get(4)?,
-                year: row.get(5)?,
-                rating: row.get(6)?,
-                poster_url: row.get(7)?,
-                fanart_url: row.get(8)?,
-                genres: row.get(9)?,
-                cast: row.get(10)?,
-                recommended_folder: row.get(11)?,
-                raw_data: row.get(12)?,
-                file_size_bytes: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
-                file_path: row.get("file_path")?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut results = Vec::new();
-    for item in media_iter {
-        results.push(item.map_err(|e| e.to_string())?);
-    }
-    Ok(results)
+pub async fn get_movies(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
+    load_media_for_query(
+        app_handle,
+        "SELECT * FROM media_items WHERE media_type = 'movie' ORDER BY updated_at DESC",
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn get_media_by_type(app_handle: AppHandle, media_type: String) -> Result<Vec<MediaItem>, String> {
+pub async fn get_series(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
+    load_media_for_query(
+        app_handle,
+        "SELECT * FROM media_items WHERE media_type = 'series' ORDER BY updated_at DESC",
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_albums(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
+    load_media_for_query(
+        app_handle,
+        "SELECT * FROM media_items WHERE media_type IN ('album', 'music', 'audio') ORDER BY updated_at DESC",
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_media_by_type(
+    app_handle: AppHandle,
+    media_type: String,
+) -> Result<Vec<MediaItem>, String> {
     let lower = media_type.to_lowercase();
     match lower.as_str() {
-        "movie" | "movies" => get_movies(app_handle),
-        "series" | "tv" | "shows" => get_series(app_handle),
-        "album" | "albums" | "music" | "audio" => get_albums(app_handle),
-        _ => get_all_media(app_handle),
+        "movie" | "movies" => get_movies(app_handle).await,
+        "series" | "tv" | "shows" => get_series(app_handle).await,
+        "album" | "albums" | "music" | "audio" => get_albums(app_handle).await,
+        _ => get_all_media(app_handle).await,
     }
 }
 
@@ -480,28 +405,35 @@ pub fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> Result<
 }
 
 #[tauri::command]
-pub fn get_vault_state(app_handle: AppHandle) -> Result<Option<String>, String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state.json");
-    if state_file.exists() {
-        let content = fs::read_to_string(&state_file).map_err(|e| e.to_string())?;
-        Ok(Some(content))
-    } else {
-        if let Ok(h) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-            let old_state = PathBuf::from(h).join(".sambavault").join("vault_state.json");
-            if old_state.exists() {
-                if let Ok(content) = fs::read_to_string(&old_state) {
-                    let _ = fs::write(&state_file, &content);
-                    return Ok(Some(content));
+pub async fn get_vault_state(app_handle: AppHandle) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let state_file = get_data_dir(&app_handle).join("vault_state.json");
+        if state_file.exists() {
+            let content = fs::read_to_string(&state_file).map_err(|e| e.to_string())?;
+            Ok(Some(content))
+        } else {
+            if let Ok(h) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+                let old_state = PathBuf::from(h).join(".sambavault").join("vault_state.json");
+                if old_state.exists() {
+                    if let Ok(content) = fs::read_to_string(&old_state) {
+                        let _ = fs::write(&state_file, &content);
+                        return Ok(Some(content));
+                    }
                 }
             }
+            Ok(None)
         }
-        Ok(None)
-    }
+    })
+    .await
+    .map_err(|error| format!("Vault state read task failed: {}", error))?
 }
 
 #[tauri::command]
-pub fn save_vault_state(app_handle: AppHandle, state_json: String) -> Result<(), String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state.json");
-    fs::write(&state_file, state_json).map_err(|e| e.to_string())?;
-    Ok(())
+pub async fn save_vault_state(app_handle: AppHandle, state_json: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let state_file = get_data_dir(&app_handle).join("vault_state.json");
+        fs::write(&state_file, state_json).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|error| format!("Vault state write task failed: {}", error))?
 }

@@ -1273,70 +1273,82 @@ async fn check_volume_mounted(
     shareName: Option<String>,
 ) -> Result<VolumeMountInfo, String> {
     let target_share = share_name.or(shareName).unwrap_or_default();
-    let candidate_paths = scanner::get_candidate_mount_paths(&target_share);
+    tokio::task::spawn_blocking(move || -> Result<VolumeMountInfo, String> {
+        let candidate_paths = scanner::get_candidate_mount_paths(&target_share);
 
-    for path in candidate_paths {
-        if path.exists() {
-            match fs::read_dir(&path) {
-                Ok(read_dir) => {
-                    let files: Vec<String> = read_dir
-                        .filter_map(|e| e.ok())
-                        .map(|e| e.file_name().to_string_lossy().to_string())
-                        .take(100)
-                        .collect();
+        for path in candidate_paths {
+            if path.exists() {
+                match fs::read_dir(&path) {
+                    Ok(read_dir) => {
+                        let files: Vec<String> = read_dir
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.file_name().to_string_lossy().to_string())
+                            .take(100)
+                            .collect();
 
-                    return Ok(VolumeMountInfo {
-                        is_mounted: true,
-                        mount_path: path.display().to_string(),
-                        files,
-                        permission_denied: false,
-                        error_details: None,
-                    });
-                }
-                Err(err) => {
-                    let is_perm = err.kind() == std::io::ErrorKind::PermissionDenied;
-                    return Ok(VolumeMountInfo {
-                        is_mounted: true,
-                        mount_path: path.display().to_string(),
-                        files: Vec::new(),
-                        permission_denied: is_perm,
-                        error_details: Some(format!("Permission denied reading {}: {}", path.display(), err)),
-                    });
+                        return Ok(VolumeMountInfo {
+                            is_mounted: true,
+                            mount_path: path.display().to_string(),
+                            files,
+                            permission_denied: false,
+                            error_details: None,
+                        });
+                    }
+                    Err(err) => {
+                        let is_perm = err.kind() == std::io::ErrorKind::PermissionDenied;
+                        return Ok(VolumeMountInfo {
+                            is_mounted: true,
+                            mount_path: path.display().to_string(),
+                            files: Vec::new(),
+                            permission_denied: is_perm,
+                            error_details: Some(format!(
+                                "Permission denied reading {}: {}",
+                                path.display(),
+                                err
+                            )),
+                        });
+                    }
                 }
             }
         }
-    }
 
-    let default_mount = Path::new("/Volumes").join(&target_share);
-    Ok(VolumeMountInfo {
-        is_mounted: false,
-        mount_path: default_mount.display().to_string(),
-        files: Vec::new(),
-        permission_denied: false,
-        error_details: Some(format!(
-            "Share '{}' is not currently mounted in /Volumes, /mnt, or /media",
-            target_share
-        )),
+        let default_mount = Path::new("/Volumes").join(&target_share);
+        Ok(VolumeMountInfo {
+            is_mounted: false,
+            mount_path: default_mount.display().to_string(),
+            files: Vec::new(),
+            permission_denied: false,
+            error_details: Some(format!(
+                "Share '{}' is not currently mounted in /Volumes, /mnt, or /media",
+                target_share
+            )),
+        })
     })
+    .await
+    .map_err(|error| format!("Volume check task failed: {}", error))?
 }
 
 #[tauri::command]
 async fn list_mounted_volumes() -> Result<Vec<String>, String> {
-    let mut volumes = Vec::new();
-    let volumes_path = Path::new("/Volumes");
+    tokio::task::spawn_blocking(|| -> Result<Vec<String>, String> {
+        let mut volumes = Vec::new();
+        let volumes_path = Path::new("/Volumes");
 
-    if volumes_path.exists() {
-        if let Ok(entries) = fs::read_dir(volumes_path) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name != "Macintosh HD" && !name.starts_with('.') {
-                    volumes.push(name);
+        if volumes_path.exists() {
+            if let Ok(entries) = fs::read_dir(volumes_path) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name != "Macintosh HD" && !name.starts_with('.') {
+                        volumes.push(name);
+                    }
                 }
             }
         }
-    }
 
-    Ok(volumes)
+        Ok(volumes)
+    })
+    .await
+    .map_err(|error| format!("Volume listing task failed: {}", error))?
 }
 
 #[tauri::command]

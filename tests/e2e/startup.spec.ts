@@ -17,6 +17,7 @@ test('the app renders after startup and navigation remains interactive', async (
     let response: Record<string, unknown> = { success: true };
 
     if (pathname === '/api/vault/state') {
+      await new Promise((resolve) => setTimeout(resolve, 800));
       response = { success: true, hasSavedState: false, state: {} };
     } else if (pathname === '/api/db/watchlist') {
       response = { success: true, watchlist: [], count: 0 };
@@ -64,6 +65,19 @@ test('the app renders after startup and navigation remains interactive', async (
 
   try {
     await page.goto('/');
+    const startupScreen = page.locator('#app-startup-screen');
+    await expect(startupScreen).toBeVisible();
+    await expect.poll(() =>
+      startupScreen.evaluate((screen) => {
+        const bounds = screen.getBoundingClientRect();
+        return (
+          bounds.x <= 0 &&
+          bounds.y <= 0 &&
+          bounds.right >= window.innerWidth &&
+          bounds.bottom >= window.innerHeight
+        );
+      })
+    ).toBe(true);
     await expect(page.getByText('Initializing SambaVault Application view...')).toBeHidden();
 
     const searchTab = page.locator('#tab-search');

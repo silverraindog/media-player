@@ -3535,7 +3535,7 @@ function App() {
 
   if (!isVaultLoaded || !w) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-300 font-mono text-xs">
+      <div id="app-startup-screen" className="app-startup-screen min-h-screen bg-slate-950 flex items-center justify-center text-slate-300 font-mono text-xs">
         <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-6 py-4 rounded-2xl shadow-2xl">
           <span className="w-3 h-3 rounded-full bg-indigo-500 animate-ping"></span>
           <span>Initializing SambaVault Application view...</span>

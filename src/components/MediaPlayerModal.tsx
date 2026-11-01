@@ -183,7 +183,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const [pipelineHealth, setPipelineHealth] = useState({ fps: 60, latency: 0 });
   const [lastPruneTime, setLastPruneTime] = useState(0);
   const [isForceStreamViaPipe, setIsForceStreamViaPipe] = useState(false);
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [fallbackPlaybackUrl, setFallbackPlaybackUrl] = useState<string | null>(null);
 
   const getSanitizedPath = (path: string) => {
     return extractCleanLocalPath(path, sambaConfig?.share || 'media');
@@ -198,32 +198,27 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
       const isNetwork = pathToUse.toLowerCase().startsWith('/volumes/') || pathToUse.startsWith('//') || pathToUse.startsWith('\\\\');
       if (isNetwork) {
-        console.log('[MediaPlayerModal] Network path detected in fallback, fetching blob via async Express stream to prevent tokio block_on hang...');
+        console.log('[MediaPlayerModal] Network path detected in fallback, using async Express range streaming to avoid Tauri asset protocol blocking...');
         const streamEndpoint = `/api/samba/stream?path=${encodeURIComponent(pathToUse)}`;
-        const res = await fetch(streamEndpoint);
-        if (!res.ok) throw new Error(`Stream proxy returned HTTP ${res.status}`);
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        setBlobUrl(url);
+        const isTauriContainer = typeof window !== 'undefined' && (
+          window.location.protocol === 'tauri:' ||
+          window.location.origin.includes('tauri.localhost') ||
+          window.location.origin.includes('localhost:1420') ||
+          Boolean((window as any).__TAURI__) ||
+          Boolean((window as any).__TAURI_IPC__)
+        );
+        const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+        setFallbackPlaybackUrl(isTauriContainer ? `http://localhost:${backendPort}${streamEndpoint}` : streamEndpoint);
         setPlayerEngine('direct');
         setPlaybackError(null);
-        console.log('[MediaPlayerModal] Native fallback URL created via async stream proxy:', url);
         return;
       }
 
-      const tauri = (window as any).__TAURI__;
-      if (!tauri || !tauri.fs) {
-        throw new Error('Tauri filesystem API not available');
-      }
-
-      // Read the file as binary using Tauri (for strictly local disk files)
-      const binaryData = await tauri.fs.readBinaryFile(pathToUse);
-      const blob = new Blob([binaryData], { type: 'video/mp4' }); 
-      const url = URL.createObjectURL(blob);
-      setBlobUrl(url);
+      const url = getDirectMediaPlayUrl(pathToUse, sambaConfig);
+      if (!url) throw new Error('Could not resolve a playable URL for the local media file');
+      setFallbackPlaybackUrl(url);
       setPlayerEngine('direct');
       setPlaybackError(null);
-      console.log('[MediaPlayerModal] Native fallback URL created:', url);
     } catch (err) {
       console.error('[MediaPlayerModal] Native fallback failed:', err);
       setPlaybackError('Native fallback failed: ' + (err as Error).message);
@@ -324,6 +319,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     const mounted = getMountedDisplayPath(resolved, mountRoot, share);
     return extractCleanLocalPath(mounted, share);
   }, [media, currentEpisode, currentTrack, sambaConfig]);
+
+  useEffect(() => {
+    setFallbackPlaybackUrl(null);
+  }, [activeFilePath]);
 
   const isMkv = useMemo(() => {
     const p = (activeFilePath || media.matchedFilename || '').toLowerCase();
@@ -685,7 +684,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Specifically logs if the browser is attempting to use a blob: scheme incorrectly or if MEDIA_ERR_SRC_NOT_SUPPORTED occurs.
   const inspectVideoSrc = useCallback(() => {
     const el = getActiveVideoElement();
-    const domSrc = el?.getAttribute('src') || el?.src || blobUrl || streamUrl || '';
+    const domSrc = el?.getAttribute('src') || el?.src || fallbackPlaybackUrl || streamUrl || '';
     const currentSrc = el?.currentSrc || domSrc;
     const videoError = el?.error;
     const videoErrorCode = videoError ? videoError.code : null;
@@ -693,7 +692,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     const isSrcNotSupported = videoErrorCode === 4;
 
     const isBlob = domSrc.startsWith('blob:') || currentSrc.startsWith('blob:');
-    const incorrectBlobUsage = isBlob && (!blobUrl || blobUrl.length < 10 || Boolean(videoError));
+    const incorrectBlobUsage = isBlob && (!fallbackPlaybackUrl || fallbackPlaybackUrl.length < 10 || Boolean(videoError));
     const isAsset = domSrc.includes('asset:/') || domSrc.includes('tauri:/') || domSrc.includes('asset://') || domSrc.includes('tauri://');
     const isHttp = domSrc.startsWith('http://') || domSrc.startsWith('https://');
     const isMalformedAsset = (
@@ -761,7 +760,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       isSrcNotSupported,
       incorrectBlobUsage,
     });
-  }, [getActiveVideoElement, blobUrl, streamUrl]);
+  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl]);
 
   // Auto-Reload mechanism:
   // If player stalls for >5 seconds, reset video.src to null/empty and re-assign original URL while preserving video.currentTime
@@ -771,7 +770,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
     isAutoReloadingRef.current = true;
     const savedTime = el.currentTime || 0;
-    const targetSrc = el.getAttribute('src') || el.src || blobUrl || streamUrl;
+    const targetSrc = el.getAttribute('src') || el.src || fallbackPlaybackUrl || streamUrl;
 
     console.warn(`[Auto-Reload] 🔄 Stream stalled (${reason}). Auto-reloading video.src at ${savedTime.toFixed(2)}s... Target: "${targetSrc}"`);
 
@@ -825,7 +824,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         setTimeout(() => setAutoReloadNotice(null), 4000);
       }, 500);
     }, 150);
-  }, [getActiveVideoElement, blobUrl, streamUrl]);
+  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl]);
 
   // Buffer Health & Stall Monitor
   const inspectBufferHealth = useCallback(() => {
@@ -1012,7 +1011,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     if (streamUrl) {
       runNetworkProbe(streamUrl);
     }
-  }, [streamUrl, blobUrl, playerEngine, inspectVideoSrc, runNetworkProbe]);
+  }, [streamUrl, fallbackPlaybackUrl, playerEngine, inspectVideoSrc, runNetworkProbe]);
 
   // Live sampling when Diagnostic Overlay is open
   useEffect(() => {
@@ -1688,7 +1687,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                               onClick={() => {
                                 const sanitized = extractCleanLocalPath(videoSrcReport.domSrc || activeFilePath, sambaConfig?.share || 'media');
                                 console.log('[DOM Src Inspector] Stripping prefixes and forcing clean Express stream proxy:', sanitized);
-                                setBlobUrl(null);
+                                setFallbackPlaybackUrl(null);
                                 setPlayerEngine('direct');
                                 setPlaybackError(null);
                                 runNetworkProbe(`/api/samba/stream?path=${encodeURIComponent(sanitized)}`);
@@ -1710,7 +1709,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                             </p>
                             <button
                               onClick={() => {
-                                setBlobUrl(null);
+                                setFallbackPlaybackUrl(null);
                                 setPlayerEngine('direct');
                                 setPlaybackError(null);
                                 setTimeout(inspectVideoSrc, 300);
@@ -1915,7 +1914,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       onClick={() => handleNativeFallback()}
                       className="px-2.5 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded text-xs font-medium transition-colors"
                     >
-                      Native Fallback (Blob URL)
+                      Native Fallback (Direct Stream)
                     </button>
                     <button
                       onClick={() => {
@@ -1974,7 +1973,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 <div className="w-full max-w-5xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl relative flex items-center justify-center border border-slate-800">
                   <video
                     ref={videoRef}
-                    src={blobUrl || streamUrl}
+                    src={fallbackPlaybackUrl || streamUrl}
                     controls
                     autoPlay
                     playsInline
@@ -1988,7 +1987,15 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                 <div className="mt-3 flex items-center gap-3 text-xs text-slate-400">
                   <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Direct Express Stream ({blobUrl ? 'Local Blob' : 'Express Async Stream'})</span>
+                    <span>
+                      Direct Stream (
+                      {fallbackPlaybackUrl?.startsWith('http')
+                        ? 'Express Async Stream'
+                        : fallbackPlaybackUrl
+                          ? 'Tauri Asset Protocol'
+                          : 'Express Async Stream'}
+                      )
+                    </span>
                   </span>
                   <span>•</span>
                   <button

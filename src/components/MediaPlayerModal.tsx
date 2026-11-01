@@ -82,6 +82,32 @@ export interface VideoSrcDiagnostic {
   incorrectBlobUsage?: boolean;
 }
 
+export interface BufferHealthReport {
+  bufferedRanges: Array<{ start: number; end: number }>;
+  totalBufferedDuration: number;
+  bufferAheadSeconds: number;
+  playbackRate: number;
+  readyState: number;
+  readyStateLabel: string;
+  isStalled: boolean;
+  stallDurationSeconds: number;
+  stallDiagnosis: 'Healthy Streaming' | 'Buffer Starvation (Network Latency)' | 'Decoder / Render Latency (Codec/GPU)' | 'Idle / Paused';
+  autoReloadCount: number;
+  lastAutoReloadNotice: string | null;
+  lastAutoReloadTime: number | null;
+}
+
+export const formatPlaybackTime = (seconds: number): string => {
+  if (!seconds || isNaN(seconds)) return '00:00';
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  if (hrs > 0) {
+    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+
 export interface MediaPlayerModalProps {
   isOpen: boolean;
   media: MediaMetadata;
@@ -131,17 +157,26 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   });
   const [isProbing, setIsProbing] = useState(false);
   const [showDiagnosticOverlay, setShowDiagnosticOverlay] = useState(false);
-  const [diagView, setDiagView] = useState<'stats' | 'protocol' | 'network' | 'videosrc'>('stats');
+  const [diagView, setDiagView] = useState<'stats' | 'protocol' | 'network' | 'videosrc' | 'buffer'>('stats');
   const [pathHealth, setPathHealth] = useState<any>(null);
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
   const [networkStats, setNetworkStats] = useState<NetworkProbeStats | null>(null);
   const [isProbingNetwork, setIsProbingNetwork] = useState(false);
   const [videoSrcReport, setVideoSrcReport] = useState<VideoSrcDiagnostic | null>(null);
+  const [bufferHealthReport, setBufferHealthReport] = useState<BufferHealthReport | null>(null);
+  const [autoReloadCount, setAutoReloadCount] = useState<number>(0);
+  const [autoReloadNotice, setAutoReloadNotice] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playerContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const stallStartTimeRef = useRef<number | null>(null);
+  const isAutoReloadingRef = useRef<boolean>(false);
+  const lastPlaybackTimeRef = useRef<number>(0);
+  const lastTimeAdvanceRef = useRef<number>(Date.now());
+
 
   const [hardwareAccel, setHardwareAccel] = useState(transcodeConfig?.hwAccel?.enabled ?? true);
   const [selectedCodec, setSelectedCodec] = useState<'h264' | 'hevc' | 'av1'>(transcodeConfig?.codec || 'h264');
@@ -728,6 +763,217 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     });
   }, [getActiveVideoElement, blobUrl, streamUrl]);
 
+  // Auto-Reload mechanism:
+  // If player stalls for >5 seconds, reset video.src to null/empty and re-assign original URL while preserving video.currentTime
+  const triggerAutoReload = useCallback((reason = 'Stall > 5 seconds') => {
+    const el = getActiveVideoElement();
+    if (!el || isAutoReloadingRef.current) return;
+
+    isAutoReloadingRef.current = true;
+    const savedTime = el.currentTime || 0;
+    const targetSrc = el.getAttribute('src') || el.src || blobUrl || streamUrl;
+
+    console.warn(`[Auto-Reload] 🔄 Stream stalled (${reason}). Auto-reloading video.src at ${savedTime.toFixed(2)}s... Target: "${targetSrc}"`);
+
+    setAutoReloadCount((prev) => prev + 1);
+    const notice = `Auto-reloading stream at ${formatPlaybackTime(savedTime)} (${reason})...`;
+    setAutoReloadNotice(notice);
+
+    // Step 1: Set video.src to empty string to reset media engine decoder pipeline
+    el.src = '';
+    try {
+      el.load();
+    } catch {}
+
+    // Step 2: Re-assign original URL and preserve currentTime
+    setTimeout(() => {
+      if (!el) return;
+      el.src = targetSrc;
+
+      const restoreTime = () => {
+        try {
+          if (savedTime > 0 && Math.abs(el.currentTime - savedTime) > 0.5) {
+            el.currentTime = savedTime;
+          }
+        } catch (e) {
+          console.warn('[Auto-Reload] Restore currentTime warning:', e);
+        }
+      };
+
+      restoreTime();
+
+      const handleLoaded = () => {
+        restoreTime();
+        el.removeEventListener('loadedmetadata', handleLoaded);
+        el.removeEventListener('canplay', handleLoaded);
+      };
+      el.addEventListener('loadedmetadata', handleLoaded);
+      el.addEventListener('canplay', handleLoaded);
+
+      const playPromise = el.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn('[Auto-Reload] Play error after reload:', err);
+        });
+      }
+
+      setTimeout(() => {
+        isAutoReloadingRef.current = false;
+        stallStartTimeRef.current = null;
+        lastTimeAdvanceRef.current = Date.now();
+        setAutoReloadNotice(`Stream re-established at ${formatPlaybackTime(savedTime)}`);
+        setTimeout(() => setAutoReloadNotice(null), 4000);
+      }, 500);
+    }, 150);
+  }, [getActiveVideoElement, blobUrl, streamUrl]);
+
+  // Buffer Health & Stall Monitor
+  const inspectBufferHealth = useCallback(() => {
+    const el = getActiveVideoElement();
+    if (!el) {
+      setBufferHealthReport(null);
+      return;
+    }
+
+    const currentTime = el.currentTime || 0;
+    const playbackRate = el.playbackRate || 1;
+    const readyState = el.readyState;
+
+    const readyStateLabels: Record<number, string> = {
+      0: '0: HAVE_NOTHING (No data)',
+      1: '1: HAVE_METADATA (Metadata loaded)',
+      2: '2: HAVE_CURRENT_DATA (Current frame only)',
+      3: '3: HAVE_FUTURE_DATA (Future frames ready)',
+      4: '4: HAVE_ENOUGH_DATA (Buffer smooth)',
+    };
+    const readyStateLabel = readyStateLabels[readyState] || `State ${readyState}`;
+
+    const bufferedRanges: Array<{ start: number; end: number }> = [];
+    let totalBufferedDuration = 0;
+    let bufferAheadSeconds = 0;
+
+    if (el.buffered && el.buffered.length > 0) {
+      for (let i = 0; i < el.buffered.length; i++) {
+        const s = el.buffered.start(i);
+        const e = el.buffered.end(i);
+        bufferedRanges.push({ start: s, end: e });
+        totalBufferedDuration += (e - s);
+
+        if (s <= currentTime + 0.5 && e >= currentTime) {
+          bufferAheadSeconds = Math.max(0, e - currentTime);
+        }
+      }
+    }
+
+    const now = Date.now();
+    if (Math.abs(currentTime - lastPlaybackTimeRef.current) > 0.1) {
+      lastPlaybackTimeRef.current = currentTime;
+      lastTimeAdvanceRef.current = now;
+      stallStartTimeRef.current = null;
+    }
+
+    const isPlayingIntent = !el.paused && !el.ended;
+    const timeSinceAdvance = (now - lastTimeAdvanceRef.current) / 1000;
+
+    let isStalled = false;
+    let stallDurationSeconds = 0;
+
+    if (isPlayingIntent) {
+      if (readyState < 3 || timeSinceAdvance > 1.0) {
+        if (stallStartTimeRef.current === null) {
+          stallStartTimeRef.current = now;
+        }
+        isStalled = true;
+        stallDurationSeconds = (now - stallStartTimeRef.current) / 1000;
+      } else {
+        stallStartTimeRef.current = null;
+      }
+    } else {
+      stallStartTimeRef.current = null;
+    }
+
+    let stallDiagnosis: 'Healthy Streaming' | 'Buffer Starvation (Network Latency)' | 'Decoder / Render Latency (Codec/GPU)' | 'Idle / Paused' = 'Idle / Paused';
+
+    if (isPlayingIntent) {
+      if (isStalled || readyState < 3) {
+        if (bufferAheadSeconds < 0.2) {
+          stallDiagnosis = 'Buffer Starvation (Network Latency)';
+        } else {
+          stallDiagnosis = 'Decoder / Render Latency (Codec/GPU)';
+        }
+      } else {
+        stallDiagnosis = 'Healthy Streaming';
+      }
+    }
+
+    setBufferHealthReport({
+      bufferedRanges,
+      totalBufferedDuration,
+      bufferAheadSeconds,
+      playbackRate,
+      readyState,
+      readyStateLabel,
+      isStalled,
+      stallDurationSeconds,
+      stallDiagnosis,
+      autoReloadCount,
+      lastAutoReloadNotice: autoReloadNotice,
+      lastAutoReloadTime: lastTimeAdvanceRef.current,
+    });
+
+    // Auto-Reload Trigger if stalled >= 5.0 seconds
+    if (isPlayingIntent && isStalled && stallDurationSeconds >= 5.0 && !isAutoReloadingRef.current) {
+      console.warn(`[Buffer Monitor] ⚠️ Video stalled for ${stallDurationSeconds.toFixed(1)}s (>= 5.0s limit). Triggering Auto-Reload...`);
+      triggerAutoReload(`Stalled for ${stallDurationSeconds.toFixed(1)}s`);
+    }
+  }, [getActiveVideoElement, autoReloadCount, autoReloadNotice, triggerAutoReload]);
+
+  // Periodic 1-second interval to check buffer health & stall state
+  useEffect(() => {
+    inspectBufferHealth();
+    const interval = setInterval(inspectBufferHealth, 1000);
+    return () => clearInterval(interval);
+  }, [inspectBufferHealth]);
+
+  // Event listeners on active video element for stall detection
+  useEffect(() => {
+    const el = getActiveVideoElement();
+    if (!el) return;
+
+    const handleWaiting = () => {
+      if (stallStartTimeRef.current === null) {
+        stallStartTimeRef.current = Date.now();
+      }
+      console.warn(`[Video Event] ⏳ WAITING event fired on video src "${el.src}"`);
+      inspectBufferHealth();
+    };
+
+    const handleStalled = () => {
+      if (stallStartTimeRef.current === null) {
+        stallStartTimeRef.current = Date.now();
+      }
+      console.warn(`[Video Event] ⚠️ STALLED event fired on video src "${el.src}"`);
+      inspectBufferHealth();
+    };
+
+    const handlePlaying = () => {
+      stallStartTimeRef.current = null;
+      lastTimeAdvanceRef.current = Date.now();
+      console.log(`[Video Event] ▶️ PLAYING event fired on video src "${el.src}"`);
+      inspectBufferHealth();
+    };
+
+    el.addEventListener('waiting', handleWaiting);
+    el.addEventListener('stalled', handleStalled);
+    el.addEventListener('playing', handlePlaying);
+
+    return () => {
+      el.removeEventListener('waiting', handleWaiting);
+      el.removeEventListener('stalled', handleStalled);
+      el.removeEventListener('playing', handlePlaying);
+    };
+  }, [getActiveVideoElement, playerEngine, streamUrl, inspectBufferHealth]);
+
   // Video playback error and stall monitoring
   const handleVideoError = useCallback((e: Event) => {
     const videoEl = e.currentTarget as HTMLVideoElement;
@@ -784,6 +1030,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     
     return () => clearInterval(interval);
   }, [showDiagnosticOverlay, diagView]); // Dependencies are stable via useCallback
+
 
   const toggleMute = () => {
     const el = media.type === 'album' ? audioRef.current : videoRef.current;
@@ -1019,6 +1266,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     <Activity className="w-4 h-4 text-amber-400 shrink-0" />
                     <span className="truncate">
                       {diagView === 'stats' && 'Live Playback Metrics'}
+                      {diagView === 'buffer' && 'Buffer Health & Stall Inspector'}
                       {diagView === 'protocol' && 'Tauri Protocol Debugger'}
                       {diagView === 'network' && 'HTTP 206 Network Monitor'}
                       {diagView === 'videosrc' && 'HTML <video src> Inspector'}
@@ -1030,6 +1278,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                       className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${diagView === 'stats' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
                     >
                       Stats
+                    </button>
+                    <button
+                      onClick={() => setDiagView('buffer')}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${diagView === 'buffer' ? 'bg-emerald-600/40 text-emerald-200 border border-emerald-500/50' : 'text-slate-400 hover:text-slate-200'}`}
+                      title="Buffer Health & Stall Diagnosis"
+                    >
+                      <Activity className="w-3 h-3 text-emerald-400" />
+                      <span>Buffer</span>
                     </button>
                     <button
                       onClick={() => setDiagView('protocol')}
@@ -1067,11 +1323,119 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <div className="space-y-1.5">
                     <div className="flex justify-between"><span>FPS:</span><span className="text-emerald-400">{pipelineHealth.fps}</span></div>
                     <div className="flex justify-between"><span>Latency:</span><span className="text-amber-400">{pipelineHealth.latency}ms</span></div>
-                    <div className="flex justify-between"><span>Buffer:</span><span className="text-indigo-400">{bufferSecondsRemaining.toFixed(1)}s</span></div>
+                    <div className="flex justify-between"><span>Buffer Ahead:</span><span className="text-indigo-400">{bufferHealthReport ? `${bufferHealthReport.bufferAheadSeconds.toFixed(1)}s` : `${bufferSecondsRemaining.toFixed(1)}s`}</span></div>
+                    <div className="flex justify-between"><span>Playback Rate:</span><span className="text-cyan-300">{bufferHealthReport ? `${bufferHealthReport.playbackRate}x` : '1.0x'}</span></div>
+                    <div className="flex justify-between"><span>Auto-Reloads:</span><span className="text-amber-400">{autoReloadCount}</span></div>
                     <div className="flex justify-between"><span>Status:</span><span className="text-slate-100 truncate">{transcodeStatus.state}</span></div>
                     <div className="flex justify-between"><span>Progress:</span><span className="text-white">{transcodeStatus.progressPercent}%</span></div>
                   </div>
                 )}
+
+                {/* 5. Buffer Health & Stall Diagnosis View */}
+                {diagView === 'buffer' && (
+                  <div className="space-y-2.5 text-[11px]">
+                    {bufferHealthReport ? (
+                      <>
+                        {/* Stall Cause Banner */}
+                        <div className={`p-2.5 rounded-lg border text-[11px] font-mono ${
+                          bufferHealthReport.stallDiagnosis === 'Healthy Streaming'
+                            ? 'bg-emerald-950/70 border-emerald-800 text-emerald-200'
+                            : bufferHealthReport.stallDiagnosis === 'Buffer Starvation (Network Latency)'
+                            ? 'bg-amber-950/80 border-amber-700 text-amber-200'
+                            : bufferHealthReport.stallDiagnosis === 'Decoder / Render Latency (Codec/GPU)'
+                            ? 'bg-rose-950/80 border-rose-700 text-rose-200'
+                            : 'bg-slate-900 border-slate-800 text-slate-300'
+                        }`}>
+                          <div className="flex items-center justify-between font-bold mb-1">
+                            <span className="flex items-center gap-1.5">
+                              {bufferHealthReport.stallDiagnosis === 'Healthy Streaming' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+                              {bufferHealthReport.stallDiagnosis === 'Buffer Starvation (Network Latency)' && <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />}
+                              {bufferHealthReport.stallDiagnosis === 'Decoder / Render Latency (Codec/GPU)' && <XCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+                              {bufferHealthReport.stallDiagnosis === 'Idle / Paused' && <Activity className="w-4 h-4 text-slate-400 shrink-0" />}
+                              <span>{bufferHealthReport.stallDiagnosis}</span>
+                            </span>
+                            <span className="text-[10px] opacity-80">{bufferHealthReport.isStalled ? `Stalled (${bufferHealthReport.stallDurationSeconds.toFixed(1)}s)` : 'Active'}</span>
+                          </div>
+                          <p className="text-[10px] opacity-90 leading-relaxed">
+                            {bufferHealthReport.stallDiagnosis === 'Healthy Streaming' && 'Stream buffer is receiving data normally and video frames are advancing smoothly.'}
+                            {bufferHealthReport.stallDiagnosis === 'Buffer Starvation (Network Latency)' && 'Buffer ahead is 0.0s. The Express stream or network share is not supplying video chunks fast enough to keep up with playback rate.'}
+                            {bufferHealthReport.stallDiagnosis === 'Decoder / Render Latency (Codec/GPU)' && `Buffer has ${bufferHealthReport.bufferAheadSeconds.toFixed(1)}s ahead loaded, but video playback is stalled. Root cause: browser video decoder latency or GPU rendering overhead.`}
+                            {bufferHealthReport.stallDiagnosis === 'Idle / Paused' && 'Video playback is paused or idle.'}
+                          </p>
+                        </div>
+
+                        {/* Live Metrics Grid */}
+                        <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between items-center">
+                            <span className="text-slate-400">Buffer Ahead:</span>
+                            <span className={`font-mono font-bold ${bufferHealthReport.bufferAheadSeconds > 3 ? 'text-emerald-400' : bufferHealthReport.bufferAheadSeconds > 0.5 ? 'text-amber-400' : 'text-rose-400'}`}>
+                              {bufferHealthReport.bufferAheadSeconds.toFixed(2)}s
+                            </span>
+                          </div>
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between items-center">
+                            <span className="text-slate-400">Playback Rate:</span>
+                            <span className="text-cyan-300 font-mono font-semibold">{bufferHealthReport.playbackRate}x</span>
+                          </div>
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between items-center">
+                            <span className="text-slate-400">Total Buffered:</span>
+                            <span className="text-indigo-300 font-mono">{bufferHealthReport.totalBufferedDuration.toFixed(1)}s</span>
+                          </div>
+                          <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between items-center">
+                            <span className="text-slate-400">Ready State:</span>
+                            <span className="text-slate-200 font-mono text-[9px] truncate max-w-[110px]" title={bufferHealthReport.readyStateLabel}>
+                              {bufferHealthReport.readyStateLabel}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Auto-Reload Control & Status */}
+                        <div className="p-2 bg-slate-950 rounded border border-slate-800 text-[10px] space-y-1">
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-400 font-semibold">Auto-Reload Tracker:</span>
+                            <span className="text-amber-400 font-mono font-bold">{autoReloadCount} reload(s)</span>
+                          </div>
+                          {autoReloadNotice && (
+                            <div className="p-1.5 bg-amber-950/60 border border-amber-800 rounded text-amber-200 font-mono text-[9px]">
+                              {autoReloadNotice}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => triggerAutoReload('Manual trigger from diagnostic overlay')}
+                            className="w-full mt-1 px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded font-medium text-[10px] transition-colors flex items-center justify-center gap-1"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            <span>Force Auto-Reload Stream Now</span>
+                          </button>
+                        </div>
+
+                        {/* Buffered Ranges Table */}
+                        <div className="p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[10px]">
+                          <span className="text-slate-400 font-semibold block mb-1">
+                            Buffered Time Ranges ({bufferHealthReport.bufferedRanges.length}):
+                          </span>
+                          {bufferHealthReport.bufferedRanges.length > 0 ? (
+                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                              {bufferHealthReport.bufferedRanges.map((r, idx) => (
+                                <div key={idx} className="flex justify-between py-0.5 border-b border-slate-900 text-[9px]">
+                                  <span className="text-slate-400">Range #{idx + 1}:</span>
+                                  <span className="text-slate-200">{r.start.toFixed(1)}s - {r.end.toFixed(1)}s (Length: {(r.end - r.start).toFixed(1)}s)</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-slate-500 italic">No buffered ranges found in media memory</span>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="p-3 bg-slate-950 rounded border border-slate-800 text-center text-slate-400">
+                        <RefreshCw className="w-4 h-4 mx-auto mb-1 animate-spin text-emerald-400" />
+                        <p>Analyzing video element buffer health & ranges...</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
 
                 {/* 2. Protocol Debugger View */}
                 {diagView === 'protocol' && (
@@ -1494,6 +1858,21 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {autoReloadNotice && (
+              <div className="absolute top-4 inset-x-4 z-30 bg-indigo-950/90 border border-indigo-500/60 text-indigo-200 px-4 py-3 rounded-xl flex items-center justify-between backdrop-blur-md shadow-xl animate-pulse">
+                <div className="flex items-center gap-3 text-xs font-medium">
+                  <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin shrink-0" />
+                  <div>
+                    <p className="font-bold text-indigo-100">Auto-Reload Active</p>
+                    <p className="text-[11px] text-indigo-300 mt-0.5">{autoReloadNotice}</p>
+                  </div>
+                </div>
+                <span className="text-[10px] px-2.5 py-1 rounded-full bg-indigo-900 border border-indigo-700 text-indigo-200 font-mono font-bold">
+                  Reload #{autoReloadCount}
+                </span>
               </div>
             )}
 

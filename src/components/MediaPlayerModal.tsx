@@ -300,14 +300,22 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     if (!activeFilePath) return;
     let isMounted = true;
     setIsProbing(true);
+    
+    // Safety timeout: clear probing if it takes longer than 10s
+    const safetyTimer = setTimeout(() => {
+      if (isMounted) setIsProbing(false);
+    }, 10000);
 
     transcodeService.probe(activeFilePath)
       .then((info) => {
+        clearTimeout(safetyTimer);
         if (!isMounted) return;
         setMediaInfo(info);
         setIsProbing(false);
       })
-      .catch(() => {
+      .catch((err) => {
+        clearTimeout(safetyTimer);
+        console.error('[MediaPlayerModal] Probe failed:', err);
         if (isMounted) setIsProbing(false);
       });
 
@@ -321,6 +329,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
     return () => {
       isMounted = false;
+      clearTimeout(safetyTimer);
       unsubscribe();
     };
   }, [activeFilePath]);

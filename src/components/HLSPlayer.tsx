@@ -150,6 +150,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [showProbeDetails, setShowProbeDetails] = useState(false);
 
@@ -278,6 +279,23 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }, 4000);
     return () => clearTimeout(timer);
   }, [isPlaying, isRecovering, hlsStatus]);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      const fullscreenDocument = document as Document & { webkitFullscreenElement?: Element | null };
+      setIsFullscreen(
+        document.fullscreenElement === containerRef.current ||
+        fullscreenDocument.webkitFullscreenElement === containerRef.current
+      );
+    };
+
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenState);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreenState);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreenState);
+    };
+  }, []);
 
   // Stream failure auto-recovery state machine
   const handleStreamFailure = useCallback(async (reason: string = 'Stream stall') => {
@@ -721,14 +739,35 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
   };
 
-  const toggleFullscreen = () => {
-    if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+  const toggleFullscreen = async () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const fullscreenDocument = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const fullscreenElement = document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement;
+
+    try {
+      if (fullscreenElement === container) {
+        await (document.exitFullscreen?.() ?? fullscreenDocument.webkitExitFullscreen?.());
+      } else {
+        const fullscreenContainer = container as HTMLDivElement & {
+          webkitRequestFullscreen?: () => Promise<void> | void;
+        };
+        const requestFullscreen =
+          container.requestFullscreen?.bind(container) ??
+          fullscreenContainer.webkitRequestFullscreen?.bind(container);
+        if (!requestFullscreen) {
+          throw new Error('Fullscreen is not supported by this webview.');
+        }
+        await requestFullscreen();
+      }
+      setFullscreenError(null);
+    } catch (error) {
+      console.error('[HLSPlayer] Failed to toggle fullscreen:', error);
+      setFullscreenError('Fullscreen could not be started in this player.');
     }
   };
 
@@ -1329,13 +1368,21 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             </select>
 
             {!isAudio && (
-              <button
-                onClick={toggleFullscreen}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors"
-                title="Toggle Fullscreen"
-              >
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-              </button>
+              <>
+                {fullscreenError && (
+                  <span role="alert" className="text-xs text-rose-300">
+                    {fullscreenError}
+                  </span>
+                )}
+                <button
+                  onClick={toggleFullscreen}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors"
+                  title={isFullscreen ? 'Exit Fullscreen' : 'Toggle Fullscreen'}
+                  aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                >
+                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                </button>
+              </>
             )}
           </div>
         </div>

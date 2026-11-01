@@ -101,6 +101,24 @@ jobs:
       - name: Run Quality Verification and Loop-Immunity Tests
         run: npm test
 
+      - name: Install FFmpeg (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg --yes --no-progress
+          $toolsPath = Join-Path $env:ChocolateyInstall 'lib\ffmpeg\tools'
+          $ffmpeg = Get-ChildItem -Path $toolsPath -Filter ffmpeg.exe -File -Recurse |
+            Where-Object { $_.FullName -match '[\\/]bin[\\/]ffmpeg\.exe$' } |
+            Select-Object -First 1
+          $ffprobe = Get-ChildItem -Path $toolsPath -Filter ffprobe.exe -File -Recurse |
+            Where-Object { $_.FullName -match '[\\/]bin[\\/]ffprobe\.exe$' } |
+            Select-Object -First 1
+          if (-not $ffmpeg -or -not $ffprobe) {
+            throw "Could not locate FFmpeg and FFprobe executables under $toolsPath"
+          }
+          "FFMPEG_PATH=$($ffmpeg.FullName)" >> $env:GITHUB_ENV
+          "FFPROBE_PATH=$($ffprobe.FullName)" >> $env:GITHUB_ENV
+
       - name: Prepare Tauri FFmpeg Sidecar Binaries
         shell: bash
         run: |

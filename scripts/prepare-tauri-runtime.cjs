@@ -210,11 +210,25 @@ async function main() {
   }
 
   for (const [name, sidecar] of [['ffmpeg', ffmpegSidecar], ['ffprobe', ffprobeSidecar]]) {
-    const source = fs.existsSync(sidecar) && fs.statSync(sidecar).isFile() && !isPlaceholderBinary(sidecar)
-      ? sidecar
-      : findSystemBinary(name);
+    const configuredPath = process.env[`${name.toUpperCase()}_PATH`];
+    const source = configuredPath
+      ? findSystemBinary(name)
+      : fs.existsSync(sidecar) && fs.statSync(sidecar).isFile() && !isPlaceholderBinary(sidecar)
+        ? sidecar
+        : findSystemBinary(name);
     const destination = path.join(runtimeDir, `${name}${extension}`);
     copyExecutable(source, destination);
+
+    if (os.platform() === 'win32') {
+      for (const dependency of fs.readdirSync(path.dirname(source), { withFileTypes: true })) {
+        if (dependency.isFile() && dependency.name.toLowerCase().endsWith('.dll')) {
+          fs.copyFileSync(
+            path.join(path.dirname(source), dependency.name),
+            path.join(runtimeDir, dependency.name),
+          );
+        }
+      }
+    }
   }
 
   console.log(`[Tauri Runtime] Prepared packaged Node backend for ${targetTriple}.`);

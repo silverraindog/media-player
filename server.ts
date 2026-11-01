@@ -8,7 +8,6 @@ import crypto, { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
 import { GoogleGenAI } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 import {
   getAllMediaFromDb,
   getMoviesFromDb,
@@ -111,6 +110,7 @@ export function resolveFfprobeBinary(): string {
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
+const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -7348,6 +7348,7 @@ app.delete('/api/playlists/:id', async (req: Request, res: Response) => {
 // Start Server and Vite Middleware
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -7370,14 +7371,15 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  VITE v6.2.3  ready in 150 ms\n`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`\n  SambaVault backend ready\n`);
     console.log(`  ➜  Local:   http://localhost:${PORT}/`);
-    console.log(`  ➜  Network: http://0.0.0.0:${PORT}/\n`);
+    console.log(`  ➜  Bind:    http://${HOST}:${PORT}/\n`);
   });
 
   server.on('error', (err: any) => {
     console.error('Server listen error:', err);
+    process.exitCode = 1;
   });
 }
 

@@ -14,3 +14,12 @@ bun.lock*
 target/
 *.mkv
 *.png
+src-tauri/backend-runtime/node_modules/
+src-tauri/backend-runtime/server.cjs
+src-tauri/backend-runtime/dist-frontend/
+src-tauri/backend-runtime/node
+src-tauri/backend-runtime/node.exe
+src-tauri/backend-runtime/ffmpeg
+src-tauri/backend-runtime/ffmpeg.exe
+src-tauri/backend-runtime/ffprobe
+src-tauri/backend-runtime/ffprobe.exe

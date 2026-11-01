@@ -44,11 +44,12 @@
 
 ## 📦 Production Build
 
-To compile the application into a standalone production server bundle:
+To build the Tauri desktop app with its backend, Node.js runtime, frontend assets, and media tools bundled:
 ```bash
-npm run build
-npm start
+npm run tauri -- build
 ```
+
+The packaged app starts the local backend automatically and stops it when the app exits. Desktop release builds require FFmpeg and FFprobe on the build machine. `npm run dev` remains the development command and starts the backend alongside Vite.
 
 ---
 

@@ -1,0 +1,11 @@
+{
+  "name": "sambavault-backend-runtime",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "@google/genai": "2.4.0",
+    "dotenv": "17.2.3",
+    "express": "4.22.3",
+    "sql.js": "1.14.2"
+  }
+}

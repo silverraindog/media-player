@@ -1,19 +1,121 @@
+use ffmpeg_light::config::FfmpegLocator;
+use ffmpeg_light::TranscodeBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
-use ffmpeg_light::config::FfmpegLocator;
-use ffmpeg_light::TranscodeBuilder;
+use tauri::{AppHandle, Manager};
 use walkdir::WalkDir;
-use tauri::AppHandle;
 
 mod ai;
 mod db;
 pub mod scanner;
+
+struct BackendProcess(Mutex<Option<Child>>);
+
+fn wait_for_backend(child: &mut Child) -> Result<(), String> {
+    let address = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!("Backend process exited during startup: {}", status));
+        }
+
+        if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .map_err(|error| error.to_string())?;
+            stream
+                .write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .map_err(|error| error.to_string())?;
+
+            let mut response = String::new();
+            BufReader::new(stream)
+                .read_line(&mut response)
+                .map_err(|error| error.to_string())?;
+
+            if (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+                && child.try_wait().map_err(|error| error.to_string())?.is_none()
+            {
+                return Ok(());
+            }
+        }
+
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    Err("Backend did not become healthy on http://127.0.0.1:3000 within 20 seconds".to_string())
+}
+
+fn start_packaged_backend(app: &tauri::App) -> Result<Child, Box<dyn std::error::Error>> {
+    let runtime_dir = app
+        .path_resolver()
+        .resource_dir()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Packaged backend resources were not found",
+            )
+        })?;
+    let runtime_dir = runtime_dir.join("backend-runtime");
+    let node_path = runtime_dir.join(if cfg!(windows) { "node.exe" } else { "node" });
+    let server_path = runtime_dir.join("server.cjs");
+    let ffmpeg_path = runtime_dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    let ffprobe_path = runtime_dir.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+
+    for required_path in [&node_path, &server_path, &ffmpeg_path, &ffprobe_path] {
+        if !required_path.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Required packaged backend file is missing: {}", required_path.display()),
+            )
+            .into());
+        }
+    }
+
+    let mut child = Command::new(&node_path)
+        .arg(&server_path)
+        .current_dir(&runtime_dir)
+        .env("NODE_ENV", "production")
+        .env("HOST", "127.0.0.1")
+        .env("PORT", "3000")
+        .env("FFMPEG_PATH", &ffmpeg_path)
+        .env("FFPROBE_PATH", &ffprobe_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    if let Some(stdout) = child.stdout.take() {
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().flatten() {
+                eprintln!("[SambaVault backend] {}", line);
+            }
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().flatten() {
+                eprintln!("[SambaVault backend] {}", line);
+            }
+        });
+    }
+
+    if let Err(error) = wait_for_backend(&mut child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, error).into());
+    }
+
+    Ok(child)
+}
 
 #[tauri::command]
 fn vault_purge_transcode_cache(app_handle: AppHandle, limit_gb: u64) -> Result<(), String> {
@@ -2472,10 +2574,15 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .manage(BackendProcess(Mutex::new(None)))
         .setup(|app| {
             if let Err(e) = db::init_db(&app.handle()) {
                 eprintln!("[SambaVault] Failed to initialize SQLite database: {}", e);
+            }
+            if !cfg!(debug_assertions) {
+                let backend = start_packaged_backend(app)?;
+                *app.state::<BackendProcess>().0.lock().unwrap() = Some(backend);
             }
             Ok(())
         })
@@ -2530,6 +2637,17 @@ fn main() {
             validate_ffmpeg_sidecar,
             check_bundled_ffmpeg,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            let state = app_handle.state::<BackendProcess>();
+            let mut child = state.0.lock().unwrap();
+            if let Some(backend) = child.as_mut() {
+                let _ = backend.kill();
+                let _ = backend.wait();
+            }
+        }
+    });
 }

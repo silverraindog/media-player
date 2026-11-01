@@ -155,7 +155,7 @@ pub fn init_db(app_handle: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-fn get_media_for_query(path: PathBuf, query: &'static str) -> Result<Vec<MediaItem>, String> {
+fn get_media_for_query(path: PathBuf, query: &str) -> Result<Vec<MediaItem>, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
 
@@ -192,10 +192,10 @@ fn get_media_for_query(path: PathBuf, query: &'static str) -> Result<Vec<MediaIt
 
 async fn load_media_for_query(
     app_handle: AppHandle,
-    query: &'static str,
+    query: String,
 ) -> Result<Vec<MediaItem>, String> {
     tokio::task::spawn_blocking(move || {
-        get_media_for_query(get_db_path(&app_handle), query)
+        get_media_for_query(get_db_path(&app_handle), &query)
     })
     .await
     .map_err(|error| format!("Media query task failed: {}", error))?
@@ -203,14 +203,34 @@ async fn load_media_for_query(
 
 #[tauri::command]
 pub async fn get_all_media(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
-    load_media_for_query(app_handle, "SELECT * FROM media_items ORDER BY updated_at DESC").await
+    load_media_for_query(
+        app_handle,
+        "SELECT * FROM media_items ORDER BY updated_at DESC".to_string(),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn get_recent_media(
+    app_handle: AppHandle,
+    limit: Option<u32>,
+) -> Result<Vec<MediaItem>, String> {
+    let safe_limit = limit.unwrap_or(10).clamp(1, 50);
+    load_media_for_query(
+        app_handle,
+        format!(
+            "SELECT * FROM media_items ORDER BY datetime(created_at) DESC, datetime(updated_at) DESC LIMIT {}",
+            safe_limit
+        ),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn get_movies(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
     load_media_for_query(
         app_handle,
-        "SELECT * FROM media_items WHERE media_type = 'movie' ORDER BY updated_at DESC",
+        "SELECT * FROM media_items WHERE media_type = 'movie' ORDER BY updated_at DESC".to_string(),
     )
     .await
 }
@@ -219,7 +239,7 @@ pub async fn get_movies(app_handle: AppHandle) -> Result<Vec<MediaItem>, String>
 pub async fn get_series(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
     load_media_for_query(
         app_handle,
-        "SELECT * FROM media_items WHERE media_type = 'series' ORDER BY updated_at DESC",
+        "SELECT * FROM media_items WHERE media_type = 'series' ORDER BY updated_at DESC".to_string(),
     )
     .await
 }
@@ -228,7 +248,7 @@ pub async fn get_series(app_handle: AppHandle) -> Result<Vec<MediaItem>, String>
 pub async fn get_albums(app_handle: AppHandle) -> Result<Vec<MediaItem>, String> {
     load_media_for_query(
         app_handle,
-        "SELECT * FROM media_items WHERE media_type IN ('album', 'music', 'audio') ORDER BY updated_at DESC",
+        "SELECT * FROM media_items WHERE media_type IN ('album', 'music', 'audio') ORDER BY updated_at DESC".to_string(),
     )
     .await
 }

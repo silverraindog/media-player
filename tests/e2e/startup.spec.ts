@@ -23,6 +23,8 @@ test('the app renders after startup and navigation remains interactive', async (
       response = { success: true, watchlist: [], count: 0 };
     } else if (pathname === '/api/db/media' || pathname === '/api/media') {
       response = { success: true, items: [], count: 0 };
+    } else if (pathname === '/api/db/media/recent') {
+      response = { success: true, items: [], count: 0 };
     } else if (pathname === '/api/playlists') {
       response = { success: true, playlists: [] };
     } else if (pathname === '/api/samba/network-diagnostics') {
@@ -79,6 +81,8 @@ test('the app renders after startup and navigation remains interactive', async (
       })
     ).toBe(true);
     await expect(page.getByText('Initializing SambaVault Application view...')).toBeHidden();
+    await expect(page.getByText('Loading recent media from SQLite database...')).toBeHidden();
+    await expect(page.getByText('No recently added media is available yet.')).toBeVisible();
 
     const searchTab = page.locator('#tab-search');
     await expect(searchTab).toBeVisible();

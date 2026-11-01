@@ -12,6 +12,18 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
       return window.fetch(url, options).then((r) => r.json()) as any;
     }
 
+    if (endpoint.startsWith('/api/db/media/recent') && (!options.method || options.method === 'GET')) {
+      const requestedLimit = Number.parseInt(
+        new URL(endpoint, 'http://localhost').searchParams.get('limit') || '',
+        10
+      );
+      const limit = Number.isFinite(requestedLimit)
+        ? Math.min(Math.max(requestedLimit, 1), 50)
+        : 10;
+      const items = await invoke<any[]>('get_recent_media', { limit });
+      return { success: true, count: items.length, items } as any;
+    }
+
     // Map REST endpoints to native Tauri commands writing to ~/.media-player
     const isLibraryMediaEndpoint = (
       endpoint === '/api/media' ||
@@ -31,18 +43,18 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
         } catch {}
       }
       if (endpoint.includes('/movies') || typeParam.toLowerCase() === 'movie' || typeParam.toLowerCase() === 'movies') {
-        const items = await invoke<any[]>('get_movies').catch(() => []);
+        const items = await invoke<any[]>('get_movies');
         return { success: true, count: items.length, items } as any;
       }
       if (endpoint.includes('/series') || typeParam.toLowerCase() === 'series') {
-        const items = await invoke<any[]>('get_series').catch(() => []);
+        const items = await invoke<any[]>('get_series');
         return { success: true, count: items.length, items } as any;
       }
       if (endpoint.includes('/music') || endpoint.includes('/albums') || typeParam.toLowerCase() === 'music' || typeParam.toLowerCase() === 'album' || typeParam.toLowerCase() === 'albums') {
-        const items = await invoke<any[]>('get_albums').catch(() => []);
+        const items = await invoke<any[]>('get_albums');
         return { success: true, count: items.length, items } as any;
       }
-      const items = await invoke<any[]>('get_all_media').catch(() => []);
+      const items = await invoke<any[]>('get_all_media');
       return { success: true, count: items.length, items } as any;
     }
     if (endpoint === '/api/db/media' && options.method === 'POST') {

@@ -2507,6 +2507,7 @@ fn main() {
             macos_permissions::open_macos_security_privacy,
             macos_permissions::request_full_disk_access_and_register,
             db::get_all_media,
+            db::get_recent_media,
             db::get_movies,
             db::get_series,
             db::get_albums,

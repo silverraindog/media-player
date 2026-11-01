@@ -12,3 +12,5 @@ bun.lock*
 .continue
 .vscode
 target/
+*.mkv
+*.png

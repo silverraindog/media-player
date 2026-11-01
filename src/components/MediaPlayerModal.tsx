@@ -1928,6 +1928,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     </button>
                     <button
                       onClick={() => {
+                        setSelectedCodec('h264');
+                        setHardwareAccel(false);
                         setUseTranscode(true);
                         setPlayerEngine('hls');
                         setPlaybackError(null);

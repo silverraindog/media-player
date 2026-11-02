@@ -8,6 +8,8 @@ import {
   getDirectPlaybackUrl,
   nodeToMediaMetadata,
 } from '../src/utils/mediaExtractor';
+import { normalizeFranchiseHierarchy } from '../src/utils/franchiseHierarchy';
+import { SambaShareNode } from '../src/types';
 
 // Simple minimal testing harness
 async function runTests() {
@@ -169,6 +171,61 @@ async function runTests() {
           'TV/Example Show/Specials/Behind the Scenes.mkv'
       ) {
         throw new Error('Assertion failed: Series root did not group S01, Season 2, and Specials as sibling seasons.');
+      }
+    }
+
+    const bsgExtrasTree: SambaShareNode[] = [{
+      id: 'franchies-root',
+      name: 'Franchies',
+      path: '/Volumes/media/Franchies',
+      type: 'folder',
+      children: [{
+        id: 'bsg-root',
+        name: 'Battlestar Galactica',
+        path: '/Volumes/media/Franchies/Battlestar Galactica',
+        type: 'folder',
+        children: [{
+          id: 'bsg-extra',
+          name: 'Extra',
+          path: '/Volumes/media/Franchies/Battlestar Galactica/Extra',
+          type: 'folder',
+          children: [2, 3].map((seasonNumber) => ({
+            id: `bsg-season-${seasonNumber}`,
+            name: `BSG Season ${seasonNumber}`,
+            path: `/Volumes/media/Franchies/Battlestar Galactica/Extra/BSG Season ${seasonNumber}`,
+            type: 'folder',
+            children: [{
+              id: `bsg-episode-${seasonNumber}`,
+              name: `Episode ${seasonNumber}.mkv`,
+              path: `/Volumes/media/Franchies/Battlestar Galactica/Extra/BSG Season ${seasonNumber}/Episode ${seasonNumber}.mkv`,
+              type: 'file',
+            }],
+          })),
+        }],
+      }],
+    }];
+    const normalizedBsgTree = normalizeFranchiseHierarchy(bsgExtrasTree);
+    const franchiseNode = normalizedBsgTree[0]?.children?.[0];
+    const primarySeriesNode = franchiseNode?.children?.[0];
+    const extraFolder = primarySeriesNode?.children?.find((child) => child.name === 'Extra');
+    if (
+      primarySeriesNode?.name !== 'Battlestar Galactica' ||
+      extraFolder?.children?.map((child) => child.name).join(',') !== 'BSG Season 2,BSG Season 3'
+    ) {
+      throw new Error('Assertion failed: Franchies/Battlestar Galactica/Extra was not preserved under the Battlestar Galactica root.');
+    }
+
+    const bsgCatalogs = [
+      extractAllMediaFromSambaTree(bsgExtrasTree),
+      await extractAllMediaFromSambaTreeAsync(bsgExtrasTree),
+    ];
+    for (const catalog of bsgCatalogs) {
+      if (
+        catalog.length !== 1 ||
+        catalog[0].title !== 'Battlestar Galactica' ||
+        catalog.some((item) => /^BSG Season [23]$/i.test(item.title))
+      ) {
+        throw new Error('Assertion failed: Extra/BSG Season 2 and 3 were extracted as separate series.');
       }
     }
 

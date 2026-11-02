@@ -178,6 +178,16 @@ export function isSeasonDirectory(folderName: string): boolean {
   );
 }
 
+export function isExtrasDirectory(folderName: string): boolean {
+  return /^(?:extras?|specials?|bonus|featurettes?|behind\s*the\s*(?:scenes?|truth|mask|curtain)|making\s*of|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(folderName.trim());
+}
+
+function isInsideExtrasDirectory(path: string, isFile: boolean): boolean {
+  const segments = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  const directorySegments = isFile ? segments.slice(0, -1) : segments;
+  return directorySegments.some(isExtrasDirectory);
+}
+
 // Helper to determine media type from path and filename across all media extensions
 export function detectMediaType(filePath: string): MediaType {
   const lower = filePath.toLowerCase().replace(/\\/g, '/');
@@ -397,7 +407,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   if (mediaType === 'series') {
     const segments = fullPath.replace(/\\/g, '/').split('/').filter(Boolean);
     const rootContainers = [
-      'series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort',
+      'series', 'tv shows', 'tv', 'shows', 'anime', 'documentaries', 'media', 'videos', 'sort', 'franchies',
       'downloads', 'complete', 'share', 'storage', 'video', 'movies', 'nas', 'public', 'disk1', 'disk2',
       'franchises', 'franchise', 'collections', 'collection', 'box sets', 'box sets & collections', 'box sets and collections', 'sagas',
       'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'
@@ -643,6 +653,7 @@ export function extractAllMediaFromSambaTree(
   function traverse(nodeList: SambaShareNode[], parentPath: string = '') {
     for (const node of nodeList) {
       const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+      if (isInsideExtrasDirectory(fullPath, node.type === 'file')) continue;
 
       if (node.matchedMedia) {
         const item = nodeToMediaMetadata(node, parentPath);
@@ -655,7 +666,7 @@ export function extractAllMediaFromSambaTree(
           c.type === 'folder' && isSeasonDirectory(c.name)
         );
 
-        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage', 'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'].includes(node.name.toLowerCase());
+        const isRootContainer = ['movies', 'series', 'franchises', 'franchise', 'franchies', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage', 'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'].includes(node.name.toLowerCase());
         const isSeasonFolder = isSeasonDirectory(node.name);
 
         if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
@@ -754,6 +765,7 @@ export async function extractAllMediaFromSambaTreeAsync(
     processedCount++;
 
     const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+    if (isInsideExtrasDirectory(fullPath, node.type === 'file')) continue;
 
     if (node.matchedMedia) {
       const item = nodeToMediaMetadata(node, parentPath);
@@ -770,6 +782,8 @@ export async function extractAllMediaFromSambaTreeAsync(
         'movies',
         'series',
         'franchises',
+        'franchise',
+        'franchies',
         'audio books',
         'books',
         'music',

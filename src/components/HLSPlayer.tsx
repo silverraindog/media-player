@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { logger } from '../utils/loggerService';
 import { hlsPrefetchWorkerService } from '../services/hlsPrefetchWorkerService';
+import { isTauriEnvironment } from '../utils/tauriBridge';
 
 export interface StreamProbeData {
   format: {
@@ -127,6 +128,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const nativeFullscreenRef = useRef(false);
   const hlsInstanceRef = useRef<Hls | null>(null);
   const [isSlowInitializing, setIsSlowInitializing] = useState(false);
 
@@ -150,6 +152,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
   const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [showProbeDetails, setShowProbeDetails] = useState(false);
@@ -279,6 +282,49 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }, 4000);
     return () => clearTimeout(timer);
   }, [isPlaying, isRecovering, hlsStatus]);
+
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const syncFullscreenState = async (appWindow: typeof import('@tauri-apps/api/window').appWindow) => {
+      try {
+        const fullscreen = await appWindow.isFullscreen();
+        if (!disposed) {
+          nativeFullscreenRef.current = fullscreen;
+          setIsNativeFullscreen(fullscreen);
+        }
+      } catch (error) {
+        console.error('[HLSPlayer] Failed to read native fullscreen state:', error);
+      }
+    };
+
+    void import('@tauri-apps/api/window')
+      .then(async ({ appWindow }) => {
+        await syncFullscreenState(appWindow);
+        const stopListening = await appWindow.onResized(() => {
+          void syncFullscreenState(appWindow);
+        });
+        if (disposed) stopListening();
+        else unlisten = stopListening;
+      })
+      .catch((error) => {
+        console.error('[HLSPlayer] Failed to observe native fullscreen state:', error);
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+      if (nativeFullscreenRef.current) {
+        void import('@tauri-apps/api/window')
+          .then(({ appWindow }) => appWindow.setFullscreen(false))
+          .catch((error) => {
+            console.error('[HLSPlayer] Failed to exit native fullscreen on unmount:', error);
+          });
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const syncFullscreenState = () => {
@@ -743,6 +789,21 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     const container = containerRef.current;
     if (!container) return;
 
+    if (isTauriEnvironment()) {
+      try {
+        const { appWindow } = await import('@tauri-apps/api/window');
+        const fullscreen = await appWindow.isFullscreen();
+        await appWindow.setFullscreen(!fullscreen);
+        nativeFullscreenRef.current = !fullscreen;
+        setIsNativeFullscreen(!fullscreen);
+        setFullscreenError(null);
+      } catch (error) {
+        console.error('[HLSPlayer] Failed to toggle native fullscreen:', error);
+        setFullscreenError('Fullscreen could not be started in this player.');
+      }
+      return;
+    }
+
     const fullscreenDocument = document as Document & {
       webkitFullscreenElement?: Element | null;
       webkitExitFullscreen?: () => Promise<void> | void;
@@ -750,7 +811,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     const fullscreenElement = document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement;
 
     try {
-      if (fullscreenElement === container) {
+      if (fullscreenElement) {
         await (document.exitFullscreen?.() ?? fullscreenDocument.webkitExitFullscreen?.());
       } else {
         const fullscreenContainer = container as HTMLDivElement & {
@@ -797,7 +858,9 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={triggerUserActivity}
-      className="relative w-full h-full flex flex-col bg-slate-950 select-none overflow-hidden text-slate-100 group"
+      className={`${
+        isNativeFullscreen ? 'fixed inset-0 z-[100] h-screen w-screen' : 'relative h-full w-full'
+      } flex flex-col bg-slate-950 select-none overflow-hidden text-slate-100 group`}
     >
       {/* Top Floating Badge & Status */}
       <div
@@ -1377,10 +1440,10 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
                 <button
                   onClick={toggleFullscreen}
                   className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors"
-                  title={isFullscreen ? 'Exit Fullscreen' : 'Toggle Fullscreen'}
-                  aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                  title={isFullscreen || isNativeFullscreen ? 'Exit Fullscreen' : 'Toggle Fullscreen'}
+                  aria-label={isFullscreen || isNativeFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
                 >
-                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                  {isFullscreen || isNativeFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
                 </button>
               </>
             )}

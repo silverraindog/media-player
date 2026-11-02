@@ -182,6 +182,59 @@ export function isExtrasDirectory(folderName: string): boolean {
   return /^(?:extras?|specials?|bonus|featurettes?|behind\s*the\s*(?:scenes?|truth|mask|curtain)|making\s*of|trailers?|interviews?|deleted\s*scenes?|shorts?|sp|other|samples?)(?:[\s._-].*)?$/i.test(folderName.trim());
 }
 
+export function inferScannedMediaType(
+  path: string,
+  metadata?: {
+    detectedType?: unknown;
+    type?: unknown;
+    primaryCategory?: unknown;
+    category?: unknown;
+    genres?: unknown;
+  }
+): MediaType {
+  const normalizedPath = path.replace(/\\/g, '/');
+  const segments = normalizedPath.split('/').filter(Boolean);
+  const fileName = segments[segments.length - 1] || '';
+  const extension = getFileExtension(fileName);
+
+  if (SUPPORTED_AUDIO_EXTENSIONS.includes(extension) || SUPPORTED_BOOK_EXTENSIONS.includes(extension)) {
+    return 'album';
+  }
+
+  if (
+    segments.some((segment) =>
+      /^(?:season|staffel|saison|temporada|stagione|series)[\s._-]?\d+|^s\d{1,2}$/i.test(segment)
+    ) ||
+    /(?:^|[._ -])s\d{1,2}e\d{1,2}(?:[._ -]|$)/i.test(fileName) ||
+    /\b\d{1,2}x\d{1,2}\b/i.test(fileName)
+  ) {
+    return 'series';
+  }
+
+  const metadataType = String(metadata?.detectedType ?? metadata?.type ?? '').toLowerCase();
+  if (metadataType === 'movie' || metadataType === 'series' || metadataType === 'album') {
+    return metadataType;
+  }
+  if (/^(?:music|audio|album|soundtrack)$/i.test(String(metadata?.primaryCategory ?? metadata?.category ?? ''))) {
+    return 'album';
+  }
+
+  const rootCategory = segments.find((segment) =>
+    /^(?:movies?|films?|cinema|feature films?|tv shows?|television|tv|shows?|series|anime|documentaries|music|audio|albums?|soundtracks?|audiobooks?|books?)$/i.test(segment)
+  );
+  if (rootCategory) {
+    if (/^(?:music|audio|albums?|soundtracks?|audiobooks?|books?)$/i.test(rootCategory)) {
+      return 'album';
+    }
+    if (/^(?:tv shows?|television|tv|shows?|series|anime|documentaries)$/i.test(rootCategory)) {
+      return 'series';
+    }
+    return 'movie';
+  }
+
+  return detectMediaType(normalizedPath);
+}
+
 function isInsideExtrasDirectory(path: string, isFile: boolean): boolean {
   const segments = path.replace(/\\/g, '/').split('/').filter(Boolean);
   const directorySegments = isFile ? segments.slice(0, -1) : segments;
@@ -391,7 +444,9 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   const hasSeasonFolderChildren = node.children?.some(
     (child) => child.type === 'folder' && isSeasonDirectory(child.name)
   ) ?? false;
-  const mediaType = node.mediaType || (hasSeasonFolderChildren ? 'series' : detectMediaType(fullPath));
+  const mediaType = hasSeasonFolderChildren
+    ? 'series'
+    : inferScannedMediaType(fullPath, { detectedType: node.mediaType });
   const parsedFile = parseTitleAndYear(node.name);
   const epInfo = extractEpisodeInfoFromFilename(node.name);
   const seasonFromFolder = extractSeasonNumberFromPath(fullPath);

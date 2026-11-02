@@ -56,6 +56,8 @@ import {
   parsedFileToMediaMetadata,
   parseTitleAndYear,
   detectMediaType,
+  inferScannedMediaType,
+  isSeasonDirectory,
   DEFAULT_MEDIA_SCAN_CONFIG,
 } from './utils/mediaExtractor';
 import {
@@ -2811,6 +2813,7 @@ function App() {
               path: currentPath,
               sourcePath: nativePathByRelative.get(normalizeScannedRelativePath(rawPath)),
               type: 'file',
+              mediaType: inferScannedMediaType(rawPath, syncedMeta),
               size: isVideo ? '2.8 GB' : isAudio ? '45 MB' : isBook ? '8.5 MB' : '2.4 KB',
             });
           }
@@ -2832,21 +2835,25 @@ function App() {
 
         // Check if this folder corresponds to a media title
         const lowerName = segment.toLowerCase();
-        const detectedType = detectMediaType(rawPath);
-        const isShow =
-          detectedType === 'series' ||
-          lowerName.includes('season') ||
-          lowerName.includes('staffel') ||
-          lowerName.includes('saison') ||
-          pathSegments.some((p) => /series|tv|shows|anime|drama|television|kdrama/i.test(p));
-        const isMusic =
-          detectedType === 'album' ||
-          pathSegments.some((p) => /music|audio|books|albums|soundtracks/i.test(p));
+        const detectedType = inferScannedMediaType(rawPath, syncedMeta);
+        const isShow = detectedType === 'series';
+        const isMusic = detectedType === 'album';
+        const isCategoryContainer = [
+          'movies', 'movie', 'films', 'film', 'cinema', 'tv shows', 'television', 'tv', 'shows',
+          'series', 'anime', 'documentaries', 'music', 'audio', 'albums', 'soundtracks',
+          'audiobooks', 'books',
+        ].includes(lowerName);
+        const isSeasonFolder = isSeasonDirectory(segment);
 
-        if (!folderNode.mediaType && (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2) || isShow)) {
+        if (
+          !folderNode.mediaType &&
+          !isCategoryContainer &&
+          !isSeasonFolder &&
+          (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2) || isShow || isMusic)
+        ) {
           folderNode.hasNfo = true;
           folderNode.hasPoster = true;
-          folderNode.mediaType = isShow ? 'series' : isMusic ? 'album' : 'movie';
+          folderNode.mediaType = detectedType;
         }
 
         getOrCreateNodeInTree(

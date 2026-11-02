@@ -63,6 +63,7 @@ import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
+import { inferScannedMediaType } from '../utils/mediaExtractor';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
@@ -243,7 +244,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       genres: getSafeGenres(m.genres),
       rating: getSafeRating(m.rating),
       title: m.title || 'Untitled',
-      type: m.type || 'series',
+      type: m.type || inferScannedMediaType(
+        m.folderPath || m.recommendedFolderStructure || m.path || m.title,
+        { primaryCategory: m.primaryCategory, genres: m.genres }
+      ),
       year: m.year || 2024,
       posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
       overview: m.overview || '',

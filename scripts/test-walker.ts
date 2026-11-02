@@ -6,6 +6,7 @@ import {
   extractAllMediaFromSambaTree,
   extractAllMediaFromSambaTreeAsync,
   getDirectPlaybackUrl,
+  inferScannedMediaType,
   nodeToMediaMetadata,
 } from '../src/utils/mediaExtractor';
 import { normalizeFranchiseHierarchy } from '../src/utils/franchiseHierarchy';
@@ -116,6 +117,20 @@ async function runTests() {
     });
     if (extractedMedia?.path !== spacedFilePath || extractedMedia.seasons?.[0]?.episodes?.[0]?.filePath !== spacedFilePath) {
       throw new Error('Assertion failed: Extracted media or episode metadata did not retain the scanned source path.');
+    }
+
+    const typeCases: Array<{ path: string; metadata?: { type?: string; primaryCategory?: string }; expected: string }> = [
+      { path: '/Volumes/media/Movies/Interstellar/Interstellar.mkv', expected: 'movie' },
+      { path: '/Volumes/media/TV Shows/Example Show/S01/E01.mkv', expected: 'series' },
+      { path: '/Volumes/media/Music/Artist/Album/Track.flac', expected: 'album' },
+      { path: '/Volumes/media/Unsorted/Some Title.mkv', metadata: { type: 'series' }, expected: 'series' },
+      { path: '/Volumes/media/Unsorted/Audio Collection.mkv', metadata: { primaryCategory: 'Music' }, expected: 'album' },
+      { path: '/Volumes/media/Movies/Some Movie/Track.flac', expected: 'album' },
+    ];
+    for (const testCase of typeCases) {
+      if (inferScannedMediaType(testCase.path, testCase.metadata) !== testCase.expected) {
+        throw new Error(`Assertion failed: ${testCase.path} should be categorized as ${testCase.expected}.`);
+      }
     }
 
     const seriesTree = [{

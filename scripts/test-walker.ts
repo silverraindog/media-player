@@ -5,8 +5,11 @@ import { walkDirectoryRecursiveAsync } from '../server';
 import {
   extractAllMediaFromSambaTree,
   extractAllMediaFromSambaTreeAsync,
+  extractSeasonNumberFromPath,
   getDirectPlaybackUrl,
   inferScannedMediaType,
+  isPathInsideExtras,
+  isSeasonDirectory,
   nodeToMediaMetadata,
 } from '../src/utils/mediaExtractor';
 import { normalizeFranchiseHierarchy } from '../src/utils/franchiseHierarchy';
@@ -121,7 +124,10 @@ async function runTests() {
 
     const typeCases: Array<{ path: string; metadata?: { type?: string; primaryCategory?: string }; expected: string }> = [
       { path: '/Volumes/media/Movies/Interstellar/Interstellar.mkv', expected: 'movie' },
+      { path: '/Volumes/media/Movies/Interstellar/Interstellar.mkv', metadata: { type: 'series' }, expected: 'movie' },
+      { path: '/Volumes/media/Movies/Interstellar/Season 1/Episode 1.mkv', expected: 'movie' },
       { path: '/Volumes/media/TV Shows/Example Show/S01/E01.mkv', expected: 'series' },
+      { path: '/Volumes/media/Franchies/Battlestar Galactica/Extra/BSG Season 2/Episode.mkv', expected: 'series' },
       { path: '/Volumes/media/Music/Artist/Album/Track.flac', expected: 'album' },
       { path: '/Volumes/media/Unsorted/Some Title.mkv', metadata: { type: 'series' }, expected: 'series' },
       { path: '/Volumes/media/Unsorted/Audio Collection.mkv', metadata: { primaryCategory: 'Music' }, expected: 'album' },
@@ -131,6 +137,15 @@ async function runTests() {
       if (inferScannedMediaType(testCase.path, testCase.metadata) !== testCase.expected) {
         throw new Error(`Assertion failed: ${testCase.path} should be categorized as ${testCase.expected}.`);
       }
+    }
+    if (!isSeasonDirectory('BSG Season 2') || !isSeasonDirectory('BSG S03')) {
+      throw new Error('Assertion failed: Season folders with a series-name prefix were not recognized.');
+    }
+    if (
+      extractSeasonNumberFromPath('/Franchies/Battlestar Galactica/Extra/BSG Season 2') !== 2 ||
+      !isPathInsideExtras('/Franchies/Battlestar Galactica/Extra/BSG Season 2/Episode.mkv')
+    ) {
+      throw new Error('Assertion failed: Nested season numbers or Extra paths were not identified.');
     }
 
     const seriesTree = [{
@@ -221,7 +236,7 @@ async function runTests() {
     }];
     const normalizedBsgTree = normalizeFranchiseHierarchy(bsgExtrasTree);
     const franchiseNode = normalizedBsgTree[0]?.children?.[0];
-    const primarySeriesNode = franchiseNode?.children?.[0];
+    const primarySeriesNode = franchiseNode;
     const extraFolder = primarySeriesNode?.children?.find((child) => child.name === 'Extra');
     if (
       primarySeriesNode?.name !== 'Battlestar Galactica' ||
@@ -233,14 +248,18 @@ async function runTests() {
     const bsgCatalogs = [
       extractAllMediaFromSambaTree(bsgExtrasTree),
       await extractAllMediaFromSambaTreeAsync(bsgExtrasTree),
+      extractAllMediaFromSambaTree(bsgExtrasTree[0].children || []),
+      await extractAllMediaFromSambaTreeAsync(bsgExtrasTree[0].children || []),
     ];
     for (const catalog of bsgCatalogs) {
+      const bsgSeries = catalog.find((item) => item.title === 'Battlestar Galactica');
       if (
-        catalog.length !== 1 ||
-        catalog[0].title !== 'Battlestar Galactica' ||
+        !bsgSeries ||
+        bsgSeries.seasons?.map((season) => season.seasonNumber).join(',') !== '2,3' ||
+        bsgSeries.seasons.some((season) => season.episodes?.length !== 1) ||
         catalog.some((item) => /^BSG Season [23]$/i.test(item.title))
       ) {
-        throw new Error('Assertion failed: Extra/BSG Season 2 and 3 were extracted as separate series.');
+        throw new Error('Assertion failed: Extra/BSG Season 2 and 3 were not grouped under Battlestar Galactica.');
       }
     }
 

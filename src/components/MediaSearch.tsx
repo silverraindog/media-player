@@ -63,7 +63,7 @@ import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { inferScannedMediaType } from '../utils/mediaExtractor';
+import { inferScannedMediaType, isPathInsideExtras } from '../utils/mediaExtractor';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
@@ -218,6 +218,21 @@ export function getSafeRating(rating: any): number {
   return !isNaN(num) ? num : 8.0;
 }
 
+function getEffectiveMediaType(media: MediaMetadata): MediaType {
+  return inferScannedMediaType(
+    media.folderPath || media.recommendedFolderStructure || media.path || media.title,
+    {
+      detectedType: media.type,
+      primaryCategory: media.primaryCategory,
+      genres: media.genres,
+    }
+  );
+}
+
+function isStandaloneExtrasEntry(media: MediaMetadata): boolean {
+  return isPathInsideExtras(media.folderPath || media.recommendedFolderStructure || media.path || '');
+}
+
 export const MediaSearch: React.FC<MediaSearchProps> = ({
   mediaLibrary = [],
   sambaTree,
@@ -239,15 +254,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 }) => {
   const safeMediaLibrary = useMemo(() => {
     if (!Array.isArray(mediaLibrary)) return [];
-    return mediaLibrary.map((m) => ({
+    return mediaLibrary.filter((media) => !isStandaloneExtrasEntry(media)).map((m) => ({
       ...m,
       genres: getSafeGenres(m.genres),
       rating: getSafeRating(m.rating),
       title: m.title || 'Untitled',
-      type: m.type || inferScannedMediaType(
-        m.folderPath || m.recommendedFolderStructure || m.path || m.title,
-        { primaryCategory: m.primaryCategory, genres: m.genres }
-      ),
+      type: getEffectiveMediaType(m),
       year: m.year || 2024,
       posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
       overview: m.overview || '',
@@ -341,6 +353,14 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const [isRecentLoading, setIsRecentLoading] = useState(true);
   const [recentMediaError, setRecentMediaError] = useState<string | null>(null);
   const recentScrollRef = useRef<HTMLDivElement>(null);
+  const visibleRecentlyAdded = useMemo(
+    () =>
+      recentlyAdded
+        .filter((item) => !isStandaloneExtrasEntry(item))
+        .map((item) => ({ ...item, type: getEffectiveMediaType(item) }))
+        .filter((item) => selectedType === 'all' || item.type === selectedType),
+    [recentlyAdded, selectedType]
+  );
 
   // Web Search Categorizer Modal State
   const [isCategorizerModalOpen, setIsCategorizerModalOpen] = useState(false);
@@ -1622,8 +1642,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
           ref={recentScrollRef}
           className="flex gap-4 overflow-x-auto pb-3 pt-1 scroll-smooth scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900"
         >
-          {recentlyAdded.length > 0 ? (
-            recentlyAdded.map((item) => {
+          {visibleRecentlyAdded.length > 0 ? (
+            visibleRecentlyAdded.map((item) => {
               const isSavedWatchlist = watchlistIds.has(item.id);
               return (
                 <div

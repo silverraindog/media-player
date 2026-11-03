@@ -136,6 +136,18 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
       const hasDirectMediaFiles = rawChildren.some(
         (c) => c.type === 'file' && isMediaFile(c.name)
       );
+      const childFolders = rawChildren.filter((child) => child.type === 'folder');
+      const hasOnlyExtrasFolders =
+        childFolders.length > 0 &&
+        childFolders.every((child) => isExtrasDirectory(child.name)) &&
+        !hasDirectMediaFiles;
+
+      // Some scan roots are already the series root (e.g. Franchies/Battlestar Galactica)
+      // and contain only an Extra/Specials subfolder. Keep that real hierarchy intact.
+      if (hasOnlyExtrasFolders) {
+        normalizedFranchiseFolders.push(franchiseFolder);
+        continue;
+      }
 
       // If already structured with series folders, ensure each series folder's seasons are properly consolidated
       if (!hasDirectSeasonOrExtras && !hasDirectMediaFiles) {

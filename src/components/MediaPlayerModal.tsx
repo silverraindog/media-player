@@ -40,6 +40,7 @@ import {
   TranscodeConfig,
 } from '../types';
 import { MatroskaPlayer } from './MatroskaPlayer';
+import { VlcPlayer } from './VlcPlayer';
 import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
 import { getMountedDisplayPath, extractCleanLocalPath } from '../utils/pathSanitizer';
@@ -323,6 +324,32 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   useEffect(() => {
     setFallbackPlaybackUrl(null);
   }, [activeFilePath]);
+
+  // Native libvlc playback (Tauri/macOS only) for formats the webview's <video> cannot decode
+  const [vlcAvailable, setVlcAvailable] = useState(false);
+  const [vlcFailedPath, setVlcFailedPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !(window as any).__TAURI__) return;
+    import('@tauri-apps/api/tauri')
+      .then(({ invoke }) => invoke<boolean>('vlc_available'))
+      .then(setVlcAvailable)
+      .catch(() => setVlcAvailable(false));
+  }, []);
+
+  const needsVlc = useMemo(() => {
+    if (media.type === 'album') return false;
+    const p = (activeFilePath || '').toLowerCase().split('?')[0];
+    const webFriendlyContainer = /\.(mp4|m4v|mov|webm)$/.test(p);
+    if (!webFriendlyContainer) return true;
+    const video = mediaInfo?.streams?.find((s) => s.codec_type === 'video');
+    const audio = mediaInfo?.streams?.find((s) => s.codec_type === 'audio');
+    const webVideo = !video || ['h264', 'vp8', 'vp9', 'av1'].includes(video.codec_name?.toLowerCase());
+    const webAudio = !audio || ['aac', 'mp3', 'opus', 'vorbis', 'flac'].includes(audio.codec_name?.toLowerCase());
+    return !(webVideo && webAudio);
+  }, [activeFilePath, media.type, mediaInfo]);
+
+  const useVlcEngine = vlcAvailable && needsVlc && vlcFailedPath !== activeFilePath && !isProbing;
 
   const isMkv = useMemo(() => {
     const p = (activeFilePath || media.matchedFilename || '').toLowerCase();
@@ -1954,7 +1981,20 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               </div>
             )}
 
-            {useMatroskaEngine || playerEngine === 'matroska' ? (
+            {useVlcEngine && !useMatroskaEngine && playerEngine === 'hls' ? (
+              <VlcPlayer
+                key={`${media.id}::${activeFilePath}`}
+                mediaId={media.id}
+                filePath={activeFilePath}
+                title={media.title}
+                episodeTitle={currentEpisode ? `S${String(currentEpisode.seasonNumber).padStart(2, '0')}E${String(currentEpisode.episodeNumber).padStart(2, '0')}: ${currentEpisode.title}` : undefined}
+                onClose={onClose}
+                onFallback={(reason) => {
+                  console.warn('[MediaPlayerModal] libvlc failed, using FFmpeg HLS:', reason);
+                  setVlcFailedPath(activeFilePath);
+                }}
+              />
+            ) : useMatroskaEngine || playerEngine === 'matroska' ? (
               <div className="w-full h-full p-4 flex flex-col">
                 <MatroskaPlayer
                   streamUrl={streamUrl}

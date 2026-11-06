@@ -16,6 +16,7 @@ use walkdir::WalkDir;
 
 mod ai;
 mod db;
+mod vlc_player;
 pub mod scanner;
 
 struct BackendProcess(Mutex<Option<Child>>);
@@ -2576,6 +2577,7 @@ async fn transcode_media_file(source_path: String, media_type: String) -> Result
 fn main() {
     let app = tauri::Builder::default()
         .manage(BackendProcess(Mutex::new(None)))
+        .manage(vlc_player::VlcPlayerState::default())
         .setup(|app| {
             if let Err(e) = db::init_db(&app.handle()) {
                 eprintln!("[SambaVault] Failed to initialize SQLite database: {}", e);
@@ -2587,6 +2589,12 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            vlc_player::vlc_available,
+            vlc_player::vlc_open,
+            vlc_player::vlc_set_rect,
+            vlc_player::vlc_status,
+            vlc_player::vlc_control,
+            vlc_player::vlc_stop,
             perform_fast_scan,
             scan_samba_volume,
             check_volume_mounted,

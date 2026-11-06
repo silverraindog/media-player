@@ -23,3 +23,4 @@ src-tauri/backend-runtime/ffmpeg
 src-tauri/backend-runtime/ffmpeg.exe
 src-tauri/backend-runtime/ffprobe
 src-tauri/backend-runtime/ffprobe.exe
+src-tauri/vlc/

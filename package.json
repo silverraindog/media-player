@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "build:tauri": "npm run build && npm ci --omit=dev --prefix src-tauri/backend-runtime && node scripts/prepare-tauri-runtime.cjs",
+    "build:tauri": "npm run build && npm ci --omit=dev --prefix src-tauri/backend-runtime && node scripts/prepare-tauri-runtime.cjs && node scripts/prepare-vlc.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "tauri": "tauri",

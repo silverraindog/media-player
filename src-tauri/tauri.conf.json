@@ -84,7 +84,8 @@
       ],
       "identifier": "com.sambavault.app",
       "resources": [
-        "backend-runtime/**/*"
+        "backend-runtime/**/*",
+        "vlc/**/*"
       ],
       "shortDescription": "",
       "targets": "all"

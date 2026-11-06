@@ -127,6 +127,13 @@ jobs:
           fi
           node scripts/download-ffmpeg.cjs
 
+      - name: Install VLC (macOS libvlc bundle)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          brew install --cask vlc
+          test -f /Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib
+
       - name: Build Tauri Desktop Application
         uses: tauri-apps/tauri-action@v0.5
         env:

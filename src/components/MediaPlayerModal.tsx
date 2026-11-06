@@ -41,6 +41,7 @@ import {
 } from '../types';
 import { MatroskaPlayer } from './MatroskaPlayer';
 import { VlcPlayer } from './VlcPlayer';
+import { isMalformedMediaSource } from '../utils/mediaSourceDiagnostics';
 import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
 import { getMountedDisplayPath, extractCleanLocalPath } from '../utils/pathSanitizer';
@@ -711,7 +712,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Specifically logs if the browser is attempting to use a blob: scheme incorrectly or if MEDIA_ERR_SRC_NOT_SUPPORTED occurs.
   const inspectVideoSrc = useCallback(() => {
     const el = getActiveVideoElement();
-    const domSrc = el?.getAttribute('src') || el?.src || fallbackPlaybackUrl || streamUrl || '';
+    const domSrc = el?.getAttribute('src') || el?.src || '';
     const currentSrc = el?.currentSrc || domSrc;
     const videoError = el?.error;
     const videoErrorCode = videoError ? videoError.code : null;
@@ -719,17 +720,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     const isSrcNotSupported = videoErrorCode === 4;
 
     const isBlob = domSrc.startsWith('blob:') || currentSrc.startsWith('blob:');
-    const incorrectBlobUsage = isBlob && (!fallbackPlaybackUrl || fallbackPlaybackUrl.length < 10 || Boolean(videoError));
+    const incorrectBlobUsage = isBlob && Boolean(videoError);
     const isAsset = domSrc.includes('asset:/') || domSrc.includes('tauri:/') || domSrc.includes('asset://') || domSrc.includes('tauri://');
     const isHttp = domSrc.startsWith('http://') || domSrc.startsWith('https://');
-    const isMalformedAsset = (
-      isAsset ||
-      domSrc.includes('%2FVolumes%2F') ||
-      /^\/Volumes\/.*asset:\//i.test(domSrc) ||
-      domSrc.includes('/Volumes/Media/asset:') ||
-      domSrc.includes('/Volumes/media/asset:') ||
-      domSrc.includes('localhost/%2F')
-    );
+    const isMalformedAsset = isMalformedMediaSource(domSrc);
     const isDoublePrefixed = isMalformedAsset;
     const isExpressStream = domSrc.includes('/api/samba/stream') || domSrc.includes('/api/media/stream');
     const isHlsPlaylist = domSrc.includes('.m3u8') || currentSrc.includes('.m3u8');
@@ -754,16 +748,16 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       status = 'error';
       notes.push('CRITICAL: Malformed asset URI or duplicated /Volumes/ prefix detected in video src.');
       notes.push('Tauri asset protocol cannot parse repeated root path segments or nested schemes.');
-    } else if (isBlob) {
+    } else if (isBlob && playerEngine !== 'hls') {
       status = 'warning';
       notes.push('WARNING: Video element is playing from an in-memory blob: URL fallback.');
       notes.push('HTTP 206 range seeking may be limited and consumes high browser RAM.');
+    } else if (isBlob || isHlsPlaylist) {
+      status = 'healthy';
+      notes.push('OPTIMAL: Active HLS media source.');
     } else if (isExpressStream || isHttp) {
       status = 'healthy';
       notes.push('OPTIMAL: Streaming directly via Express HTTP 206 partial content proxy or HTTP network route.');
-    } else if (isHlsPlaylist) {
-      status = 'healthy';
-      notes.push('OPTIMAL: Active FFmpeg HLS segmented playlist stream (.m3u8).');
     } else if (domSrc) {
       notes.push(`INFO: Video source resolved to: ${domSrc.substring(0, 35)}...`);
     } else {
@@ -787,13 +781,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       isSrcNotSupported,
       incorrectBlobUsage,
     });
-  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl]);
+  }, [getActiveVideoElement, playerEngine]);
 
   // Auto-Reload mechanism:
   // If player stalls for >5 seconds, reset video.src to null/empty and re-assign original URL while preserving video.currentTime
   const triggerAutoReload = useCallback((reason = 'Stall > 5 seconds') => {
     const el = getActiveVideoElement();
-    if (!el || isAutoReloadingRef.current) return;
+    if (playerEngine !== 'direct' || useMatroskaEngine || !el || isAutoReloadingRef.current) return;
 
     isAutoReloadingRef.current = true;
     const savedTime = el.currentTime || 0;
@@ -851,7 +845,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         setTimeout(() => setAutoReloadNotice(null), 4000);
       }, 500);
     }, 150);
-  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl]);
+  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl, playerEngine, useMatroskaEngine]);
 
   // Buffer Health & Stall Monitor
   const inspectBufferHealth = useCallback(() => {
@@ -948,11 +942,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     });
 
     // Auto-Reload Trigger if stalled >= 5.0 seconds
-    if (isPlayingIntent && isStalled && stallDurationSeconds >= 5.0 && !isAutoReloadingRef.current) {
+    if (playerEngine === 'direct' && !useMatroskaEngine && isPlayingIntent && isStalled && stallDurationSeconds >= 5.0 && !isAutoReloadingRef.current) {
       console.warn(`[Buffer Monitor] ⚠️ Video stalled for ${stallDurationSeconds.toFixed(1)}s (>= 5.0s limit). Triggering Auto-Reload...`);
       triggerAutoReload(`Stalled for ${stallDurationSeconds.toFixed(1)}s`);
     }
-  }, [getActiveVideoElement, autoReloadCount, autoReloadNotice, triggerAutoReload]);
+  }, [getActiveVideoElement, autoReloadCount, autoReloadNotice, triggerAutoReload, playerEngine, useMatroskaEngine]);
 
   // Periodic 1-second interval to check buffer health & stall state
   useEffect(() => {
@@ -1708,7 +1702,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                               <span>MALFORMED ASSET URL DETECTED</span>
                             </div>
                             <p className="text-[10px] text-rose-300 mt-1">
-                              The DOM <code>&lt;video&gt;</code> element received an invalid or double-prefixed URI (e.g., <code>/Volumes/Media/asset:...</code> or repeated <code>localhost</code>/<code>%2F</code>). This triggers Tauri main-thread tokio deadlocks and causes playback failure.
+                              The DOM <code>&lt;video&gt;</code> element appears to have a nested URI or duplicated path prefix. This can prevent playback.
                             </p>
                             <button
                               onClick={() => {
@@ -1725,7 +1719,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                               Strip Prefixes & Switch to Express Stream
                             </button>
                           </div>
-                        ) : videoSrcReport.isBlob ? (
+                        ) : videoSrcReport.isBlob && playerEngine !== 'hls' ? (
                           <div className="p-2.5 bg-amber-950/70 border border-amber-700/80 rounded-lg text-amber-200">
                             <div className="flex items-center gap-1.5 font-bold text-amber-300 text-[11px]">
                               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
@@ -1816,7 +1810,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                           </div>
                           <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between">
                             <span className="text-slate-400">Engine:</span>
-                            <span className="text-indigo-300 font-semibold">{playerEngine.toUpperCase()}</span>
+                            <span className="text-indigo-300 font-semibold">{useVlcEngine && !useMatroskaEngine && playerEngine === 'hls' ? 'VLC' : playerEngine.toUpperCase()}</span>
                           </div>
                         </div>
 

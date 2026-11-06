@@ -54,6 +54,8 @@ export const VlcPlayer: React.FC<VlcPlayerProps> = ({
   const openedRef = useRef(false);
   const timeRef = useRef(0);
   const failedRef = useRef(false);
+  const onFallbackRef = useRef(onFallback);
+  onFallbackRef.current = onFallback;
   const [status, setStatus] = useState<VlcStatus | null>(null);
   const [scrubMs, setScrubMs] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,8 +78,8 @@ export const VlcPlayer: React.FC<VlcPlayerProps> = ({
     if (failedRef.current) return;
     failedRef.current = true;
     setError(reason);
-    onFallback(reason);
-  }, [onFallback]);
+    onFallbackRef.current(reason);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

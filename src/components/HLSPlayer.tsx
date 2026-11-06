@@ -152,6 +152,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const streamOffsetRef = useRef(0);
   // HLS/video report only the transcoded-so-far length; ffprobe knows the full media length
   const probedDuration = probeData?.format?.duration;
+  const probedDurationRef = useRef(probedDuration);
+  probedDurationRef.current = probedDuration;
   const loadedEnd = streamOffset + loadedDuration;
   const duration = probedDuration && probedDuration > loadedEnd ? probedDuration : loadedEnd;
   const [bufferedEnd, setBufferedEnd] = useState(0);
@@ -231,7 +233,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (isNaN(targetTime) || !isFinite(targetTime) || targetTime < 0) return;
 
     // targetTime is an absolute position in the media file
-    const totalDuration = probeData?.format?.duration;
+    const totalDuration = probedDurationRef.current;
     const clamped = totalDuration ? Math.min(targetTime, Math.max(0, totalDuration - 0.5)) : targetTime;
     const offset = streamOffsetRef.current;
     const local = clamped - offset;
@@ -240,7 +242,6 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       if (local < 0 || local > seekableEnd) {
         // Target isn't transcoded yet (or is before the transcode start): restart the transcode there
         initialSeekPendingRef.current = null;
-        lastKnownTimeRef.current = clamped;
         streamOffsetRef.current = clamped;
         setStreamOffset(clamped);
         setDuration(0);
@@ -250,11 +251,10 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       }
       video.currentTime = local;
       setCurrentTime(clamped);
-      lastKnownTimeRef.current = clamped;
     } catch (e) {
       console.warn('[HLSPlayer] Safe seek warning:', e);
     }
-  }, [probeData]);
+  }, []);
 
   // Series episodes keep their own resume position and subtitle offset
   const settingsId = currentEpisodeTitle ? `${mediaId}::${currentEpisodeTitle}` : mediaId;
@@ -484,6 +484,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       hlsInstanceRef.current = null;
     }
 
+    let cleanupNativeListeners: (() => void) | undefined;
     if (Hls.isSupported()) {
       const hls = new Hls({
         maxBufferLength: 30,
@@ -544,14 +545,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
           if (seekTo - offset <= totalAvail) safeSeek(seekTo);
           else {
             // Resume point is far ahead: start the transcode there instead of waiting for it
-            lastKnownTimeRef.current = seekTo;
             streamOffsetRef.current = seekTo;
             setStreamOffset(seekTo);
-          }
-        } else if (lastKnownTimeRef.current > 0 && Math.abs(video.currentTime + offset - lastKnownTimeRef.current) > 2) {
-          const local = lastKnownTimeRef.current - offset;
-          if (totalAvail > 0 && local >= 0 && local <= totalAvail) {
-            safeSeek(lastKnownTimeRef.current);
           }
         }
       });
@@ -648,19 +643,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       // Native Apple Safari / iOS HLS
       video.src = streamSrc;
       video.load();
-      video.addEventListener('loadedmetadata', () => {
+      const onLoadedMetadata = () => {
         setHlsStatus('streaming');
-        if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
-          const seekTo = initialSeekPendingRef.current;
-          initialSeekPendingRef.current = null;
-          safeSeek(seekTo);
-        } else if (lastKnownTimeRef.current > 0) {
-          safeSeek(lastKnownTimeRef.current);
-        }
         video.play().catch(() => setIsPlaying(false));
-      });
-      video.addEventListener('canplay', () => setHlsStatus('streaming'));
-      video.addEventListener('error', () => {
+      };
+      const onCanPlay = () => setHlsStatus('streaming');
+      const onError = () => {
         const errCode = video.error?.code;
         if (errCode === 2 || errCode === 3) {
           handleStreamFailure(`Native HLS error code ${errCode}`);
@@ -668,7 +656,15 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
           setHlsStatus('error');
           setStreamError('Native browser HLS pipeline could not play stream.');
         }
-      });
+      };
+      video.addEventListener('loadedmetadata', onLoadedMetadata);
+      video.addEventListener('canplay', onCanPlay);
+      video.addEventListener('error', onError);
+      cleanupNativeListeners = () => {
+        video.removeEventListener('loadedmetadata', onLoadedMetadata);
+        video.removeEventListener('canplay', onCanPlay);
+        video.removeEventListener('error', onError);
+      };
     } else {
       setHlsStatus('error');
       setStreamError('HLS streaming is not supported in this browser environment.');
@@ -676,6 +672,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
     return () => {
       clearTimeout(slowInitTimer);
+      cleanupNativeListeners?.();
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
@@ -735,8 +732,6 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     const vidDuration = videoRef.current.duration;
     if (vidDuration && !isNaN(vidDuration) && isFinite(vidDuration)) {
       setDuration(vidDuration);
-    } else if (probeData?.format?.duration) {
-      setDuration(probeData.format.duration);
     }
 
     if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
@@ -744,7 +739,9 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       initialSeekPendingRef.current = null;
       safeSeek(seekTo);
     } else if (lastKnownTimeRef.current > 0) {
-      safeSeek(lastKnownTimeRef.current);
+      const seekTo = lastKnownTimeRef.current;
+      lastKnownTimeRef.current = 0;
+      safeSeek(seekTo);
     }
   };
 

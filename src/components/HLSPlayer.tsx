@@ -146,7 +146,10 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [loadedDuration, setDuration] = useState(0);
+  // HLS/video report only the transcoded-so-far length; ffprobe knows the full media length
+  const probedDuration = probeData?.format?.duration;
+  const duration = probedDuration && probedDuration > loadedDuration ? probedDuration : loadedDuration;
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);

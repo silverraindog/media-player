@@ -6979,6 +6979,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     const codec = (req.query.codec as string || 'h264').toLowerCase();
     const forceTranscode = req.query.forceTranscode === 'true';
     const audioTrack = parseInt((req.query.audioTrack as string) || '0', 10);
+    const startOffset = Math.max(0, parseFloat((req.query.start as string) || '0') || 0);
 
     const resolvedPath = resolveStreamSourceFile(rawPath, req.query);
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
@@ -6987,7 +6988,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       });
     }
 
-    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + codec + forceTranscode + audioTrack).digest('hex').slice(0, 10)}`;
+    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + codec + forceTranscode + audioTrack + startOffset).digest('hex').slice(0, 10)}`;
     let session = activeHlsStreamSessions.get(sessionKey);
 
     // If session exists, verify playlist exists and has content
@@ -7060,6 +7061,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       '-probesize', '10M',
       '-analyzeduration', '10M',
       '-avoid_negative_ts', 'make_zero',
+      ...(startOffset > 0 ? ['-ss', startOffset.toFixed(2)] : []),
       '-i', resolvedPath,
     );
 

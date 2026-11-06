@@ -147,9 +147,13 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [loadedDuration, setDuration] = useState(0);
+  // The transcode can start at an offset into the file; video element times are relative to it
+  const [streamOffset, setStreamOffset] = useState(0);
+  const streamOffsetRef = useRef(0);
   // HLS/video report only the transcoded-so-far length; ffprobe knows the full media length
   const probedDuration = probeData?.format?.duration;
-  const duration = probedDuration && probedDuration > loadedDuration ? probedDuration : loadedDuration;
+  const loadedEnd = streamOffset + loadedDuration;
+  const duration = probedDuration && probedDuration > loadedEnd ? probedDuration : loadedEnd;
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
@@ -226,13 +230,25 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (!video) return;
     if (isNaN(targetTime) || !isFinite(targetTime) || targetTime < 0) return;
 
-    const maxDuration = video.duration && isFinite(video.duration) && video.duration > 0
-      ? Math.max(0, video.duration - 0.5)
-      : (probeData?.format?.duration ? Math.max(0, probeData.format.duration - 0.5) : targetTime);
-
-    const clamped = Math.min(targetTime, maxDuration);
+    // targetTime is an absolute position in the media file
+    const totalDuration = probeData?.format?.duration;
+    const clamped = totalDuration ? Math.min(targetTime, Math.max(0, totalDuration - 0.5)) : targetTime;
+    const offset = streamOffsetRef.current;
+    const local = clamped - offset;
+    const seekableEnd = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : 0;
     try {
-      video.currentTime = clamped;
+      if (local < 0 || local > seekableEnd) {
+        // Target isn't transcoded yet (or is before the transcode start): restart the transcode there
+        initialSeekPendingRef.current = null;
+        lastKnownTimeRef.current = clamped;
+        streamOffsetRef.current = clamped;
+        setStreamOffset(clamped);
+        setDuration(0);
+        setBufferedEnd(0);
+        setCurrentTime(clamped);
+        return;
+      }
+      video.currentTime = local;
       setCurrentTime(clamped);
       lastKnownTimeRef.current = clamped;
     } catch (e) {
@@ -240,9 +256,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
   }, [probeData]);
 
+  // Series episodes keep their own resume position and subtitle offset
+  const settingsId = currentEpisodeTitle ? `${mediaId}::${currentEpisodeTitle}` : mediaId;
+
   // Fetch settings on mount (stores initial timestamp in pending ref without crashing video element)
   useEffect(() => {
-    fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`)
+    fetch(`/api/media/settings/${encodeURIComponent(settingsId)}`)
       .then(r => r.json())
       .then(d => {
         if (d.success && d.settings) {
@@ -253,12 +272,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         }
       })
       .catch(e => console.warn('Failed to fetch media settings', e));
-  }, [mediaId]);
+  }, [settingsId]);
 
   // Save settings (debounce)
   useEffect(() => {
     const timer = setTimeout(() => {
-      fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`, {
+      fetch(`/api/media/settings/${encodeURIComponent(settingsId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -268,7 +287,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       }).catch(e => console.warn('Failed to save media settings', e));
     }, 1000);
     return () => clearTimeout(timer);
-  }, [subtitleOffset, currentTime, mediaId]);
+  }, [subtitleOffset, currentTime, settingsId]);
 
   // Playback stabilization monitor: resets retryCount after 4 seconds of uninterrupted playing
   useEffect(() => {
@@ -356,7 +375,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     lastFailureTimestampRef.current = now;
 
     if (videoRef.current && videoRef.current.currentTime > 0) {
-      lastKnownTimeRef.current = videoRef.current.currentTime;
+      lastKnownTimeRef.current = videoRef.current.currentTime + streamOffsetRef.current;
     }
     console.warn(`[HLSPlayer] Stream failure: ${reason}. Retry attempt: ${retryCount + 1}/3`);
     logger.warn(`[FFmpeg HLS Transcode] Stream interruption: ${reason} (Attempt ${retryCount + 1}/3)`, 'Transcode');
@@ -424,6 +443,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (activeCodec) params.set('codec', activeCodec);
     if (forceTranscode || retryCount > 0) params.set('forceTranscode', 'true');
     if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
+    if (streamOffset > 0) params.set('start', streamOffset.toFixed(2));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
     const relativeUrl = `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
@@ -442,7 +462,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
 
     return relativeUrl;
-  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, forceTranscode, retryCount, activeAudioTrack, restartNonce]);
+  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, forceTranscode, retryCount, activeAudioTrack, restartNonce, streamOffset]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -515,16 +535,22 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         if (data.details && data.details.totalduration) {
           setDuration(data.details.totalduration);
         }
-        // Only seek if the target timestamp is already within the loaded/generated duration
+        // Positions are absolute; the playlist only covers [offset, offset + totalAvail]
+        const offset = streamOffsetRef.current;
         const totalAvail = data.details?.totalduration || 0;
         if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
           const seekTo = initialSeekPendingRef.current;
-          if (totalAvail > 0 && seekTo <= totalAvail) {
-            initialSeekPendingRef.current = null;
-            safeSeek(seekTo);
+          initialSeekPendingRef.current = null;
+          if (seekTo - offset <= totalAvail) safeSeek(seekTo);
+          else {
+            // Resume point is far ahead: start the transcode there instead of waiting for it
+            lastKnownTimeRef.current = seekTo;
+            streamOffsetRef.current = seekTo;
+            setStreamOffset(seekTo);
           }
-        } else if (lastKnownTimeRef.current > 0 && Math.abs(video.currentTime - lastKnownTimeRef.current) > 2) {
-          if (totalAvail > 0 && lastKnownTimeRef.current <= totalAvail) {
+        } else if (lastKnownTimeRef.current > 0 && Math.abs(video.currentTime + offset - lastKnownTimeRef.current) > 2) {
+          const local = lastKnownTimeRef.current - offset;
+          if (totalAvail > 0 && local >= 0 && local <= totalAvail) {
             safeSeek(lastKnownTimeRef.current);
           }
         }
@@ -533,7 +559,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       hls.on(Hls.Events.FRAG_BUFFERED, (_e, data) => {
         setHlsStatus('streaming');
         if (video.buffered.length > 0) {
-          setBufferedEnd(video.buffered.end(video.buffered.length - 1));
+          setBufferedEnd(video.buffered.end(video.buffered.length - 1) + streamOffsetRef.current);
         }
 
         // Web Worker based dynamic pre-fetch service for high-bitrate content (>3 Mbps):
@@ -698,9 +724,9 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   // Video event handlers
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
-    setCurrentTime(videoRef.current.currentTime);
+    setCurrentTime(videoRef.current.currentTime + streamOffsetRef.current);
     if (videoRef.current.buffered.length > 0) {
-      setBufferedEnd(videoRef.current.buffered.end(videoRef.current.buffered.length - 1));
+      setBufferedEnd(videoRef.current.buffered.end(videoRef.current.buffered.length - 1) + streamOffsetRef.current);
     }
   };
 

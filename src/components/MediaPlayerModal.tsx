@@ -2013,6 +2013,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               </div>
             ) : (
               <HLSPlayer
+                key={`${media.id}::${activeFilePath}`}
                 mediaId={media.id}
                 filePath={activeFilePath}
                 title={media.title}

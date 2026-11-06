@@ -42,6 +42,7 @@ import {
 import { MatroskaPlayer } from './MatroskaPlayer';
 import { VlcPlayer } from './VlcPlayer';
 import { isMalformedMediaSource } from '../utils/mediaSourceDiagnostics';
+import { reloadDirectMedia } from '../utils/reloadDirectMedia';
 import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
 import { getMountedDisplayPath, extractCleanLocalPath } from '../utils/pathSanitizer';
@@ -176,6 +177,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   const stallStartTimeRef = useRef<number | null>(null);
   const isAutoReloadingRef = useRef<boolean>(false);
+  const cancelReloadRef = useRef<(() => void) | null>(null);
+  const reloadAttemptsRef = useRef(0);
+  const playbackStableSinceRef = useRef<number | null>(null);
   const lastPlaybackTimeRef = useRef<number>(0);
   const lastTimeAdvanceRef = useRef<number>(Date.now());
 
@@ -783,69 +787,52 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     });
   }, [getActiveVideoElement, playerEngine]);
 
-  // Auto-Reload mechanism:
-  // If player stalls for >5 seconds, reset video.src to null/empty and re-assign original URL while preserving video.currentTime
-  const triggerAutoReload = useCallback((reason = 'Stall > 5 seconds') => {
-    const el = getActiveVideoElement();
-    if (playerEngine !== 'direct' || useMatroskaEngine || !el || isAutoReloadingRef.current) return;
+  useEffect(() => {
+    reloadAttemptsRef.current = 0;
+    playbackStableSinceRef.current = null;
+    isAutoReloadingRef.current = false;
+    setAutoReloadNotice(null);
+    return () => {
+      cancelReloadRef.current?.();
+      cancelReloadRef.current = null;
+    };
+  }, [activeFilePath, streamUrl, fallbackPlaybackUrl, playerEngine, useMatroskaEngine, isOpen]);
 
+  const triggerAutoReload = useCallback((reason = 'Stall > 5 seconds', manual = false) => {
+    const el = videoRef.current;
+    if (!isOpen || playerEngine !== 'direct' || useMatroskaEngine || !el || isAutoReloadingRef.current) return;
+    if (manual) reloadAttemptsRef.current = 0;
+    if (reloadAttemptsRef.current >= 2) {
+      setPlaybackError('Direct playback repeatedly stalled. Switch to FFmpeg HLS transcoding or check the network connection.');
+      return;
+    }
+
+    reloadAttemptsRef.current += 1;
+    playbackStableSinceRef.current = null;
     isAutoReloadingRef.current = true;
     const savedTime = el.currentTime || 0;
-    const targetSrc = el.getAttribute('src') || el.src || fallbackPlaybackUrl || streamUrl;
-
-    console.warn(`[Auto-Reload] 🔄 Stream stalled (${reason}). Auto-reloading video.src at ${savedTime.toFixed(2)}s... Target: "${targetSrc}"`);
-
+    console.warn(`[Auto-Reload] Stream stalled (${reason}); reloading at ${savedTime.toFixed(2)}s.`);
     setAutoReloadCount((prev) => prev + 1);
-    const notice = `Auto-reloading stream at ${formatPlaybackTime(savedTime)} (${reason})...`;
-    setAutoReloadNotice(notice);
-
-    // Step 1: Set video.src to empty string to reset media engine decoder pipeline
-    el.src = '';
-    try {
-      el.load();
-    } catch {}
-
-    // Step 2: Re-assign original URL and preserve currentTime
-    setTimeout(() => {
-      if (!el) return;
-      el.src = targetSrc;
-
-      const restoreTime = () => {
-        try {
-          if (savedTime > 0 && Math.abs(el.currentTime - savedTime) > 0.5) {
-            el.currentTime = savedTime;
-          }
-        } catch (e) {
-          console.warn('[Auto-Reload] Restore currentTime warning:', e);
-        }
-      };
-
-      restoreTime();
-
-      const handleLoaded = () => {
-        restoreTime();
-        el.removeEventListener('loadedmetadata', handleLoaded);
-        el.removeEventListener('canplay', handleLoaded);
-      };
-      el.addEventListener('loadedmetadata', handleLoaded);
-      el.addEventListener('canplay', handleLoaded);
-
-      const playPromise = el.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn('[Auto-Reload] Play error after reload:', err);
-        });
-      }
-
-      setTimeout(() => {
+    setAutoReloadNotice(`Reloading stream at ${formatPlaybackTime(savedTime)} (${reason})...`);
+    cancelReloadRef.current = reloadDirectMedia(el, {
+      onSuccess: () => {
         isAutoReloadingRef.current = false;
+        cancelReloadRef.current = null;
         stallStartTimeRef.current = null;
         lastTimeAdvanceRef.current = Date.now();
-        setAutoReloadNotice(`Stream re-established at ${formatPlaybackTime(savedTime)}`);
-        setTimeout(() => setAutoReloadNotice(null), 4000);
-      }, 500);
-    }, 150);
-  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl, playerEngine, useMatroskaEngine]);
+        setPlaybackError(null);
+        setAutoReloadNotice(null);
+      },
+      onFailure: (message) => {
+        console.error('[Auto-Reload]', message);
+        isAutoReloadingRef.current = false;
+        cancelReloadRef.current = null;
+        reloadAttemptsRef.current = 2;
+        setAutoReloadNotice(null);
+        setPlaybackError(`${message} Switch to FFmpeg HLS transcoding or check the network connection.`);
+      },
+    });
+  }, [isOpen, playerEngine, useMatroskaEngine]);
 
   // Buffer Health & Stall Monitor
   const inspectBufferHealth = useCallback(() => {
@@ -890,6 +877,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       lastPlaybackTimeRef.current = currentTime;
       lastTimeAdvanceRef.current = now;
       stallStartTimeRef.current = null;
+      if (playbackStableSinceRef.current === null) playbackStableSinceRef.current = now;
+      if (now - playbackStableSinceRef.current >= 30000) reloadAttemptsRef.current = 0;
     }
 
     const isPlayingIntent = !el.paused && !el.ended;
@@ -908,6 +897,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       } else {
         stallStartTimeRef.current = null;
       }
+      if (isStalled || !isPlayingIntent) playbackStableSinceRef.current = null;
     } else {
       stallStartTimeRef.current = null;
     }
@@ -996,13 +986,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   // Video playback error and stall monitoring
   const handleVideoError = useCallback((e: Event) => {
+    if (isAutoReloadingRef.current) return;
     const videoEl = e.currentTarget as HTMLVideoElement;
     const err = videoEl.error;
     const errCode = err ? err.code : null;
     const errMsg = err ? err.message : 'Unknown error';
     console.error(`[Video Source Monitor] ❌ MEDIA ENGINE ERROR EVENT: Code ${errCode} (${errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED' : errCode === 3 ? 'MEDIA_ERR_DECODE' : errCode === 2 ? 'MEDIA_ERR_NETWORK' : 'OTHER'}) - Message: "${errMsg}". Current src: "${videoEl.src}". Protocol may have misinterpreted file path or unsupported scheme!`, e);
     if (errCode === 4) {
-      setPlaybackError(`MEDIA_ERR_SRC_NOT_SUPPORTED (Error 4): The media engine could not load source ("${videoEl.src}"). Protocol or file path was misinterpreted.`);
+      setPlaybackError(`MEDIA_ERR_SRC_NOT_SUPPORTED (Error 4): The media engine could not load "${videoEl.currentSrc || videoEl.getAttribute('src') || 'the media source'}". The format, codec, or source may not be supported. Try FFmpeg HLS transcoding.`);
     } else {
       setPlaybackError(`Video playback error (Code ${errCode}): ${errMsg}`);
     }
@@ -1420,7 +1411,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                             </div>
                           )}
                           <button
-                            onClick={() => triggerAutoReload('Manual trigger from diagnostic overlay')}
+                            onClick={() => triggerAutoReload('Manual trigger from diagnostic overlay', true)}
+                            disabled={playerEngine !== 'direct' || useMatroskaEngine}
                             className="w-full mt-1 px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded font-medium text-[10px] transition-colors flex items-center justify-center gap-1"
                           >
                             <RefreshCw className="w-3 h-3" />

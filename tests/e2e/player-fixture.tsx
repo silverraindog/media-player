@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 import Hls from 'hls.js';
 import { HLSPlayer } from '../../src/components/HLSPlayer';
 import { VlcPlayer } from '../../src/components/VlcPlayer';
+import { reloadDirectMedia } from '../../src/utils/reloadDirectMedia';
+
+Object.assign(window, { reloadDirectMedia });
 
 if (location.search === '?hlsjs') {
   const handlers: Array<(_event: string, data: { details: { totalduration: number } }) => void> = [];

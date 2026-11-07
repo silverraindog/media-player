@@ -154,7 +154,19 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
         // Check children to ensure none of them have fragmented extras
         const structuredSeriesNodes = rawChildren.map((seriesNode) => {
           if (seriesNode.type !== 'folder') return seriesNode;
-          return consolidateSeriesSeasonsAndExtras(seriesNode, franchiseFolder.path);
+          const consolidated = consolidateSeriesSeasonsAndExtras(seriesNode, franchiseFolder.path);
+          if (seriesNode.id !== `series-${franchiseLower}-primary` ||
+              seriesNode.name !== `${franchiseName} (Main Series)`) return consolidated;
+          const name = `${franchiseName} (Universe)`;
+          const matchedMedia = consolidated.matchedMedia;
+          return {
+            ...consolidated,
+            name,
+            matchedMedia: matchedMedia?.id === `franchise-media-${franchiseLower}` &&
+              matchedMedia.title === seriesNode.name
+              ? { ...matchedMedia, title: name }
+              : matchedMedia,
+          };
         });
 
         normalizedFranchiseFolders.push({
@@ -169,7 +181,7 @@ export function normalizeFranchiseHierarchy(nodes: SambaShareNode[]): SambaShare
       // group them under the Primary Series title!
       const knownInfo = KNOWN_FRANCHISES_MAP[franchiseLower] || {
         franchiseName: franchiseName,
-        defaultSeries: `${franchiseName} (Main Series)`,
+        defaultSeries: `${franchiseName} (Universe)`,
         overview: `Complete ${franchiseName} franchise collection.`,
       };
 

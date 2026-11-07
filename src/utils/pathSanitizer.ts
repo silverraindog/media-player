@@ -73,13 +73,13 @@ export function stripVirtualFranchiseSuffix(inputPath: string): string {
   let cleaned = inputPath;
 
   // Pattern 1: /<Folder>/<Folder> (Main Series) or /<Folder>/<Folder> (2004)
-  cleaned = cleaned.replace(/\/([^/]+)\/\1\s+\((?:Main Series|\d{4})\)(?=\/|$)/gi, '/$1');
+  cleaned = cleaned.replace(/\/([^/]+)\/\1\s+\((?:Main Series|Universe|\d{4})\)(?=\/|$)/gi, '/$1');
 
   // Pattern 2: /<Folder> (Main Series) directly (e.g. end of path or standalone segment)
   cleaned = cleaned.replace(/\/([^/]+)\s+\(Main Series\)(?=\/|$)/gi, '/$1');
 
   // Pattern 3: Leading segment: "<Folder>/<Folder> (Main Series)"
-  cleaned = cleaned.replace(/^([^/]+)\/\1\s+\((?:Main Series|\d{4})\)(?=\/|$)/i, '$1');
+  cleaned = cleaned.replace(/^([^/]+)\/\1\s+\((?:Main Series|Universe|\d{4})\)(?=\/|$)/i, '$1');
   cleaned = cleaned.replace(/^([^/]+)\s+\(Main Series\)(?=\/|$)/i, '$1');
 
   return cleaned;

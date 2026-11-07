@@ -55,8 +55,10 @@ import {
   hardResetAndDeleteDatabaseFiles,
 } from './src/server/database';
 import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
+import { registerUniverseRoutes } from './src/server/universeMatcher';
 
 dotenv.config();
+dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
 
 // Ensure common binary search directories (such as Apple Silicon Homebrew /opt/homebrew/bin) are included in PATH
 const extraBinaryDirs = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/opt/local/bin', '/usr/bin'];
@@ -113,6 +115,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json({ limit: '10mb' }));
+registerUniverseRoutes(app, getPersistentStorageInfo().dataDir);
 
 // Lazy Google GenAI Client
 let genAIClient: GoogleGenAI | null = null;

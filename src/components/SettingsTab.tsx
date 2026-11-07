@@ -1434,6 +1434,14 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SECTION 4.7: FFPEG TRANSCODE & STREAM LOGS */}
       <FfmpegTranscodeLogsCard />
 
+      <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-3">
+        <h3 className="text-base font-bold text-white">About &amp; Credits</h3>
+        <a href="https://www.themoviedb.org/" target="_blank" rel="noreferrer">
+          <img className="w-16" alt="TMDB" src="https://www.themoviedb.org/assets/v4/logos/v2/blue_short-8e7b30f73a4020692ccca9c88bafe5dcb6f8a62a4c6bc55cd9ba82bb2cd95f6c.svg" />
+        </a>
+        <p className="text-xs text-slate-400">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+      </section>
+
       {/* SECTION 5: RELEASE VERSION TRACKER & BUILD INCREMENTS */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">

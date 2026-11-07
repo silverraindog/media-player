@@ -56,6 +56,7 @@ import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, 
 import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
+import { UniverseMatcherModal } from './UniverseMatcherModal';
 import { BulkSubtitlesModal } from './BulkSubtitlesModal';
 import { logger } from '../utils/loggerService';
 import { listMountedVolumes } from '../utils/tauriBridge';
@@ -366,6 +367,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   // Web Search Categorizer Modal State
   const [isCategorizerModalOpen, setIsCategorizerModalOpen] = useState(false);
+  const [isUniverseMatcherOpen, setIsUniverseMatcherOpen] = useState(false);
   const [isBulkSubtitlesModalOpen, setIsBulkSubtitlesModalOpen] = useState(false);
   const [categorizerInitialQuery, setCategorizerInitialQuery] = useState('');
   const [categorizerInitialType, setCategorizerInitialType] = useState<MediaType | 'all'>('all');
@@ -1414,6 +1416,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       />
 
       {/* Web Search & Categorizer Modal */}
+      {isUniverseMatcherOpen && (
+        <UniverseMatcherModal items={mediaLibrary} onClose={() => setIsUniverseMatcherOpen(false)}
+          onOpenDetails={onOpenDetails} onFetchLibraryMetadata={onFetchLibraryMetadata} />
+      )}
       <WebSearchCategorizerModal
         isOpen={isCategorizerModalOpen}
         onClose={() => setIsCategorizerModalOpen(false)}
@@ -1464,6 +1470,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
           {/* Quick Actions: Web Search Categorizer & Ingestion */}
           <div className="flex flex-wrap items-center gap-3 shrink-0">
+            <button type="button" onClick={() => setIsUniverseMatcherOpen(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 text-indigo-300 hover:text-white text-xs font-semibold border border-indigo-500/30">
+              <Layers className="w-4 h-4" /> Universe Matcher
+            </button>
             <button
               id="btn-open-web-categorizer"
               onClick={() => {

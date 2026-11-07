@@ -10,6 +10,7 @@
 - **Embedded SQLite Persistence**: Reliable local storage for titles, synopses, custom tags, and episode watch progress.
 - **Samba (SMB) Share Sync & Mount Hub**: Connect to local or remote SMB network shares, view folder trees, sync media files, and generate native OS mount commands (`mount_smbfs` for macOS, UNC paths for Windows).
 - **Metadata Downloader**: Search and fetch professional posters, backdrops, synopses, cast lists, and tracklists.
+- **Fetch All library metadata**: In Web Search & Categorize, open **Missing & Unfetched** and select **Fetch All** to check every library item. Existing metadata and local playback information are preserved; verified matches fill missing synopsis, poster, backdrop, genres, rating, and cast. The list shows items not yet checked, items still missing a synopsis or poster, and lookups without a verified match. A no-match result can also mean providers were unavailable; retry or use manual matching. Stopping or closing the dialog stops the batch after any current save.
 - **Series Watch Progress Tracker**: Track seasons, episodes, and completed watch states across your TV library.
 - **Cross-Platform Desktop Bundling**: Native Tauri integration for macOS (`.dmg`, `.app`) and Windows (`.msi`, `.exe`) via GitHub Actions.
 

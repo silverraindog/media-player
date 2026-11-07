@@ -28,6 +28,7 @@ import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar
 import { PermissionHelpModal } from './components/PermissionHelpModal';
 import { FullDiskAccessOverlay } from './components/FullDiskAccessOverlay';
 import { logger } from './utils/loggerService';
+import { mergeFetchedMetadata } from './utils/libraryMetadataFetch';
 import { syncScheduler } from './utils/syncScheduler';
 import { usePathSanitizer } from './hooks/usePathSanitizer';
 import { Bug, ShieldAlert, X, ExternalLink } from 'lucide-react';
@@ -1254,6 +1255,8 @@ function App() {
     } catch {}
     return CURATED_MEDIA_DATABASE;
   });
+  const mediaLibraryRef = useRef(mediaLibrary);
+  mediaLibraryRef.current = mediaLibrary;
 
   // State initialization guard for 'w' object in SambaVault Application view
   const [w, setW] = useState<any>(null);
@@ -1400,12 +1403,14 @@ function App() {
 
   // Background SQLite persistent caching reconciliation
   useEffect(() => {
+    if (!isVaultLoaded) return;
     fetchWithRetry('/api/db/media')
       .then((res) => res.json())
       .then((data) => {
         if (data.success && Array.isArray(data.items) && data.items.length > 0) {
           setMediaLibrary((prev) => {
             const map = new Map<string, MediaMetadata>();
+            const fetchedMetadata = new Map<string, MediaMetadata>();
             prev.forEach((m) => map.set(m.title.toLowerCase(), m));
             let newItemsAdded = false;
 
@@ -1422,6 +1427,7 @@ function App() {
                     : sqliteItem.raw_data;
                 } catch {}
               }
+              if (parsedMedia?.metadataFetchStatus) fetchedMetadata.set(parsedMedia.id, parsedMedia);
 
               const resolvedFolder = parsedMedia?.folderPath ||
                 parsedMedia?.recommendedFolderStructure ||
@@ -1465,18 +1471,24 @@ function App() {
               }
             });
 
+            const restoreFetchedMetadata = (item: MediaMetadata) => {
+              const saved = fetchedMetadata.get(item.id);
+              if (!saved) return item;
+              return { ...mergeFetchedMetadata(item, saved), metadataFetchStatus: saved.metadataFetchStatus };
+            };
             if (newItemsAdded) {
               const combined = Array.from(map.values());
               const { enrichedItems } = detectDuplicatesAndVersionBranches(combined);
-              sqliteBatchWriter.updateCache(enrichedItems);
-              return enrichedItems;
+              const restoredItems = enrichedItems.map(restoreFetchedMetadata);
+              sqliteBatchWriter.updateCache(restoredItems);
+              return restoredItems;
             }
-            return prev;
+            return fetchedMetadata.size ? prev.map(restoreFetchedMetadata) : prev;
           });
         }
       })
       .catch((err) => console.warn('SQLite hydration:', err));
-  }, []);
+  }, [isVaultLoaded]);
 
   useEffect(() => {
     requestNotificationPermission();
@@ -3831,6 +3843,35 @@ function App() {
               onImportFiles={handleImportFilesDirectly}
               onSyncFromSamba={() => handleSyncSamba()}
               onOpenManualMatch={handleOpenManualMatch}
+              onFetchLibraryMetadata={async (id, metadata) => {
+                const current = mediaLibraryRef.current.find((item) => item.id === id);
+                if (!current) throw new Error('The library item no longer exists.');
+                const updated = metadata ? mergeFetchedMetadata(current, metadata) : { ...current };
+                updated.metadataFetchStatus = metadata ? 'matched' : 'no-match';
+                if (isTauri) {
+                  await apiCall('/api/db/media/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: [updated] }),
+                  });
+                } else {
+                  const response = await fetch('/api/db/media', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(updated),
+                  });
+                  if (!response.ok) throw new Error(`Saving metadata failed (HTTP ${response.status}).`);
+                  const result = await response.json();
+                  if (!result.success) throw new Error(result.error || 'Saving metadata failed.');
+                }
+                sqliteBatchWriter.enqueue(updated);
+                setMediaLibrary((prev) => prev.map((item) => {
+                  if (item.id !== id) return item;
+                  const merged = metadata ? mergeFetchedMetadata(item, metadata) : { ...item };
+                  merged.metadataFetchStatus = updated.metadataFetchStatus;
+                  return merged;
+                }));
+              }}
               onSaveCategorizedMedia={(media) => {
                 setMediaLibrary((prev) => {
                   const idx = prev.findIndex(

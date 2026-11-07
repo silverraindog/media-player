@@ -4500,6 +4500,7 @@ app.post('/api/db/media', async (req: Request, res: Response) => {
       poster_url: media.posterUrl || media.poster_url,
       fanart_url: media.fanartUrl || media.fanart_url,
       genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres,
+      cast: Array.isArray(media.cast) ? JSON.stringify(media.cast) : media.cast,
       recommended_folder: media.recommendedFolderStructure || media.recommended_folder,
       file_path: media.path || media.file_path,
       raw_data: JSON.stringify(media),

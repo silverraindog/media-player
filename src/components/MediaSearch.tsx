@@ -78,6 +78,7 @@ interface MediaSearchProps {
   onSyncFromSamba?: () => void;
   onOpenManualMatch?: (rawPathOrName?: string, mediaType?: MediaType) => void;
   onSaveCategorizedMedia?: (media: MediaMetadata) => void;
+  onFetchLibraryMetadata: (id: string, metadata: import('../utils/libraryMetadataFetch').FetchedLibraryMetadata | null) => Promise<void>;
   isSyncing?: boolean;
   scanRootPath?: string;
   selectedMediaType?: 'all' | MediaType;
@@ -246,6 +247,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   onSyncFromSamba,
   onOpenManualMatch,
   onSaveCategorizedMedia,
+  onFetchLibraryMetadata,
   isSyncing = false,
   selectedMediaType,
   onSelectMediaType,
@@ -1418,6 +1420,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         initialQuery={categorizerInitialQuery}
         initialType={categorizerInitialType}
         mediaLibrary={mediaLibrary}
+        onFetchLibraryMetadata={onFetchLibraryMetadata}
         onOpenApiDebugger={onOpenApiDebugger}
         onSaveCategorizedMedia={(media) => {
           if (onSaveCategorizedMedia) {

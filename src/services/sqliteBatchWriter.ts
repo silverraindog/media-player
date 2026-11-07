@@ -238,7 +238,9 @@ class SqliteBatchWriterService {
       this.lastFlushCount = flushCount;
 
       // Remove successfully written items from queue
-      itemsToFlush.forEach((item) => this.queue.delete(item.id));
+      itemsToFlush.forEach((item) => {
+        if (this.queue.get(item.id)?.media === item) this.queue.delete(item.id);
+      });
 
       this.secondsRemaining = BATCH_INTERVAL_SECONDS;
       return { success: true, count: flushCount };

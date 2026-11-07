@@ -85,6 +85,7 @@ export interface MediaMetadata {
   selectedVersionId?: string;
   isMultiVersion?: boolean;
   status?: 'categorized' | 'pending' | 'draft' | string;
+  metadataFetchStatus?: 'matched' | 'no-match';
   resolution?: string;
 }
 
@@ -635,6 +636,5 @@ export interface SyncProgressState {
   batchStats?: any[];
   failedFilePaths?: any[];
 }
-
 
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Search,
@@ -31,11 +32,13 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
+import { fetchLibraryMetadata, isMissingArtwork, isMissingSynopsis, type FetchedLibraryMetadata } from '../utils/libraryMetadataFetch';
 
 interface WebSearchCategorizerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveCategorizedMedia: (media: MediaMetadata) => void;
+  onFetchLibraryMetadata: (id: string, metadata: FetchedLibraryMetadata | null) => Promise<void>;
   onPlayMedia?: (media: MediaMetadata) => void;
   onOpenInNfoStudio?: (media: MediaMetadata) => void;
   onOpenManualMatch?: (media: MediaMetadata) => void;
@@ -64,6 +67,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   isOpen,
   onClose,
   onSaveCategorizedMedia,
+  onFetchLibraryMetadata,
   onPlayMedia,
   onOpenInNfoStudio,
   onOpenManualMatch,
@@ -73,11 +77,18 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   mediaLibrary = [],
 }) => {
   const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
-  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'synopsis' | 'artwork' | 'series' | 'movie'>('all');
+  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'unfetched' | 'synopsis' | 'artwork' | 'series' | 'movie'>('all');
   const [uncatSearchQuery, setUncatSearchQuery] = useState('');
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [batchErrors, setBatchErrors] = useState<Record<string, string>>({});
+  const [batchCurrentTitle, setBatchCurrentTitle] = useState('');
+  const batchController = React.useRef<AbortController | null>(null);
+  React.useEffect(() => {
+    if (!isOpen) batchController.current?.abort();
+    return () => batchController.current?.abort();
+  }, [isOpen]);
 
   const [query, setQuery] = useState(initialQuery);
   const [mediaType, setMediaType] = useState<MediaType | 'all'>(initialType);
@@ -197,21 +208,14 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   }, [initialQuery, initialType]);
 
-  const isMissingSynopsis = (m: MediaMetadata): boolean => {
-    const text = (m.overview || (m as any).synopsis || '').trim();
-    return !text || text.toLowerCase().includes('placeholder') || text.toLowerCase().includes('no synopsis');
-  };
-
-  const isMissingArtwork = (m: MediaMetadata): boolean => {
-    return !m.posterUrl || m.posterUrl.trim() === '';
-  };
-
   const incompleteItems = mediaLibrary.filter(
-    (m) => isMissingSynopsis(m) || isMissingArtwork(m)
+    (m) => !m.metadataFetchStatus || m.metadataFetchStatus === 'no-match' ||
+      isMissingSynopsis(m) || isMissingArtwork(m.posterUrl) || !!batchErrors[m.id]
   );
 
   const missingSynopsisCount = incompleteItems.filter(isMissingSynopsis).length;
-  const missingArtworkCount = incompleteItems.filter(isMissingArtwork).length;
+  const missingArtworkCount = incompleteItems.filter((m) => isMissingArtwork(m.posterUrl)).length;
+  const unfetchedCount = mediaLibrary.filter((m) => !m.metadataFetchStatus).length;
 
   const seriesIncompleteCount = incompleteItems.filter((m) => m.type === 'series').length;
   const movieIncompleteCount = incompleteItems.filter((m) => m.type === 'movie').length;
@@ -228,7 +232,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       return isMissingSynopsis(item);
     }
     if (uncatSubFilter === 'artwork') {
-      return isMissingArtwork(item);
+      return isMissingArtwork(item.posterUrl);
+    }
+    if (uncatSubFilter === 'unfetched') {
+      return !item.metadataFetchStatus;
     }
     if (uncatSubFilter === 'series') {
       return item.type === 'series';
@@ -240,35 +247,42 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   });
 
   const handleBatchCategorizeAll = async () => {
-    if (incompleteItems.length === 0 || batchProcessing) return;
+    if (mediaLibrary.length === 0 || batchProcessing) return;
+    const items = [...mediaLibrary];
+    const controller = new AbortController();
+    batchController.current = controller;
     setBatchProcessing(true);
-    setBatchProgress({ current: 0, total: incompleteItems.length });
+    setBatchProgress({ current: 0, total: items.length });
     setBatchMessage(null);
+    setBatchErrors({});
 
-    let successCount = 0;
-    for (let i = 0; i < incompleteItems.length; i++) {
-      const item = incompleteItems[i];
-      setBatchProgress({ current: i + 1, total: incompleteItems.length });
+    let matched = 0;
+    let noMatch = 0;
+    let failed = 0;
+    let completed = 0;
+    for (const item of items) {
+      if (controller.signal.aborted) break;
+      setBatchCurrentTitle(item.title);
       try {
-        const itemData = await categorizeMediaWithRetry(
-          item.title,
-          item.type,
-          item.year,
-          { maxRetries: 2, timeoutMs: 7000 }
-        ) || await resolveMediaWithFallback(item.title, item.type, item.year);
-
-        if (itemData) {
-          onSaveCategorizedMedia(itemData);
-          successCount++;
-        }
+        const itemData = await fetchLibraryMetadata(item, controller.signal);
+        if (controller.signal.aborted) break;
+        await onFetchLibraryMetadata(item.id, itemData);
+        if (itemData) matched++;
+        else noMatch++;
       } catch (e) {
-        console.warn(`Failed to auto-categorize ${item.title}:`, e);
+        if (controller.signal.aborted) break;
+        const message = e instanceof Error ? e.message : String(e);
+        console.warn(`Failed to fetch metadata for ${item.title}:`, e);
+        setBatchErrors((prev) => ({ ...prev, [item.id]: message }));
+        failed++;
       }
+      completed++;
+      setBatchProgress({ current: completed, total: items.length });
     }
-
+    batchController.current = null;
+    setBatchCurrentTitle('');
     setBatchProcessing(false);
-    setBatchMessage(`Batch categorization complete! Updated ${successCount} of ${incompleteItems.length} items.`);
-    setTimeout(() => setBatchMessage(null), 5000);
+    setBatchMessage(`${controller.signal.aborted ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${failed} failed.`);
   };
 
   if (!isOpen) return null;
@@ -451,8 +465,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     onClose();
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-3xl bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-slate-800 shrink-0">
@@ -520,7 +534,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             }`}
           >
             <ListFilter className="w-3.5 h-3.5 text-amber-400" />
-            <span>Uncategorized Media</span>
+            <span>Missing &amp; Unfetched</span>
             <span
               className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
                 activeTabFilter === 'uncategorized'
@@ -543,38 +557,41 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
                     <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Dedicated View Filter: Uncategorized Media</span>
+                    <span>Missing &amp; Unfetched Media</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    These {incompleteItems.length} files currently lack an official synopsis or artwork. Use one-click triggers to re-categorize or manually match.
+                    Showing items not yet checked by Fetch All, without a verified match, or missing a synopsis or poster. Existing metadata is kept.
                   </p>
                 </div>
 
-                {incompleteItems.length > 0 && (
+                {mediaLibrary.length > 0 && (
+                  batchProcessing ? (
+                    <button type="button" onClick={() => batchController.current?.abort()}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold cursor-pointer">
+                      Stop after current save
+                    </button>
+                  ) : (
                   <button
                     type="button"
-                    disabled={batchProcessing}
                     onClick={handleBatchCategorizeAll}
                     className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                   >
-                    {batchProcessing ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Processing ({batchProgress.current}/{batchProgress.total})...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>Auto-Categorize All ({incompleteItems.length})</span>
-                      </>
-                    )}
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Fetch All ({mediaLibrary.length})</span>
                   </button>
+                  )
                 )}
               </div>
 
+              {batchProcessing && (
+                <div role="status" className="text-xs text-slate-300 flex items-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Checked {batchProgress.current}/{batchProgress.total}; {batchProgress.total - batchProgress.current} remaining. Checking: {batchCurrentTitle}
+                </div>
+              )}
               {/* Batch feedback message */}
               {batchMessage && (
-                <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+                <div role="status" className="p-3 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-200 flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>{batchMessage}</span>
                 </div>
@@ -594,6 +611,17 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     }`}
                   >
                     All ({incompleteItems.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUncatSubFilter('unfetched')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'unfetched'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    Not Checked ({unfetchedCount})
                   </button>
                   <button
                     type="button"
@@ -660,18 +688,14 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
                   <div className="text-xs font-bold text-white">No items found matching this filter!</div>
                   <p className="text-[11px] text-slate-400">
-                    All scanned library media have complete synopsis and artwork metadata.
+                    No media matches the selected filter.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
                   {filteredUncategorized.map((item) => {
-                    const isMissingSynopsis =
-                      !item.synopsis ||
-                      item.synopsis.trim() === '' ||
-                      item.synopsis.toLowerCase().includes('placeholder') ||
-                      item.synopsis.toLowerCase().includes('no synopsis');
-                    const isMissingArtwork = !item.posterUrl || item.posterUrl.trim() === '';
+                    const missingSynopsis = isMissingSynopsis(item);
+                    const missingArtwork = isMissingArtwork(item.posterUrl);
 
                     return (
                       <div
@@ -682,7 +706,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                         <div className="flex items-center gap-3 min-w-0">
                           {/* Thumbnail / Artwork Placeholder */}
                           <div className="w-11 h-14 rounded-lg bg-slate-950 border border-slate-800 shrink-0 overflow-hidden flex items-center justify-center relative">
-                            {item.posterUrl && !isMissingArtwork ? (
+                            {item.posterUrl && !missingArtwork ? (
                               <img
                                 src={item.posterUrl}
                                 alt={item.title}
@@ -718,13 +742,22 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
                             {/* Defect Badges */}
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              {isMissingSynopsis && (
+                              {!item.metadataFetchStatus && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-200">Not checked by Fetch All</span>
+                              )}
+                              {item.metadataFetchStatus === 'no-match' && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950 text-amber-200">No verified match or provider unavailable</span>
+                              )}
+                              {batchErrors[item.id] && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950 text-red-200">Fetch failed: {batchErrors[item.id]}</span>
+                              )}
+                              {missingSynopsis && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950/80 border border-red-800/70 text-red-300 flex items-center gap-1 font-medium">
                                   <FileQuestion className="w-3 h-3" />
                                   <span>Missing Synopsis</span>
                                 </span>
                               )}
-                              {isMissingArtwork && (
+                              {missingArtwork && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950/80 border border-amber-800/70 text-amber-300 flex items-center gap-1 font-medium">
                                   <ImageOff className="w-3 h-3" />
                                   <span>Missing Artwork</span>
@@ -1136,6 +1169,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, type MetadataLookupDetails } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, type MetadataLookupDetails } from './libraryMetadataFetch';
 
 const item: MediaMetadata = {
   id: 'local-1', title: 'Example', type: 'series', year: 2020, overview: '',
@@ -18,6 +18,15 @@ test('excludes exact category folder labels but keeps titles and standalone file
   assert.equal(isCategorizerFolderLabel({ ...item, title: 'comedy', path: '/media/Comedy/a-film.mkv' }), true);
   assert.equal(isCategorizerFolderLabel({ ...item, title: 'Comedy', path: 'C:\\media\\Comedy.MKV' }), false);
   assert.equal(isCategorizerFolderLabel({ ...item, title: 'Comedy Nights', path: '/media/Comedy Nights' }), false);
+});
+
+test('identifies individual audio entries without excluding albums that point to an audio file', () => {
+  const album = { ...item, type: 'album' as const, title: 'The Album', path: '/Music/Artist/The Album/01 - Track.mp3', recommendedFolderStructure: '/Music/Artist/The Album', matchedFilename: 'The Album' };
+  assert.equal(isIndividualAudioTrack(album), false);
+  assert.equal(isIndividualAudioTrack({ ...album, title: '01 - Track', recommendedFolderStructure: album.path!, matchedFilename: '01 - Track.mp3' }), true);
+  assert.equal(isIndividualAudioTrack({ ...album, title: 'Track', path: 'C:\\Music\\Artist\\Album\\01 - Track.FLAC', recommendedFolderStructure: '', matchedFilename: undefined }), true);
+  assert.equal(isIndividualAudioTrack({ ...album, title: 'Book', path: '/books/Book.epub', recommendedFolderStructure: '/books/Book.epub' }), false);
+  assert.equal(isIndividualAudioTrack({ ...album, type: 'movie', recommendedFolderStructure: 'Film.mp3' }), false);
 });
 
 test('fills missing fields without changing identity, paths, episodes, or existing values', () => {

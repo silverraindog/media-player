@@ -1,5 +1,6 @@
 import type { CastMember, MediaMetadata } from '../types';
 import { isTauri } from '../lib/api';
+import { SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
 
 export interface FetchedLibraryMetadata {
   title?: string;
@@ -40,6 +41,21 @@ export function isCategorizerFolderLabel(media: MediaMetadata): boolean {
   const filename = media.path?.replace(/\\/g, '/').split('/').pop() || '';
   const file = filename.match(/^(.+)\.(?:mkv|mp4|m4v|avi|mov|wmv|webm|flv|ts|m2ts|mp3|flac|m4a|wav|ogg)$/i);
   return !file || file[1].trim().toLowerCase() !== title;
+}
+
+export function isIndividualAudioTrack(media: MediaMetadata): boolean {
+  if (media.type !== 'album') return false;
+  const isAudioFile = (value?: string) => {
+    const name = value?.replace(/\\/g, '/').split('/').pop()?.toLowerCase() || '';
+    const extension = name.split('.').pop() || '';
+    return name.includes('.') && SUPPORTED_AUDIO_EXTENSIONS.includes(extension);
+  };
+  if (isAudioFile(media.recommendedFolderStructure) || isAudioFile(media.matchedFilename)) return true;
+  if (media.folderPath || (media.recommendedFolderStructure && media.recommendedFolderStructure !== media.path)) return false;
+  if (!isAudioFile(media.path)) return false;
+  const filename = media.path!.replace(/\\/g, '/').split('/').pop()!.replace(/\.[^.]+$/, '');
+  const stripTrackNumber = (value: string) => value.replace(/^\s*\d{1,3}[\s._-]+/, '');
+  return normalizedTitle(stripTrackNumber(filename)) === normalizedTitle(stripTrackNumber(media.title));
 }
 
 export function isMissingText(value?: string): boolean {

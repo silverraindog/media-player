@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isMissingText, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMissingArtwork, isMissingSynopsis, isMissingText, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -211,7 +211,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   }, [initialQuery, initialType]);
 
-  const categorizerItems = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item));
+  const categoryLabelCount = mediaLibrary.filter(isCategorizerFolderLabel).length;
+  const audioTrackCount = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item) && isIndividualAudioTrack(item)).length;
+  const categorizerItems = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item) && !isIndividualAudioTrack(item));
   const incompleteItems = categorizerItems.filter((m) => isMissingSynopsis(m) || isMissingArtwork(m.posterUrl));
   const completeItems = categorizerItems.filter((m) => !isMissingSynopsis(m) && !isMissingArtwork(m.posterUrl));
 
@@ -259,7 +261,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setBatchErrors({});
     setShowBatchLog(true);
     setBatchLog([
-      `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${mediaLibrary.length - categorizerItems.length} category labels excluded.`,
+      `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${categoryLabelCount} category labels and ${audioTrackCount} individual audio tracks excluded.`,
       'Fetch All checks all incomplete items, regardless of the current list filter. TMDB is not used by this lookup.',
     ]);
 
@@ -598,8 +600,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     <span>Missing &amp; Unfetched Media</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    Showing items missing a synopsis or poster. Category folder labels are excluded; existing metadata is kept.
+                    Showing items missing a synopsis or poster. Category folder labels and individual audio tracks are excluded; albums remain eligible. Existing metadata is kept.
                   </p>
+                  {audioTrackCount > 0 && <p className="text-[11px] text-slate-400">{audioTrackCount} audio track entries excluded. Only albums already in the library are searched.</p>}
                 </div>
 
                 {incompleteItems.length > 0 && (

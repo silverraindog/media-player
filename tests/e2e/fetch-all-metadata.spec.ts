@@ -90,3 +90,37 @@ test('Fetch All checks incomplete items and keeps complete items available for r
   await expect(page.getByRole('button', { name: 'Not Checked (1)' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Has metadata (2)' })).toBeVisible();
 });
+
+test('Fetch All searches album entries once and excludes individual audio tracks', async ({ page }) => {
+  const base = { type: 'album', year: 0, overview: '', posterUrl: '', genres: [], rating: 0, recommendedFilenames: [] };
+  const items = [
+    { ...base, id: 'album', title: 'Test Album', path: '/media/Music/Artist/Test Album/01 - First.mp3', recommendedFolderStructure: '/media/Music/Artist/Test Album', matchedFilename: 'Test Album' },
+    { ...base, id: 'track1', title: 'First', path: '/media/Music/Artist/Test Album/01 - First.mp3', recommendedFolderStructure: '/media/Music/Artist/Test Album/01 - First.mp3', matchedFilename: '01 - First.mp3' },
+    { ...base, id: 'track2', title: 'Second', path: '/media/Music/Artist/Test Album/02 - Second.flac', recommendedFolderStructure: '/media/Music/Artist/Test Album/02 - Second.flac', matchedFilename: '02 - Second.flac' },
+  ];
+  const checked: string[] = [];
+  const saved: string[] = [];
+  await page.route('**/api/**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media' && request.method() === 'POST') saved.push(request.postDataJSON().id);
+    else if (pathname === '/api/db/media') body = { success: true, items: [] };
+    else if (pathname === '/api/media/fetch-art') {
+      const { title } = request.postDataJSON();
+      checked.push(title);
+      body = { success: true, title, source: 'itunes', posterUrl: 'https://example.com/album.jpg' };
+    }
+    await route.fulfill({ json: body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  await expect(page.getByText('2 audio track entries excluded.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Fetch All (1)' }).click();
+  await expect(page.getByText('Finished: 1/1 checked, 1 matched, 0 without a verified match, 0 failed.', { exact: true })).toBeVisible();
+  expect(checked).toEqual(['Test Album']);
+  expect(saved).toEqual(['album']);
+  await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('2 individual audio tracks excluded');
+});

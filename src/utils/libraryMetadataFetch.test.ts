@@ -61,11 +61,23 @@ test('cleans explicit collection and encoding annotations without guessing seque
     ['06 Hellraiser VI Hellseeker - Horror 2002 Eng Subs', 'Hellraiser VI Hellseeker'],
     ['07 Hellraiser VII Deader - Horror 2005 Eng Subs', 'Hellraiser VII Deader'],
     ['Battlestar Galactica The Plan 2009   10-bit   5 1', 'Battlestar Galactica The Plan'],
+    ['Toy Story 2 1999  BRrip  YIFY', 'Toy Story 2'],
+    ['02 Return To House On Haunted Hill - Unrated Horror 2007 Eng Subs', 'Return To House On Haunted Hill'],
+    ['01 House On Haunted Hill - Horror Mystery 1999 Eng Subs', 'House On Haunted Hill'],
+    ['04 Insidious The Last Key - 2018 Eng Ita Multi-Subs', 'Insidious The Last Key'],
+    ['03 Insidious Chapter 3 - Horror 2015 Eng Ita Multi-Subs', 'Insidious Chapter 3'],
+    ['01 Insidious Chapter 1 - 2011 Eng Ita Multi-Subs', 'Insidious Chapter 1'],
+    ['02 Insidious Chapter 2 - 2013 Eng Ita Multi-Subs', 'Insidious Chapter 2'],
+    ['Dragonfly 2002   -OFT', 'Dragonfly'],
+    ['Mr Brooks 2007  BRrip  YIFY', 'Mr Brooks'],
+    ['The Postman 1997  BrRip  YIFY', 'The Postman'],
   ];
   for (const [title, expected] of examples) assert.equal(libraryLookupTitle({ title, type: 'movie' }), expected);
   assert.equal(libraryLookupTitle({ title: '10 Things I Hate About You (1999)', type: 'movie' }), '10 Things I Hate About You');
   assert.equal(libraryLookupTitle({ title: '10-bit Heroes (2020)', type: 'movie' }), '10-bit Heroes');
   assert.equal(libraryLookupTitle({ title: '01 The Horror (1987)', type: 'movie' }), '01 The Horror');
+  assert.equal(libraryLookupTitle({ title: '10 Things I Hate About You - Comedy 1999 Eng Subs', type: 'movie' }), '10 Things I Hate About You - Comedy');
+  assert.equal(libraryLookupTitle({ title: 'Dragonfly 2002 -Director', type: 'movie' }), 'Dragonfly -Director');
   assert.equal(libraryLookupTitle({ title: '01 Hellraiser I - Horror 1987 Eng Subs', type: 'album' }), '01 Hellraiser I - Horror 1987 Eng Subs');
 });
 
@@ -83,6 +95,22 @@ test('searches and verifies cleaned titles without accepting a different sequel 
     assert.equal(isVerifiedMatch(media, { source: 'tmdb', title: 'Battlestar Galactica: The Plan', year: 2008 }), false);
     const sequel = { ...media, title: '02 Hellraiser II Hellbound - Horror 1988 Eng Subs', year: 1988 };
     assert.equal(isVerifiedMatch(sequel, { source: 'tmdb', title: 'Hellraiser', year: 1988 }), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('uses the cleaned filename for lookup and exact match verification', async () => {
+  const media: MediaMetadata = { ...item, type: 'movie', title: 'Toy Story 2 1999  BRrip  YIFY', year: 1999, yearSource: 'filename' };
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'Toy Story 2');
+      assert.equal(request.year, 1999);
+      return Response.json({ success: true, source: 'tmdb', title: 'Toy Story 2', year: 1999, overview: 'Synopsis' });
+    };
+    assert.ok(await fetchLibraryMetadata(media, new AbortController().signal));
+    assert.equal(isVerifiedMatch(media, { source: 'tmdb', title: 'Toy Story', year: 1999 }), false);
+    assert.equal(isVerifiedMatch(media, { source: 'tmdb', title: 'Toy Story 2', year: 2000 }), false);
   } finally { globalThis.fetch = originalFetch; }
 });
 

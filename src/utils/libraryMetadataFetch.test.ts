@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, MetadataBackendUnavailableError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, libraryLookupTitle, mergeFetchedMetadata, MetadataBackendUnavailableError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
 import { nodeToMediaMetadata, parseTitleAndYear, parsedFileToMediaMetadata } from './mediaExtractor';
 import { localDbFallback } from './localDatabaseFallback';
 
@@ -49,6 +49,40 @@ test('cleans release tags from lookup titles while requiring the correct year', 
     };
     assert.ok(await fetchLibraryMetadata(media, new AbortController().signal));
     assert.equal(isVerifiedMatch(media, { source: 'omdb', title: 'The First Omen', year: 2006 }), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('cleans explicit collection and encoding annotations without guessing sequel titles', () => {
+  const examples = [
+    ['01 Hellraiser I - Horror 1987 Eng Subs', 'Hellraiser I'],
+    ['02 Hellraiser II Hellbound - Horror 1988 Eng Subs', 'Hellraiser II Hellbound'],
+    ['08 Hellraiser VIII Hellworld - Horror 2005 Eng Subs', 'Hellraiser VIII Hellworld'],
+    ['04 Hellraiser IV Bloodline - Horror 1996 Eng Subs', 'Hellraiser IV Bloodline'],
+    ['06 Hellraiser VI Hellseeker - Horror 2002 Eng Subs', 'Hellraiser VI Hellseeker'],
+    ['07 Hellraiser VII Deader - Horror 2005 Eng Subs', 'Hellraiser VII Deader'],
+    ['Battlestar Galactica The Plan 2009   10-bit   5 1', 'Battlestar Galactica The Plan'],
+  ];
+  for (const [title, expected] of examples) assert.equal(libraryLookupTitle({ title, type: 'movie' }), expected);
+  assert.equal(libraryLookupTitle({ title: '10 Things I Hate About You (1999)', type: 'movie' }), '10 Things I Hate About You');
+  assert.equal(libraryLookupTitle({ title: '10-bit Heroes (2020)', type: 'movie' }), '10-bit Heroes');
+  assert.equal(libraryLookupTitle({ title: '01 The Horror (1987)', type: 'movie' }), '01 The Horror');
+  assert.equal(libraryLookupTitle({ title: '01 Hellraiser I - Horror 1987 Eng Subs', type: 'album' }), '01 Hellraiser I - Horror 1987 Eng Subs');
+});
+
+test('searches and verifies cleaned titles without accepting a different sequel or year', async () => {
+  const media: MediaMetadata = { ...item, type: 'movie', title: 'Battlestar Galactica The Plan 2009   10-bit   5 1', year: 2009, yearSource: 'filename' };
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'Battlestar Galactica The Plan');
+      assert.equal(request.year, 2009);
+      return Response.json({ success: true, source: 'tmdb', title: 'Battlestar Galactica: The Plan', year: 2009, overview: 'Synopsis' });
+    };
+    assert.ok(await fetchLibraryMetadata(media, new AbortController().signal));
+    assert.equal(isVerifiedMatch(media, { source: 'tmdb', title: 'Battlestar Galactica: The Plan', year: 2008 }), false);
+    const sequel = { ...media, title: '02 Hellraiser II Hellbound - Horror 1988 Eng Subs', year: 1988 };
+    assert.equal(isVerifiedMatch(sequel, { source: 'tmdb', title: 'Hellraiser', year: 1988 }), false);
   } finally { globalThis.fetch = originalFetch; }
 });
 

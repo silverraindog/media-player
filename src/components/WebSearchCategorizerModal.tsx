@@ -32,8 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { cleanUniverseTitle } from '../shared/universeMatcher';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, MetadataBackendUnavailableError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, MetadataBackendUnavailableError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -281,7 +280,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       setBatchCurrentTitle(item.title);
       const year = trustedMediaYear(item);
       log(`Checking "${item.title}" (${item.type}${year ? `, ${year}` : ', unverified year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
-      const lookupTitle = item.type === 'album' ? item.title : cleanUniverseTitle(item.title).title || item.title;
+      const lookupTitle = libraryLookupTitle(item);
       if (lookupTitle !== item.title) log(`  Lookup title: "${lookupTitle}".`);
       try {
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {

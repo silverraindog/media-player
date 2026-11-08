@@ -97,6 +97,19 @@ function normalizedTitle(title: string): string {
   return title.toLowerCase().replace(/\s*\(\d{4}\)\s*$/, '').replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
+export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'>): string {
+  if (media.type === 'album') return media.title;
+  const original = media.title;
+  let title = original;
+  const taggedCollection = title.match(/^\s*\d{1,2}\s+(.+?)\s+-\s+(?:action|adventure|animation|comedy|crime|documentary|drama|fantasy|horror|mystery|romance|sci[\s-]?fi|thriller)\s+((?:19|20)\d{2})(?:\s+(?:eng|english)\s+subs?)?\s*$/i);
+  if (taggedCollection) title = `${taggedCollection[1]} ${taggedCollection[2]}`;
+  title = title.replace(
+    /(\b(?:19|20)\d{2}\b)(?:\s+(?:10[\s-]?bit|8[\s-]?bit|5[ .]1|7[ .]1|(?:eng|english)\s+subs?))+\s*$/i,
+    '$1',
+  );
+  return cleanUniverseTitle(title).title || original;
+}
+
 export function trustedMediaYear(media: MediaMetadata): number | undefined {
   if (!Number.isInteger(media.year) || media.year <= 0) return undefined;
   if (media.yearSource === 'placeholder') return undefined;
@@ -122,7 +135,7 @@ export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMeta
       !!result.title && normalizedTitle(media.title) === normalizedTitle(result.title);
   }
   const year = trustedMediaYear(media);
-  const lookupTitle = cleanUniverseTitle(media.title).title;
+  const lookupTitle = libraryLookupTitle(media);
   return !!result.source && result.source !== 'fallback' && !!result.title &&
     !!lookupTitle && normalizedTitle(lookupTitle) === normalizedTitle(result.title) &&
     !!year && !!result.year && year === result.year;
@@ -169,7 +182,7 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: media.type === 'album' ? media.title : cleanUniverseTitle(media.title).title || media.title, type: media.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, diagnostics: true }),
+        body: JSON.stringify({ title: libraryLookupTitle(media), type: media.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, diagnostics: true }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -192,7 +205,7 @@ export async function fetchLibraryMetadata(
     let reason = 'Verified title and year';
     if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
-    else if (normalizedTitle(media.type === 'album' ? media.title : cleanUniverseTitle(media.title).title) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
+    else if (normalizedTitle(libraryLookupTitle(media)) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
     else if (media.type === 'album' && !verified) reason = 'Album artist cannot be verified; review this result manually';
     else if (media.type === 'album') reason = 'Verified album and artist';
     else if (!trustedMediaYear(media)) reason = 'Library year is unverified; review this result manually';

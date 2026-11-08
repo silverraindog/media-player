@@ -5,6 +5,10 @@ test('Fetch All checks every item, preserves data, and reports unmatched and fai
     { id: 'one', title: 'First Movie', type: 'movie', year: 2020, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },
     { id: 'two', title: 'Second Movie', type: 'movie', year: 2021, overview: 'Existing synopsis', posterUrl: 'https://example.com/existing.jpg', genres: ['Drama'], rating: 8, path: '/media/second.mkv', recommendedFolderStructure: 'Second', recommendedFilenames: [] },
     { id: 'three', title: 'Third Movie', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/third.mkv', recommendedFolderStructure: 'Third', recommendedFilenames: [] },
+    ...['Pictures', 'Collections', 'Comedy', 'Animation', 'Horror - Supernatural', 'Reality', 'Scify'].map((title) => ({
+      id: `folder-${title}`, title, type: 'movie', year: 0, overview: '', posterUrl: '', genres: [], rating: 0,
+      path: `/media/${title}`, recommendedFolderStructure: title, recommendedFilenames: [],
+    })),
   ];
   const saved = new Map<string, Record<string, unknown>>();
   const checked: string[] = [];
@@ -51,6 +55,12 @@ test('Fetch All checks every item, preserves data, and reports unmatched and fai
   await page.goto('/');
   await openList();
   await expect(page.getByRole('button', { name: 'Not Checked (3)' })).toBeVisible();
+  const categorizer = page.locator('div.fixed.inset-0').filter({
+    has: page.getByRole('heading', { name: /Web Search & Media Categorizer/ }),
+  });
+  for (const title of ['Pictures', 'Collections', 'Comedy', 'Animation', 'Horror - Supernatural', 'Reality', 'Scify']) {
+    await expect(categorizer.getByText(title, { exact: true })).toHaveCount(0);
+  }
   await page.getByRole('button', { name: 'Fetch All (3)' }).click();
   await expect(page.getByText('Finished: 3/3 checked, 1 matched, 1 without a verified match, 1 failed.')).toBeVisible();
   expect(checked).toEqual(['First Movie', 'Second Movie', 'Third Movie']);

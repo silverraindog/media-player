@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata } from './libraryMetadataFetch';
 
 const item: MediaMetadata = {
   id: 'local-1', title: 'Example', type: 'series', year: 2020, overview: '',
@@ -10,6 +10,15 @@ const item: MediaMetadata = {
     { seasonNumber: 1, episodeNumber: 1, title: 'Pilot', filePath: '/media/example/pilot.mkv' },
   ] }], recommendedFolderStructure: 'Example', recommendedFilenames: [],
 };
+
+test('excludes exact category folder labels but keeps titles and standalone files', () => {
+  for (const title of ['Pictures', 'Collections', 'Comedy', 'Animation', 'Horror - Supernatural', 'Scify', 'Reality', 'Documentory']) {
+    assert.equal(isCategorizerFolderLabel({ ...item, title, path: `/media/${title}` }), true, title);
+  }
+  assert.equal(isCategorizerFolderLabel({ ...item, title: 'comedy', path: '/media/Comedy/a-film.mkv' }), true);
+  assert.equal(isCategorizerFolderLabel({ ...item, title: 'Comedy', path: 'C:\\media\\Comedy.MKV' }), false);
+  assert.equal(isCategorizerFolderLabel({ ...item, title: 'Comedy Nights', path: '/media/Comedy Nights' }), false);
+});
 
 test('fills missing fields without changing identity, paths, episodes, or existing values', () => {
   const updated = mergeFetchedMetadata({ ...item, genres: ['Drama'], rating: 7 }, {

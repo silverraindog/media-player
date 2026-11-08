@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isMissingArtwork, isMissingSynopsis, type FetchedLibraryMetadata } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, type FetchedLibraryMetadata } from '../utils/libraryMetadataFetch';
 
 interface WebSearchCategorizerModalProps {
   isOpen: boolean;
@@ -208,14 +208,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   }, [initialQuery, initialType]);
 
-  const incompleteItems = mediaLibrary.filter(
+  const categorizerItems = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item));
+  const incompleteItems = categorizerItems.filter(
     (m) => !m.metadataFetchStatus || m.metadataFetchStatus === 'no-match' ||
       isMissingSynopsis(m) || isMissingArtwork(m.posterUrl) || !!batchErrors[m.id]
   );
 
   const missingSynopsisCount = incompleteItems.filter(isMissingSynopsis).length;
   const missingArtworkCount = incompleteItems.filter((m) => isMissingArtwork(m.posterUrl)).length;
-  const unfetchedCount = mediaLibrary.filter((m) => !m.metadataFetchStatus).length;
+  const unfetchedCount = categorizerItems.filter((m) => !m.metadataFetchStatus).length;
 
   const seriesIncompleteCount = incompleteItems.filter((m) => m.type === 'series').length;
   const movieIncompleteCount = incompleteItems.filter((m) => m.type === 'movie').length;
@@ -247,8 +248,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   });
 
   const handleBatchCategorizeAll = async () => {
-    if (mediaLibrary.length === 0 || batchProcessing) return;
-    const items = [...mediaLibrary];
+    if (categorizerItems.length === 0 || batchProcessing) return;
+    const items = [...categorizerItems];
     const controller = new AbortController();
     batchController.current = controller;
     setBatchProcessing(true);
@@ -560,11 +561,11 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     <span>Missing &amp; Unfetched Media</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    Showing items not yet checked by Fetch All, without a verified match, or missing a synopsis or poster. Existing metadata is kept.
+                    Showing items not yet checked by Fetch All, without a verified match, or missing a synopsis or poster. Category folder labels are excluded; existing metadata is kept.
                   </p>
                 </div>
 
-                {mediaLibrary.length > 0 && (
+                {categorizerItems.length > 0 && (
                   batchProcessing ? (
                     <button type="button" onClick={() => batchController.current?.abort()}
                       className="shrink-0 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold cursor-pointer">
@@ -577,7 +578,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>Fetch All ({mediaLibrary.length})</span>
+                    <span>Fetch All ({categorizerItems.length})</span>
                   </button>
                   )
                 )}

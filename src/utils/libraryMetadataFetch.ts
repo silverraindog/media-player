@@ -13,6 +13,21 @@ export interface FetchedLibraryMetadata {
   cast?: CastMember[];
 }
 
+const CATEGORY_FOLDER_NAMES = new Set([
+  'pictures', 'collections', 'collection', 'comedy', 'animation', 'horror',
+  'horror - supernatural', 'scifi', 'scify', 'sci-fi', 'drama', 'reality',
+  'movies', 'series', 'franchises', 'franchise', 'documentary', 'documentaries',
+  'documentory', 'sort', 'lost+found',
+]);
+
+export function isCategorizerFolderLabel(media: MediaMetadata): boolean {
+  const title = media.title.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!CATEGORY_FOLDER_NAMES.has(title)) return false;
+  const filename = media.path?.replace(/\\/g, '/').split('/').pop() || '';
+  const file = filename.match(/^(.+)\.(?:mkv|mp4|m4v|avi|mov|wmv|webm|flv|ts|m2ts|mp3|flac|m4a|wav|ogg)$/i);
+  return !file || file[1].trim().toLowerCase() !== title;
+}
+
 export function isMissingText(value?: string): boolean {
   const text = value?.trim().toLowerCase() || '';
   return !text || text.includes('placeholder') || text.includes('no synopsis') ||

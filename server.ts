@@ -491,9 +491,15 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 }
 
 // Helper to fetch metadata from OMDb API
-async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number): Promise<any> {
+type MetadataDiagnostic = { provider: string; outcome: string };
+type MetadataDiagnostics = MetadataDiagnostic[];
+
+async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number, diagnostics?: MetadataDiagnostics): Promise<any> {
   const apiKey = getOmdbKey();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    diagnostics?.push({ provider: 'OMDb', outcome: 'No API key configured' });
+    return null;
+  }
 
   try {
     const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
@@ -504,11 +510,20 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
     if (episode) url += `&Episode=${episode}`;
 
     const res = await fetchWithTimeout(url, {}, 2500);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      diagnostics?.push({ provider: 'OMDb', outcome: `HTTP ${res.status}` });
+      return null;
+    }
     const data = await res.json();
-    if (data.Response === 'False') return null;
+    if (data.Response === 'False') {
+      const error = String(data.Error || '');
+      diagnostics?.push({ provider: 'OMDb', outcome: /not found/i.test(error) ? 'No result found' : /key|limit|request/i.test(error) ? 'Key, quota, or request rejected' : 'Provider returned an error' });
+      return null;
+    }
+    diagnostics?.push({ provider: 'OMDb', outcome: data.Title ? 'Result returned' : 'Response contained no title' });
     return data;
   } catch (err) {
+    diagnostics?.push({ provider: 'OMDb', outcome: 'Network error or timeout' });
     console.warn('OMDb API fetch error.');
     return null;
   }
@@ -516,7 +531,7 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
 
 // Secondary metadata fetcher function in the media extraction service
 // Acts as a fallback if the primary API (e.g., OMDb) fails or returns 404/not found.
-async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: string = 'movie', year?: number): Promise<{
+async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics): Promise<{
   title?: string;
   year?: number;
   overview?: string;
@@ -540,6 +555,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
       if (tvmazeRes.ok) {
         const data: any = await tvmazeRes.json();
         if (data && data.name) {
+          diagnostics?.push({ provider: 'TVMaze', outcome: 'Result returned' });
           const overview = (data.summary || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
           const poster = data.image?.original || data.image?.medium;
           const rating = data.rating?.average || 8.4;
@@ -573,8 +589,12 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
             source: 'tvmaze-secondary-fallback',
           };
         }
+        diagnostics?.push({ provider: 'TVMaze', outcome: 'Response contained no title' });
+      } else {
+        diagnostics?.push({ provider: 'TVMaze', outcome: tvmazeRes.status === 404 ? 'No result found' : `HTTP ${tvmazeRes.status}` });
       }
     } catch (err) {
+      diagnostics?.push({ provider: 'TVMaze', outcome: 'Network error or timeout' });
       console.warn('TVMaze secondary metadata resolution warning:', err);
     }
   }
@@ -585,6 +605,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
     if (itunesRes.ok) {
       const data: any = await itunesRes.json();
       if (data.resultCount > 0 && data.results[0]) {
+        diagnostics?.push({ provider: 'iTunes movies', outcome: 'Result returned' });
         const item = data.results[0];
         const poster = (item.artworkUrl100 || '').replace('/100x100bb.jpg', '/1000x1000bb.jpg');
         return {
@@ -598,8 +619,12 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
           source: 'itunes-secondary-fallback',
         };
       }
+      diagnostics?.push({ provider: 'iTunes movies', outcome: 'No result found' });
+    } else {
+      diagnostics?.push({ provider: 'iTunes movies', outcome: `HTTP ${itunesRes.status}` });
     }
   } catch (err) {
+    diagnostics?.push({ provider: 'iTunes movies', outcome: 'Network error or timeout' });
     console.warn('iTunes movie secondary metadata resolution warning:', err);
   }
 
@@ -607,7 +632,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -629,6 +654,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
       if (itunesRes.ok) {
         const itunesData: any = await itunesRes.json();
         if (itunesData.resultCount > 0 && itunesData.results[0]?.artworkUrl100) {
+          diagnostics?.push({ provider: 'iTunes albums', outcome: 'Result returned' });
           const highResArtwork = itunesData.results[0].artworkUrl100.replace('/100x100bb.jpg', '/1000x1000bb.jpg');
           return {
             posterUrl: highResArtwork,
@@ -638,16 +664,20 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
             genres: itunesData.results[0].primaryGenreName ? [itunesData.results[0].primaryGenreName] : undefined,
           };
         }
+        diagnostics?.push({ provider: 'iTunes albums', outcome: 'No artwork found' });
+      } else {
+        diagnostics?.push({ provider: 'iTunes albums', outcome: `HTTP ${itunesRes.status}` });
       }
     } catch (err) {
+      diagnostics?.push({ provider: 'iTunes albums', outcome: 'Network error or timeout' });
       console.warn('iTunes art search warning:', err);
     }
   }
 
   // 2. Query Providers IN PARALLEL for rapid response
   const [omdbResult, secondaryResult] = await Promise.allSettled([
-    fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year),
-    fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year)
+    fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year, undefined, undefined, diagnostics),
+    fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year, diagnostics)
   ]);
 
   const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
@@ -819,7 +849,8 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'title is required' });
     }
     const cleanTitle = String(title).trim();
-    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined);
+    const diagnostics: MetadataDiagnostics | undefined = req.body.diagnostics === true ? [] : undefined;
+    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics);
 
     const postersSet = new Set<string>();
     if (art.posterUrl) postersSet.add(art.posterUrl);
@@ -880,6 +911,7 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
       genres: art.genres,
       rating: art.rating,
       cast: art.cast,
+      ...(diagnostics ? { diagnostics } : {}),
     });
   } catch (err: any) {
     console.error('Fetch art error:', err);

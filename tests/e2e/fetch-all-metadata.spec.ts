@@ -5,6 +5,7 @@ test('Fetch All checks incomplete items and keeps complete items available for r
     { id: 'one', title: 'First Movie', type: 'movie', year: 2020, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },
     { id: 'two', title: 'Second Movie', type: 'movie', year: 2021, overview: 'Existing synopsis', posterUrl: 'https://example.com/existing.jpg', genres: ['Drama'], rating: 8, path: '/media/second.mkv', recommendedFolderStructure: 'Second', recommendedFilenames: [] },
     { id: 'three', title: 'Third Movie', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/third.mkv', recommendedFolderStructure: 'Third', recommendedFilenames: [] },
+    { id: 'four', title: 'Fourth Movie', type: 'movie', year: 2020, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/fourth.mkv', recommendedFolderStructure: 'Fourth', recommendedFilenames: [] },
     { id: 'picture', title: 'Picture Folder Video', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/Volumes/media/Pictures/album/video.mp4', recommendedFolderStructure: '/Volumes/media/Pictures/album', recommendedFilenames: [] },
     ...['Pictures', 'Collections', 'Comedy', 'Animation', 'Horror - Supernatural', 'Reality', 'Scify'].map((title) => ({
       id: `folder-${title}`, title, type: 'movie', year: 0, overview: '', posterUrl: '', genres: [], rating: 0,
@@ -32,9 +33,11 @@ test('Fetch All checks incomplete items and keeps complete items available for r
       const { title } = request.postDataJSON() as { title: string };
       checked.push(title);
       if (title === 'First Movie') {
-        body = { success: true, source: 'omdb', title, year: 2020, overview: 'Fetched synopsis', posterUrl: 'https://example.com/new.jpg' };
+        body = { success: true, source: 'omdb', title, year: 2020, overview: 'Fetched synopsis', posterUrl: 'https://example.com/new.jpg', diagnostics: [{ provider: 'OMDb', outcome: 'Result returned' }] };
       } else if (title === 'Second Movie') {
         body = { success: true, source: 'fallback', title };
+      } else if (title === 'Fourth Movie') {
+        body = { success: true, source: 'itunes', title: 'Different title', diagnostics: [{ provider: 'OMDb', outcome: 'No result found' }, { provider: 'iTunes movies', outcome: 'Result returned' }] };
       } else {
         status = 500;
         body = { error: 'Provider failed' };
@@ -56,7 +59,7 @@ test('Fetch All checks incomplete items and keeps complete items available for r
   await page.goto('/');
   await expect(page.getByText('Picture Folder Video', { exact: true })).toHaveCount(0);
   await openList();
-  await expect(page.getByRole('button', { name: 'Not Checked (2)' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Not Checked (3)' })).toBeVisible();
   const categorizer = page.locator('div.fixed.inset-0').filter({
     has: page.getByRole('heading', { name: /Web Search & Media Categorizer/ }),
   });
@@ -67,12 +70,18 @@ test('Fetch All checks incomplete items and keeps complete items available for r
   await expect(categorizer.getByText('Second Movie (2021)', { exact: true })).toBeVisible();
   await expect(categorizer.getByRole('button', { name: 'Manual Match' })).toBeVisible();
   await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
-  await page.getByRole('button', { name: 'Fetch All (2)' }).click();
-  await expect(page.getByText('Finished: 2/2 checked, 1 matched, 0 without a verified match, 1 failed.')).toBeVisible();
-  expect(checked).toEqual(['First Movie', 'Third Movie']);
+  await page.getByRole('button', { name: 'Fetch All (3)' }).click();
+  await expect(page.getByText('Finished: 3/3 checked, 1 matched, 1 without a verified match, 1 failed.', { exact: true })).toBeVisible();
+  expect(checked).toEqual(['First Movie', 'Third Movie', 'Fourth Movie']);
+  const log = page.getByRole('log', { name: 'Fetch All log' });
+  await expect(log).toContainText('OMDb: Result returned');
+  await expect(log).toContainText('Failed to fetch or save "Third Movie": Metadata lookup failed (HTTP 500)');
+  await expect(log).toContainText('Title does not match the library item; source: itunes; returned: Different title');
+  await expect(log).toContainText('No verified match saved for "Fourth Movie"');
   expect(saved.get('one')).toMatchObject({ id: 'one', path: '/media/first.mkv', overview: 'Fetched synopsis', posterUrl: 'https://example.com/new.jpg', metadataFetchStatus: 'matched' });
   expect(saved.has('two')).toBe(false);
   expect(saved.has('three')).toBe(false);
+  expect(saved.get('four')).toMatchObject({ metadataFetchStatus: 'no-match' });
   await expect(page.getByText('Fetch failed: Metadata lookup failed (HTTP 500)')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Has metadata (2)' })).toBeVisible();
 

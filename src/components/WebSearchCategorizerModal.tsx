@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isMissingText, type FetchedLibraryMetadata } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isMissingText, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -85,6 +85,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
   const [batchErrors, setBatchErrors] = useState<Record<string, string>>({});
   const [batchCurrentTitle, setBatchCurrentTitle] = useState('');
+  const [batchLog, setBatchLog] = useState<string[]>([]);
+  const [showBatchLog, setShowBatchLog] = useState(false);
   const batchController = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
     if (!isOpen) batchController.current?.abort();
@@ -255,6 +257,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setBatchProgress({ current: 0, total: items.length });
     setBatchMessage(null);
     setBatchErrors({});
+    setShowBatchLog(true);
+    setBatchLog([
+      `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${mediaLibrary.length - categorizerItems.length} category labels excluded.`,
+      'Fetch All checks all incomplete items, regardless of the current list filter. TMDB is not used by this lookup.',
+    ]);
+
+    const log = (message: string) => {
+      setBatchLog((previous) => [...previous, message]);
+    };
 
     let matched = 0;
     let noMatch = 0;
@@ -263,17 +274,39 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     for (const item of items) {
       if (controller.signal.aborted) break;
       setBatchCurrentTitle(item.title);
+      log(`Checking "${item.title}" (${item.type}${item.year ? `, ${item.year}` : ', no year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
       try {
-        const itemData = await fetchLibraryMetadata(item, controller.signal);
+        const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
+          if (details.providers?.length) {
+            for (const provider of details.providers) log(`  ${provider.provider}: ${provider.outcome}.`);
+          } else {
+            log('  Provider details unavailable from this backend.');
+          }
+          log(`  ${details.reason}; source: ${details.source || 'none'}; returned: ${details.returnedTitle || 'no title'}${details.returnedYear ? ` (${details.returnedYear})` : ''}; fields: ${details.fields.join(', ') || 'none'}.`);
+        });
         if (controller.signal.aborted) break;
         await onFetchLibraryMetadata(item.id, itemData);
-        if (itemData) matched++;
-        else noMatch++;
+        if (itemData) {
+          matched++;
+          const filled = [
+            isMissingSynopsis(item) && !isMissingText(itemData.overview) ? 'synopsis' : '',
+            isMissingArtwork(item.posterUrl) && !isMissingArtwork(itemData.posterUrl) ? 'poster' : '',
+            isMissingArtwork(item.fanartUrl) && !isMissingArtwork(itemData.fanartUrl) ? 'fanart' : '',
+            !item.genres?.length && itemData.genres?.length ? 'genres' : '',
+            !item.rating && itemData.rating && Number.isFinite(itemData.rating) ? 'rating' : '',
+            !item.cast?.length && itemData.cast?.length ? 'cast' : '',
+          ].filter(Boolean);
+          log(`  Saved verified match for "${item.title}"; filled: ${filled.join(', ') || 'no missing fields'}; existing metadata was preserved.`);
+        } else {
+          noMatch++;
+          log(`  No verified match saved for "${item.title}".`);
+        }
       } catch (e) {
         if (controller.signal.aborted) break;
         const message = e instanceof Error ? e.message : String(e);
         console.warn(`Failed to fetch metadata for ${item.title}:`, e);
         setBatchErrors((prev) => ({ ...prev, [item.id]: message }));
+        log(`  Failed to fetch or save "${item.title}": ${message}`);
         failed++;
       }
       completed++;
@@ -283,6 +316,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setBatchCurrentTitle('');
     setBatchProcessing(false);
     setBatchMessage(`${controller.signal.aborted ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${failed} failed.`);
+    log(`${controller.signal.aborted ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${failed} failed.`);
   };
 
   if (!isOpen) return null;
@@ -599,6 +633,22 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>{batchMessage}</span>
                 </div>
+              )}
+              {batchLog.length > 0 && (
+                <section className="rounded-xl border border-slate-700 bg-slate-950 p-3 space-y-2" aria-label="Fetch All diagnostics">
+                  <button type="button" onClick={() => setShowBatchLog(!showBatchLog)}
+                    className="text-xs font-bold text-indigo-300" aria-expanded={showBatchLog}>
+                    {showBatchLog ? 'Hide' : 'Show'} Fetch All log ({batchLog.length} entries)
+                  </button>
+                  {showBatchLog && (
+                    <>
+                      <p className="text-[11px] text-slate-400">Contains library titles and years. Review before sharing. Cleared when the next Fetch All starts.</p>
+                      <div role="log" aria-label="Fetch All log" className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-slate-300">
+                        {batchLog.join('\n')}
+                      </div>
+                    </>
+                  )}
+                </section>
               )}
 
               {/* Sub-Filters & Quick Search */}

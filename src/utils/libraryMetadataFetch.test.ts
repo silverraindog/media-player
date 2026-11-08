@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, type MetadataLookupDetails } from './libraryMetadataFetch';
 
 const item: MediaMetadata = {
   id: 'local-1', title: 'Example', type: 'series', year: 2020, overview: '',
@@ -57,6 +57,30 @@ test('surfaces failed responses and does not treat fallback data as a match', as
     assert.equal(await fetchLibraryMetadata(item, new AbortController().signal), null);
     globalThis.fetch = async () => new Response('', { status: 500 });
     await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), /HTTP 500/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('reports provider outcomes and rejection reasons without changing match behavior', async () => {
+  const originalFetch = globalThis.fetch;
+  const details: MetadataLookupDetails[] = [];
+  try {
+    globalThis.fetch = async (_url, init) => {
+      assert.equal(JSON.parse(String(init?.body)).diagnostics, true);
+      return Response.json({
+        success: true, source: 'tvmaze', title: 'Example', year: 2021,
+        overview: 'A story', diagnostics: [{ provider: 'OMDb', outcome: 'Key, quota, or request rejected' }, { provider: 'TVMaze', outcome: 'Result returned' }],
+      });
+    };
+    assert.equal(await fetchLibraryMetadata(item, new AbortController().signal, (entry) => details.push(entry)), null);
+    assert.equal(details[0].reason, 'Year does not match the library item');
+    assert.deepEqual(details[0].fields, ['synopsis']);
+    assert.deepEqual(details[0].providers?.map((entry) => entry.provider), ['OMDb', 'TVMaze']);
+    globalThis.fetch = async () => Response.json({ success: true, source: 'itunes', title: 'Different' });
+    await fetchLibraryMetadata(item, new AbortController().signal, (entry) => details.push(entry));
+    assert.equal(details[1].reason, 'Title does not match the library item');
+    assert.equal(details[1].providers, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }

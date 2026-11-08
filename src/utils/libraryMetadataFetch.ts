@@ -13,6 +13,20 @@ export interface FetchedLibraryMetadata {
   cast?: CastMember[];
 }
 
+export interface MetadataFetchDiagnostic {
+  provider: string;
+  outcome: string;
+}
+
+export interface MetadataLookupDetails {
+  source?: string;
+  returnedTitle?: string;
+  returnedYear?: number;
+  reason: string;
+  fields: string[];
+  providers?: MetadataFetchDiagnostic[];
+}
+
 const CATEGORY_FOLDER_NAMES = new Set([
   'pictures', 'collections', 'collection', 'comedy', 'animation', 'horror',
   'horror - supernatural', 'scifi', 'scify', 'sci-fi', 'drama', 'reality',
@@ -64,7 +78,11 @@ export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibrar
   return updated;
 }
 
-export async function fetchLibraryMetadata(media: MediaMetadata, signal: AbortSignal): Promise<FetchedLibraryMetadata | null> {
+export async function fetchLibraryMetadata(
+  media: MediaMetadata,
+  signal: AbortSignal,
+  onDetails?: (details: MetadataLookupDetails) => void,
+): Promise<FetchedLibraryMetadata | null> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true });
@@ -80,13 +98,32 @@ export async function fetchLibraryMetadata(media: MediaMetadata, signal: AbortSi
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: media.title, type: media.type, year: media.year || undefined }),
+      body: JSON.stringify({ title: media.title, type: media.type, year: media.year || undefined, ...(onDetails ? { diagnostics: true } : {}) }),
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`Metadata lookup failed (HTTP ${response.status})`);
-    const result: FetchedLibraryMetadata & { success?: boolean } = await response.json();
-    if (!result.success) throw new Error('Metadata lookup returned an invalid response');
-    return isVerifiedMatch(media, result) ? result : null;
+    const result: FetchedLibraryMetadata & { success?: boolean; diagnostics?: unknown } = await response.json();
+    if (!result || !result.success) throw new Error('Metadata lookup returned an invalid response');
+    const verified = isVerifiedMatch(media, result);
+    const fields = [
+      !isMissingText(result.overview) ? 'synopsis' : '',
+      !isMissingArtwork(result.posterUrl) ? 'poster' : '',
+      !isMissingArtwork(result.fanartUrl) ? 'fanart' : '',
+      result.genres?.length ? 'genres' : '',
+      result.rating ? 'rating' : '',
+      result.cast?.length ? 'cast' : '',
+    ].filter(Boolean);
+    let reason = 'Verified title and year';
+    if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
+    else if (!result.title) reason = 'Provider returned no title';
+    else if (normalizedTitle(media.title) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
+    else if (media.year && result.year && media.year !== result.year) reason = 'Year does not match the library item';
+    const providers = Array.isArray(result.diagnostics)
+      ? result.diagnostics.filter((entry): entry is MetadataFetchDiagnostic =>
+        entry && typeof entry.provider === 'string' && typeof entry.outcome === 'string')
+      : undefined;
+    onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers });
+    return verified ? result : null;
   } catch (error) {
     if (timedOut && !signal.aborted) throw new Error('Metadata lookup timed out');
     throw error;

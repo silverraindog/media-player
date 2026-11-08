@@ -52,6 +52,8 @@ Alternatively, set `TMDB_READ_ACCESS_TOKEN` in the backend environment or in `~/
 
 The categorizer and Universe Matcher provide an additional search for reviewing TVMaze and OMDb results. TVMaze searches TV series without a key. OMDb searches movies and series and requires your own `OMDB_API_KEY` in Settings or the backend environment as described above. These searches do not automatically change metadata or universe assignments, and neither provider establishes general universe relationships.
 
+In **Web Search & Media Categorizer → Missing & Unfetched**, Fetch All displays a per-item diagnostic log with provider outcomes, returned titles and years, available fields, and reasons a match was rejected. It uses OMDb, TVMaze for series, and iTunes fallbacks, not TMDB. The log is cleared on the next Fetch All run and contains library titles; review it before sharing.
+
 ---
 
 ## 📦 Production Build

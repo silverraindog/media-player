@@ -4,6 +4,7 @@ import type { MediaMetadata } from '../types';
 import type { FetchedLibraryMetadata } from '../utils/libraryMetadataFetch';
 import { isTauri } from '../lib/api';
 import { universeItemKey, type UniverseAssignment, type UniverseCandidate, type UniverseMatch } from '../shared/universeMatcher';
+import { ProviderSearch } from './ProviderSearch';
 
 interface Props {
   items: MediaMetadata[];
@@ -36,6 +37,8 @@ export function UniverseMatcherModal({ items, onClose, onOpenDetails, onFetchLib
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [providerSearchItem, setProviderSearchItem] = useState<string | null>(null);
+  const [showProviderSearch, setShowProviderSearch] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0, title: '' });
   const controller = useRef<AbortController | null>(null);
@@ -191,6 +194,8 @@ export function UniverseMatcherModal({ items, onClose, onOpenDetails, onFetchLib
           <button type="button" onClick={onClose} className="px-3 py-1 bg-slate-800 rounded">Close</button>
         </div>
         <p className="text-sm text-slate-400">Searches send cleaned movie and series titles to TMDB. Groups are virtual; files are never moved or deleted. Albums are not included.</p>
+        <button type="button" onClick={() => setShowProviderSearch(!showProviderSearch)} className="bg-slate-700 rounded px-3 py-2 text-sm">Search providers by title</button>
+        {showProviderSearch && <ProviderSearch initialTitle="" type="all" />}
         <div className="flex gap-2 items-center">
           <button type="button" disabled={busy || loading || !eligible.length} onClick={run} className="bg-indigo-600 px-3 py-2 rounded disabled:opacity-50">Match library ({eligible.length})</button>
           {busy && controller.current && <button type="button" onClick={() => controller.current?.abort()} className="bg-slate-700 px-3 py-2 rounded">Stop</button>}
@@ -226,7 +231,9 @@ export function UniverseMatcherModal({ items, onClose, onOpenDetails, onFetchLib
           return <div key={item.id} className="rounded border border-slate-800 p-3 text-sm space-y-2">
             <div className="flex flex-wrap items-center gap-2"><strong>{item.title}</strong><span className="text-slate-400">{item.type} · {status}</span>
               <button type="button" disabled={busy || loading} onClick={() => searchAgain(item)} className="bg-slate-700 rounded px-2 py-1">Find matches</button>
+              <button type="button" onClick={() => setProviderSearchItem(providerSearchItem === key ? null : key)} className="bg-slate-700 rounded px-2 py-1">Search TVMaze / OMDb</button>
             </div>
+            {providerSearchItem === key && <ProviderSearch key={key} initialTitle={item.title} type={item.type === 'movie' ? 'movie' : 'series'} />}
             {errors[key] && <p className="text-red-300">{errors[key]}</p>}
             {(candidates[key] || []).map((candidate) => <button key={candidate.id} type="button" disabled={busy} onClick={() => review(item, candidate)} className="block text-left text-indigo-300 underline">{candidate.title} {candidate.year ? `(${candidate.year})` : ''}</button>)}
             <div className="flex flex-wrap gap-2">

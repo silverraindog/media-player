@@ -14,6 +14,7 @@ import { resolveMediaWithFallback } from './clientMediaResolver';
 import { normalizeFranchiseHierarchy } from './franchiseHierarchy';
 import { categorizeMediaWithRetry } from './metadataCategorizer';
 import { logger } from './loggerService';
+import { isExcludedPicturesPath } from './excludedMedia';
 
 // Comprehensive Media Extension Definitions
 export const SUPPORTED_VIDEO_EXTENSIONS = [
@@ -752,6 +753,7 @@ export function extractAllMediaFromSambaTree(
   function traverse(nodeList: SambaShareNode[], parentPath: string = '') {
     for (const node of nodeList) {
       const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+      if (isExcludedPicturesPath(fullPath)) continue;
       if (isPathInsideExtras(fullPath, node.type === 'file')) continue;
 
       if (node.matchedMedia) {
@@ -864,6 +866,7 @@ export async function extractAllMediaFromSambaTreeAsync(
     processedCount++;
 
     const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+    if (isExcludedPicturesPath(fullPath)) continue;
     if (isPathInsideExtras(fullPath, node.type === 'file')) continue;
 
     if (node.matchedMedia) {

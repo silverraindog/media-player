@@ -32,7 +32,8 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, type FetchedLibraryMetadata } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isMissingArtwork, isMissingSynopsis, isMissingText, type FetchedLibraryMetadata } from '../utils/libraryMetadataFetch';
+import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
   isOpen: boolean;
@@ -76,7 +77,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   initialType = 'all',
   mediaLibrary = [],
 }) => {
-  const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
+  const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized' | 'complete'>('search');
   const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'unfetched' | 'synopsis' | 'artwork' | 'series' | 'movie'>('all');
   const [uncatSearchQuery, setUncatSearchQuery] = useState('');
   const [batchProcessing, setBatchProcessing] = useState(false);
@@ -209,14 +210,12 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   }, [initialQuery, initialType]);
 
   const categorizerItems = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item));
-  const incompleteItems = categorizerItems.filter(
-    (m) => !m.metadataFetchStatus || m.metadataFetchStatus === 'no-match' ||
-      isMissingSynopsis(m) || isMissingArtwork(m.posterUrl) || !!batchErrors[m.id]
-  );
+  const incompleteItems = categorizerItems.filter((m) => isMissingSynopsis(m) || isMissingArtwork(m.posterUrl));
+  const completeItems = categorizerItems.filter((m) => !isMissingSynopsis(m) && !isMissingArtwork(m.posterUrl));
 
   const missingSynopsisCount = incompleteItems.filter(isMissingSynopsis).length;
   const missingArtworkCount = incompleteItems.filter((m) => isMissingArtwork(m.posterUrl)).length;
-  const unfetchedCount = categorizerItems.filter((m) => !m.metadataFetchStatus).length;
+  const unfetchedCount = incompleteItems.filter((m) => !m.metadataFetchStatus).length;
 
   const seriesIncompleteCount = incompleteItems.filter((m) => m.type === 'series').length;
   const movieIncompleteCount = incompleteItems.filter((m) => m.type === 'movie').length;
@@ -248,8 +247,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   });
 
   const handleBatchCategorizeAll = async () => {
-    if (categorizerItems.length === 0 || batchProcessing) return;
-    const items = [...categorizerItems];
+    if (incompleteItems.length === 0 || batchProcessing) return;
+    const items = [...incompleteItems];
     const controller = new AbortController();
     batchController.current = controller;
     setBatchProcessing(true);
@@ -507,6 +506,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             >
               <X className="w-5 h-5" />
             </button>
+            <button type="button" onClick={() => setActiveTabFilter('complete')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold ${activeTabFilter === 'complete' ? 'bg-emerald-700 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'}`}>
+              Has metadata ({completeItems.length})
+            </button>
           </div>
         </div>
 
@@ -561,11 +564,11 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     <span>Missing &amp; Unfetched Media</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    Showing items not yet checked by Fetch All, without a verified match, or missing a synopsis or poster. Category folder labels are excluded; existing metadata is kept.
+                    Showing items missing a synopsis or poster. Category folder labels are excluded; existing metadata is kept.
                   </p>
                 </div>
 
-                {categorizerItems.length > 0 && (
+                {incompleteItems.length > 0 && (
                   batchProcessing ? (
                     <button type="button" onClick={() => batchController.current?.abort()}
                       className="shrink-0 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold cursor-pointer">
@@ -578,7 +581,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                   >
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>Fetch All ({categorizerItems.length})</span>
+                    <span>Fetch All ({incompleteItems.length})</span>
                   </button>
                   )
                 )}
@@ -814,8 +817,25 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           )}
 
           {/* TAB 2: WEB SEARCH & CATEGORIZE VIEW */}
+          {activeTabFilter === 'complete' && (
+            <section className="space-y-3">
+              <p className="text-sm text-slate-400">These items have a synopsis and poster. Review or manually correct them if needed.</p>
+              {completeItems.length === 0 && <p className="text-sm text-slate-400">No items with a synopsis and poster found.</p>}
+              {completeItems.map((item) => (
+                <div key={item.id} className="flex items-start gap-3 rounded-xl bg-slate-900 p-3 text-sm">
+                  <img src={item.posterUrl} alt={`${item.title} poster`} className="w-12 rounded" referrerPolicy="no-referrer" />
+                  <div className="flex-1 space-y-1">
+                    <strong>{item.title} {item.year ? `(${item.year})` : ''}</strong>
+                    <p className="text-xs text-slate-400">{isMissingText(item.overview) ? item.synopsis : item.overview}</p>
+                  </div>
+                  {onOpenManualMatch && <button type="button" onClick={() => onOpenManualMatch(item)} className="rounded bg-slate-700 px-3 py-1">Manual Match</button>}
+                </div>
+              ))}
+            </section>
+          )}
           {activeTabFilter === 'search' && (
             <>
+              <ProviderSearch key={`${query}:${mediaType}`} initialTitle={query} type={mediaType === 'album' ? 'all' : mediaType} />
               {/* Reminder banner for uncategorized media if any */}
               {incompleteItems.length > 0 && (
                 <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 flex items-center justify-between gap-2">

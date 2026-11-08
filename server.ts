@@ -56,6 +56,7 @@ import {
 } from './src/server/database';
 import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 import { registerUniverseRoutes } from './src/server/universeMatcher';
+import { registerProviderSearchRoutes } from './src/server/providerSearch';
 
 dotenv.config();
 dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
@@ -116,6 +117,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json({ limit: '10mb' }));
 registerUniverseRoutes(app, getPersistentStorageInfo().dataDir);
+registerProviderSearchRoutes(app);
 
 // Lazy Google GenAI Client
 let genAIClient: GoogleGenAI | null = null;

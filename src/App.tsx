@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { isExcludedPicturesMedia } from './utils/excludedMedia';
 import { MenuBar } from './components/MenuBar';
 import {
   Header,
@@ -1234,7 +1235,7 @@ function App() {
 
   // Persistent state loading from backend (~/.media-player)
   const [isVaultLoaded, setIsVaultLoaded] = useState(false);
-  const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
+  const [storedMediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
     try {
       const wasReset = localStorage.getItem('sambavault_db_reset') === 'true';
       if (wasReset) return [];
@@ -1255,6 +1256,7 @@ function App() {
     } catch {}
     return CURATED_MEDIA_DATABASE;
   });
+  const mediaLibrary = useMemo(() => storedMediaLibrary.filter((item) => !isExcludedPicturesMedia(item)), [storedMediaLibrary]);
   const mediaLibraryRef = useRef(mediaLibrary);
   mediaLibraryRef.current = mediaLibrary;
 

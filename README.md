@@ -10,7 +10,7 @@
 - **Embedded SQLite Persistence**: Reliable local storage for titles, synopses, custom tags, and episode watch progress.
 - **Samba (SMB) Share Sync & Mount Hub**: Connect to local or remote SMB network shares, view folder trees, sync media files, and generate native OS mount commands (`mount_smbfs` for macOS, UNC paths for Windows).
 - **Metadata Downloader**: Search and fetch professional posters, backdrops, synopses, cast lists, and tracklists.
-- **Fetch All library metadata**: In Web Search & Categorize, open **Missing & Unfetched** and select **Fetch All** to check library items. Known category folder labels are excluded from this list and batch, without removing anything from the library; standalone files with the same names remain eligible. Existing metadata and local playback information are preserved; verified matches fill missing synopsis, poster, backdrop, genres, rating, and cast. The list shows items not yet checked, items still missing a synopsis or poster, and lookups without a verified match. A no-match result can also mean providers were unavailable; retry or use manual matching. Stopping or closing the dialog stops the batch after any current save.
+- **Fetch All library metadata**: In Web Search & Categorize, open **Missing & Unfetched** and select **Fetch All** to check items missing a synopsis or poster. Items that already have both appear under **Has metadata**, where they can be reviewed or manually matched. Known category folder labels are excluded without removing anything from the library; standalone files with the same names remain eligible. Existing metadata and local playback information are preserved. A no-match result can also mean providers were unavailable; retry or use manual matching. Stopping or closing the dialog stops the batch after any current save.
 - **Universe Matcher**: From All Media, open **Universe Matcher** and select **Match library**. It sends cleaned movie and series titles to TMDB, uses movie collections and a small curated cross-media mapping, and leaves uncertain matches for review. Choose a suggested title, or enter a universe name to create or change a virtual group. Manual assignments and removals are kept on subsequent runs. This does not move or delete files; albums are excluded. Results and overrides are stored in the backend data directory. This product uses the TMDB API but is not endorsed or certified by TMDB.
 - **Series Watch Progress Tracker**: Track seasons, episodes, and completed watch states across your TV library.
 - **Cross-Platform Desktop Bundling**: Native Tauri integration for macOS (`.dmg`, `.app`) and Windows (`.msi`, `.exe`) via GitHub Actions.
@@ -45,6 +45,10 @@
 ### TMDB setup
 
 Obtain a TMDB API Read Access Token and set `TMDB_READ_ACCESS_TOKEN` in the backend environment, or add it to the private `~/.media-player/.env` file (use `.env` inside `SAMBA_VAULT_DATA_DIR` if configured). Restart the backend or desktop app after changing it. The desktop app inherits environment variables from its launcher; the private file also works when launching from the macOS Finder. Never commit or share the token. TMDB requires attribution and its own usage terms apply.
+
+### TVMaze and OMDb search
+
+The categorizer and Universe Matcher provide an additional search for reviewing TVMaze and OMDb results. TVMaze searches TV series without a key. OMDb searches movies and series and requires your own `OMDB_API_KEY` in the backend environment or private `.env` described above; restart after changing it. These searches do not automatically change metadata or universe assignments, and neither provider establishes general universe relationships.
 
 ---
 

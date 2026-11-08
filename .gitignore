@@ -8,6 +8,8 @@ test-results/
 *.log
 .env*
 !.env.example
+api-keys.json
+api-keys.json.*.tmp
 bun.lock*
 .continue
 .vscode

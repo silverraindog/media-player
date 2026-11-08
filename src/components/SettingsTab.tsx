@@ -54,6 +54,7 @@ import { HwAccelSettingsCard } from './HwAccelSettingsCard';
 import { PresetManager } from './PresetManager';
 import { NetworkConnectionDiagnosticsCard } from './NetworkConnectionDiagnosticsCard';
 import { FfmpegTranscodeLogsCard } from './FfmpegTranscodeLogsCard';
+import { ApiKeySettings } from './ApiKeySettings';
 
 interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
@@ -526,6 +527,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           <span>{isSyncRunning ? 'Syncing Samba Storage...' : 'Sync Samba Now'}</span>
         </button>
       </div>
+
+      <ApiKeySettings />
 
       {/* SECTION 0: BASIC macOS PERMISSIONS STATUS INDICATOR */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-wrap items-center justify-between gap-4">
@@ -1681,4 +1684,3 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     </div>
   );
 };
-

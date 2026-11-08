@@ -57,6 +57,7 @@ import {
 import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 import { registerUniverseRoutes } from './src/server/universeMatcher';
 import { registerProviderSearchRoutes } from './src/server/providerSearch';
+import { registerApiKeyRoutes } from './src/server/apiKeys';
 
 dotenv.config();
 dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
@@ -116,11 +117,12 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json({ limit: '10mb' }));
+let genAIClient: GoogleGenAI | null = null;
+registerApiKeyRoutes(app, getPersistentStorageInfo().dataDir, () => { genAIClient = null; });
 registerUniverseRoutes(app, getPersistentStorageInfo().dataDir);
 registerProviderSearchRoutes(app);
 
 // Lazy Google GenAI Client
-let genAIClient: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI | null {
   if (!genAIClient && process.env.GEMINI_API_KEY) {
     genAIClient = new GoogleGenAI({
@@ -472,7 +474,7 @@ function resolveMediaKnowledge(cleanTitle: string, preferredType: string = 'all'
 // ==========================================
 
 // OMDb API Key configuration with user's verified key as fallback
-const OMDB_API_KEY = process.env.OMDB_API_KEY || 'a593ebab';
+const getOmdbKey = () => process.env.OMDB_API_KEY || 'a593ebab';
 
 // Helper for HTTP requests with strict timeouts to prevent hanging endpoints
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 2500): Promise<globalThis.Response> {
@@ -490,12 +492,12 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 
 // Helper to fetch metadata from OMDb API
 async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number): Promise<any> {
-  const apiKey = OMDB_API_KEY;
+  const apiKey = getOmdbKey();
   if (!apiKey) return null;
 
   try {
     const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
-    let url = `http://www.omdbapi.com/?apikey=${apiKey}&t=${encodeURIComponent(cleanTitle)}&plot=full`;
+    let url = `https://www.omdbapi.com/?apikey=${encodeURIComponent(apiKey)}&t=${encodeURIComponent(cleanTitle)}&plot=full`;
     if (type === 'series' || type === 'tv shows' || type === 'tv' || type === 'anime') url += '&type=series';
     if (year) url += `&y=${year}`;
     if (season) url += `&Season=${season}`;
@@ -507,7 +509,7 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
     if (data.Response === 'False') return null;
     return data;
   } catch (err) {
-    console.warn('OMDb API fetch error:', err);
+    console.warn('OMDb API fetch error.');
     return null;
   }
 }
@@ -690,7 +692,7 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
-    hasOmdbKey: Boolean(OMDB_API_KEY),
+    hasOmdbKey: Boolean(getOmdbKey()),
     timestamp: new Date().toISOString(),
   });
 });

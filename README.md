@@ -44,11 +44,13 @@
 
 ### TMDB setup
 
-Obtain a TMDB API Read Access Token and set `TMDB_READ_ACCESS_TOKEN` in the backend environment, or add it to the private `~/.media-player/.env` file (use `.env` inside `SAMBA_VAULT_DATA_DIR` if configured). Restart the backend or desktop app after changing it. The desktop app inherits environment variables from its launcher; the private file also works when launching from the macOS Finder. Never commit or share the token. TMDB requires attribution and its own usage terms apply.
+Obtain a TMDB **API Read Access Token** (not the shorter API key) and enter it under Settings → API keys. The same section supports OMDb and Gemini keys. Saved values take effect immediately, override environment values, and are not displayed again. Removing a saved value restores any environment value. Settings are available only from the computer running the backend. Keys are stored unencrypted in `~/.media-player/api-keys.json`, or in `SAMBA_VAULT_DATA_DIR` when configured, with owner-only file permissions. Protect the file and do not include it in backups or share it.
+
+Alternatively, set `TMDB_READ_ACCESS_TOKEN` in the backend environment or in `~/.media-player/.env` (or `.env` inside `SAMBA_VAULT_DATA_DIR`), then restart the backend. `.env.example` is only a template and is not loaded. Existing environment variables and the project `.env` take precedence over the private `.env`; a saved Settings value takes precedence over all of them. The desktop app inherits environment variables from its launcher. Never commit or share tokens. TMDB requires attribution and its own usage terms apply.
 
 ### TVMaze and OMDb search
 
-The categorizer and Universe Matcher provide an additional search for reviewing TVMaze and OMDb results. TVMaze searches TV series without a key. OMDb searches movies and series and requires your own `OMDB_API_KEY` in the backend environment or private `.env` described above; restart after changing it. These searches do not automatically change metadata or universe assignments, and neither provider establishes general universe relationships.
+The categorizer and Universe Matcher provide an additional search for reviewing TVMaze and OMDb results. TVMaze searches TV series without a key. OMDb searches movies and series and requires your own `OMDB_API_KEY` in Settings or the backend environment as described above. These searches do not automatically change metadata or universe assignments, and neither provider establishes general universe relationships.
 
 ---
 

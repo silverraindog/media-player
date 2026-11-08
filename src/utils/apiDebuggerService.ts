@@ -100,6 +100,10 @@ class ApiDebuggerStore {
           url = (input as Request).url;
         }
 
+        if (/\/api\/settings\/api-keys(?:[?#]|$)/.test(url)) {
+          return originalFetch(input, init);
+        }
+
         const isActualTauri = typeof window !== 'undefined' && (
           Boolean((window as any).__TAURI__) ||
           Boolean((window as any).__TAURI_IPC__) ||

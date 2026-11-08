@@ -1,21 +1,12 @@
 import type { Router } from 'express';
 import type { ProviderResult } from '../shared/providerSearch';
 import { cleanUniverseTitle } from '../shared/universeMatcher';
+import { tauriCors } from './tauriCors';
 
 class ProviderSearchError extends Error {}
 
 export function registerProviderSearchRoutes(router: Router): void {
-  router.use('/api/provider-search', (req, res, next) => {
-    const origin = req.headers.origin;
-    if (origin && ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost', 'http://localhost:1420'].includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    }
-    if (req.method === 'OPTIONS') return res.sendStatus(204);
-    next();
-  });
+  router.use('/api/provider-search', tauriCors('POST, OPTIONS'));
 
   router.post('/api/provider-search', async (req, res) => {
     const { title, type, provider } = req.body || {};

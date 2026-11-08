@@ -58,6 +58,7 @@ import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 import { registerUniverseRoutes } from './src/server/universeMatcher';
 import { registerProviderSearchRoutes } from './src/server/providerSearch';
 import { registerApiKeyRoutes } from './src/server/apiKeys';
+import { tauriCors } from './src/server/tauriCors';
 
 dotenv.config();
 dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
@@ -116,6 +117,7 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
+app.use('/api/media/fetch-art', tauriCors('POST, OPTIONS'));
 app.use(express.json({ limit: '10mb' }));
 let genAIClient: GoogleGenAI | null = null;
 registerApiKeyRoutes(app, getPersistentStorageInfo().dataDir, () => { genAIClient = null; });

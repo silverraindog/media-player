@@ -135,7 +135,7 @@ export async function fetchLibraryMetadata(
   }, 20000);
   try {
     const port = isTauri ? (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000 : undefined;
-    const url = isTauri ? `http://localhost:${port}/api/media/fetch-art` : '/api/media/fetch-art';
+    const url = isTauri ? `http://127.0.0.1:${port}/api/media/fetch-art` : '/api/media/fetch-art';
     let response: Response;
     try {
       response = await fetch(url, {

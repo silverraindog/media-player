@@ -56,7 +56,7 @@ In **Web Search & Media Categorizer → Missing & Unfetched**, Fetch All display
 
 Scanned release years retain their origin: a year found in a file or folder name is distinct from the current-year display placeholder. Fetch All sends only a trusted year and applies movie or series results only when both the title and provider year agree. Older entries without provenance are trusted only when their original filename or folder name confirms the stored year; otherwise use manual matching to review them. Album results currently require manual review because the existing provider response cannot verify the artist. These safeguards may leave items unfetched rather than risk applying an incorrect match.
 
-Fetch All stops if the metadata backend is unreachable instead of recording offline cache responses as no matches. Check that the backend is running and accessible, then retry; Fetch All includes incomplete items previously marked no-match.
+Fetch All stops if the metadata backend is unreachable instead of recording offline cache responses as no matches. The packaged desktop app must be rebuilt and restarted after backend changes; its local backend listens on `127.0.0.1:3000`. For development, run `npm run dev`. Once the backend is running, retry Fetch All; it includes incomplete items previously marked no-match.
 
 ---
 

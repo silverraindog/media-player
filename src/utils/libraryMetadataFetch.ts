@@ -1,7 +1,7 @@
 import type { CastMember, MediaMetadata } from '../types';
 import { isTauri } from '../lib/api';
 import { getFileCategory, parseTitleAndYear, SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
-import { cleanUniverseTitle } from '../shared/universeMatcher';
+import { cleanUniverseTitle, normalizeUniverseTitle } from '../shared/universeMatcher';
 
 export interface FetchedLibraryMetadata {
   title?: string;
@@ -13,6 +13,8 @@ export interface FetchedLibraryMetadata {
   genres?: string[];
   rating?: number;
   cast?: CastMember[];
+  artist?: string;
+  musicBrainzId?: string;
 }
 
 export interface MetadataFetchDiagnostic {
@@ -113,11 +115,23 @@ export function trustedMediaYear(media: MediaMetadata): number | undefined {
 }
 
 export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMetadata): boolean {
+  if (media.type === 'album') {
+    const artist = trustedAlbumArtist(media);
+    return result.source === 'musicbrainz-audiodb' && !!artist && !!result.artist && !!result.musicBrainzId &&
+      normalizeUniverseTitle(artist) === normalizeUniverseTitle(result.artist) &&
+      !!result.title && normalizedTitle(media.title) === normalizedTitle(result.title);
+  }
   const year = trustedMediaYear(media);
   const lookupTitle = cleanUniverseTitle(media.title).title;
   return !!result.source && result.source !== 'fallback' && !!result.title &&
     !!lookupTitle && normalizedTitle(lookupTitle) === normalizedTitle(result.title) &&
-    !!year && !!result.year && year === result.year && media.type !== 'album';
+    !!year && !!result.year && year === result.year;
+}
+
+export function trustedAlbumArtist(media: MediaMetadata): string | undefined {
+  const artists = media.artists?.map(artist => artist.trim()).filter(Boolean) || [];
+  if (artists.length !== 1 || /^(?:unknown|various artists|imported artist|artist)$/i.test(artists[0])) return undefined;
+  return artists[0];
 }
 
 export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibraryMetadata): MediaMetadata {
@@ -129,6 +143,7 @@ export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibrar
   if (!updated.genres?.length && result.genres?.length) updated.genres = result.genres;
   if (!updated.rating && result.rating && Number.isFinite(result.rating)) updated.rating = result.rating;
   if (!updated.cast?.length && result.cast?.length) updated.cast = result.cast;
+  if (!updated.musicBrainzId && result.musicBrainzId) updated.musicBrainzId = result.musicBrainzId;
   return updated;
 }
 
@@ -154,7 +169,7 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: cleanUniverseTitle(media.title).title || media.title, type: media.type, year: trustedMediaYear(media), requireProviderYear: true, diagnostics: true }),
+        body: JSON.stringify({ title: media.type === 'album' ? media.title : cleanUniverseTitle(media.title).title || media.title, type: media.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, diagnostics: true }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -177,8 +192,9 @@ export async function fetchLibraryMetadata(
     let reason = 'Verified title and year';
     if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
-    else if (normalizedTitle(cleanUniverseTitle(media.title).title) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
-    else if (media.type === 'album') reason = 'Album artist cannot be verified; review this result manually';
+    else if (normalizedTitle(media.type === 'album' ? media.title : cleanUniverseTitle(media.title).title) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
+    else if (media.type === 'album' && !verified) reason = 'Album artist cannot be verified; review this result manually';
+    else if (media.type === 'album') reason = 'Verified album and artist';
     else if (!trustedMediaYear(media)) reason = 'Library year is unverified; review this result manually';
     else if (!result.year) reason = 'Provider returned no year; review this result manually';
     else if (trustedMediaYear(media) !== result.year) reason = 'Year does not match the library item';
@@ -188,7 +204,7 @@ export async function fetchLibraryMetadata(
       : undefined;
     onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers });
     if ((!result.source || result.source === 'fallback') && providers?.some(({ outcome }) =>
-      /^(?:HTTP (?!404\b)\d+|Network error or timeout|Key, quota, or request rejected|No API key configured|Provider returned an error|Response contained no title)/i.test(outcome))) {
+      /^(?:HTTP (?!404\b)\d+|Network error or timeout|Key, quota, or request rejected|No API key configured|Invalid provider response|Provider returned an error|Provider (?:queue is full|cooling down)|Response contained no title|Ambiguous results|Too many results)/i.test(outcome))) {
       throw new Error('One or more metadata providers failed; check the provider details and retry.');
     }
     return verified ? result : null;

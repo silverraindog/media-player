@@ -32,6 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
+import { cleanUniverseTitle } from '../shared/universeMatcher';
 import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, MetadataBackendUnavailableError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
@@ -263,7 +264,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setShowBatchLog(true);
     setBatchLog([
       `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${categoryLabelCount} category labels and ${audioTrackCount} individual audio tracks excluded. ${sidecarCount} subtitle/metadata/artwork entries excluded.`,
-      'Fetch All checks all incomplete items, regardless of the current list filter. TMDB is not used by this lookup.',
+      'Fetch All checks all incomplete items, regardless of the current list filter. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB.',
     ]);
 
     const log = (message: string) => {
@@ -280,6 +281,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       setBatchCurrentTitle(item.title);
       const year = trustedMediaYear(item);
       log(`Checking "${item.title}" (${item.type}${year ? `, ${year}` : ', unverified year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
+      const lookupTitle = item.type === 'album' ? item.title : cleanUniverseTitle(item.title).title || item.title;
+      if (lookupTitle !== item.title) log(`  Lookup title: "${lookupTitle}".`);
       try {
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
           if (details.providers?.length) {

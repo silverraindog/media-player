@@ -61,6 +61,11 @@ test('provider failures without a match are surfaced rather than recorded as no-
     });
     await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), /providers failed/);
     globalThis.fetch = async () => Response.json({
+      success: true, source: 'fallback',
+      diagnostics: [{ provider: 'TMDB', outcome: 'Ambiguous results; review manually' }],
+    });
+    await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), /providers failed/);
+    globalThis.fetch = async () => Response.json({
       success: true, source: 'tvmaze', title: 'Example', year: 2020,
       diagnostics: [{ provider: 'OMDb', outcome: 'HTTP 401' }, { provider: 'TVMaze', outcome: 'Result returned' }],
     });
@@ -99,6 +104,36 @@ test('requires a provider match with the same title and compatible year', () => 
   assert.equal(isVerifiedMatch(item, { title: 'Example', source: 'tvmaze' }), false);
   assert.equal(isVerifiedMatch({ ...item, yearSource: 'placeholder' }, { title: 'Example', year: 2020, source: 'tvmaze' }), false);
   assert.equal(isVerifiedMatch({ ...item, type: 'album' }, { title: 'Example', year: 2020, source: 'itunes' }), false);
+});
+
+test('requires a unique known artist and verified provider identity for albums', () => {
+  const album = { ...item, type: 'album' as const, title: 'Parachutes', artists: ['Coldplay'] };
+  const result = { source: 'musicbrainz-audiodb', title: 'Parachutes', artist: 'Coldplay', musicBrainzId: 'id' };
+  assert.equal(isVerifiedMatch(album, result), true);
+  assert.equal(isVerifiedMatch({ ...album, artists: ['Other'] }, result), false);
+  assert.equal(isVerifiedMatch({ ...album, artists: ['Imported Artist'] }, result), false);
+  assert.equal(isVerifiedMatch({ ...album, artists: ['Coldplay', 'Other'] }, result), false);
+  assert.equal(isVerifiedMatch(album, { ...result, source: 'itunes' }), false);
+  assert.equal(mergeFetchedMetadata(album, result).musicBrainzId, 'id');
+});
+
+test('sends album artist and accepts verified album metadata without a trusted year', async () => {
+  const originalFetch = globalThis.fetch;
+  const album = { ...item, type: 'album' as const, title: 'Parachutes', yearSource: 'placeholder' as const, artists: ['Coldplay'] };
+  try {
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'Parachutes');
+      assert.equal(request.artist, 'Coldplay');
+      assert.equal(request.year, undefined);
+      return Response.json({
+        success: true, source: 'musicbrainz-audiodb', title: 'Parachutes', artist: 'Coldplay',
+        musicBrainzId: '1dc4c347-a1db-32aa-b14f-bc9cc507b843', overview: 'Description',
+      });
+    };
+    const result = await fetchLibraryMetadata(album, new AbortController().signal);
+    assert.equal(result?.overview, 'Description');
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('records detected and placeholder years without confusing a current-year release', () => {

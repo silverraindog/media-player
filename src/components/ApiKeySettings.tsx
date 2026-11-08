@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 
 const providers = [
-  { name: 'TMDB_READ_ACCESS_TOKEN', label: 'TMDB API Read Access Token', description: 'For Universe Matcher. Use the read access token, not the shorter API key.' },
+  { name: 'TMDB_READ_ACCESS_TOKEN', label: 'TMDB API Read Access Token', description: 'For Universe Matcher and Fetch All. Use the read access token, not the shorter API key.' },
   { name: 'OMDB_API_KEY', label: 'OMDb API key', description: 'For OMDb movie and series searches.' },
   { name: 'GEMINI_API_KEY', label: 'Gemini API key', description: 'For Google Gemini features.' },
 ] as const;

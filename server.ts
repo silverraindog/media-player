@@ -59,6 +59,8 @@ import { registerUniverseRoutes } from './src/server/universeMatcher';
 import { registerProviderSearchRoutes } from './src/server/providerSearch';
 import { registerApiKeyRoutes } from './src/server/apiKeys';
 import { tauriCors } from './src/server/tauriCors';
+import { fetchTmdbMetadata } from './src/server/tmdbMetadata';
+import { fetchAlbumMetadata } from './src/server/albumMetadata';
 
 dotenv.config();
 dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
@@ -475,8 +477,7 @@ function resolveMediaKnowledge(cleanTitle: string, preferredType: string = 'all'
 // API ROUTES
 // ==========================================
 
-// OMDb API Key configuration with user's verified key as fallback
-const getOmdbKey = () => process.env.OMDB_API_KEY || 'a593ebab';
+const getOmdbKey = () => process.env.OMDB_API_KEY;
 
 // Helper for HTTP requests with strict timeouts to prevent hanging endpoints
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 2500): Promise<globalThis.Response> {
@@ -635,7 +636,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -646,9 +647,25 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   rating?: number;
   cast?: { name: string; role: string }[];
   episodes?: any[];
+  artist?: string;
+  musicBrainzId?: string;
 }> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
+
+  if (requireProviderYear && lowerType === 'album') {
+    if (!artist) {
+      diagnostics?.push({ provider: 'MusicBrainz', outcome: 'Album artist missing; review manually' });
+      return { source: 'fallback' };
+    }
+    return await fetchAlbumMetadata(cleanTitle, artist, diagnostics || []) || { source: 'fallback' };
+  }
+
+  if (requireProviderYear && (lowerType === 'movie' || lowerType === 'series')) {
+    const tmdb = await fetchTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
+    if (tmdb.metadata) return tmdb.metadata;
+    if (tmdb.unsafeToMatch) return { source: 'fallback' };
+  }
 
   // 1. Music Albums: Query iTunes Search API for 1000x1000 high-resolution original art
   if (lowerType === 'album' || lowerType === 'music') {
@@ -870,7 +887,8 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
     }
     const cleanTitle = String(title).trim();
     const diagnostics: MetadataDiagnostics | undefined = req.body.diagnostics === true ? [] : undefined;
-    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true);
+    const artist = typeof req.body.artist === 'string' && req.body.artist.trim().length <= 300 ? req.body.artist.trim() : undefined;
+    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true, artist);
 
     const postersSet = new Set<string>();
     if (art.posterUrl) postersSet.add(art.posterUrl);
@@ -878,6 +896,9 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
 
     // Also fetch secondary/alternative posters for rich picture selection
     try {
+      if (req.body.requireProviderYear === true) {
+        return res.json({ success: true, ...art, posters: Array.from(postersSet), ...(diagnostics ? { diagnostics } : {}) });
+      }
       if (type === 'series' || type === 'tv' || type === 'anime') {
         const tvmazeSearch = await fetch(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(cleanTitle)}`);
         if (tvmazeSearch.ok) {

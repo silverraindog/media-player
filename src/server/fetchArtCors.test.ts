@@ -18,9 +18,9 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
 
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'sambavault-cors-test-'));
   const root = fileURLToPath(new URL('../..', import.meta.url));
-  const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], {
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/server/testFixtures/mockMetadataProviders.ts', 'server.ts'], {
     cwd: root,
-    env: { ...process.env, NODE_ENV: 'development', HOST: '127.0.0.1', PORT: String(port), SAMBA_VAULT_DATA_DIR: dataDir },
+    env: { ...process.env, NODE_ENV: 'development', HOST: '127.0.0.1', PORT: String(port), SAMBA_VAULT_DATA_DIR: dataDir, TMDB_READ_ACCESS_TOKEN: 'test-token' },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   let stderr = '';
@@ -57,6 +57,31 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     }
     const untrusted = await fetch(url, { method: 'OPTIONS', headers: { Origin: 'https://example.com', 'Access-Control-Request-Method': 'POST' } });
     assert.equal(untrusted.headers.get('access-control-allow-origin'), null);
+    const lookup = (title: string) => fetch(url, {
+      method: 'POST', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, type: 'movie', year: 2024, requireProviderYear: true, diagnostics: true }),
+    }).then(response => response.json());
+    const match = await lookup('The First Omen');
+    assert.equal(match.source, 'tmdb');
+    assert.equal(match.title, 'The First Omen');
+    assert.equal(match.year, 2024);
+    assert.equal(match.overview, 'Provider synopsis');
+    assert.equal(match.posterUrl, 'https://image.tmdb.org/t/p/w500/poster.jpg');
+    assert.deepEqual(match.diagnostics, [{ provider: 'TMDB', outcome: 'Result returned' }]);
+    const ambiguous = await lookup('Ambiguous');
+    assert.equal(ambiguous.source, 'fallback');
+    assert.equal(ambiguous.title, undefined);
+    assert.deepEqual(ambiguous.diagnostics, [{ provider: 'TMDB', outcome: 'Ambiguous results; review manually' }]);
+    const albumResponse = await fetch(url, {
+      method: 'POST', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Parachutes', artist: 'Coldplay', type: 'album', requireProviderYear: true, diagnostics: true }),
+    });
+    const album = await albumResponse.json();
+    assert.equal(album.source, 'musicbrainz-audiodb');
+    assert.equal(album.artist, 'Coldplay');
+    assert.equal(album.overview, 'Album description');
+    assert.equal(album.posterUrl, 'https://example.com/album.jpg');
+    assert.deepEqual(album.diagnostics.map((entry: { provider: string }) => entry.provider), ['MusicBrainz', 'TheAudioDB']);
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     await exited;

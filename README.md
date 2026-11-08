@@ -68,6 +68,7 @@ The packaged app starts the local backend automatically and stops it when the ap
 This repository includes an automated GitHub Actions release workflow in `.github/workflows/release.yml` with cross-platform desktop bundling for **macOS** (`.dmg`), **Windows** (`.msi`), and **Linux** (`.deb`, `.AppImage`).
 
 ### Release Versioning (`0.0.1` → next push `0.0.2`):
+- The header displays the version embedded in the running app, not the latest GitHub release. Release builds synchronize this version to the selected release tag; local builds use the version in `src/version.ts`. Click the badge to open version settings. A differing backend version is shown as a mismatch, not as an available update.
 - **Automated Push Tagging**: Whenever you push code to `main`, GitHub Actions automatically:
   1. Inspects the latest release tag in the repository.
   2. Bumps the patch version: `0.0.1` on first release, then next push `0.0.2`, `0.0.3`, etc.

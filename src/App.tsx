@@ -913,12 +913,17 @@ function App() {
           const buildInfo = await buildRes.json();
           console.log('[VersionCheck] Local Runtime:', APP_RELEASE_TAG, 'Build Metadata:', buildInfo.version);
 
-          if (buildInfo.version !== APP_RELEASE_TAG) {
-            showToast(`🚀 New Version Available: v${buildInfo.version} (Current: v${APP_RELEASE_TAG})`);
+          if (buildInfo.version !== APP_VERSION) {
+            console.warn('[VersionCheck] Frontend build metadata does not match the running app version:', buildInfo.version, APP_VERSION);
           }
         }
 
-        // 2. Fetch server-side version for UI display
+      } catch (err) {
+        console.warn('[VersionCheck] Failed to verify frontend build metadata:', err);
+      }
+
+      try {
+        // Fetch server-side version independently of frontend build metadata.
         const serverRes = await fetch('/api/system/version');
         if (serverRes.ok) {
           const data = await serverRes.json();
@@ -927,7 +932,7 @@ function App() {
           }
         }
       } catch (err) {
-        console.warn('[VersionCheck] Failed to verify build version:', err);
+        console.warn('[VersionCheck] Failed to retrieve backend version:', err);
       }
     };
     checkVersion();
@@ -4150,7 +4155,7 @@ function App() {
                 <span className="text-[10px] uppercase tracking-widest text-slate-700 font-bold">Build Release</span>
                 <span
                   className={`px-2 py-0.5 rounded border font-mono font-bold transition-colors ${
-                    serverVersionInfo?.releaseTag !== APP_RELEASE_TAG
+                    serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG
                       ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                       : 'bg-slate-900 text-slate-400 border-slate-800'
                   }`}
@@ -4158,7 +4163,7 @@ function App() {
                 >
                   v{APP_RELEASE_TAG}
                   {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG && (
-                    <span className="ml-1 text-[9px] opacity-75">→ v{serverVersionInfo.releaseTag}</span>
+                    <span className="ml-1 text-[9px] opacity-75">Backend: v{serverVersionInfo.releaseTag}</span>
                   )}
                 </span>
               </div>

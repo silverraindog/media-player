@@ -23,7 +23,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { SambaConfig, AppTab, SyncProgressState } from '../types';
-import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag } from '../version';
+import { APP_VERSION, APP_RELEASE_TAG, formatReleaseTag } from '../version';
 
 interface HeaderProps {
   activeTab: AppTab;
@@ -70,11 +70,13 @@ export const Header: React.FC<HeaderProps> = ({
                   Media & Metadata
                 </span>
                 <button
+                  type="button"
+                  aria-label={`App version ${formatReleaseTag(APP_RELEASE_TAG, true)}; open version settings`}
                   onClick={() => {
                     console.log('[Header] Settings / version badge clicked');
                     setActiveTab('settings');
                   }}
-                  title={serverVersionInfo ? `Server Version: ${serverVersionInfo.releaseTag}\nCommit: ${serverVersionInfo.commit?.substring(0, 7)}\nBuild Date: ${new Date(serverVersionInfo.buildDate).toLocaleString()}` : `Release Tag: ${APP_RELEASE_TAG} (Next push: ${getNextReleaseTag(APP_RELEASE_TAG)}) - Click to view release info`}
+                  title={serverVersionInfo?.releaseTag ? `App build: ${formatReleaseTag(APP_RELEASE_TAG, true)}\nBackend build: ${formatReleaseTag(serverVersionInfo.releaseTag, true)}\nClick to view version settings` : `App build: ${formatReleaseTag(APP_RELEASE_TAG, true)}\nClick to view version settings`}
                   className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded-md transition-colors flex items-center gap-1 shadow-xs cursor-pointer ${
                     serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG
                       ? 'bg-amber-950/60 text-amber-400 border border-amber-500/30 hover:bg-amber-900/60'
@@ -84,9 +86,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
                     serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG ? 'bg-amber-400' : 'bg-emerald-400'
                   }`}></span>
-                  <span>v{APP_RELEASE_TAG}</span>
+                  <span>App {formatReleaseTag(APP_RELEASE_TAG, true)}</span>
                   {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG && (
-                    <span className="ml-1 text-[9px] opacity-75">New: v{serverVersionInfo.releaseTag}</span>
+                    <span className="ml-1 text-[9px] opacity-75">Backend: {formatReleaseTag(serverVersionInfo.releaseTag, true)}</span>
                   )}
                 </button>
               </div>

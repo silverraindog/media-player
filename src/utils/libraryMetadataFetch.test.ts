@@ -1,8 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, MetadataBackendUnavailableError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
 import { nodeToMediaMetadata, parseTitleAndYear, parsedFileToMediaMetadata } from './mediaExtractor';
+import { localDbFallback } from './localDatabaseFallback';
 
 const item: MediaMetadata = {
   id: 'local-1', title: 'Example', type: 'series', year: 2020, yearSource: 'user', overview: '',
@@ -114,6 +115,25 @@ test('surfaces failed responses and does not treat fallback data as a match', as
     assert.equal(await fetchLibraryMetadata(item, new AbortController().signal), null);
     globalThis.fetch = async () => new Response('', { status: 500 });
     await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), /HTTP 500/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('does not use offline cache for metadata lookups and reports connection failures', async () => {
+  assert.equal(localDbFallback.handleDbRequestFallback('/api/media/fetch-art', 'POST'), null);
+  assert.equal(localDbFallback.handleDbRequestFallback('http://localhost:3000/api/media/fetch-art?x=1', 'POST'), null);
+  assert.ok(localDbFallback.handleDbRequestFallback('/api/other', 'GET'));
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ success: true, fallback: true, source: 'local_storage_cache' });
+    await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), MetadataBackendUnavailableError);
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), MetadataBackendUnavailableError);
+    const controller = new AbortController();
+    controller.abort();
+    globalThis.fetch = async () => { throw new DOMException('Aborted', 'AbortError'); };
+    await assert.rejects(fetchLibraryMetadata(item, controller.signal), { name: 'AbortError' });
   } finally {
     globalThis.fetch = originalFetch;
   }

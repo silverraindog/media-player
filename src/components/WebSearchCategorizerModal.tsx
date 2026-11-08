@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMissingArtwork, isMissingSynopsis, isMissingText, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMissingArtwork, isMissingSynopsis, isMissingText, MetadataBackendUnavailableError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -273,10 +273,12 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     let noMatch = 0;
     let failed = 0;
     let completed = 0;
+    let backendUnavailable = false;
     for (const item of items) {
       if (controller.signal.aborted) break;
       setBatchCurrentTitle(item.title);
-      log(`Checking "${item.title}" (${item.type}${item.year ? `, ${item.year}` : ', no year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
+      const year = trustedMediaYear(item);
+      log(`Checking "${item.title}" (${item.type}${year ? `, ${year}` : ', unverified year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
       try {
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
           if (details.providers?.length) {
@@ -310,15 +312,18 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         setBatchErrors((prev) => ({ ...prev, [item.id]: message }));
         log(`  Failed to fetch or save "${item.title}": ${message}`);
         failed++;
+        if (e instanceof MetadataBackendUnavailableError) backendUnavailable = true;
       }
       completed++;
       setBatchProgress({ current: completed, total: items.length });
+      if (backendUnavailable) break;
     }
     batchController.current = null;
     setBatchCurrentTitle('');
     setBatchProcessing(false);
-    setBatchMessage(`${controller.signal.aborted ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${failed} failed.`);
-    log(`${controller.signal.aborted ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${failed} failed.`);
+    const summary = `${controller.signal.aborted || backendUnavailable ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${failed} failed.`;
+    setBatchMessage(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
+    log(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
   };
 
   if (!isOpen) return null;

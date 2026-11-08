@@ -114,6 +114,7 @@ test('Fetch All searches album entries once and excludes individual audio tracks
     }
     await route.fulfill({ json: body });
   });
+
   await page.goto('/');
   await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
   await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
@@ -124,4 +125,41 @@ test('Fetch All searches album entries once and excludes individual audio tracks
   expect(saved).toEqual(['album']);
   await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('2 individual audio tracks excluded');
   await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('Album artist cannot be verified; review this result manually');
+});
+
+test('offline metadata responses stop the batch without marking items as no-match, and can be retried', async ({ page }) => {
+  const items = ['First Movie', 'Second Movie'].map((title, index) => ({
+    id: `offline-${index}`, title, type: 'movie', year: 2020, yearSource: 'user',
+    overview: '', posterUrl: '', genres: [], rating: 0, recommendedFolderStructure: title, recommendedFilenames: [],
+    ...(index === 0 ? { metadataFetchStatus: 'no-match' } : {}),
+  }));
+  let online = false;
+  let requests = 0;
+  const saved: Record<string, unknown>[] = [];
+  await page.route('**/api/**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media' && request.method() === 'POST') saved.push(request.postDataJSON());
+    else if (pathname === '/api/db/media') body = { success: true, items: [] };
+    else if (pathname === '/api/media/fetch-art') {
+      requests++;
+      body = online
+        ? { success: true, source: 'omdb', title: request.postDataJSON().title, year: 2020, overview: 'Synopsis', posterUrl: 'https://example.com/poster.jpg' }
+        : { success: true, fallback: true, source: 'local_storage_cache' };
+    }
+    await route.fulfill({ json: body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  await page.getByRole('button', { name: 'Fetch All (2)' }).click();
+  await expect(page.getByRole('status')).toContainText('Stopped: 1/2 checked, 0 matched, 0 without a verified match, 1 failed');
+  expect(requests).toBe(1);
+  expect(saved).toHaveLength(0);
+  online = true;
+  await page.getByRole('button', { name: 'Fetch All (2)' }).click();
+  await expect(page.getByText('Finished: 2/2 checked, 2 matched, 0 without a verified match, 0 failed.', { exact: true })).toBeVisible();
+  expect(saved).toHaveLength(2);
 });

@@ -28,6 +28,13 @@ export interface MetadataLookupDetails {
   providers?: MetadataFetchDiagnostic[];
 }
 
+export class MetadataBackendUnavailableError extends Error {
+  constructor() {
+    super('Metadata backend is unavailable. Check that the backend is running and accessible, then retry Fetch All.');
+    this.name = 'MetadataBackendUnavailableError';
+  }
+}
+
 const CATEGORY_FOLDER_NAMES = new Set([
   'pictures', 'collections', 'collection', 'comedy', 'animation', 'horror',
   'horror - supernatural', 'scifi', 'scify', 'sci-fi', 'drama', 'reality',
@@ -129,15 +136,22 @@ export async function fetchLibraryMetadata(
   try {
     const port = isTauri ? (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000 : undefined;
     const url = isTauri ? `http://localhost:${port}/api/media/fetch-art` : '/api/media/fetch-art';
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: media.title, type: media.type, year: trustedMediaYear(media), requireProviderYear: true, ...(onDetails ? { diagnostics: true } : {}) }),
-      signal: controller.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: media.title, type: media.type, year: trustedMediaYear(media), requireProviderYear: true, ...(onDetails ? { diagnostics: true } : {}) }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      throw new MetadataBackendUnavailableError();
+    }
     if (!response.ok) throw new Error(`Metadata lookup failed (HTTP ${response.status})`);
-    const result: FetchedLibraryMetadata & { success?: boolean; diagnostics?: unknown } = await response.json();
+    const result: FetchedLibraryMetadata & { success?: boolean; diagnostics?: unknown; fallback?: boolean } = await response.json();
     if (!result || !result.success) throw new Error('Metadata lookup returned an invalid response');
+    if (result.fallback || result.source === 'local_storage_cache') throw new MetadataBackendUnavailableError();
     const verified = isVerifiedMatch(media, result);
     const fields = [
       !isMissingText(result.overview) ? 'synopsis' : '',

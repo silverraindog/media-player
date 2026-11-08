@@ -438,7 +438,7 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
                   type="number"
                   value={selectedMedia.year}
                   onChange={(e) =>
-                    setSelectedMedia({ ...selectedMedia, year: Number(e.target.value) })
+                    setSelectedMedia({ ...selectedMedia, year: Number(e.target.value), yearSource: 'user' })
                   }
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-purple-500"
                 />
@@ -910,4 +910,3 @@ export const NfoStudio: React.FC<NfoStudioProps> = ({
     </div>
   );
 };
-

@@ -339,7 +339,7 @@ export function detectMediaType(filePath: string): MediaType {
 
 
 // Clean title and year from path or filename
-export function parseTitleAndYear(rawName: string): { title: string; year: number; season?: number; episode?: number } {
+export function parseTitleAndYear(rawName: string): { title: string; year: number; hasYear: boolean; season?: number; episode?: number } {
   // Strip extension
   let clean = rawName.replace(/\.[a-zA-Z0-9]{2,4}$/, '');
 
@@ -380,7 +380,7 @@ export function parseTitleAndYear(rawName: string): { title: string; year: numbe
     title = rawName.replace(/\.[^/.]+$/, '');
   }
 
-  return { title, year, season, episode };
+  return { title, year, hasYear: !!yearMatch, season, episode };
 }
 
 // Extract Season number from directory or path string (e.g. "Season 1", "S01", "S02", "Staffel 3", "Series 2", "Specials", "Extras/4")
@@ -485,6 +485,9 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   // Derive candidate title & series hierarchy
   let title = parsedFile.title;
   let year = parsedFile.year;
+  let yearSource: MediaMetadata['yearSource'] = parsedFile.hasYear
+    ? (node.type === 'folder' ? 'folder' : 'filename')
+    : 'placeholder';
   let season = epInfo.season ?? seasonFromFolder ?? parsedFile.season ?? (fullPath.toLowerCase().includes('season 00') || fullPath.toLowerCase().includes('s00') ? 0 : 1);
   let episode = epInfo.episode ?? parsedFile.episode ?? 1;
   let episodeTitle = epInfo.episodeTitle;
@@ -514,8 +517,9 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     if (seriesFolderName) {
       const parsedFolder = parseTitleAndYear(seriesFolderName);
       title = parsedFolder.title || seriesFolderName;
-      if (parsedFolder.year && parsedFolder.year !== new Date().getFullYear()) {
+      if (parsedFolder.hasYear) {
         year = parsedFolder.year;
+        yearSource = 'folder';
       }
     }
   }
@@ -662,6 +666,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     type: mediaType,
     title: title,
     year: year,
+    yearSource,
     overview: `${title} (${year}) cataloged from Samba network storage at "${fullPath}". Full metadata manifest and media streams ready.`,
     genres: fullPath.toLowerCase().includes('audio books')
       ? ['Audiobook', 'Spoken Word', 'Literature']
@@ -700,6 +705,10 @@ export function extractAllMediaFromSambaTree(
     }
 
     const existing = mediaMap.get(key)!;
+    if (existing.yearSource === 'placeholder' && item.yearSource && item.yearSource !== 'placeholder') {
+      existing.year = item.year;
+      existing.yearSource = item.yearSource;
+    }
     // Always preserve real file system paths over generic defaults
     if (item.folderPath) {
       existing.folderPath = item.folderPath;
@@ -812,6 +821,10 @@ export async function extractAllMediaFromSambaTreeAsync(
     }
 
     const existing = mediaMap.get(key)!;
+    if (existing.yearSource === 'placeholder' && item.yearSource && item.yearSource !== 'placeholder') {
+      existing.year = item.year;
+      existing.yearSource = item.yearSource;
+    }
     if (item.type === 'series' && item.seasons && item.seasons.length > 0) {
       const existingSeasons = existing.seasons || [];
       for (const newSeason of item.seasons) {
@@ -944,6 +957,7 @@ export async function extractAllMediaFromSambaTreeAsync(
 // Convert parsed cleaner files into MediaMetadata
 export function parsedFileToMediaMetadata(item: ParsedFileInfo): MediaMetadata {
   const type = item.detectedType || 'movie';
+  const parsedOriginal = parseTitleAndYear(item.originalFilename);
   let posterUrl = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80';
   let defaultPlayback = getDirectPlaybackUrl(item.cleanFolderPath || item.cleanFormattedFilename);
 
@@ -960,6 +974,8 @@ export function parsedFileToMediaMetadata(item: ParsedFileInfo): MediaMetadata {
     type: type,
     title: item.detectedTitle,
     year: item.detectedYear || new Date().getFullYear(),
+    yearSource: !item.detectedYear ? 'placeholder' :
+      parsedOriginal.hasYear && parsedOriginal.year === item.detectedYear ? 'filename' : undefined,
     overview: `Imported via Batch Renamer from release: "${item.originalFilename}". Tagged for Samba storage.`,
     genres: ['Imported Media', type === 'series' ? 'series' : type === 'album' ? 'Audio Album' : 'Feature Film'],
     rating: 8.5,

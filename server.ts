@@ -531,7 +531,7 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
 
 // Secondary metadata fetcher function in the media extraction service
 // Acts as a fallback if the primary API (e.g., OMDb) fails or returns 404/not found.
-async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics): Promise<{
+async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false): Promise<{
   title?: string;
   year?: number;
   overview?: string;
@@ -559,7 +559,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
           const overview = (data.summary || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
           const poster = data.image?.original || data.image?.medium;
           const rating = data.rating?.average || 8.4;
-          const premiered = data.premiered ? parseInt(data.premiered.substring(0, 4), 10) : year || 2001;
+          const premiered = data.premiered ? parseInt(data.premiered.substring(0, 4), 10) : (requireProviderYear ? undefined : year || 2001);
           const genres = data.genres && data.genres.length > 0 ? data.genres : ['Action', 'Drama', 'Thriller'];
           const cast = (data._embedded?.cast || []).slice(0, 12).map((c: any) => ({
             name: c.person?.name || 'Cast Member',
@@ -610,7 +610,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
         const poster = (item.artworkUrl100 || '').replace('/100x100bb.jpg', '/1000x1000bb.jpg');
         return {
           title: item.trackName || cleanTitle,
-          year: item.releaseDate ? parseInt(item.releaseDate.substring(0, 4), 10) : year || 2024,
+          year: item.releaseDate ? parseInt(item.releaseDate.substring(0, 4), 10) : (requireProviderYear ? undefined : year || 2024),
           overview: item.longDescription || item.description || `Theatrical film ${cleanTitle}`,
           genres: item.primaryGenreName ? [item.primaryGenreName] : ['Drama'],
           rating: 8.5,
@@ -632,7 +632,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -677,7 +677,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   // 2. Query Providers IN PARALLEL for rapid response
   const [omdbResult, secondaryResult] = await Promise.allSettled([
     fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year, undefined, undefined, diagnostics),
-    fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year, diagnostics)
+    fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year, diagnostics, requireProviderYear)
   ]);
 
   const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
@@ -708,7 +708,9 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
     fanartUrl,
     source: omdbData?.Title ? 'omdb' : secondaryData?.source || (posterUrl ? 'tvmaze' : 'fallback'),
     title: omdbData?.Title || secondaryData?.title || cleanTitle,
-    year: omdbData?.Year ? parseInt(omdbData.Year, 10) : secondaryData?.year || year,
+    year: requireProviderYear
+      ? (omdbData?.Title ? (omdbData.Year ? parseInt(omdbData.Year, 10) : undefined) : secondaryData?.year)
+      : (omdbData?.Year ? parseInt(omdbData.Year, 10) : secondaryData?.year || year),
     overview: (omdbData?.Plot && omdbData.Plot !== 'N/A') ? omdbData.Plot : secondaryData?.overview,
     genres: (omdbData?.Genre && omdbData.Genre !== 'N/A') ? omdbData.Genre.split(', ') : secondaryData?.genres,
     rating: (omdbData?.imdbRating && omdbData.imdbRating !== 'N/A') ? parseFloat(omdbData.imdbRating) : secondaryData?.rating,
@@ -850,7 +852,7 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
     }
     const cleanTitle = String(title).trim();
     const diagnostics: MetadataDiagnostics | undefined = req.body.diagnostics === true ? [] : undefined;
-    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics);
+    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true);
 
     const postersSet = new Set<string>();
     if (art.posterUrl) postersSet.add(art.posterUrl);

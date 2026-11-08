@@ -54,6 +54,8 @@ The categorizer and Universe Matcher provide an additional search for reviewing 
 
 In **Web Search & Media Categorizer → Missing & Unfetched**, Fetch All displays a per-item diagnostic log with provider outcomes, returned titles and years, available fields, and reasons a match was rejected. It searches album entries rather than individual audio track entries; tracks are not deleted or changed. An album must already exist as a library entry to be searched. It uses OMDb, TVMaze for series, and iTunes fallbacks, not TMDB. The log is cleared on the next Fetch All run and contains library titles; review it before sharing.
 
+Scanned release years retain their origin: a year found in a file or folder name is distinct from the current-year display placeholder. Fetch All sends only a trusted year and applies movie or series results only when both the title and provider year agree. Older entries without provenance are trusted only when their original filename or folder name confirms the stored year; otherwise use manual matching to review them. Album results currently require manual review because the existing provider response cannot verify the artist. These safeguards may leave items unfetched rather than risk applying an incorrect match.
+
 ---
 
 ## 📦 Production Build

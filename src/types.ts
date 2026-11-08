@@ -45,6 +45,7 @@ export interface MediaMetadata {
   title: string;
   originalTitle?: string;
   year: number;
+  yearSource?: 'filename' | 'folder' | 'user' | 'provider' | 'placeholder';
   premiered?: string;
   overview: string;
   tagline?: string;
@@ -636,5 +637,4 @@ export interface SyncProgressState {
   batchStats?: any[];
   failedFilePaths?: any[];
 }
-
 

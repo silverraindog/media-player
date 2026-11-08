@@ -68,6 +68,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
   const [mediaType, setMediaType] = useState<MediaType>(initialMediaType || 'series');
   const [customTitle, setCustomTitle] = useState('');
   const [customYear, setCustomYear] = useState<number>(new Date().getFullYear());
+  const [customYearSource, setCustomYearSource] = useState<MediaMetadata['yearSource']>('placeholder');
   const [customSeasonNumber, setCustomSeasonNumber] = useState<number>(1);
   
   // Custom Synopsis & Metadata fields
@@ -98,7 +99,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
   // Mark changes as unsaved when metadata fields change
   useEffect(() => {
     setSaveStatus('Unsaved Changes');
-  }, [customTitle, customOverview, customTagline, customGenres, customRating, customPosterUrl, customSeasonNumber]);
+  }, [customTitle, customYear, customYearSource, customOverview, customTagline, customGenres, customRating, customPosterUrl, customSeasonNumber]);
 
   // Parse path when modal opens or path changes
   useEffect(() => {
@@ -139,6 +140,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
       const initialCandidate = candidateTitle || '';
       setCustomTitle(initialCandidate);
       setCustomYear(parsedGeneral.year || new Date().getFullYear());
+      setCustomYearSource(parsedGeneral.hasYear ? 'filename' : 'placeholder');
 
       // Initialize default overview placeholder
       setCustomOverview(`${initialCandidate || 'Media Title'} synopsis and description.`);
@@ -196,6 +198,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           title: titleQuery,
           type: type,
           year: customYear,
+          yearSource: customYearSource,
           seasonNumber: seasonNum,
           episodeNumber: episodeNum,
           episodeTitle: epTitleGuess,
@@ -599,7 +602,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           genres: JSON.stringify(finalized.genres),
           cast: finalized.cast ? JSON.stringify(finalized.cast) : null,
           recommended_folder: finalized.recommendedFolderStructure,
-          raw_data: finalized.source || 'manual-match'
+          raw_data: JSON.stringify(finalized)
         })
       }).catch(() => {});
 
@@ -799,7 +802,10 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
                 <input
                   type="number"
                   value={customYear}
-                  onChange={(e) => setCustomYear(Number(e.target.value))}
+                  onChange={(e) => {
+                    setCustomYear(Number(e.target.value));
+                    setCustomYearSource('user');
+                  }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 text-sm font-medium"
                 />
               </div>

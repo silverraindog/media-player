@@ -1,6 +1,6 @@
 import type { CastMember, MediaMetadata } from '../types';
 import { isTauri } from '../lib/api';
-import { SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
+import { parseTitleAndYear, SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
 
 export interface FetchedLibraryMetadata {
   title?: string;
@@ -76,10 +76,28 @@ function normalizedTitle(title: string): string {
   return title.toLowerCase().replace(/\s*\(\d{4}\)\s*$/, '').replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
+export function trustedMediaYear(media: MediaMetadata): number | undefined {
+  if (!Number.isInteger(media.year) || media.year <= 0) return undefined;
+  if (media.yearSource === 'placeholder') return undefined;
+  if (media.yearSource) return media.year;
+
+  // Legacy items have no provenance: only a matching original name is evidence.
+  const names = [media.matchedFilename, media.folderPath?.replace(/\\/g, '/').split('/').filter(Boolean).pop()];
+  for (const name of names) {
+    if (!name) continue;
+    const parsed = parseTitleAndYear(name);
+    if (parsed.hasYear && parsed.year === media.year && normalizedTitle(parsed.title) === normalizedTitle(media.title)) {
+      return media.year;
+    }
+  }
+  return undefined;
+}
+
 export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMetadata): boolean {
+  const year = trustedMediaYear(media);
   return !!result.source && result.source !== 'fallback' && !!result.title &&
     normalizedTitle(media.title) === normalizedTitle(result.title) &&
-    (!media.year || !result.year || media.year === result.year);
+    !!year && !!result.year && year === result.year && media.type !== 'album';
 }
 
 export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibraryMetadata): MediaMetadata {
@@ -114,7 +132,7 @@ export async function fetchLibraryMetadata(
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: media.title, type: media.type, year: media.year || undefined, ...(onDetails ? { diagnostics: true } : {}) }),
+      body: JSON.stringify({ title: media.title, type: media.type, year: trustedMediaYear(media), requireProviderYear: true, ...(onDetails ? { diagnostics: true } : {}) }),
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`Metadata lookup failed (HTTP ${response.status})`);
@@ -133,7 +151,10 @@ export async function fetchLibraryMetadata(
     if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
     else if (normalizedTitle(media.title) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
-    else if (media.year && result.year && media.year !== result.year) reason = 'Year does not match the library item';
+    else if (media.type === 'album') reason = 'Album artist cannot be verified; review this result manually';
+    else if (!trustedMediaYear(media)) reason = 'Library year is unverified; review this result manually';
+    else if (!result.year) reason = 'Provider returned no year; review this result manually';
+    else if (trustedMediaYear(media) !== result.year) reason = 'Year does not match the library item';
     const providers = Array.isArray(result.diagnostics)
       ? result.diagnostics.filter((entry): entry is MetadataFetchDiagnostic =>
         entry && typeof entry.provider === 'string' && typeof entry.outcome === 'string')

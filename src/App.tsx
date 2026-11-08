@@ -1446,6 +1446,10 @@ function App() {
               if (map.has(key)) {
                 const existing = map.get(key)!;
                 if (parsedMedia) {
+                  if (!existing.yearSource && existing.year === parsedMedia.year && parsedMedia.yearSource) {
+                    existing.yearSource = parsedMedia.yearSource;
+                    newItemsAdded = true;
+                  }
                   if (!existing.path && parsedMedia.path) existing.path = parsedMedia.path;
                   if (!existing.matchedFilename && parsedMedia.matchedFilename) existing.matchedFilename = parsedMedia.matchedFilename;
                   if ((!existing.seasons || existing.seasons.length === 0) && parsedMedia.seasons) existing.seasons = parsedMedia.seasons;
@@ -1847,14 +1851,14 @@ function App() {
       } else {
         // Fallback local parser
         parsedItems = fileNames.map((fn, idx) => {
-          const { title, year, season, episode } = parseTitleAndYear(fn);
+          const { title, year, hasYear, season, episode } = parseTitleAndYear(fn);
           const type = detectMediaType(fn);
           return {
             id: `import-${idx}-${Date.now()}`,
             originalFilename: fn,
             detectedType: type,
             detectedTitle: title,
-            detectedYear: year,
+            detectedYear: hasYear ? year : undefined,
             detectedSeason: season,
             detectedEpisode: episode,
             cleanFormattedFilename: fn,

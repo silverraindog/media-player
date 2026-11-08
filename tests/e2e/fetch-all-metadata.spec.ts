@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test('Fetch All checks incomplete items and keeps complete items available for review', async ({ page }) => {
   const items = [
-    { id: 'one', title: 'First Movie', type: 'movie', year: 2020, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },
+    { id: 'one', title: 'First Movie', type: 'movie', year: 2020, yearSource: 'user', overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },
     { id: 'two', title: 'Second Movie', type: 'movie', year: 2021, overview: 'Existing synopsis', posterUrl: 'https://example.com/existing.jpg', genres: ['Drama'], rating: 8, path: '/media/second.mkv', recommendedFolderStructure: 'Second', recommendedFilenames: [] },
     { id: 'three', title: 'Third Movie', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/third.mkv', recommendedFolderStructure: 'Third', recommendedFilenames: [] },
     { id: 'four', title: 'Fourth Movie', type: 'movie', year: 2020, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/fourth.mkv', recommendedFolderStructure: 'Fourth', recommendedFilenames: [] },
@@ -119,8 +119,9 @@ test('Fetch All searches album entries once and excludes individual audio tracks
   await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
   await expect(page.getByText('2 audio track entries excluded.', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Fetch All (1)' }).click();
-  await expect(page.getByText('Finished: 1/1 checked, 1 matched, 0 without a verified match, 0 failed.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Finished: 1/1 checked, 0 matched, 1 without a verified match, 0 failed.', { exact: true })).toBeVisible();
   expect(checked).toEqual(['Test Album']);
   expect(saved).toEqual(['album']);
   await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('2 individual audio tracks excluded');
+  await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('Album artist cannot be verified; review this result manually');
 });

@@ -513,7 +513,7 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
 
     const res = await fetchWithTimeout(url, {}, 2500);
     if (!res.ok) {
-      diagnostics?.push({ provider: 'OMDb', outcome: `HTTP ${res.status}` });
+      diagnostics?.push({ provider: 'OMDb', outcome: res.status === 401 || res.status === 403 ? `HTTP ${res.status}: API key rejected; check Settings or OMDB_API_KEY` : `HTTP ${res.status}` });
       return null;
     }
     const data = await res.json();
@@ -548,7 +548,8 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 } | null> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
-  const isSeries = lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime' || /24|breaking bad|season|stranger/i.test(cleanTitle);
+  const isSeries = lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime' ||
+    (!requireProviderYear && /24|breaking bad|season|stranger/i.test(cleanTitle));
 
   // 1. TV Series Fallback: Query TVMaze (keyless, rich episode and cast catalog)
   if (isSeries) {
@@ -560,9 +561,9 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
           diagnostics?.push({ provider: 'TVMaze', outcome: 'Result returned' });
           const overview = (data.summary || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
           const poster = data.image?.original || data.image?.medium;
-          const rating = data.rating?.average || 8.4;
+          const rating = data.rating?.average || (requireProviderYear ? undefined : 8.4);
           const premiered = data.premiered ? parseInt(data.premiered.substring(0, 4), 10) : (requireProviderYear ? undefined : year || 2001);
-          const genres = data.genres && data.genres.length > 0 ? data.genres : ['Action', 'Drama', 'Thriller'];
+          const genres = data.genres && data.genres.length > 0 ? data.genres : (requireProviderYear ? undefined : ['Action', 'Drama', 'Thriller']);
           const cast = (data._embedded?.cast || []).slice(0, 12).map((c: any) => ({
             name: c.person?.name || 'Cast Member',
             role: c.character?.name || 'Cast',
@@ -611,11 +612,11 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
         const item = data.results[0];
         const poster = (item.artworkUrl100 || '').replace('/100x100bb.jpg', '/1000x1000bb.jpg');
         return {
-          title: item.trackName || cleanTitle,
+          title: item.trackName || (requireProviderYear ? undefined : cleanTitle),
           year: item.releaseDate ? parseInt(item.releaseDate.substring(0, 4), 10) : (requireProviderYear ? undefined : year || 2024),
-          overview: item.longDescription || item.description || `Theatrical film ${cleanTitle}`,
-          genres: item.primaryGenreName ? [item.primaryGenreName] : ['Drama'],
-          rating: 8.5,
+          overview: item.longDescription || item.description || (requireProviderYear ? undefined : `Theatrical film ${cleanTitle}`),
+          genres: item.primaryGenreName ? [item.primaryGenreName] : (requireProviderYear ? undefined : ['Drama']),
+          rating: requireProviderYear ? undefined : 8.5,
           posterUrl: poster,
           fanartUrl: poster,
           source: 'itunes-secondary-fallback',
@@ -685,6 +686,21 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
   const secondaryData = secondaryResult.status === 'fulfilled' ? secondaryResult.value : null;
 
+  if (requireProviderYear && omdbData?.Title) {
+    const poster = omdbData.Poster && omdbData.Poster !== 'N/A' ? omdbData.Poster : undefined;
+    return {
+      source: 'omdb',
+      title: omdbData.Title,
+      year: omdbData.Year ? parseInt(omdbData.Year, 10) : undefined,
+      posterUrl: poster,
+      fanartUrl: poster,
+      overview: omdbData.Plot && omdbData.Plot !== 'N/A' ? omdbData.Plot : undefined,
+      genres: omdbData.Genre && omdbData.Genre !== 'N/A' ? omdbData.Genre.split(', ') : undefined,
+      rating: omdbData.imdbRating && omdbData.imdbRating !== 'N/A' ? parseFloat(omdbData.imdbRating) : undefined,
+      cast: omdbData.Actors && omdbData.Actors !== 'N/A' ? omdbData.Actors.split(', ').map((a: string) => ({ name: a, role: 'Cast' })) : undefined,
+    };
+  }
+
   let posterUrl: string | undefined = undefined;
   let fanartUrl: string | undefined = undefined;
 
@@ -709,7 +725,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
     posterUrl,
     fanartUrl,
     source: omdbData?.Title ? 'omdb' : secondaryData?.source || (posterUrl ? 'tvmaze' : 'fallback'),
-    title: omdbData?.Title || secondaryData?.title || cleanTitle,
+    title: omdbData?.Title || secondaryData?.title || (requireProviderYear ? undefined : cleanTitle),
     year: requireProviderYear
       ? (omdbData?.Title ? (omdbData.Year ? parseInt(omdbData.Year, 10) : undefined) : secondaryData?.year)
       : (omdbData?.Year ? parseInt(omdbData.Year, 10) : secondaryData?.year || year),

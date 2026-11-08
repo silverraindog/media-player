@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, MetadataBackendUnavailableError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, mergeFetchedMetadata, MetadataBackendUnavailableError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
 import { nodeToMediaMetadata, parseTitleAndYear, parsedFileToMediaMetadata } from './mediaExtractor';
 import { localDbFallback } from './localDatabaseFallback';
 
@@ -29,6 +29,43 @@ test('identifies individual audio entries without excluding albums that point to
   assert.equal(isIndividualAudioTrack({ ...album, title: 'Track', path: 'C:\\Music\\Artist\\Album\\01 - Track.FLAC', recommendedFolderStructure: '', matchedFilename: undefined }), true);
   assert.equal(isIndividualAudioTrack({ ...album, title: 'Book', path: '/books/Book.epub', recommendedFolderStructure: '/books/Book.epub' }), false);
   assert.equal(isIndividualAudioTrack({ ...album, type: 'movie', recommendedFolderStructure: 'Film.mp3' }), false);
+});
+
+test('excludes sidecar entries but preserves folders with media paths', () => {
+  for (const file of ['3 Eng.srt', 'Example.nfo', 'poster.jpg', 'Example.en.SSA']) {
+    assert.equal(isMetadataSidecar({ ...item, path: `/media/${file}`, recommendedFolderStructure: `/media/${file}`, matchedFilename: file }), true);
+  }
+  assert.equal(isMetadataSidecar({ ...item, path: '/media/Example/film.mkv', recommendedFolderStructure: '/media/Example', matchedFilename: 'Example.srt' }), false);
+  assert.equal(isMetadataSidecar({ ...item, path: '/media/Example/film.mkv', folderPath: '/media/Example', recommendedFolderStructure: '/media/Example' }), false);
+});
+
+test('cleans release tags from lookup titles while requiring the correct year', async () => {
+  const media = { ...item, title: 'The First Omen 2024  WEBRip  -', year: 2024, yearSource: 'filename' as const };
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      assert.equal(JSON.parse(String(init?.body)).title, 'The First Omen');
+      return Response.json({ success: true, source: 'omdb', title: 'The First Omen', year: 2024 });
+    };
+    assert.ok(await fetchLibraryMetadata(media, new AbortController().signal));
+    assert.equal(isVerifiedMatch(media, { source: 'omdb', title: 'The First Omen', year: 2006 }), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('provider failures without a match are surfaced rather than recorded as no-match', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({
+      success: true, source: 'fallback', title: 'Example',
+      diagnostics: [{ provider: 'OMDb', outcome: 'HTTP 401: API key rejected; check Settings or OMDB_API_KEY' }, { provider: 'iTunes movies', outcome: 'No result found' }],
+    });
+    await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), /providers failed/);
+    globalThis.fetch = async () => Response.json({
+      success: true, source: 'tvmaze', title: 'Example', year: 2020,
+      diagnostics: [{ provider: 'OMDb', outcome: 'HTTP 401' }, { provider: 'TVMaze', outcome: 'Result returned' }],
+    });
+    assert.ok(await fetchLibraryMetadata(item, new AbortController().signal));
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('fills missing fields without changing identity, paths, episodes, or existing values', () => {

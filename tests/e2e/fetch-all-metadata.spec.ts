@@ -7,6 +7,7 @@ test('Fetch All checks incomplete items and keeps complete items available for r
     { id: 'three', title: 'Third Movie', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/third.mkv', recommendedFolderStructure: 'Third', recommendedFilenames: [] },
     { id: 'four', title: 'Fourth Movie', type: 'movie', year: 2020, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/fourth.mkv', recommendedFolderStructure: 'Fourth', recommendedFilenames: [] },
     { id: 'picture', title: 'Picture Folder Video', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/Volumes/media/Pictures/album/video.mp4', recommendedFolderStructure: '/Volumes/media/Pictures/album', recommendedFilenames: [] },
+    { id: 'subtitle', title: '3 Eng', type: 'movie', year: 2026, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/3 Eng.srt', matchedFilename: '3 Eng.srt', recommendedFolderStructure: '/media/3 Eng.srt', recommendedFilenames: [] },
     ...['Pictures', 'Collections', 'Comedy', 'Animation', 'Horror - Supernatural', 'Reality', 'Scify'].map((title) => ({
       id: `folder-${title}`, title, type: 'movie', year: 0, overview: '', posterUrl: '', genres: [], rating: 0,
       path: `/media/${title}`, recommendedFolderStructure: title, recommendedFilenames: [],
@@ -74,6 +75,7 @@ test('Fetch All checks incomplete items and keeps complete items available for r
   await expect(page.getByText('Finished: 3/3 checked, 1 matched, 1 without a verified match, 1 failed.', { exact: true })).toBeVisible();
   expect(checked).toEqual(['First Movie', 'Third Movie', 'Fourth Movie']);
   const log = page.getByRole('log', { name: 'Fetch All log' });
+  await expect(log).toContainText('1 subtitle/metadata/artwork entries excluded');
   await expect(log).toContainText('OMDb: Result returned');
   await expect(log).toContainText('Failed to fetch or save "Third Movie": Metadata lookup failed (HTTP 500)');
   await expect(log).toContainText('Title does not match the library item; source: itunes; returned: Different title');

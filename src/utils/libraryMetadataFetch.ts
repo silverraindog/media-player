@@ -1,6 +1,7 @@
 import type { CastMember, MediaMetadata } from '../types';
 import { isTauri } from '../lib/api';
-import { parseTitleAndYear, SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
+import { getFileCategory, parseTitleAndYear, SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
+import { cleanUniverseTitle } from '../shared/universeMatcher';
 
 export interface FetchedLibraryMetadata {
   title?: string;
@@ -65,6 +66,17 @@ export function isIndividualAudioTrack(media: MediaMetadata): boolean {
   return normalizedTitle(stripTrackNumber(filename)) === normalizedTitle(stripTrackNumber(media.title));
 }
 
+export function isMetadataSidecar(media: MediaMetadata): boolean {
+  const isSidecar = (path?: string) => {
+    if (!path) return false;
+    const category = getFileCategory(path.replace(/\\/g, '/').split('/').pop() || '');
+    return category === 'subtitles' || category === 'metadata' || category === 'artwork';
+  };
+  if (isSidecar(media.recommendedFolderStructure)) return true;
+  if (media.folderPath || (media.recommendedFolderStructure && media.recommendedFolderStructure !== media.path && !isSidecar(media.path))) return false;
+  return isSidecar(media.path) || isSidecar(media.matchedFilename);
+}
+
 export function isMissingText(value?: string): boolean {
   const text = value?.trim().toLowerCase() || '';
   return !text || text.includes('placeholder') || text.includes('no synopsis') ||
@@ -102,8 +114,9 @@ export function trustedMediaYear(media: MediaMetadata): number | undefined {
 
 export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMetadata): boolean {
   const year = trustedMediaYear(media);
+  const lookupTitle = cleanUniverseTitle(media.title).title;
   return !!result.source && result.source !== 'fallback' && !!result.title &&
-    normalizedTitle(media.title) === normalizedTitle(result.title) &&
+    !!lookupTitle && normalizedTitle(lookupTitle) === normalizedTitle(result.title) &&
     !!year && !!result.year && year === result.year && media.type !== 'album';
 }
 
@@ -141,7 +154,7 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: media.title, type: media.type, year: trustedMediaYear(media), requireProviderYear: true, ...(onDetails ? { diagnostics: true } : {}) }),
+        body: JSON.stringify({ title: cleanUniverseTitle(media.title).title || media.title, type: media.type, year: trustedMediaYear(media), requireProviderYear: true, diagnostics: true }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -164,7 +177,7 @@ export async function fetchLibraryMetadata(
     let reason = 'Verified title and year';
     if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
-    else if (normalizedTitle(media.title) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
+    else if (normalizedTitle(cleanUniverseTitle(media.title).title) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
     else if (media.type === 'album') reason = 'Album artist cannot be verified; review this result manually';
     else if (!trustedMediaYear(media)) reason = 'Library year is unverified; review this result manually';
     else if (!result.year) reason = 'Provider returned no year; review this result manually';
@@ -174,6 +187,10 @@ export async function fetchLibraryMetadata(
         entry && typeof entry.provider === 'string' && typeof entry.outcome === 'string')
       : undefined;
     onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers });
+    if ((!result.source || result.source === 'fallback') && providers?.some(({ outcome }) =>
+      /^(?:HTTP (?!404\b)\d+|Network error or timeout|Key, quota, or request rejected|No API key configured|Provider returned an error|Response contained no title)/i.test(outcome))) {
+      throw new Error('One or more metadata providers failed; check the provider details and retry.');
+    }
     return verified ? result : null;
   } catch (error) {
     if (timedOut && !signal.aborted) throw new Error('Metadata lookup timed out');

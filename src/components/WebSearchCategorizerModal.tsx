@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, MetadataBackendUnavailableError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -272,6 +272,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
     let matched = 0;
     let noMatch = 0;
+    let review = 0;
     let failed = 0;
     let completed = 0;
     let backendUnavailable = false;
@@ -311,11 +312,16 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       } catch (e) {
         if (controller.signal.aborted) break;
         const message = e instanceof Error ? e.message : String(e);
-        console.warn(`Failed to fetch metadata for ${item.title}:`, e);
         setBatchErrors((prev) => ({ ...prev, [item.id]: message }));
-        log(`  Failed to fetch or save "${item.title}": ${message}`);
-        failed++;
-        if (e instanceof MetadataBackendUnavailableError) backendUnavailable = true;
+        if (e instanceof MetadataReviewRequiredError) {
+          log(`  Manual review required for "${item.title}": ${message}`);
+          review++;
+        } else {
+          console.warn(`Failed to fetch metadata for ${item.title}:`, e);
+          log(`  Failed to fetch or save "${item.title}": ${message}`);
+          failed++;
+          if (e instanceof MetadataBackendUnavailableError) backendUnavailable = true;
+        }
       }
       completed++;
       setBatchProgress({ current: completed, total: items.length });
@@ -324,7 +330,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     batchController.current = null;
     setBatchCurrentTitle('');
     setBatchProcessing(false);
-    const summary = `${controller.signal.aborted || backendUnavailable ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${failed} failed.`;
+    const summary = `${controller.signal.aborted || backendUnavailable ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${review} requiring manual review, ${failed} failed.`;
     setBatchMessage(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
     log(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
   };

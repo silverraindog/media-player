@@ -38,6 +38,13 @@ export class MetadataBackendUnavailableError extends Error {
   }
 }
 
+export class MetadataReviewRequiredError extends Error {
+  constructor() {
+    super('Provider results are ambiguous or too numerous to verify; review manually.');
+    this.name = 'MetadataReviewRequiredError';
+  }
+}
+
 const CATEGORY_FOLDER_NAMES = new Set([
   'pictures', 'collections', 'collection', 'comedy', 'animation', 'horror',
   'horror - supernatural', 'scifi', 'scify', 'sci-fi', 'drama', 'reality',
@@ -107,8 +114,8 @@ export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'>)
     title = title.replace(/(\b(?:19|20)\d{2}\b)\s+specials\s+-[a-z0-9][a-z0-9._-]*\s*$/i, '$1');
   }
   title = title.replace(/\s+ac3\s+[57][ .]1(?:\s+(?:ita|italian|eng|english))*\s+(?=h[ ._-]?265\b)/i, ' ');
-  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:brrip|bdrip|dvdrip|webrip|web[\s.-]?dl)\b.*$/i, '$1');
-  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+-oft\s*$/i, '$1');
+  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:(?:amzn|dc)\s+)?(?:brrip|bdrip|dvdrip|webrip|web[\s.-]?dl)\b.*$/i, '$1');
+  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:yify|-(?:oft|jyk)?)\s*$/i, '$1');
   title = title.replace(
     /(\b(?:19|20)\d{2}\b)(?:\s+(?:10[\s-]?bit|8[\s-]?bit|5[ .]1|7[ .]1|(?:eng|english)\s+subs?))+\s*$/i,
     '$1',
@@ -223,8 +230,12 @@ export async function fetchLibraryMetadata(
       : undefined;
     onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers });
     if ((!result.source || result.source === 'fallback') && providers?.some(({ outcome }) =>
-      /^(?:HTTP (?!404\b)\d+|Network error or timeout|Key, quota, or request rejected|No API key configured|Invalid provider response|Provider returned an error|Provider (?:queue is full|cooling down)|Response contained no title|Ambiguous results|Too many results)/i.test(outcome))) {
+      /^(?:HTTP (?!404\b)\d+|Network error or timeout|Key, quota, or request rejected|No API key configured|Invalid provider response|Provider returned an error|Provider (?:queue is full|cooling down)|Response contained no title)/i.test(outcome))) {
       throw new Error('One or more metadata providers failed; check the provider details and retry.');
+    }
+    if ((!result.source || result.source === 'fallback') && providers?.some(({ outcome }) =>
+      /^(?:Ambiguous results|Too many results)/i.test(outcome))) {
+      throw new MetadataReviewRequiredError();
     }
     return verified ? result : null;
   } catch (error) {

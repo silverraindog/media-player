@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, libraryLookupTitle, mergeFetchedMetadata, MetadataBackendUnavailableError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, libraryLookupTitle, mergeFetchedMetadata, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
 import { nodeToMediaMetadata, parseTitleAndYear, parsedFileToMediaMetadata } from './mediaExtractor';
 import { localDbFallback } from './localDatabaseFallback';
 
@@ -74,6 +74,11 @@ test('cleans explicit collection and encoding annotations without guessing seque
     ['01 Wishmaster - Horror 1997 Eng Rus Multi Subs', 'Wishmaster'],
     ['Sinister 2012  BRrip  GAZ YIFY', 'Sinister'],
     ['Predator 2 1990  BrRip  bitloks YIFY', 'Predator 2'],
+    ['House of Spoils 2024  AMZN WEBRip 800MB -GalaxyRG', 'House of Spoils'],
+    ['13 Sins 2014    YIFY', '13 Sins'],
+    ['The Visit 2015    -JYK', 'The Visit'],
+    ['Hollow Man 2000 DC  BRRip  YIFY', 'Hollow Man'],
+    ['The Sacrament 2013   -', 'The Sacrament'],
   ];
   for (const [title, expected] of examples) assert.equal(libraryLookupTitle({ title, type: 'movie' }), expected);
   assert.equal(libraryLookupTitle({ title: '10 Things I Hate About You (1999)', type: 'movie' }), '10 Things I Hate About You');
@@ -83,6 +88,11 @@ test('cleans explicit collection and encoding annotations without guessing seque
   assert.equal(libraryLookupTitle({ title: 'Dragonfly 2002 -Director', type: 'movie' }), 'Dragonfly -Director');
   assert.equal(libraryLookupTitle({ title: 'The BRrip Chronicles (2012)', type: 'movie' }), 'The BRrip Chronicles');
   assert.equal(libraryLookupTitle({ title: 'Movie 2012 BRripper', type: 'movie' }), 'Movie BRripper');
+  assert.equal(libraryLookupTitle({ title: 'AMZN Story (2024)', type: 'movie' }), 'AMZN Story');
+  assert.equal(libraryLookupTitle({ title: 'Movie 2024 AMZN', type: 'movie' }), 'Movie AMZN');
+  assert.equal(libraryLookupTitle({ title: 'Movie 2024 DC Comics', type: 'movie' }), 'Movie DC Comics');
+  assert.equal(libraryLookupTitle({ title: 'YIFY (2014)', type: 'movie' }), 'YIFY');
+  assert.equal(libraryLookupTitle({ title: 'The Visit 2015 -JYK Story', type: 'movie' }), 'The Visit -JYK Story');
   assert.equal(libraryLookupTitle({ title: '01 Hellraiser I - Horror 1987 Eng Subs', type: 'album' }), '01 Hellraiser I - Horror 1987 Eng Subs');
 });
 
@@ -92,6 +102,11 @@ test('uses cleaned release filenames while still requiring the original title an
     { title: '01 Wishmaster - Horror 1997 Eng Rus Multi Subs', clean: 'Wishmaster', year: 1997 },
     { title: 'Sinister 2012  BRrip  GAZ YIFY', clean: 'Sinister', year: 2012 },
     { title: 'Predator 2 1990  BrRip  bitloks YIFY', clean: 'Predator 2', year: 1990 },
+    { title: 'House of Spoils 2024  AMZN WEBRip 800MB -GalaxyRG', clean: 'House of Spoils', year: 2024 },
+    { title: '13 Sins 2014    YIFY', clean: '13 Sins', year: 2014 },
+    { title: 'The Visit 2015    -JYK', clean: 'The Visit', year: 2015 },
+    { title: 'Hollow Man 2000 DC  BRRip  YIFY', clean: 'Hollow Man', year: 2000 },
+    { title: 'The Sacrament 2013   -', clean: 'The Sacrament', year: 2013 },
   ];
   try {
     for (const example of examples) {
@@ -166,9 +181,19 @@ test('provider failures without a match are surfaced rather than recorded as no-
     await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), /providers failed/);
     globalThis.fetch = async () => Response.json({
       success: true, source: 'fallback',
-      diagnostics: [{ provider: 'TMDB', outcome: 'Ambiguous results; review manually' }],
+      diagnostics: [{ provider: 'MusicBrainz', outcome: 'Too many results to verify uniquely; review manually' }],
+    });
+    await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), MetadataReviewRequiredError);
+    globalThis.fetch = async () => Response.json({
+      success: true, source: 'fallback',
+      diagnostics: [{ provider: 'MusicBrainz', outcome: 'Ambiguous results; review manually' }, { provider: 'OMDb', outcome: 'HTTP 401' }],
     });
     await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), /providers failed/);
+    globalThis.fetch = async () => Response.json({
+      success: true, source: 'fallback',
+      diagnostics: [{ provider: 'TMDB', outcome: 'Ambiguous results; review manually' }],
+    });
+    await assert.rejects(fetchLibraryMetadata(item, new AbortController().signal), MetadataReviewRequiredError);
     globalThis.fetch = async () => Response.json({
       success: true, source: 'tvmaze', title: 'Example', year: 2020,
       diagnostics: [{ provider: 'OMDb', outcome: 'HTTP 401' }, { provider: 'TVMaze', outcome: 'Result returned' }],

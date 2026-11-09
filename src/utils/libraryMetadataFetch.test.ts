@@ -71,6 +71,9 @@ test('cleans explicit collection and encoding annotations without guessing seque
     ['Dragonfly 2002   -OFT', 'Dragonfly'],
     ['Mr Brooks 2007  BRrip  YIFY', 'Mr Brooks'],
     ['The Postman 1997  BrRip  YIFY', 'The Postman'],
+    ['01 Wishmaster - Horror 1997 Eng Rus Multi Subs', 'Wishmaster'],
+    ['Sinister 2012  BRrip  GAZ YIFY', 'Sinister'],
+    ['Predator 2 1990  BrRip  bitloks YIFY', 'Predator 2'],
   ];
   for (const [title, expected] of examples) assert.equal(libraryLookupTitle({ title, type: 'movie' }), expected);
   assert.equal(libraryLookupTitle({ title: '10 Things I Hate About You (1999)', type: 'movie' }), '10 Things I Hate About You');
@@ -78,7 +81,32 @@ test('cleans explicit collection and encoding annotations without guessing seque
   assert.equal(libraryLookupTitle({ title: '01 The Horror (1987)', type: 'movie' }), '01 The Horror');
   assert.equal(libraryLookupTitle({ title: '10 Things I Hate About You - Comedy 1999 Eng Subs', type: 'movie' }), '10 Things I Hate About You - Comedy');
   assert.equal(libraryLookupTitle({ title: 'Dragonfly 2002 -Director', type: 'movie' }), 'Dragonfly -Director');
+  assert.equal(libraryLookupTitle({ title: 'The BRrip Chronicles (2012)', type: 'movie' }), 'The BRrip Chronicles');
+  assert.equal(libraryLookupTitle({ title: 'Movie 2012 BRripper', type: 'movie' }), 'Movie BRripper');
   assert.equal(libraryLookupTitle({ title: '01 Hellraiser I - Horror 1987 Eng Subs', type: 'album' }), '01 Hellraiser I - Horror 1987 Eng Subs');
+});
+
+test('uses cleaned release filenames while still requiring the original title and year', async () => {
+  const originalFetch = globalThis.fetch;
+  const examples = [
+    { title: '01 Wishmaster - Horror 1997 Eng Rus Multi Subs', clean: 'Wishmaster', year: 1997 },
+    { title: 'Sinister 2012  BRrip  GAZ YIFY', clean: 'Sinister', year: 2012 },
+    { title: 'Predator 2 1990  BrRip  bitloks YIFY', clean: 'Predator 2', year: 1990 },
+  ];
+  try {
+    for (const example of examples) {
+      const media: MediaMetadata = { ...item, type: 'movie', title: example.title, year: example.year, yearSource: 'filename' };
+      globalThis.fetch = async (_url, init) => {
+        const request = JSON.parse(String(init?.body));
+        assert.equal(request.title, example.clean);
+        assert.equal(request.year, example.year);
+        return Response.json({ success: true, source: 'tmdb', title: example.clean, year: example.year, overview: 'Synopsis' });
+      };
+      assert.ok(await fetchLibraryMetadata(media, new AbortController().signal));
+      assert.equal(isVerifiedMatch(media, { source: 'tmdb', title: example.clean, year: example.year + 1 }), false);
+      assert.equal(isVerifiedMatch(media, { source: 'tmdb', title: `${example.clean} 2`, year: example.year }), false);
+    }
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('searches and verifies cleaned titles without accepting a different sequel or year', async () => {

@@ -101,9 +101,9 @@ export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'>)
   if (media.type === 'album') return media.title;
   const original = media.title;
   let title = original;
-  const taggedCollection = title.match(/^\s*0[1-9]\s+(.+?)\s+-\s+(?:(?:(?:unrated|extended|theatrical|directors[\s-]cut)\s+)?(?:(?:action|adventure|animation|comedy|crime|documentary|drama|fantasy|horror|mystery|romance|sci[\s-]?fi|thriller)\s+)*)?((?:19|20)\d{2})(?:\s+(?:(?:eng|english|ita|italian)\s+)*(?:multi[\s-]*)?subs?)?\s*$/i);
+  const taggedCollection = title.match(/^\s*0[1-9]\s+(.+?)\s+-\s+(?:(?:(?:unrated|extended|theatrical|directors[\s-]cut)\s+)?(?:(?:action|adventure|animation|comedy|crime|documentary|drama|fantasy|horror|mystery|romance|sci[\s-]?fi|thriller)\s+)*)?((?:19|20)\d{2})(?:\s+(?:(?:eng|english|ita|italian|rus|russian)\s+)*(?:multi[\s-]*)?subs?)?\s*$/i);
   if (taggedCollection) title = `${taggedCollection[1]} ${taggedCollection[2]}`;
-  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:brrip|bdrip|dvdrip|webrip|web[\s.-]?dl)(?:\s+(?:yify|yts))?\s*$/i, '$1');
+  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:brrip|bdrip|dvdrip|webrip|web[\s.-]?dl)\b.*$/i, '$1');
   title = title.replace(/(\b(?:19|20)\d{2}\b)\s+-oft\s*$/i, '$1');
   title = title.replace(
     /(\b(?:19|20)\d{2}\b)(?:\s+(?:10[\s-]?bit|8[\s-]?bit|5[ .]1|7[ .]1|(?:eng|english)\s+subs?))+\s*$/i,

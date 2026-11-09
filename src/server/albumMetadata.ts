@@ -1,5 +1,6 @@
 import { normalizeUniverseTitle } from '../shared/universeMatcher';
 import { APP_VERSION } from '../version';
+import { fetchMetadataWithDiagnostics } from './metadataRequestDiagnostics';
 
 type Diagnostic = { provider: string; outcome: string };
 export interface AlbumMetadata {
@@ -59,10 +60,10 @@ export async function fetchAlbumMetadata(
   let groups: unknown;
   try {
     const response = await musicBrainzGate.run(async () => {
-      const result = await fetch(search, {
+      const result = await fetchMetadataWithDiagnostics(search, {
         headers: { 'User-Agent': `SambaVault/${APP_VERSION} (https://github.com/silverraindog/media-player)`, Accept: 'application/json' },
         signal: AbortSignal.timeout(8000),
-      });
+      }, 'MusicBrainz', diagnostics, ['query', 'fmt', 'limit']);
       if (result.status === 503 || result.status === 429) musicBrainzGate.cooldown(60000);
       return result;
     });
@@ -108,7 +109,8 @@ export async function fetchAlbumMetadata(
   lookup.searchParams.set('i', group.id);
   try {
     const response = await audioDbGate.run(async () => {
-      const result = await fetch(lookup, { signal: AbortSignal.timeout(8000) });
+      const result = await fetchMetadataWithDiagnostics(lookup, { signal: AbortSignal.timeout(8000) },
+        'TheAudioDB', diagnostics, ['i']);
       if (result.status === 429 || result.status === 503) audioDbGate.cooldown(60000);
       return result;
     });

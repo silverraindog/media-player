@@ -61,6 +61,7 @@ import { registerApiKeyRoutes } from './src/server/apiKeys';
 import { tauriCors } from './src/server/tauriCors';
 import { fetchTmdbMetadata } from './src/server/tmdbMetadata';
 import { fetchAlbumMetadata } from './src/server/albumMetadata';
+import { fetchMetadataWithDiagnostics } from './src/server/metadataRequestDiagnostics';
 
 dotenv.config();
 dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
@@ -480,11 +481,15 @@ function resolveMediaKnowledge(cleanTitle: string, preferredType: string = 'all'
 const getOmdbKey = () => process.env.OMDB_API_KEY;
 
 // Helper for HTTP requests with strict timeouts to prevent hanging endpoints
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 2500): Promise<globalThis.Response> {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 2500,
+  trace?: { provider: string; diagnostics?: MetadataDiagnostics; visibleParams: string[] }): Promise<globalThis.Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
+    const requestOptions = { ...options, signal: controller.signal };
+    const res = trace
+      ? await fetchMetadataWithDiagnostics(url, requestOptions, trace.provider, trace.diagnostics, trace.visibleParams)
+      : await fetch(url, requestOptions);
     clearTimeout(timer);
     return res;
   } catch (err) {
@@ -512,7 +517,9 @@ async function fetchFromOMDb(title: string, type: string = 'movie', year?: numbe
     if (season) url += `&Season=${season}`;
     if (episode) url += `&Episode=${episode}`;
 
-    const res = await fetchWithTimeout(url, {}, 2500);
+    const res = await fetchWithTimeout(url, {}, 2500, {
+      provider: 'OMDb', diagnostics, visibleParams: ['t', 'plot', 'type', 'y', 'Season', 'Episode'],
+    });
     if (!res.ok) {
       diagnostics?.push({ provider: 'OMDb', outcome: res.status === 401 || res.status === 403 ? `HTTP ${res.status}: API key rejected; check Settings or OMDB_API_KEY` : `HTTP ${res.status}` });
       return null;
@@ -555,7 +562,9 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
   // 1. TV Series Fallback: Query TVMaze (keyless, rich episode and cast catalog)
   if (isSeries) {
     try {
-      const tvmazeRes = await fetchWithTimeout(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}&embed[]=episodes&embed[]=cast`, {}, 2500);
+      const tvmazeRes = await fetchWithTimeout(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}&embed[]=episodes&embed[]=cast`, {}, 2500, {
+        provider: 'TVMaze', diagnostics, visibleParams: ['q', 'embed[]'],
+      });
       if (tvmazeRes.ok) {
         const data: any = await tvmazeRes.json();
         if (data && data.name) {
@@ -605,7 +614,9 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 
   // 2. Movie Fallback: Query iTunes Search API for 1000x1000 authentic theatrical artwork & synopsis
   try {
-    const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=1`, {}, 2500);
+    const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=1`, {}, 2500, {
+      provider: 'iTunes movies', diagnostics, visibleParams: ['term', 'entity', 'limit'],
+    });
     if (itunesRes.ok) {
       const data: any = await itunesRes.json();
       if (data.resultCount > 0 && data.results[0]) {
@@ -670,7 +681,9 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   // 1. Music Albums: Query iTunes Search API for 1000x1000 high-resolution original art
   if (lowerType === 'album' || lowerType === 'music') {
     try {
-      const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=1`, {}, 2500);
+      const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=1`, {}, 2500, {
+        provider: 'iTunes albums', diagnostics, visibleParams: ['term', 'entity', 'limit'],
+      });
       if (itunesRes.ok) {
         const itunesData: any = await itunesRes.json();
         if (itunesData.resultCount > 0 && itunesData.results[0]?.artworkUrl100) {

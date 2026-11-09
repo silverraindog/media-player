@@ -109,6 +109,20 @@ test('uses cleaned release filenames while still requiring the original title an
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('removes specific specials and audio encoding suffixes without choosing movie aliases', () => {
+  const series: MediaMetadata = { ...item, title: 'Doctor Who 2005 Specials   -GalaxyTV', year: 2005, yearSource: 'filename' };
+  assert.equal(libraryLookupTitle(series), 'Doctor Who');
+  assert.equal(isVerifiedMatch(series, { source: 'tvmaze', title: 'Doctor Who', year: 2005 }), true);
+  assert.equal(isVerifiedMatch(series, { source: 'tvmaze', title: 'Doctor Who', year: 1963 }), false);
+  assert.equal(libraryLookupTitle({ title: 'Doctor Who 2005 Specials', type: 'series' }), 'Doctor Who Specials');
+  assert.equal(libraryLookupTitle({ title: 'The Specials (2000)', type: 'series' }), 'The Specials');
+  const movie = 'Il convento - Heretiks - The Convent  AC3 5 1 ITA ENG  H265 sub ita eng Sp33dy94-MIRCrew';
+  assert.equal(libraryLookupTitle({ title: movie, type: 'movie' }), 'Il convento - Heretiks - The Convent');
+  assert.equal(isVerifiedMatch({ ...item, type: 'movie', title: movie, year: 2018, yearSource: 'filename' },
+    { source: 'tmdb', title: 'The Convent', year: 2018 }), false);
+  assert.equal(libraryLookupTitle({ title: 'AC3 5 1 Story (2018)', type: 'movie' }), 'AC3 5 1 Story');
+});
+
 test('searches and verifies cleaned titles without accepting a different sequel or year', async () => {
   const media: MediaMetadata = { ...item, type: 'movie', title: 'Battlestar Galactica The Plan 2009   10-bit   5 1', year: 2009, yearSource: 'filename' };
   const originalFetch = globalThis.fetch;

@@ -1,4 +1,5 @@
 import { normalizeUniverseTitle } from '../shared/universeMatcher';
+import { fetchMetadataWithDiagnostics } from './metadataRequestDiagnostics';
 
 type Diagnostic = { provider: string; outcome: string };
 
@@ -27,10 +28,10 @@ export async function fetchTmdbMetadata(
     url.searchParams.set('query', title);
     url.searchParams.set('include_adult', 'false');
     if (year) url.searchParams.set(type === 'movie' ? 'primary_release_year' : 'first_air_date_year', String(year));
-    const response = await fetch(url, {
+    const response = await fetchMetadataWithDiagnostics(url, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(10000),
-    });
+    }, 'TMDB', diagnostics, ['query', 'include_adult', 'primary_release_year', 'first_air_date_year']);
     if (!response.ok) {
       diagnostics?.push({ provider: 'TMDB', outcome: `HTTP ${response.status}${response.status === 401 || response.status === 403 ? ': API token rejected; check Settings' : ''}` });
       return {};

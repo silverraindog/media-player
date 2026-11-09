@@ -103,6 +103,10 @@ export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'>)
   let title = original;
   const taggedCollection = title.match(/^\s*0[1-9]\s+(.+?)\s+-\s+(?:(?:(?:unrated|extended|theatrical|directors[\s-]cut)\s+)?(?:(?:action|adventure|animation|comedy|crime|documentary|drama|fantasy|horror|mystery|romance|sci[\s-]?fi|thriller)\s+)*)?((?:19|20)\d{2})(?:\s+(?:(?:eng|english|ita|italian|rus|russian)\s+)*(?:multi[\s-]*)?subs?)?\s*$/i);
   if (taggedCollection) title = `${taggedCollection[1]} ${taggedCollection[2]}`;
+  if (media.type === 'series') {
+    title = title.replace(/(\b(?:19|20)\d{2}\b)\s+specials\s+-[a-z0-9][a-z0-9._-]*\s*$/i, '$1');
+  }
+  title = title.replace(/\s+ac3\s+[57][ .]1(?:\s+(?:ita|italian|eng|english))*\s+(?=h[ ._-]?265\b)/i, ' ');
   title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:brrip|bdrip|dvdrip|webrip|web[\s.-]?dl)\b.*$/i, '$1');
   title = title.replace(/(\b(?:19|20)\d{2}\b)\s+-oft\s*$/i, '$1');
   title = title.replace(

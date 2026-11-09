@@ -27,7 +27,8 @@ test('looks up a uniquely identified MusicBrainz album in TheAudioDB', async () 
       source: 'musicbrainz-audiodb', title: 'Parachutes', artist: 'Coldplay', musicBrainzId: id,
       overview: 'Album description', posterUrl: 'https://example.com/album.jpg',
     });
-    assert.deepEqual(diagnostics.map(entry => entry.provider), ['MusicBrainz', 'TheAudioDB']);
+    assert.deepEqual(diagnostics.filter(entry => entry.outcome === 'Result returned').map(entry => entry.provider), ['MusicBrainz', 'TheAudioDB']);
+    assert.equal(diagnostics.filter(entry => entry.outcome.startsWith('Request: GET')).length, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -46,7 +47,7 @@ test('refuses ambiguous or different artists before looking up album artwork', a
     };
     assert.equal(await fetchAlbumMetadata('Parachutes', 'Coldplay', diagnostics), null);
     assert.equal(calls, 1);
-    assert.match(diagnostics[0].outcome, /Ambiguous/);
+    assert.ok(diagnostics.some(entry => /Ambiguous/.test(entry.outcome)));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -62,7 +63,7 @@ test('reports rate limits and prevents queued retries during provider cooldown',
     assert.equal(await fetchAlbumMetadata('Example', 'Artist', diagnostics), null);
     assert.equal(await fetchAlbumMetadata('Example', 'Artist', diagnostics), null);
     assert.equal(calls, 1);
-    assert.equal(diagnostics[0].outcome, 'HTTP 503');
-    assert.equal(diagnostics[1].outcome, 'Provider cooling down; retry later');
+    assert.ok(diagnostics.some(entry => entry.outcome === 'HTTP 503'));
+    assert.ok(diagnostics.some(entry => entry.outcome === 'Provider cooling down; retry later'));
   } finally { globalThis.fetch = originalFetch; }
 });

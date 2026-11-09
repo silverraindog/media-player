@@ -67,11 +67,34 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     assert.equal(match.year, 2024);
     assert.equal(match.overview, 'Provider synopsis');
     assert.equal(match.posterUrl, 'https://image.tmdb.org/t/p/w500/poster.jpg');
-    assert.deepEqual(match.diagnostics, [{ provider: 'TMDB', outcome: 'Result returned' }]);
+    assert.ok(match.diagnostics.some((entry: { provider: string; outcome: string }) =>
+      entry.provider === 'TMDB' && entry.outcome === 'Result returned'));
+    assert.ok(match.diagnostics.some((entry: { outcome: string }) =>
+      entry.outcome.startsWith('Request: GET https://api.themoviedb.org/')));
     const ambiguous = await lookup('Ambiguous');
     assert.equal(ambiguous.source, 'fallback');
     assert.equal(ambiguous.title, undefined);
-    assert.deepEqual(ambiguous.diagnostics, [{ provider: 'TMDB', outcome: 'Ambiguous results; review manually' }]);
+    assert.ok(ambiguous.diagnostics.some((entry: { outcome: string }) => entry.outcome === 'Ambiguous results; review manually'));
+    const keyResponse = await fetch(`http://127.0.0.1:${port}/api/settings/api-keys`, {
+      method: 'PUT', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'OMDB_API_KEY', value: 'saved-test-key' }),
+    });
+    assert.equal(keyResponse.status, 200);
+    const omdb = await lookup('OMDb Test');
+    assert.equal(omdb.source, 'omdb');
+    assert.equal(omdb.title, 'OMDb Test');
+    assert.equal(omdb.year, 2024);
+    assert.equal(omdb.overview, 'OMDb synopsis');
+    assert.ok(omdb.diagnostics.some((entry: { provider: string; outcome: string }) =>
+      entry.provider === 'OMDb' && entry.outcome === 'Result returned'));
+    const omdbRequest = omdb.diagnostics.find((entry: { provider: string; outcome: string }) =>
+      entry.provider === 'OMDb' && entry.outcome.startsWith('Request: GET'));
+    assert.ok(omdbRequest);
+    const omdbUrl = new URL(omdbRequest.outcome.slice('Request: GET '.length));
+    assert.equal(omdbUrl.searchParams.get('apikey'), '[REDACTED]');
+    assert.equal(omdbUrl.searchParams.get('t'), 'OMDb Test');
+    assert.equal(omdbUrl.searchParams.get('y'), '2024');
+    assert.ok(!JSON.stringify(omdb.diagnostics).includes('saved-test-key'));
     const albumResponse = await fetch(url, {
       method: 'POST', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Parachutes', artist: 'Coldplay', type: 'album', requireProviderYear: true, diagnostics: true }),
@@ -81,7 +104,8 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     assert.equal(album.artist, 'Coldplay');
     assert.equal(album.overview, 'Album description');
     assert.equal(album.posterUrl, 'https://example.com/album.jpg');
-    assert.deepEqual(album.diagnostics.map((entry: { provider: string }) => entry.provider), ['MusicBrainz', 'TheAudioDB']);
+    assert.deepEqual(album.diagnostics.filter((entry: { outcome: string }) => entry.outcome === 'Result returned')
+      .map((entry: { provider: string }) => entry.provider), ['MusicBrainz', 'TheAudioDB']);
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     await exited;

@@ -41,7 +41,10 @@ test('TMDB metadata searches exact movie and series titles and years safely', as
     response = { total_pages: 2, results: [{ title: 'The First Omen', release_date: '2024-01-01' }] };
     assert.equal((await fetchTmdbMetadata('The First Omen', 'movie', 2024)).unsafeToMatch, true);
     assert.deepEqual(await fetchTmdbMetadata('The First Omen', 'album', 2024), {});
-    assert.equal(diagnostics[0].outcome, 'Result returned');
+    assert.ok(diagnostics.some(entry => entry.outcome === 'Result returned'));
+    assert.ok(diagnostics.some(entry => entry.outcome.startsWith('Request: GET https://api.themoviedb.org/')));
+    assert.ok(diagnostics.some(entry => /^Response: HTTP 200 in \d+ms$/.test(entry.outcome)));
+    assert.ok(!JSON.stringify(diagnostics).includes('test-token'));
   } finally {
     globalThis.fetch = originalFetch;
     if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;
@@ -61,7 +64,8 @@ test('TMDB metadata reports missing tokens, rejected tokens, and invalid respons
     assert.deepEqual(await fetchTmdbMetadata('Example', 'movie', 2020, diagnostics), {});
     globalThis.fetch = async () => Response.json({ results: [] });
     assert.deepEqual(await fetchTmdbMetadata('Example', 'movie', 2020, diagnostics), {});
-    assert.deepEqual(diagnostics.map(entry => entry.outcome), [
+    assert.deepEqual(diagnostics.map(entry => entry.outcome).filter(outcome =>
+      !outcome.startsWith('Request:') && !outcome.startsWith('Response:')), [
       'No API token configured', 'HTTP 401: API token rejected; check Settings', 'Invalid provider response',
     ]);
     assert.ok(!JSON.stringify(diagnostics).includes('test-token'));

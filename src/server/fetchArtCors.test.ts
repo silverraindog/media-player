@@ -91,6 +91,15 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     assert.equal(collectionResponse.matchMode, 'unique-title');
     assert.equal(collectionResponse.title, 'The Evil Dead');
     assert.equal(collectionResponse.year, 1981);
+    const wishmasterCollection = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Wishmaster', type: 'movie', requireProviderYear: true, collectionLookup: true, diagnostics: true }),
+    }).then(response => response.json());
+    assert.equal(wishmasterCollection.matchMode, 'unique-collection');
+    assert.equal(wishmasterCollection.collectionName, 'Wishmaster Collection');
+    assert.equal(wishmasterCollection.collectionFilms.length, 2);
+    assert.match(wishmasterCollection.overview, /The djinn returns/);
+    assert.equal(wishmasterCollection.posterUrl, 'https://image.tmdb.org/t/p/w500/wishmaster-collection.jpg');
     const deerHunter = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'The Deer Hunter', type: 'movie', requireProviderYear: true, allowRanked: true, allowUniqueMovie: true, diagnostics: true }),

@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, isSingleFilmCollectionLookup, libraryLookupTitle, metadataLookupMedia, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isCollectionLookup, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, metadataLookupMedia, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -288,15 +288,19 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       const lookupTitle = libraryLookupTitle(lookupMedia);
       if (lookupMedia.type !== item.type) log(`  Using ${lookupMedia.type} lookup based on TV path context.`);
       if (lookupTitle !== item.title) log(`  Lookup title: "${lookupTitle}".`);
-      if (isSingleFilmCollectionLookup(lookupMedia)) {
-        log('  Collection lookup selects one film, not the entire collection; verify the match.');
+      if (isCollectionLookup(lookupMedia)) {
+        log('  Looking up the TMDB collection and combining its overview with descriptions for its films.');
       }
       try {
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
           if (details.candidates?.length) {
             setReviewCandidates(previous => ({ ...previous, [item.id]: details.candidates! }));
             log('  Multiple exact-title results; choose the correct TMDB result below.');
-            for (const candidate of details.candidates) log(`  TMDB option: ${candidate.title} (${candidate.year}).`);
+            for (const candidate of details.candidates) {
+              log(candidate.candidateType === 'collection'
+                ? `  TMDB collection option: ${candidate.title}.`
+                : `  TMDB option: ${candidate.title}${candidate.year ? ` (${candidate.year})` : ''}.`);
+            }
           }
           if (details.providers?.length) {
             for (const provider of details.providers) log(`  ${provider.provider}: ${provider.outcome}.`);
@@ -356,7 +360,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   ) => {
     setSavingCandidateId(item.id);
     try {
-      await onFetchLibraryMetadata(item.id, { ...candidate, matchMode: 'manual' });
+      let selectedMetadata: FetchedLibraryMetadata;
+      if (candidate.candidateType === 'collection' && candidate.collectionId) {
+        const selected = await fetchLibraryMetadata(item, new AbortController().signal, undefined, candidate.collectionId);
+        if (!selected) throw new Error('The selected TMDB collection could not be verified or had no usable descriptions.');
+        selectedMetadata = selected;
+      } else {
+        selectedMetadata = { ...candidate, matchMode: 'manual' };
+      }
+      await onFetchLibraryMetadata(item.id, selectedMetadata);
       setReviewCandidates(previous => {
         const next = { ...previous };
         delete next[item.id];
@@ -367,7 +379,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         delete next[item.id];
         return next;
       });
-      setBatchLog(previous => [...previous, `  Saved your selection: ${candidate.title} (${candidate.year}) for "${item.title}".`]);
+      setBatchLog(previous => [...previous, `  Saved your selection: ${candidate.title}${candidate.year ? ` (${candidate.year})` : ''} for "${item.title}".`]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setBatchErrors(previous => ({ ...previous, [item.id]: message }));
@@ -921,18 +933,18 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                         </div>
                         {!!reviewCandidates[item.id]?.length && (
                           <div className="space-y-2 border-t border-slate-700 pt-3">
-                            <p className="text-xs text-amber-200">TMDB found multiple possible matches. Select the correct title and year:</p>
+                            <p className="text-xs text-amber-200">TMDB found multiple possible matches. Select the correct title or collection:</p>
                             <div className="flex flex-wrap gap-2">
                               {reviewCandidates[item.id].map((candidate, index) => (
                                 <button
-                                  key={`${candidate.title}:${candidate.year}:${index}`}
+                                  key={`${candidate.candidateType || 'movie'}:${candidate.collectionId || candidate.title}:${candidate.year || ''}:${index}`}
                                   type="button"
                                   disabled={savingCandidateId === item.id}
                                   onClick={() => handleSelectReviewCandidate(item, candidate)}
                                   className="flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-left text-xs text-white hover:border-amber-400 disabled:opacity-50"
                                 >
                                   {candidate.posterUrl && <img src={candidate.posterUrl} alt="" className="h-10 w-7 rounded object-cover" />}
-                                  <span>{candidate.title} ({candidate.year})</span>
+                                  <span>{candidate.title}{candidate.year ? ` (${candidate.year})` : ' (collection)'}</span>
                                 </button>
                               ))}
                             </div>

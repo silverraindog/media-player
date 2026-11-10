@@ -59,7 +59,7 @@ import { registerUniverseRoutes } from './src/server/universeMatcher';
 import { registerProviderSearchRoutes } from './src/server/providerSearch';
 import { registerApiKeyRoutes } from './src/server/apiKeys';
 import { tauriCors } from './src/server/tauriCors';
-import { fetchRankedTmdbMetadata, fetchTmdbMetadata } from './src/server/tmdbMetadata';
+import { fetchRankedTmdbMetadata, fetchTmdbCollectionMetadata, fetchTmdbMetadata } from './src/server/tmdbMetadata';
 import { normalizeUniverseTitle } from './src/shared/universeMatcher';
 import { fetchAlbumMetadata } from './src/server/albumMetadata';
 import { fetchMetadataWithDiagnostics } from './src/server/metadataRequestDiagnostics';
@@ -648,7 +648,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false, allowUniqueMovie = false): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false, allowUniqueMovie = false, collectionLookup = false, selectedCollectionId?: number): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -661,8 +661,11 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   episodes?: any[];
   artist?: string;
   musicBrainzId?: string;
-  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual';
-  candidates?: Array<{ source: 'tmdb'; title: string; year: number; overview?: string; posterUrl?: string }>;
+  collectionName?: string;
+  collectionOverview?: string;
+  collectionFilms?: Array<{ title: string; year?: number; overview?: string; posterUrl?: string }>;
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual' | 'unique-collection';
+  candidates?: Array<{ source: 'tmdb'; title: string; year?: number; overview?: string; posterUrl?: string; collectionId?: number; candidateType?: 'movie' | 'collection'; collectionName?: string }>;
 }> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
@@ -673,6 +676,12 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
       return { source: 'fallback' };
     }
     return await fetchAlbumMetadata(cleanTitle, artist, diagnostics || []) || { source: 'fallback' };
+  }
+
+  if (requireProviderYear && collectionLookup && lowerType === 'movie') {
+    const collection = await fetchTmdbCollectionMetadata(cleanTitle, diagnostics, selectedCollectionId);
+    if (collection.metadata) return collection.metadata;
+    return { source: 'fallback', candidates: collection.candidates };
   }
 
   if (requireProviderYear && (lowerType === 'movie' || lowerType === 'series')) {
@@ -932,7 +941,21 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
     const cleanTitle = String(title).trim();
     const diagnostics: MetadataDiagnostics | undefined = req.body.diagnostics === true ? [] : undefined;
     const artist = typeof req.body.artist === 'string' && req.body.artist.trim().length <= 300 ? req.body.artist.trim() : undefined;
-    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true, artist, req.body.allowRanked === true, req.body.allowUniqueMovie === true);
+    const selectedCollectionId = Number.isSafeInteger(req.body.selectedCollectionId)
+      ? Number(req.body.selectedCollectionId)
+      : undefined;
+    const art = await fetchMediaArt(
+      cleanTitle,
+      type,
+      year ? parseInt(year, 10) : undefined,
+      diagnostics,
+      req.body.requireProviderYear === true,
+      artist,
+      req.body.allowRanked === true,
+      req.body.allowUniqueMovie === true,
+      req.body.collectionLookup === true,
+      selectedCollectionId,
+    );
 
     const postersSet = new Set<string>();
     if (art.posterUrl) postersSet.add(art.posterUrl);

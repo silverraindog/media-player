@@ -16,9 +16,179 @@ export interface TmdbMetadata {
 export interface TmdbReviewCandidate {
   source: 'tmdb';
   title: string;
-  year: number;
+  year?: number;
   overview?: string;
   posterUrl?: string;
+  collectionId?: number;
+  candidateType?: 'movie' | 'collection';
+  collectionName?: string;
+}
+
+export interface TmdbCollectionFilm {
+  title: string;
+  year?: number;
+  overview?: string;
+  posterUrl?: string;
+}
+
+export interface TmdbCollectionMetadata {
+  source: 'tmdb';
+  title: string;
+  collectionName: string;
+  collectionOverview?: string;
+  collectionFilms: TmdbCollectionFilm[];
+  overview: string;
+  posterUrl?: string;
+  year?: number;
+  matchMode: 'unique-collection';
+}
+
+function collectionBase(title: string): string {
+  return title.replace(/\s+(?:collection|trilogy|complete)\s*$/i, '').trim();
+}
+
+function collectionNameMatches(title: string, collectionName: string): boolean {
+  const expected = normalizeUniverseTitle(collectionBase(title));
+  const actual = normalizeUniverseTitle(collectionBase(collectionName));
+  return !!expected && expected === actual;
+}
+
+export async function fetchTmdbCollectionMetadata(
+  title: string,
+  diagnostics?: Diagnostic[],
+  selectedCollectionId?: number,
+): Promise<{ metadata?: TmdbCollectionMetadata; candidates?: TmdbReviewCandidate[]; unsafeToMatch?: boolean }> {
+  const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
+  if (!token) {
+    diagnostics?.push({ provider: 'TMDB', outcome: 'No API token configured' });
+    return {};
+  }
+
+  const fetchJson = async (url: URL): Promise<Record<string, unknown> | undefined> => {
+    const response = await fetchMetadataWithDiagnostics(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    }, 'TMDB', diagnostics, ['query', 'page']);
+    if (!response.ok) throw new Error(`TMDB HTTP ${response.status}`);
+    const value: unknown = await response.json();
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  };
+
+  const fetchDetails = async (id: number): Promise<TmdbCollectionMetadata | undefined> => {
+    const detailsUrl = new URL(`https://api.themoviedb.org/3/collection/${id}`);
+    const details = await fetchJson(detailsUrl);
+    if (!details || !Number.isSafeInteger(details.id) || Number(details.id) !== id ||
+        typeof details.name !== 'string' || !collectionNameMatches(title, details.name) ||
+        !Array.isArray(details.parts)) return undefined;
+
+    const collectionFilms: TmdbCollectionFilm[] = details.parts.flatMap((part): TmdbCollectionFilm[] => {
+      if (!part || typeof part !== 'object') return [];
+      const film = part as Record<string, unknown>;
+      if (typeof film.title !== 'string' || !film.title.trim()) return [];
+      const releaseDate = typeof film.release_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(film.release_date)
+        ? Number(film.release_date.slice(0, 4))
+        : undefined;
+      return [{
+        title: film.title,
+        year: releaseDate,
+        overview: typeof film.overview === 'string' && film.overview.trim() ? film.overview.trim() : undefined,
+        posterUrl: typeof film.poster_path === 'string' && /^\/[a-zA-Z0-9._-]+$/.test(film.poster_path)
+          ? `https://image.tmdb.org/t/p/w500${film.poster_path}` : undefined,
+      }];
+    });
+    const collectionOverview = typeof details.overview === 'string' && details.overview.trim()
+      ? details.overview.trim() : undefined;
+    const hasFilmDescription = collectionFilms.some(film => film.overview);
+    if (!collectionFilms.length || (!collectionOverview && !hasFilmDescription)) return undefined;
+    const filmSections = collectionFilms.map(film => {
+      const filmTitle = `${film.title}${film.year ? ` (${film.year})` : ''}`;
+      return `${filmTitle}\n${film.overview || 'No synopsis available from TMDB.'}`;
+    });
+    const overview = [
+      collectionOverview ? `Collection overview\n${collectionOverview}` : '',
+      `Films in this collection\n${filmSections.join('\n\n')}`,
+    ].filter(Boolean).join('\n\n');
+    return {
+      source: 'tmdb',
+      title: details.name,
+      collectionName: details.name,
+      collectionOverview,
+      collectionFilms,
+      overview,
+      posterUrl: typeof details.poster_path === 'string' && /^\/[a-zA-Z0-9._-]+$/.test(details.poster_path)
+        ? `https://image.tmdb.org/t/p/w500${details.poster_path}` : undefined,
+      matchMode: 'unique-collection',
+    };
+  };
+
+  try {
+    if (selectedCollectionId !== undefined) {
+      if (!Number.isSafeInteger(selectedCollectionId) || selectedCollectionId <= 0) return {};
+      const metadata = await fetchDetails(selectedCollectionId);
+      if (!metadata) {
+        diagnostics?.push({ provider: 'TMDB', outcome: 'Selected collection did not match the requested title or had no usable descriptions' });
+        return {};
+      }
+      diagnostics?.push({ provider: 'TMDB', outcome: `Verified collection: ${metadata.collectionName} (${metadata.collectionFilms.length} film(s))` });
+      return { metadata };
+    }
+
+    const firstUrl = new URL('https://api.themoviedb.org/3/search/collection');
+    firstUrl.searchParams.set('query', title);
+    const firstPage = await fetchJson(firstUrl);
+    if (!firstPage || !Array.isArray(firstPage.results) ||
+        !Number.isSafeInteger(firstPage.total_pages) || Number(firstPage.total_pages) < 0) {
+      diagnostics?.push({ provider: 'TMDB', outcome: 'Invalid provider response during collection search' });
+      return { unsafeToMatch: true };
+    }
+    const totalPages = Number(firstPage.total_pages);
+    if (totalPages > 5) {
+      diagnostics?.push({ provider: 'TMDB', outcome: 'Too many results in collection search to verify safely; review manually' });
+      return { unsafeToMatch: true };
+    }
+    const remaining = await Promise.all(Array.from({ length: Math.max(0, totalPages - 1) }, async (_, index) => {
+      const pageUrl = new URL(firstUrl);
+      pageUrl.searchParams.set('page', String(index + 2));
+      const page = await fetchJson(pageUrl);
+      if (!page || !Array.isArray(page.results) || Number(page.total_pages) !== totalPages) throw new Error('Invalid collection search page');
+      return page.results;
+    }));
+    const exact = [firstPage.results, ...remaining].flat().flatMap((entry): TmdbReviewCandidate[] => {
+      if (!entry || typeof entry !== 'object') return [];
+      const result = entry as Record<string, unknown>;
+      if (!Number.isSafeInteger(result.id) || Number(result.id) <= 0 ||
+          typeof result.name !== 'string' || !collectionNameMatches(title, result.name)) return [];
+      return [{
+        source: 'tmdb',
+        title: result.name,
+        collectionName: result.name,
+        collectionId: Number(result.id),
+        candidateType: 'collection',
+        overview: typeof result.overview === 'string' && result.overview.trim() ? result.overview : undefined,
+        posterUrl: typeof result.poster_path === 'string' && /^\/[a-zA-Z0-9._-]+$/.test(result.poster_path)
+          ? `https://image.tmdb.org/t/p/w500${result.poster_path}` : undefined,
+      }];
+    }).filter((candidate, index, list) => list.findIndex(other => other.collectionId === candidate.collectionId) === index);
+    if (!exact.length) {
+      diagnostics?.push({ provider: 'TMDB', outcome: 'No exact collection title found' });
+      return {};
+    }
+    if (exact.length !== 1) {
+      diagnostics?.push({ provider: 'TMDB', outcome: `Ambiguous collection results; ${exact.length} exact collections require manual selection` });
+      return { unsafeToMatch: true, candidates: exact };
+    }
+    const metadata = await fetchDetails(exact[0].collectionId!);
+    if (!metadata) {
+      diagnostics?.push({ provider: 'TMDB', outcome: 'Exact collection found, but it contains no usable descriptions' });
+      return { unsafeToMatch: true };
+    }
+    diagnostics?.push({ provider: 'TMDB', outcome: `Verified collection: ${metadata.collectionName} (${metadata.collectionFilms.length} film(s))` });
+    return { metadata };
+  } catch {
+    diagnostics?.push({ provider: 'TMDB', outcome: 'Network error or timeout during collection lookup' });
+    console.warn('[TMDB metadata] Collection lookup failed or returned an invalid response.');
+    return { unsafeToMatch: true };
+  }
 }
 
 export async function fetchRankedTmdbMetadata(

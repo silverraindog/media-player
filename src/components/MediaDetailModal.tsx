@@ -917,7 +917,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                   <p className="text-indigo-300 italic font-medium text-xs">"{media.tagline}"</p>
                 )}
 
-                <p className="text-slate-200 leading-relaxed text-xs sm:text-sm font-normal">
+                <p className="whitespace-pre-line text-slate-200 leading-relaxed text-xs sm:text-sm font-normal">
                   {media.overview}
                 </p>
 

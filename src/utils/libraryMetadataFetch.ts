@@ -16,7 +16,14 @@ export interface FetchedLibraryMetadata {
   cast?: CastMember[];
   artist?: string;
   musicBrainzId?: string;
-  matchMode?: 'ranked' | 'unique-title' | 'unique-variant';
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual';
+  candidates?: Array<{
+    source: 'tmdb';
+    title: string;
+    year: number;
+    overview?: string;
+    posterUrl?: string;
+  }>;
 }
 
 export interface MetadataFetchDiagnostic {
@@ -31,6 +38,7 @@ export interface MetadataLookupDetails {
   reason: string;
   fields: string[];
   providers?: MetadataFetchDiagnostic[];
+  candidates?: NonNullable<FetchedLibraryMetadata['candidates']>;
 }
 
 export class MetadataBackendUnavailableError extends Error {
@@ -208,11 +216,18 @@ export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMeta
   const lookupTitle = libraryLookupTitle(media);
   if (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant') {
     const resultTitle = result.title;
-    return (media.type === 'series' || isSingleFilmCollectionLookup(media)) &&
-      !year && result.source === 'tmdb' && !!result.year &&
-      !!resultTitle && (result.matchMode === 'unique-title'
-        ? normalizeUniverseTitle(lookupTitle) === normalizeUniverseTitle(resultTitle)
-        : metadataTitleVariants(lookupTitle).some(variant => normalizeUniverseTitle(variant) === normalizeUniverseTitle(resultTitle)));
+    if (media.type === 'series') {
+      return !year && result.source === 'tmdb' && !!result.year && !!resultTitle &&
+        (result.matchMode === 'unique-title'
+          ? normalizeUniverseTitle(lookupTitle) === normalizeUniverseTitle(resultTitle)
+          : metadataTitleVariants(lookupTitle).some(variant => normalizeUniverseTitle(variant) === normalizeUniverseTitle(resultTitle)));
+    }
+    return result.matchMode === 'unique-title' && !year && result.source === 'tmdb' && !!result.year &&
+      !!resultTitle && normalizeUniverseTitle(lookupTitle) === normalizeUniverseTitle(resultTitle);
+  }
+  if (result.matchMode === 'manual') {
+    return result.source === 'tmdb' && !!result.title && !!result.year &&
+      metadataTitleVariants(lookupTitle).some(variant => normalizeUniverseTitle(variant) === normalizeUniverseTitle(result.title!));
   }
   if (result.matchMode === 'ranked') {
     const resultTitle = result.title;
@@ -234,7 +249,7 @@ export function trustedAlbumArtist(media: MediaMetadata): string | undefined {
 export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibraryMetadata): MediaMetadata {
   const updated = { ...media };
   if (isVerifiedMatch(media, result)) updated.type = metadataLookupMedia(media).type;
-  if ((result.matchMode === 'unique-title' || result.matchMode === 'unique-variant') && isVerifiedMatch(media, result) && result.year) {
+  if ((result.matchMode === 'unique-title' || result.matchMode === 'unique-variant' || result.matchMode === 'manual') && isVerifiedMatch(media, result) && result.year) {
     updated.year = result.year;
     updated.yearSource = 'provider';
   }
@@ -272,7 +287,7 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: libraryLookupTitle(lookupMedia), type: lookupMedia.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, allowUniqueMovie: isSingleFilmCollectionLookup(lookupMedia), diagnostics: true }),
+        body: JSON.stringify({ title: libraryLookupTitle(lookupMedia), type: lookupMedia.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, allowUniqueMovie: lookupMedia.type === 'movie' && !trustedMediaYear(media), diagnostics: true }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -282,7 +297,7 @@ export async function fetchLibraryMetadata(
     if (!response.ok) throw new Error(`Metadata lookup failed (HTTP ${response.status})`);
     const result: FetchedLibraryMetadata & { success?: boolean; diagnostics?: unknown; fallback?: boolean } = await response.json();
     if (!result || !result.success) throw new Error('Metadata lookup returned an invalid response');
-    if (result.fallback || result.source === 'local_storage_cache') throw new MetadataBackendUnavailableError();
+    if ((result.fallback || result.source === 'local_storage_cache') && !result.candidates?.length) throw new MetadataBackendUnavailableError();
     const verified = isVerifiedMatch(media, result);
     const fields = [
       !isMissingText(result.overview) ? 'synopsis' : '',
@@ -307,7 +322,9 @@ export async function fetchLibraryMetadata(
       ? result.diagnostics.filter((entry): entry is MetadataFetchDiagnostic =>
         entry && typeof entry.provider === 'string' && typeof entry.outcome === 'string')
       : undefined;
-    onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers });
+    onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers,
+      candidates: Array.isArray(result.candidates) ? result.candidates.filter(candidate =>
+        candidate?.source === 'tmdb' && typeof candidate.title === 'string' && Number.isInteger(candidate.year)) : undefined });
     if ((!result.source || result.source === 'fallback') && isSingleFilmCollectionLookup(lookupMedia) && !trustedMediaYear(media) &&
         providers?.some(({ provider, outcome }) => provider === 'TMDB' && outcome === 'No API token configured')) {
       throw new Error('A TMDB token is required to match a collection without a trusted year.');

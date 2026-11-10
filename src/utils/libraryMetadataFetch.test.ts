@@ -222,14 +222,14 @@ test('ranked matches permit only title variants and years within one year', asyn
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test('unique TMDB series with unverified years can be saved without relaxing movie or ambiguous matching', () => {
+test('unique exact TMDB titles without local years can be saved while other movie matches remain strict', () => {
   for (const [title, year] of [['The Walking Dead', 2010], ['Futurama', 1999], ['Twin Peaks', 1990]] as const) {
     const media: MediaMetadata = { ...item, title, year: 2024, yearSource: 'placeholder' };
     const result = { source: 'tmdb', title, year, matchMode: 'unique-title' as const };
     assert.equal(isVerifiedMatch(media, result), true);
     assert.equal(mergeFetchedMetadata(media, result).year, year);
     assert.equal(mergeFetchedMetadata(media, result).yearSource, 'provider');
-    assert.equal(isVerifiedMatch({ ...media, type: 'movie' }, result), false);
+    assert.equal(isVerifiedMatch({ ...media, type: 'movie' }, result), true);
     assert.equal(isVerifiedMatch(media, { ...result, title: `${title} 2` }), false);
     assert.equal(isVerifiedMatch(media, { ...result, source: 'omdb' }), false);
   }
@@ -273,7 +273,7 @@ test('generic download containers are excluded and collections match one unique 
   const originalFetch = globalThis.fetch;
   try {
     const collection: MediaMetadata = { ...item, type: 'movie', title: 'The Evil Dead Collection 1981-2013 Mkvking', year: 1981, yearSource: 'folder' };
-    const movie = { source: 'tmdb', title: 'The Evil Dead', year: 1981, matchMode: 'unique-variant' as const };
+    const movie = { source: 'tmdb', title: 'The Evil Dead', year: 1981, matchMode: 'unique-title' as const };
     let details: MetadataLookupDetails | undefined;
     globalThis.fetch = async (_url, init) => {
       const request = JSON.parse(String(init?.body));
@@ -286,7 +286,7 @@ test('generic download containers are excluded and collections match one unique 
     assert.match(details?.reason || '', /collection matched to one film/);
     assert.equal(mergeFetchedMetadata(collection, movie).yearSource, 'provider');
     assert.equal(isVerifiedMatch(collection, { ...movie, title: 'The Evil Dead 2' }), false);
-    assert.equal(isVerifiedMatch({ ...collection, title: 'The Evil Dead' }, movie), false);
+    assert.equal(isVerifiedMatch({ ...collection, title: 'The Evil Dead' }, movie), true);
     assert.equal(trustedMediaYear({ ...collection, title: 'The Evil Dead Trilogy (2013)', year: 2013, yearSource: 'folder' }), undefined);
     assert.equal(trustedMediaYear({ ...collection, yearSource: 'user' }), 1981);
     globalThis.fetch = async () => Response.json({
@@ -470,6 +470,40 @@ test('omits unsupported filename years and saves a unique series provider year',
     assert.ok(result);
     assert.equal(mergeFetchedMetadata(media, result).year, 1996);
     assert.equal(mergeFetchedMetadata(media, result).yearSource, 'provider');
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('saves a unique exact movie title without a local year and exposes ambiguous choices', async () => {
+  const media: MediaMetadata = { ...item, type: 'movie', title: 'The Deer Hunter', year: 2026, yearSource: 'placeholder' };
+  const originalFetch = globalThis.fetch;
+  const details: MetadataLookupDetails[] = [];
+  try {
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'The Deer Hunter');
+      assert.equal(request.type, 'movie');
+      assert.equal(request.year, undefined);
+      assert.equal(request.allowUniqueMovie, true);
+      return Response.json({ success: true, source: 'tmdb', title: 'The Deer Hunter', year: 1978, matchMode: 'unique-title' });
+    };
+    const result = await fetchLibraryMetadata(media, new AbortController().signal, value => details.push(value));
+    assert.ok(result);
+    assert.equal(isVerifiedMatch(media, result), true);
+    assert.equal(mergeFetchedMetadata(media, result).year, 1978);
+    assert.equal(mergeFetchedMetadata(media, result).yearSource, 'provider');
+
+    globalThis.fetch = async () => Response.json({
+      success: true,
+      source: 'fallback',
+      candidates: [
+        { source: 'tmdb', title: 'The Deer Hunter', year: 1978 },
+        { source: 'tmdb', title: 'The Deer Hunter', year: 2026 },
+      ],
+      diagnostics: [{ provider: 'TMDB', outcome: 'No unique exact movie title; select a result manually' }],
+    });
+    assert.equal(await fetchLibraryMetadata(media, new AbortController().signal, value => details.push(value)), null);
+    assert.equal(details.at(-1)?.candidates?.length, 2);
+    assert.equal(isVerifiedMatch(media, { ...details.at(-1)!.candidates![0], matchMode: 'manual' }), true);
   } finally { globalThis.fetch = originalFetch; }
 });
 

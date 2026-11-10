@@ -84,6 +84,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
   const [batchErrors, setBatchErrors] = useState<Record<string, string>>({});
+  const [reviewCandidates, setReviewCandidates] = useState<Record<string, NonNullable<FetchedLibraryMetadata['candidates']>>>({});
+  const [savingCandidateId, setSavingCandidateId] = useState<string | null>(null);
   const [batchCurrentTitle, setBatchCurrentTitle] = useState('');
   const [batchLog, setBatchLog] = useState<string[]>([]);
   const [showBatchLog, setShowBatchLog] = useState(false);
@@ -260,6 +262,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setBatchProgress({ current: 0, total: items.length });
     setBatchMessage(null);
     setBatchErrors({});
+    setReviewCandidates({});
     setShowBatchLog(true);
     setBatchLog([
       `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${categoryLabelCount} category labels and ${audioTrackCount} individual audio tracks excluded. ${sidecarCount} subtitle/metadata/artwork entries excluded.`,
@@ -290,6 +293,11 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       }
       try {
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
+          if (details.candidates?.length) {
+            setReviewCandidates(previous => ({ ...previous, [item.id]: details.candidates! }));
+            log('  Multiple exact-title results; choose the correct TMDB result below.');
+            for (const candidate of details.candidates) log(`  TMDB option: ${candidate.title} (${candidate.year}).`);
+          }
           if (details.providers?.length) {
             for (const provider of details.providers) log(`  ${provider.provider}: ${provider.outcome}.`);
           } else {
@@ -340,6 +348,33 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     const summary = `${controller.signal.aborted || backendUnavailable ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${review} requiring manual review, ${failed} failed.`;
     setBatchMessage(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
     log(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
+  };
+
+  const handleSelectReviewCandidate = async (
+    item: MediaMetadata,
+    candidate: NonNullable<FetchedLibraryMetadata['candidates']>[number],
+  ) => {
+    setSavingCandidateId(item.id);
+    try {
+      await onFetchLibraryMetadata(item.id, { ...candidate, matchMode: 'manual' });
+      setReviewCandidates(previous => {
+        const next = { ...previous };
+        delete next[item.id];
+        return next;
+      });
+      setBatchErrors(previous => {
+        const next = { ...previous };
+        delete next[item.id];
+        return next;
+      });
+      setBatchLog(previous => [...previous, `  Saved your selection: ${candidate.title} (${candidate.year}) for "${item.title}".`]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setBatchErrors(previous => ({ ...previous, [item.id]: message }));
+      setBatchLog(previous => [...previous, `  Could not save selected result for "${item.title}": ${message}`]);
+    } finally {
+      setSavingCandidateId(null);
+    }
   };
 
   if (!isOpen) return null;
@@ -778,8 +813,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     return (
                       <div
                         key={item.id}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 transition"
+                        className="flex flex-col gap-3 p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 transition"
                       >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         {/* Media Item Info */}
                         <div className="flex items-center gap-3 min-w-0">
                           {/* Thumbnail / Artwork Placeholder */}
@@ -882,6 +918,26 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                             </button>
                           )}
                         </div>
+                        </div>
+                        {!!reviewCandidates[item.id]?.length && (
+                          <div className="space-y-2 border-t border-slate-700 pt-3">
+                            <p className="text-xs text-amber-200">TMDB found multiple possible matches. Select the correct title and year:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {reviewCandidates[item.id].map((candidate, index) => (
+                                <button
+                                  key={`${candidate.title}:${candidate.year}:${index}`}
+                                  type="button"
+                                  disabled={savingCandidateId === item.id}
+                                  onClick={() => handleSelectReviewCandidate(item, candidate)}
+                                  className="flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-left text-xs text-white hover:border-amber-400 disabled:opacity-50"
+                                >
+                                  {candidate.posterUrl && <img src={candidate.posterUrl} alt="" className="h-10 w-7 rounded object-cover" />}
+                                  <span>{candidate.title} ({candidate.year})</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

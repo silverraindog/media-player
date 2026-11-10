@@ -661,7 +661,8 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   episodes?: any[];
   artist?: string;
   musicBrainzId?: string;
-  matchMode?: 'ranked' | 'unique-title' | 'unique-variant';
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual';
+  candidates?: Array<{ source: 'tmdb'; title: string; year: number; overview?: string; posterUrl?: string }>;
 }> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
@@ -676,14 +677,17 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
 
   if (requireProviderYear && (lowerType === 'movie' || lowerType === 'series')) {
     if (lowerType === 'movie' && !year && allowUniqueMovie) {
-      return (await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, true)).metadata || { source: 'fallback' };
+      const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, true);
+      if (ranked.metadata) return ranked.metadata;
+      return { source: 'fallback', candidates: ranked.candidates };
     }
     const tmdb = await fetchTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
     if (tmdb.metadata) return tmdb.metadata;
     if (tmdb.unsafeToMatch) {
       if (allowRanked) {
-        const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
+        const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, allowUniqueMovie);
         if (ranked.metadata) return ranked.metadata;
+        if (ranked.candidates?.length) return { source: 'fallback', candidates: ranked.candidates };
       }
       return { source: 'fallback' };
     }
@@ -738,6 +742,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
     if (!omdbExact && !secondaryExact) {
       const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
       if (ranked.metadata) return ranked.metadata;
+      if (ranked.candidates?.length) return { source: 'fallback', candidates: ranked.candidates };
       if (ranked.unsafeToMatch) return { source: 'fallback' };
     }
   }

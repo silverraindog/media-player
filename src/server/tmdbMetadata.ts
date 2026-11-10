@@ -10,12 +10,20 @@ export interface TmdbMetadata {
   year: number;
   overview?: string;
   posterUrl?: string;
-  matchMode?: 'ranked' | 'unique-title' | 'unique-variant';
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual';
+}
+
+export interface TmdbReviewCandidate {
+  source: 'tmdb';
+  title: string;
+  year: number;
+  overview?: string;
+  posterUrl?: string;
 }
 
 export async function fetchRankedTmdbMetadata(
   title: string, type: string, year: number | undefined, diagnostics?: Diagnostic[], allowUniqueMovie = false,
-): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean }> {
+): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean; candidates?: TmdbReviewCandidate[] }> {
   const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
   if ((!year && type !== 'series' && !(type === 'movie' && allowUniqueMovie)) || (type !== 'movie' && type !== 'series')) return {};
   if (!token) {
@@ -103,10 +111,19 @@ export async function fetchRankedTmdbMetadata(
     }
     if (!year && unique.length !== 1) {
       diagnostics?.push({ provider: 'TMDB', outcome: 'Ambiguous results without a trusted year; review manually' });
-      return { unsafeToMatch: true };
+      return { unsafeToMatch: true, candidates: unique.map(({ metadata }) => metadata) };
+    }
+    if (!year && type === 'movie') {
+      if (unique.length === 1 && unique[0].variant === 0) {
+        unique[0].metadata.matchMode = 'unique-title';
+        diagnostics?.push({ provider: 'TMDB', outcome: `Unique exact movie title: ${unique[0].metadata.title} (${unique[0].metadata.year}); saving provider year` });
+        return { metadata: unique[0].metadata };
+      }
+      diagnostics?.push({ provider: 'TMDB', outcome: 'No unique exact movie title; select a result manually' });
+      return { unsafeToMatch: true, candidates: unique.map(({ metadata }) => metadata) };
     }
     const selected = unique[0];
-    if (!year) selected.metadata.matchMode = 'unique-variant';
+    if (!year) selected.metadata.matchMode = type === 'series' ? 'unique-variant' : 'unique-title';
     diagnostics?.push({ provider: 'TMDB', outcome: `Ranked selection: ${selected.metadata.title} (${selected.metadata.year}), TMDB ID ${selected.id}; ${unique.length} candidate(s), popularity ${selected.popularity}, votes ${selected.votes}; verify this match` });
     return { metadata: selected.metadata };
   } catch (error) {
@@ -123,7 +140,7 @@ export async function fetchTmdbMetadata(
   type: string,
   year: number | undefined,
   diagnostics?: Diagnostic[],
-): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean }> {
+): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean; candidates?: TmdbReviewCandidate[] }> {
   if (type !== 'movie' && type !== 'series') return {};
   const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
   if (!token) {
@@ -174,10 +191,10 @@ export async function fetchTmdbMetadata(
     });
     if (candidates.length !== 1) {
       diagnostics?.push({ provider: 'TMDB', outcome: candidates.length ? 'Ambiguous results; review manually' : 'No exact title and year result found' });
-      return candidates.length ? { unsafeToMatch: true } : {};
+      return candidates.length ? { unsafeToMatch: true, candidates } : {};
     }
     diagnostics?.push({ provider: 'TMDB', outcome: 'Result returned' });
-    return { metadata: !year && type === 'series' ? { ...candidates[0], matchMode: 'unique-title' } : candidates[0] };
+    return { metadata: !year ? { ...candidates[0], matchMode: 'unique-title' } : candidates[0] };
   } catch {
     diagnostics?.push({ provider: 'TMDB', outcome: 'Network error or timeout' });
     console.warn('[TMDB metadata] Search failed or timed out.');

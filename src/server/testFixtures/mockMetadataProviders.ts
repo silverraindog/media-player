@@ -20,6 +20,9 @@ globalThis.fetch = async (input, init) => {
     if (query === 'The Evil Dead') return Response.json({ total_pages: 1, results: [
       { id: 88, title: 'The Evil Dead', release_date: '1981-10-15', overview: 'Film synopsis' },
     ] });
+    if (query === 'The Deer Hunter') return Response.json({ total_pages: 1, results: [
+      { id: 89, title: 'The Deer Hunter', release_date: '1978-12-08', overview: 'Drama synopsis', poster_path: '/deer-hunter.jpg' },
+    ] });
     if (query === 'Futurama') return Response.json({ total_pages: 1, results: [
       { id: 33, name: 'Futurama', first_air_date: '1999-03-28', overview: 'Series synopsis' },
     ] });

@@ -186,33 +186,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         } catch {}
       }
 
-      // 5. Send backend reset command (both Tauri native IPC and Node/Express server DELETE endpoint)
-      const isTauri = typeof window !== 'undefined' && '__TAURI_IPC__' in window;
-      if (isTauri) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          await invoke('reset_database');
-          await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
-        } catch (e) {
-          console.warn('Tauri reset invoke error:', e);
-        }
-      }
-
+      // 5. Send the backend reset command.
       // Call dedicated DELETE endpoint on Express backend
-      try {
-        const response = await fetch('/api/db/reset', {
-          method: 'DELETE',
-        });
-        if (!response.ok && !isTauri) {
-          // Fallback to POST if DELETE not supported
-          const fallbackRes = await fetch('/api/db/reset', { method: 'POST' });
-          if (!fallbackRes.ok && !isTauri) {
-            throw new Error('Server API failed to reset database.');
-          }
-        }
-      } catch (err) {
-        if (!isTauri) throw err;
-      }
+      const response = await fetch('/api/db/reset', { method: 'DELETE' });
+      if (!response.ok || !(await response.json()).success) throw new Error('Server API failed to reset database.');
 
       logger.info('Database reset completed successfully. Reloading state...', 'Database');
       setIsConfirmingReset(false);

@@ -1208,8 +1208,8 @@ export const openInIina = async (filePath: string): Promise<{ success: boolean; 
 export const getAllMediaFromTauriDb = async (): Promise<any[]> => {
   if (!isTauriEnvironment()) return [];
   try {
-    const { invoke } = await import('@tauri-apps/api/tauri');
-    const items = await invoke<any[]>('get_all_media');
+    const { apiCall } = await import('../lib/api');
+    const { items } = await apiCall<{ items: any[] }>('/api/db/media');
     if (!Array.isArray(items)) return [];
     return items.map((it) => {
       let genres: string[] = ['Media'];
@@ -1243,26 +1243,12 @@ export const getAllMediaFromTauriDb = async (): Promise<any[]> => {
 export const saveMediaToTauriDb = async (media: any): Promise<boolean> => {
   if (!isTauriEnvironment()) return false;
   try {
-    const { invoke } = await import('@tauri-apps/api/tauri');
-    const dbItem = {
-      id: media.id || `media-${Date.now()}`,
-      media_type: media.type || 'series',
-      title: media.title,
-      original_title: media.originalTitle || media.title,
-      synopsis: media.overview || media.synopsis || media.tagline || media.title || '',
-      year: media.year || null,
-      rating: media.rating || null,
-      poster_url: media.posterUrl || null,
-      fanart_url: media.fanartUrl || null,
-      genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres || null,
-      cast: media.cast ? JSON.stringify(media.cast) : null,
-      recommended_folder: media.recommendedFolderStructure || null,
-      raw_data: JSON.stringify(media),
-      file_size_bytes: null,
-      created_at: null,
-      updated_at: null,
-    };
-    await invoke('save_media', { media: dbItem });
+    const { apiCall } = await import('../lib/api');
+    await apiCall('/api/db/media', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(media),
+    });
     return true;
   } catch (err) {
     console.warn('saveMediaToTauriDb error:', err);
@@ -2445,7 +2431,6 @@ export const validateFfmpegSidecar = async (): Promise<FfmpegSidecarReport> => {
     version: 'Browser Preview Fallback Mode',
   };
 };
-
 
 
 

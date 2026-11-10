@@ -13,7 +13,6 @@ import { generateMetadataFile } from '../utils/nfoGenerator';
 import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 import { downloadMediaBundleZip } from '../utils/zipDownloader';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
-import { saveMediaToTauriDb } from '../utils/tauriBridge';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 
 interface MediaDetailModalProps {
@@ -209,27 +208,11 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         localStorage.setItem('sambavault_media_library_v2', JSON.stringify(stored));
       } catch (e) {}
 
-      // 3. Persist to Tauri SQLite
-      saveMediaToTauriDb(updated).catch(() => {});
-
-      // 4. Save to server SQLite vault
+      // 3. Save to the server SQLite vault.
       await apiCall('/api/db/media', {
         method: 'POST',
-        body: JSON.stringify({
-          id: updated.id,
-          media_type: updated.type,
-          title: updated.title,
-          original_title: updated.originalTitle || updated.title,
-          synopsis: updated.overview || (updated as any).synopsis || '',
-          year: updated.year,
-          rating: updated.rating,
-          poster_url: updated.posterUrl,
-          fanart_url: updated.fanartUrl,
-          genres: JSON.stringify(updated.genres),
-          cast: updated.cast ? JSON.stringify(updated.cast) : null,
-          recommended_folder: updated.recommendedFolderStructure,
-          raw_data: updated.source || 'gemini-ai'
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
       });
     } catch (err) {
       console.error('Failed to persist media change to database:', err);

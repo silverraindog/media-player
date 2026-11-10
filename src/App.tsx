@@ -175,6 +175,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
       });
     } catch (e) {
       console.warn(`[Tauri customFetch] apiCall error for ${urlStr}:`, e);
+      if (urlStr.startsWith('/api/db/') || urlStr.startsWith('/api/vault/state')) throw e;
       let bodyObj: any = null;
       if (init?.body && typeof init.body === 'string') {
         try { bodyObj = JSON.parse(init.body); } catch {}
@@ -1240,6 +1241,7 @@ function App() {
 
   // Persistent state loading from backend (~/.media-player)
   const [isVaultLoaded, setIsVaultLoaded] = useState(false);
+  const vaultStateReadable = useRef(false);
   const [storedMediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
     try {
       const wasReset = localStorage.getItem('sambavault_db_reset') === 'true';
@@ -1317,6 +1319,8 @@ function App() {
     fetchWithRetry('/api/vault/state')
       .then(res => res.json())
       .then(data => {
+        if (!data.success) throw new Error('Vault state could not be loaded');
+        vaultStateReadable.current = true;
         const wasReset = typeof window !== 'undefined' && localStorage.getItem('sambavault_db_reset') === 'true';
         if (data.success && data.state) {
           if (data.state.sambaTree && Array.isArray(data.state.sambaTree)) setSambaTree(data.state.sambaTree);
@@ -1341,7 +1345,9 @@ function App() {
         }
         setIsVaultLoaded(true);
       })
-      .catch(() => {
+      .catch((error) => {
+        console.error('Failed to load vault state; automatic state saving is disabled:', error);
+        showToast('Could not load saved vault state. Automatic state saving is disabled; restart after checking storage.');
         const wasReset = typeof window !== 'undefined' && localStorage.getItem('sambavault_db_reset') === 'true';
         setMediaLibrary(prev => (prev && prev.length > 0 ? prev : (wasReset ? [] : CURATED_MEDIA_DATABASE)));
         setIsVaultLoaded(true);
@@ -1374,7 +1380,7 @@ function App() {
 
   // Persist the smaller vault state without duplicating the media library.
   useEffect(() => {
-    if (!isVaultLoaded) return;
+    if (!isVaultLoaded || !vaultStateReadable.current) return;
 
     const timeoutId = window.setTimeout(() => {
       fetchWithRetry('/api/vault/state', {

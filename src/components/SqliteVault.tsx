@@ -104,19 +104,7 @@ export const SqliteVault: React.FC<SqliteVaultProps> = ({ onOpenDetails, onRefre
       // 2. Clear frontend fallback database cache
       localDbFallback.clearAll();
 
-      // 3. Send native IPC reset if running in Tauri desktop environment
-      const isTauri = typeof window !== 'undefined' && '__TAURI_IPC__' in window;
-      if (isTauri) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          await invoke('reset_database');
-          await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
-        } catch (tauriErr) {
-          console.warn('[SqliteVault] Tauri reset invoke error:', tauriErr);
-        }
-      }
-
-      // 4. Call backend dedicated DELETE endpoint to physically drop tables, close connection, and unlink files
+      // 3. Call the backend to reset the database.
       let response = await fetch('/api/db/reset', {
         method: 'DELETE',
       });

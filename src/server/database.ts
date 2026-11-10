@@ -4,17 +4,14 @@ import path from 'path';
 import os from 'os';
 
 let dbInstance: Database | null = null;
+let dbInitialization: Promise<Database> | null = null;
 
 // Determine persistent data directory across app re-installs / zip extractions
 function resolveDataDirectory(): string {
   // 1. Explicit override via env variable
   if (process.env.SAMBA_VAULT_DATA_DIR) {
-    try {
-      if (!fs.existsSync(process.env.SAMBA_VAULT_DATA_DIR)) {
-        fs.mkdirSync(process.env.SAMBA_VAULT_DATA_DIR, { recursive: true });
-      }
-      return process.env.SAMBA_VAULT_DATA_DIR;
-    } catch {}
+    fs.mkdirSync(process.env.SAMBA_VAULT_DATA_DIR, { recursive: true });
+    return process.env.SAMBA_VAULT_DATA_DIR;
   }
 
   // 2. Primary: User's permanent home directory (~/.media-player)
@@ -29,17 +26,9 @@ function resolveDataDirectory(): string {
       return userMediaPlayerDir;
     }
   } catch (e) {
-    console.warn('[Storage] Could not access user home directory, falling back to local folder:', e);
+    throw new Error('[Storage] Could not access the persistent user data directory', { cause: e });
   }
-
-  // 3. Fallback: local project data directory
-  const localData = path.join(process.cwd(), 'data');
-  if (!fs.existsSync(localData)) {
-    try {
-      fs.mkdirSync(localData, { recursive: true });
-    } catch {}
-  }
-  return localData;
+  throw new Error('[Storage] No home directory available for persistent data');
 }
 
 const DATA_DIR = resolveDataDirectory();
@@ -49,7 +38,7 @@ const VAULT_STATE_FILE = path.join(DATA_DIR, 'vault_state.json');
 // Automatic Migration: If ~/.media-player is active but missing DB, check ~/.sambavault and ./data
 try {
   const homeDir = os.homedir();
-  const legacyDirs = [
+  const legacyDirs = process.env.SAMBA_VAULT_DATA_DIR ? [] : [
     homeDir ? path.join(homeDir, '.sambavault') : '',
     path.join(process.cwd(), 'data'),
   ].filter(Boolean);
@@ -69,7 +58,7 @@ try {
     }
   }
 } catch (e) {
-  console.warn('[Storage] Migration check error:', e);
+  throw new Error('[Storage] Could not migrate existing persistent data', { cause: e });
 }
 
 export interface MediaItemDb {
@@ -117,46 +106,53 @@ export interface WatchHistoryLogDb {
   watched_at: string;
 }
 
-let persistTimer: NodeJS.Timeout | null = null;
+let thumbnailStatsTimer: NodeJS.Timeout | null = null;
 
 export function persistDbToDiskSync() {
   if (!dbInstance) return;
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
+  if (thumbnailStatsTimer) {
+    clearTimeout(thumbnailStatsTimer);
+    thumbnailStatsTimer = null;
   }
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    const binaryArray = dbInstance.export();
-    const buffer = Buffer.from(binaryArray);
-    fs.writeFileSync(DB_PATH, buffer);
-  } catch (err) {
-    console.error('Error synchronously persisting SQLite database to disk:', err);
-  }
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const buffer = Buffer.from(dbInstance.export());
+  const tempPath = `${DB_PATH}.tmp`;
+  fs.writeFileSync(tempPath, buffer);
+  fs.renameSync(tempPath, DB_PATH);
 }
 
 function persistDbToDisk() {
-  if (!dbInstance) return;
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    persistDbToDiskSync();
-  }, 250);
+  persistDbToDiskSync();
 }
 
 export async function getDatabase(): Promise<Database> {
   if (dbInstance) return dbInstance;
+  if (!dbInitialization) {
+    dbInitialization = initializeDatabase().catch(error => {
+      dbInstance?.close();
+      dbInstance = null;
+      throw error;
+    }).finally(() => { dbInitialization = null; });
+  }
+  return dbInitialization;
+}
 
+async function initializeDatabase(): Promise<Database> {
   const SQL = await initSqlJs();
 
   if (fs.existsSync(DB_PATH)) {
     try {
       const fileBuffer = fs.readFileSync(DB_PATH);
-      dbInstance = new SQL.Database(fileBuffer);
+      const existing = new SQL.Database(fileBuffer);
+      try {
+        existing.exec('PRAGMA schema_version');
+      } catch (error) {
+        existing.close();
+        throw error;
+      }
+      dbInstance = existing;
     } catch (e) {
-      console.warn('Could not read existing SQLite DB file, creating fresh database...', e);
-      dbInstance = new SQL.Database();
+      throw new Error(`[Storage] Cannot open existing database at ${DB_PATH}; it was not replaced`, { cause: e });
     }
   } else {
     dbInstance = new SQL.Database();
@@ -969,8 +965,8 @@ export async function batchSaveMediaToDb(items: MediaItemDb[]): Promise<number> 
         : calculateMediaSizeBytes(media);
 
       db.run(
-        `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, recommended_folder, raw_data, file_size_bytes, file_path, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, file_path, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET
            media_type = excluded.media_type,
            title = excluded.title,
@@ -981,6 +977,7 @@ export async function batchSaveMediaToDb(items: MediaItemDb[]): Promise<number> 
            poster_url = excluded.poster_url,
            fanart_url = excluded.fanart_url,
            genres = excluded.genres,
+           cast = excluded.cast,
            recommended_folder = excluded.recommended_folder,
            raw_data = excluded.raw_data,
            file_path = excluded.file_path,
@@ -997,6 +994,7 @@ export async function batchSaveMediaToDb(items: MediaItemDb[]): Promise<number> 
           media.poster_url || null,
           media.fanart_url || null,
           media.genres || null,
+          media.cast || null,
           media.recommended_folder || null,
           media.raw_data || null,
           calculatedSize,
@@ -1991,7 +1989,17 @@ export async function incrementThumbnailHitInDb(mediaPathOrId: string): Promise<
      WHERE media_path = ? OR id = ?`,
     [Date.now(), mediaPathOrId, mediaPathOrId]
   );
-  persistDbToDisk();
+  if (!thumbnailStatsTimer) {
+    thumbnailStatsTimer = setTimeout(() => {
+      thumbnailStatsTimer = null;
+      try {
+        persistDbToDiskSync();
+      } catch (error) {
+        console.error('[Storage] Failed to persist thumbnail access statistics:', error);
+      }
+    }, 5000);
+    thumbnailStatsTimer.unref();
+  }
 }
 
 export async function clearThumbnailCacheInDb(idOrPath?: string): Promise<void> {
@@ -2139,20 +2147,13 @@ export function getPersistentStorageInfo() {
 }
 
 export function getVaultStateFromDisk(): PersistentVaultState | null {
+  if (!fs.existsSync(VAULT_STATE_FILE)) return null;
   try {
-    if (fs.existsSync(VAULT_STATE_FILE)) {
-      const raw = fs.readFileSync(VAULT_STATE_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      return parsed;
-    }
+    return JSON.parse(fs.readFileSync(VAULT_STATE_FILE, 'utf-8'));
   } catch (e) {
-    console.error('[SambaVault Storage] Error reading vault_state.json:', e);
+    throw new Error(`[Storage] Cannot read vault state at ${VAULT_STATE_FILE}; it was not replaced`, { cause: e });
   }
-  return null;
 }
-
-let vaultStatePersistTimer: NodeJS.Timeout | null = null;
-let pendingVaultState: PersistentVaultState | null = null;
 
 export function saveVaultStateToDiskSync(state: Partial<PersistentVaultState>): PersistentVaultState {
   const existing = getVaultStateFromDisk() || {
@@ -2167,56 +2168,16 @@ export function saveVaultStateToDiskSync(state: Partial<PersistentVaultState>): 
     lastSavedAt: new Date().toISOString(),
   };
 
-  pendingVaultState = updated;
-  if (vaultStatePersistTimer) {
-    clearTimeout(vaultStatePersistTimer);
-    vaultStatePersistTimer = null;
-  }
-
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-    const tempPath = `${VAULT_STATE_FILE}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
-    fs.renameSync(tempPath, VAULT_STATE_FILE);
-  } catch (e) {
-    console.error('[SambaVault Storage] Failed saving vault_state.json synchronously to disk:', e);
-  }
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tempPath = `${VAULT_STATE_FILE}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(updated, null, 2), 'utf-8');
+  fs.renameSync(tempPath, VAULT_STATE_FILE);
 
   return updated;
 }
 
 export function saveVaultStateToDisk(state: Partial<PersistentVaultState>): PersistentVaultState {
-  const existing = getVaultStateFromDisk() || {
-    version: 1,
-    lastSavedAt: new Date().toISOString(),
-  };
-
-  const updated: PersistentVaultState = {
-    ...existing,
-    ...state,
-    version: 1,
-    lastSavedAt: new Date().toISOString(),
-  };
-
-  pendingVaultState = updated;
-
-  if (vaultStatePersistTimer) clearTimeout(vaultStatePersistTimer);
-  vaultStatePersistTimer = setTimeout(() => {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      const tempPath = `${VAULT_STATE_FILE}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
-      fs.renameSync(tempPath, VAULT_STATE_FILE);
-    } catch (e) {
-      console.error('[SambaVault Storage] Failed saving vault_state.json to disk:', e);
-    }
-  }, 150);
-
-  return updated;
+  return saveVaultStateToDiskSync(state);
 }
 
 export async function globalSanitizeVaultPaths(): Promise<{
@@ -2414,6 +2375,10 @@ export async function hardResetAndDeleteDatabaseFiles(): Promise<{
   statePath: string;
   message: string;
 }> {
+  if (thumbnailStatsTimer) {
+    clearTimeout(thumbnailStatsTimer);
+    thumbnailStatsTimer = null;
+  }
   if (dbInstance) {
     try {
       dbInstance.run(`
@@ -2435,11 +2400,6 @@ export async function hardResetAndDeleteDatabaseFiles(): Promise<{
       console.warn('Error closing SQLite DB instance:', e);
     }
     dbInstance = null;
-  }
-
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
   }
 
   const filesToRemove = [
@@ -2481,6 +2441,3 @@ export async function hardResetAndDeleteDatabaseFiles(): Promise<{
 export async function resetDatabaseInDb(): Promise<void> {
   await hardResetAndDeleteDatabaseFiles();
 }
-
-
-

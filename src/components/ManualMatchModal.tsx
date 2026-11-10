@@ -39,7 +39,6 @@ import {
 } from '../utils/mediaExtractor';
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { downloadMediaArtwork } from '../utils/zipDownloader';
-import { saveMediaToTauriDb } from '../utils/tauriBridge';
 
 export interface ManualMatchModalProps {
   isOpen: boolean;
@@ -582,29 +581,13 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
         localStorage.setItem('sambavault_media_library_v2', JSON.stringify(stored));
       } catch (e) {}
 
-      // 3. Persist to Tauri SQLite
-      saveMediaToTauriDb(finalized).catch(() => {});
-
-      // 4. Persist to local SQLite Vault via HTTP API
-      await fetch('/api/db/media', {
+      // 3. Persist to the SQLite vault via the backend.
+      const saveResponse = await fetch('/api/db/media', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: finalized.id,
-          media_type: finalized.type,
-          title: finalized.title,
-          original_title: finalized.title,
-          synopsis: finalized.overview,
-          year: finalized.year,
-          rating: finalized.rating,
-          poster_url: finalized.posterUrl,
-          fanart_url: finalized.fanartUrl,
-          genres: JSON.stringify(finalized.genres),
-          cast: finalized.cast ? JSON.stringify(finalized.cast) : null,
-          recommended_folder: finalized.recommendedFolderStructure,
-          raw_data: JSON.stringify(finalized)
-        })
-      }).catch(() => {});
+        body: JSON.stringify(finalized),
+      });
+      if (!saveResponse.ok) throw new Error(`Failed to save metadata (HTTP ${saveResponse.status})`);
 
       // 5. Trigger asynchronous write operation to Samba filesystem (.nfo and local images)
       const rootTag = finalized.type === 'series' ? 'tvshow' : 'movie';

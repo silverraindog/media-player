@@ -42,6 +42,12 @@
 
 4. Open your browser at **`http://localhost:3000`**.
 
+### Persistent data and backups
+
+The desktop app stores its library in `~/.media-player/media_vault.sqlite` and its saved vault state in `~/.media-player/vault_state.json`, outside the application bundle. Replacing the app in `/Applications` should not remove these files. The backend is the single database writer; do not run multiple SambaVault backend instances against the same data directory.
+
+Close SambaVault before copying these files for backup or restoring them. Keep backups in a separate location; they contain library and potentially network configuration details. API keys and `.env` files are separate and should be protected, not shared. The backend also supports `SAMBA_VAULT_DATA_DIR` as an explicit storage override; changing it selects a different database.
+
 ### TMDB setup
 
 Obtain a TMDB **API Read Access Token** (not the shorter API key) and enter it under Settings → API keys. The same section supports OMDb and Gemini keys. Saved values take effect immediately, override environment values, and are not displayed again. Removing a saved value restores any environment value. Settings are available only from the computer running the backend. Keys are stored unencrypted in `~/.media-player/api-keys.json`, or in `SAMBA_VAULT_DATA_DIR` when configured, with owner-only file permissions. Protect the file and do not include it in backups or share it.

@@ -1136,12 +1136,14 @@ fn generate_media_id(path: &str) -> String {
 
 #[tauri::command]
 async fn scan_and_import_volumes(
-    app_handle: tauri::AppHandle,
     mount_paths: Option<Vec<String>>,
     mountPaths: Option<Vec<String>>,
 ) -> Result<Vec<String>, String> {
     let paths = mount_paths.or(mountPaths).unwrap_or_default();
     let mut results = Vec::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build().map_err(|error| error.to_string())?;
 
     for path_str in paths {
         let path = PathBuf::from(&path_str);
@@ -1158,6 +1160,7 @@ async fn scan_and_import_volumes(
             .into_iter();
 
         let mut count = 0;
+        let mut batch = Vec::new();
         for entry_res in walker {
             let entry = match entry_res {
                 Ok(e) => e,
@@ -1194,15 +1197,35 @@ async fn scan_and_import_volumes(
                 file_path: Some(full_path.clone()),
             };
 
-            if let Err(e) = db::save_media(app_handle.clone(), media_item) {
-                eprintln!("[DB] Failed to save media {}: {}", full_path, e);
-            } else {
-                count += 1;
+            batch.push(media_item);
+            if batch.len() >= 128 {
+                save_scanned_media_batch(&client, &batch).await?;
+                count += batch.len();
+                batch.clear();
             }
+        }
+        if !batch.is_empty() {
+            save_scanned_media_batch(&client, &batch).await?;
+            count += batch.len();
         }
         results.push(format!("Successfully imported {} items from {}", count, path_str));
     }
     Ok(results)
+}
+
+async fn save_scanned_media_batch(client: &reqwest::Client, items: &[db::MediaItem]) -> Result<(), String> {
+    let response = client.post("http://127.0.0.1:3000/api/db/media/batch")
+        .json(&serde_json::json!({ "items": items }))
+        .send().await.map_err(|error| format!("Failed to save scanned media: {}", error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Failed to save scanned media: HTTP {}", status));
+    }
+    let result: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
+    if result.get("success").and_then(|value| value.as_bool()) != Some(true) {
+        return Err("Backend did not confirm scanned media was saved".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2579,9 +2602,6 @@ fn main() {
         .manage(BackendProcess(Mutex::new(None)))
         .manage(vlc_player::VlcPlayerState::default())
         .setup(|app| {
-            if let Err(e) = db::init_db(&app.handle()) {
-                eprintln!("[SambaVault] Failed to initialize SQLite database: {}", e);
-            }
             if !cfg!(debug_assertions) {
                 let backend = start_packaged_backend(app)?;
                 *app.state::<BackendProcess>().0.lock().unwrap() = Some(backend);
@@ -2621,18 +2641,6 @@ fn main() {
             macos_permissions::verify_full_disk_access_preflight,
             macos_permissions::open_macos_security_privacy,
             macos_permissions::request_full_disk_access_and_register,
-            db::get_all_media,
-            db::get_recent_media,
-            db::get_movies,
-            db::get_series,
-            db::get_albums,
-            db::get_media_by_type,
-            db::save_media,
-            db::save_media_batch,
-            db::get_vault_state,
-            db::save_vault_state,
-            db::update_watch_progress,
-            db::reset_database,
             ai::generate_synopsis,
             macos_permissions::diagnostic_check_full_disk_access,
             macos_permissions::check_tcc_access,

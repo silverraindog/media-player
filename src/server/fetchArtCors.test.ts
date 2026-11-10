@@ -42,6 +42,19 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
       }
     }
     assert.ok(ready, 'Backend did not start in time');
+    const savedMedia = await fetch(`http://127.0.0.1:${port}/api/db/media/batch`, {
+      method: 'POST',
+      headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{ id: 'persistence-test', type: 'movie', title: 'Saved title', overview: 'Saved synopsis', cast: [{ name: 'Actor' }] }] }),
+    });
+    assert.equal(savedMedia.status, 200);
+    const storedMedia = await fetch(`http://127.0.0.1:${port}/api/db/media`, {
+      headers: { Origin: 'tauri://localhost' },
+    }).then(response => response.json());
+    const savedItem = storedMedia.items.find((item: { id: string }) => item.id === 'persistence-test');
+    assert.equal(savedItem.title, 'Saved title');
+    assert.equal(JSON.parse(savedItem.cast)[0].name, 'Actor');
+    assert.equal(JSON.parse(savedItem.raw_data).overview, 'Saved synopsis');
     for (const origin of ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost', 'http://localhost:1420']) {
       const preflight = await fetch(url, {
         method: 'OPTIONS',

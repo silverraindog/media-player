@@ -12,130 +12,15 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
       return window.fetch(url, options).then((r) => r.json()) as any;
     }
 
-    if (endpoint.startsWith('/api/db/media/recent') && (!options.method || options.method === 'GET')) {
-      const requestedLimit = Number.parseInt(
-        new URL(endpoint, 'http://localhost').searchParams.get('limit') || '',
-        10
-      );
-      const limit = Number.isFinite(requestedLimit)
-        ? Math.min(Math.max(requestedLimit, 1), 50)
-        : 10;
-      const items = await invoke<any[]>('get_recent_media', { limit });
-      return { success: true, count: items.length, items } as any;
-    }
-
-    // Map REST endpoints to native Tauri commands writing to ~/.media-player
-    const isLibraryMediaEndpoint = (
-      endpoint === '/api/media' ||
-      endpoint.startsWith('/api/media?') ||
-      endpoint.startsWith('/api/db/media') ||
-      endpoint.startsWith('/api/media/movies') ||
-      endpoint.startsWith('/api/media/series') ||
-      endpoint.startsWith('/api/media/music') ||
-      endpoint.startsWith('/api/media/albums')
-    );
-
-    if (isLibraryMediaEndpoint && (!options.method || options.method === 'GET')) {
-      let typeParam = '';
-      if (endpoint.includes('?')) {
-        try {
-          typeParam = new URL(endpoint, 'http://localhost').searchParams.get('type') || '';
-        } catch {}
-      }
-      if (endpoint.includes('/movies') || typeParam.toLowerCase() === 'movie' || typeParam.toLowerCase() === 'movies') {
-        const items = await invoke<any[]>('get_movies');
-        return { success: true, count: items.length, items } as any;
-      }
-      if (endpoint.includes('/series') || typeParam.toLowerCase() === 'series') {
-        const items = await invoke<any[]>('get_series');
-        return { success: true, count: items.length, items } as any;
-      }
-      if (endpoint.includes('/music') || endpoint.includes('/albums') || typeParam.toLowerCase() === 'music' || typeParam.toLowerCase() === 'album' || typeParam.toLowerCase() === 'albums') {
-        const items = await invoke<any[]>('get_albums');
-        return { success: true, count: items.length, items } as any;
-      }
-      const items = await invoke<any[]>('get_all_media');
-      return { success: true, count: items.length, items } as any;
-    }
-    if (endpoint === '/api/db/media' && options.method === 'POST') {
-      const media = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
-      return invoke<T>('save_media', { media });
-    }
-    if (endpoint === '/api/db/media/batch' && options.method === 'POST') {
-      const payload = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
-      const items = payload?.items || [];
-      const rustItems = items.map((m: any) => ({
-        id: m.id,
-        media_type: m.type || m.media_type || 'series',
-        title: m.title,
-        original_title: m.originalTitle || null,
-        synopsis: m.overview || m.synopsis || '',
-        year: m.year || null,
-        rating: m.rating || null,
-        poster_url: m.posterUrl || m.poster_url || null,
-        fanart_url: m.fanartUrl || m.fanart_url || null,
-        genres: typeof m.genres === 'string' ? m.genres : JSON.stringify(m.genres || []),
-        cast: typeof m.cast === 'string' ? m.cast : JSON.stringify(m.cast || []),
-        recommended_folder: m.recommendedFolderStructure || m.recommended_folder || null,
-        file_path: m.path || m.file_path || null,
-        raw_data: JSON.stringify(m),
-        file_size_bytes: m.fileSizeBytes || null,
-      }));
-      await invoke('save_media_batch', { items: rustItems });
-      return { success: true, count: rustItems.length } as any;
-    }
-    if (endpoint === '/api/vault/state' && (!options.method || options.method === 'GET')) {
-      const stateJson = await invoke<string | null>('get_vault_state').catch(() => null);
-      if (stateJson) {
-        try {
-          return { success: true, hasSavedState: true, state: JSON.parse(stateJson) } as any;
-        } catch {}
-      }
-      // Check localStorage fallback
-      try {
-        const local = localStorage.getItem('sambavault_persistent_vault_state');
-        if (local) {
-          return { success: true, hasSavedState: true, state: JSON.parse(local) } as any;
-        }
-      } catch {}
-      return { success: false, hasSavedState: false, state: null } as any;
-    }
-    if (endpoint === '/api/vault/state' && options.method === 'POST') {
-      const bodyStr = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
-      try {
-        localStorage.setItem('sambavault_persistent_vault_state', bodyStr);
-      } catch {}
-      await invoke('save_vault_state', { stateJson: bodyStr }).catch((err) => {
-        console.warn('[apiCall] save_vault_state Tauri IPC error:', err);
-      });
-      return { success: true } as any;
-    }
-    if (endpoint === '/api/db/watchlist' && (!options.method || options.method === 'GET')) {
-      const stored = localStorage.getItem('media_vault_watchlist_cache');
-      const list = stored ? JSON.parse(stored) : [];
-      return { success: true, watchlist: list, count: list.length } as any;
-    }
-    if (endpoint === '/api/db/reset') {
-      await invoke('reset_database').catch(() => {});
-      await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
-      try {
-        localStorage.removeItem('sambavault_persistent_vault_state');
-      } catch {}
-      return { success: true } as any;
-    }
     if (endpoint === '/api/metadata/generate-synopsis') {
       const { title, type, year } = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
       return invoke<T>('generate_synopsis', { title, mediaType: type, year });
-    }
-    if (endpoint === '/api/db/progress/update') {
-      const progress = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
-      return invoke<T>('update_watch_progress', { progress });
     }
   }
 
   // Fallback to fetch for Node/Express dev server / web
   try {
-    let effectiveUrl = endpoint;
+    let effectiveUrl = endpoint === '/api/db/progress/update' ? '/api/db/progress' : endpoint;
     if (isTauri && effectiveUrl.startsWith('/')) {
       const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
       effectiveUrl = `http://localhost:${backendPort}${effectiveUrl}`;
@@ -144,6 +29,7 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
     if (!res.ok) throw new Error(`API error: ${res.statusText}`);
     return res.json();
   } catch (err) {
+    if (endpoint.startsWith('/api/db/') || endpoint.startsWith('/api/vault/state')) throw err;
     // If backend fetch failed, use localDbFallback
     let bodyObj: any = null;
     if (options.body && typeof options.body === 'string') {

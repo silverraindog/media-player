@@ -16,6 +16,10 @@ globalThis.fetch = async (input, init) => {
   }
   if (url.hostname === 'api.themoviedb.org') {
     const query = url.searchParams.get('query');
+    if (query === 'Доктор кто') return Response.json({ total_pages: 1, results: [] });
+    if (query === 'Futurama') return Response.json({ total_pages: 1, results: [
+      { id: 33, name: 'Futurama', first_air_date: '1999-03-28', overview: 'Series synopsis' },
+    ] });
     if (query === 'OMDb Test') return Response.json({ total_pages: 1, results: [] });
     if (query === 'Nearby Year') return Response.json({
       total_pages: 1,

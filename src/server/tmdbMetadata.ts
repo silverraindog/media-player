@@ -10,17 +10,19 @@ export interface TmdbMetadata {
   year: number;
   overview?: string;
   posterUrl?: string;
-  matchMode?: 'ranked';
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant';
 }
 
 export async function fetchRankedTmdbMetadata(
   title: string, type: string, year: number | undefined, diagnostics?: Diagnostic[],
 ): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean }> {
   const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
-  if (!token || !year || (type !== 'movie' && type !== 'series')) return {};
+  if (!token || (!year && type !== 'series') || (type !== 'movie' && type !== 'series')) return {};
   const variants = metadataTitleVariants(title);
   const candidates: Array<{ metadata: TmdbMetadata; variant: number; distance: number; popularity: number; votes: number; id: number }> = [];
-  diagnostics?.push({ provider: 'TMDB', outcome: 'Trying ranked title variants and release years within one year; this may select a different film' });
+  diagnostics?.push({ provider: 'TMDB', outcome: year
+    ? 'Trying ranked title variants and release years within one year; this may select a different film'
+    : 'Trying title variants without a trusted year; only a unique result can be selected' });
   try {
     const searches = await Promise.allSettled(variants.map(async (query, variant) => {
       const url = new URL(`https://api.themoviedb.org/3/search/${type === 'movie' ? 'movie' : 'tv'}`);
@@ -72,7 +74,7 @@ export async function fetchRankedTmdbMetadata(
             typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
             !Number.isSafeInteger(result.id) || Number(result.id) <= 0) continue;
         const resultYear = Number(date.slice(0, 4));
-        const distance = Math.abs(resultYear - year);
+        const distance = year ? Math.abs(resultYear - year) : 0;
         if (distance > 1) continue;
         candidates.push({
           metadata: {
@@ -95,7 +97,12 @@ export async function fetchRankedTmdbMetadata(
       diagnostics?.push({ provider: 'TMDB', outcome: 'No ranked title variant and nearby year result found' });
       return {};
     }
+    if (!year && unique.length !== 1) {
+      diagnostics?.push({ provider: 'TMDB', outcome: 'Ambiguous results without a trusted year; review manually' });
+      return { unsafeToMatch: true };
+    }
     const selected = unique[0];
+    if (!year) selected.metadata.matchMode = 'unique-variant';
     diagnostics?.push({ provider: 'TMDB', outcome: `Ranked selection: ${selected.metadata.title} (${selected.metadata.year}), TMDB ID ${selected.id}; ${unique.length} candidate(s), popularity ${selected.popularity}, votes ${selected.votes}; verify this match` });
     return { metadata: selected.metadata };
   } catch (error) {
@@ -166,7 +173,7 @@ export async function fetchTmdbMetadata(
       return candidates.length ? { unsafeToMatch: true } : {};
     }
     diagnostics?.push({ provider: 'TMDB', outcome: 'Result returned' });
-    return { metadata: candidates[0] };
+    return { metadata: !year && type === 'series' ? { ...candidates[0], matchMode: 'unique-title' } : candidates[0] };
   } catch {
     diagnostics?.push({ provider: 'TMDB', outcome: 'Network error or timeout' });
     console.warn('[TMDB metadata] Search failed or timed out.');

@@ -78,6 +78,18 @@ test('TMDB metadata searches exact movie and series titles and years safely', as
         globalThis.fetch = async () => new Response(null, { status: 503 });
         assert.equal((await fetchRankedTmdbMetadata('Skinamarink', 'movie', 2022)).unsafeToMatch, true);
         assert.equal((await fetchRankedTmdbMetadata('Skinamarink', 'movie', undefined)).metadata, undefined);
+        globalThis.fetch = async input => {
+          const query = new URL(String(input)).searchParams.get('query');
+          return Response.json({ total_pages: 1, results: query === 'Show' ? [
+            { id: 44, name: 'Show', first_air_date: '1999-01-01' },
+          ] : [] });
+        };
+        assert.equal((await fetchRankedTmdbMetadata('Local - Show', 'series', undefined)).metadata?.matchMode, 'unique-variant');
+        globalThis.fetch = async () => Response.json({ total_pages: 1, results: [
+          { id: 44, name: 'Show', first_air_date: '1999-01-01' },
+          { id: 45, name: 'Show', first_air_date: '2000-01-01' },
+        ] });
+        assert.equal((await fetchRankedTmdbMetadata('Show', 'series', undefined)).unsafeToMatch, true);
       } finally {
         globalThis.fetch = originalFetch;
         if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;

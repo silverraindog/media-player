@@ -88,6 +88,18 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     const alternate = await rankedLookup('Local - Alternate');
     assert.equal(alternate.title, 'Alternate');
     assert.equal(alternate.matchMode, 'ranked');
+    const showLookup = (title: string) => fetch(url, {
+      method: 'POST', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, type: 'series', requireProviderYear: true, allowRanked: true, diagnostics: true }),
+    }).then(response => response.json());
+    const show = await showLookup('Futurama');
+    assert.equal(show.matchMode, 'unique-title');
+    assert.equal(show.year, 1999);
+    const nonLatin = await showLookup('Доктор кто');
+    assert.ok(nonLatin.diagnostics.some((entry: { provider: string; outcome: string }) =>
+      entry.provider === 'OMDb' && entry.outcome.startsWith('Skipped non-Latin')));
+    assert.ok(!nonLatin.diagnostics.some((entry: { provider: string; outcome: string }) =>
+      entry.provider === 'OMDb' && entry.outcome.startsWith('Request:')));
     const keyResponse = await fetch(`http://127.0.0.1:${port}/api/settings/api-keys`, {
       method: 'PUT', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'OMDB_API_KEY', value: 'saved-test-key' }),

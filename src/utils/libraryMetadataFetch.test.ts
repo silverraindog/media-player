@@ -222,6 +222,57 @@ test('ranked matches permit only title variants and years within one year', asyn
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('unique TMDB series with unverified years can be saved without relaxing movie or ambiguous matching', () => {
+  for (const [title, year] of [['The Walking Dead', 2010], ['Futurama', 1999], ['Twin Peaks', 1990]] as const) {
+    const media: MediaMetadata = { ...item, title, year: 2024, yearSource: 'placeholder' };
+    const result = { source: 'tmdb', title, year, matchMode: 'unique-title' as const };
+    assert.equal(isVerifiedMatch(media, result), true);
+    assert.equal(mergeFetchedMetadata(media, result).year, year);
+    assert.equal(mergeFetchedMetadata(media, result).yearSource, 'provider');
+    assert.equal(isVerifiedMatch({ ...media, type: 'movie' }, result), false);
+    assert.equal(isVerifiedMatch(media, { ...result, title: `${title} 2` }), false);
+    assert.equal(isVerifiedMatch(media, { ...result, source: 'omdb' }), false);
+  }
+});
+
+test('TV folder context corrects numbered entries but never guesses from a movie folder', async () => {
+  const media: MediaMetadata = { ...item, type: 'movie', title: 'Доктор кто 01', folderPath: '/TV/Доктор кто 01', yearSource: 'placeholder' };
+  const result = { source: 'tmdb', title: 'Доктор кто', year: 2005, matchMode: 'unique-title' as const };
+  assert.equal(isVerifiedMatch(media, result), true);
+  assert.equal(mergeFetchedMetadata(media, result).type, 'series');
+  assert.equal(isVerifiedMatch({ ...media, folderPath: '/Movies/Доктор кто 01' }, result), false);
+  assert.equal(libraryLookupTitle({ title: 'Studio 60', type: 'series' }), 'Studio 60');
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'Доктор кто');
+      assert.equal(request.type, 'series');
+      return Response.json({ success: true, ...result });
+    };
+    assert.ok(await fetchLibraryMetadata(media, new AbortController().signal));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('generic download containers are excluded but collections require review without a lookup', async () => {
+  for (const title of ['drive-download-20261031T084432Z-1-001', 'New Folder (2)', 'Downloads']) {
+    assert.equal(isCategorizerFolderLabel({ ...item, title, folderPath: `/media/${title}` }), true);
+  }
+  assert.equal(isCategorizerFolderLabel({ ...item, title: 'Downloads', folderPath: '/media/Downloads/Downloads', path: '/media/Downloads/Downloads.mkv' }), false);
+  assert.equal(libraryLookupTitle({ title: 'Our Friends in the North      BONE', type: 'series' }), 'Our Friends in the North');
+  assert.equal(libraryLookupTitle({ title: 'The Evil Dead Collection 1981-2013 Mkvking', type: 'movie' }), 'The Evil Dead');
+  assert.equal(libraryLookupTitle({ title: 'The Collection (2012)', type: 'movie' }), 'The Collection');
+  assert.equal(libraryLookupTitle({ title: 'The Collection', type: 'movie' }), 'The Collection');
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw new Error('unexpected network request'); };
+    await assert.rejects(fetchLibraryMetadata({ ...item, title: 'The Evil Dead Collection 1981-2013 Mkvking' }, new AbortController().signal), MetadataReviewRequiredError);
+    globalThis.fetch = async () => Response.json({ success: true, source: 'fallback' });
+    assert.equal(await fetchLibraryMetadata({ ...item, title: 'The Collection', type: 'movie' }, new AbortController().signal), null);
+    assert.equal(await fetchLibraryMetadata({ ...item, title: 'Greatest Collection', type: 'album' }, new AbortController().signal), null);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('provider failures without a match are surfaced rather than recorded as no-match', async () => {
   const originalFetch = globalThis.fetch;
   try {

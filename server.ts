@@ -661,7 +661,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   episodes?: any[];
   artist?: string;
   musicBrainzId?: string;
-  matchMode?: 'ranked';
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant';
 }> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
@@ -716,15 +716,17 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   }
 
   // 2. Query Providers IN PARALLEL for rapid response
+  const skipOmdb = requireProviderYear && [...cleanTitle].some(char => /\p{L}/u.test(char) && !/\p{Script=Latin}/u.test(char));
+  if (skipOmdb) diagnostics?.push({ provider: 'OMDb', outcome: 'Skipped non-Latin lookup; use manual matching if needed' });
   const [omdbResult, secondaryResult] = await Promise.allSettled([
-    fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year, undefined, undefined, diagnostics),
+    skipOmdb ? Promise.resolve(null) : fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year, undefined, undefined, diagnostics),
     fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year, diagnostics, requireProviderYear)
   ]);
 
   const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
   const secondaryData = secondaryResult.status === 'fulfilled' ? secondaryResult.value : null;
 
-  if (requireProviderYear && allowRanked && year && (lowerType === 'movie' || lowerType === 'series')) {
+  if (requireProviderYear && allowRanked && (year || lowerType === 'series') && (lowerType === 'movie' || lowerType === 'series')) {
     const omdbExact = omdbData?.Title && normalizeUniverseTitle(omdbData.Title) === normalizeUniverseTitle(cleanTitle) &&
       parseInt(omdbData.Year, 10) === year;
     const secondaryExact = secondaryData?.title && normalizeUniverseTitle(secondaryData.title) === normalizeUniverseTitle(cleanTitle) &&

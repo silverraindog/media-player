@@ -14,7 +14,7 @@ import { resolveMediaWithFallback } from './clientMediaResolver';
 import { normalizeFranchiseHierarchy } from './franchiseHierarchy';
 import { categorizeMediaWithRetry } from './metadataCategorizer';
 import { logger } from './loggerService';
-import { isExcludedPicturesPath } from './excludedMedia';
+import { isExcludedPicturesPath, isGenericDownloadFolder } from './excludedMedia';
 
 // Comprehensive Media Extension Definitions
 export const SUPPORTED_VIDEO_EXTENSIONS = [
@@ -461,6 +461,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
   const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
   const filePath = findFirstMediaFilePath(node, parentPath) || fullPath;
 
+  if (node.type === 'folder' && isGenericDownloadFolder(node.name)) return null;
   if (node.matchedMedia) {
     return {
       ...node.matchedMedia,
@@ -765,6 +766,10 @@ export function extractAllMediaFromSambaTree(
       if (isExcludedPicturesPath(fullPath)) continue;
       if (isPathInsideExtras(fullPath, node.type === 'file')) continue;
 
+      if (node.type === 'folder' && isGenericDownloadFolder(node.name)) {
+        if (node.children) traverse(node.children, fullPath);
+        continue;
+      }
       if (node.matchedMedia) {
         const item = nodeToMediaMetadata(node, parentPath);
         if (item) mergeOrAdd(item);
@@ -882,7 +887,9 @@ export async function extractAllMediaFromSambaTreeAsync(
     if (isExcludedPicturesPath(fullPath)) continue;
     if (isPathInsideExtras(fullPath, node.type === 'file')) continue;
 
-    if (node.matchedMedia) {
+    if (node.type === 'folder' && isGenericDownloadFolder(node.name)) {
+      // Traverse the container without adding it as a media item.
+    } else if (node.matchedMedia) {
       const item = nodeToMediaMetadata(node, parentPath);
       if (item) mergeOrAdd(item);
     } else if (node.type === 'folder') {

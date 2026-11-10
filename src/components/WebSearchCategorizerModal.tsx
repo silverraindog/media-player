@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, metadataLookupMedia, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -281,7 +281,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       setBatchCurrentTitle(item.title);
       const year = trustedMediaYear(item);
       log(`Checking "${item.title}" (${item.type}${year ? `, ${year}` : ', unverified year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
-      const lookupTitle = libraryLookupTitle(item);
+      const lookupMedia = metadataLookupMedia(item);
+      const lookupTitle = libraryLookupTitle(lookupMedia);
+      if (lookupMedia.type !== item.type) log(`  Using ${lookupMedia.type} lookup based on TV folder location.`);
       if (lookupTitle !== item.title) log(`  Lookup title: "${lookupTitle}".`);
       try {
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
@@ -304,7 +306,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             !item.rating && itemData.rating && Number.isFinite(itemData.rating) ? 'rating' : '',
             !item.cast?.length && itemData.cast?.length ? 'cast' : '',
           ].filter(Boolean);
-          log(`  Saved ${itemData.matchMode === 'ranked' ? 'ranked match (verify manually)' : 'verified match'} for "${item.title}"; filled: ${filled.join(', ') || 'no missing fields'}; existing metadata was preserved.`);
+          const matchLabel = itemData.matchMode === 'ranked' || itemData.matchMode === 'unique-variant'
+            ? 'inferred match (verify manually)' : 'verified match';
+          log(`  Saved ${matchLabel} for "${item.title}"; filled: ${filled.join(', ') || 'no missing fields'}; existing metadata was preserved.`);
         } else {
           noMatch++;
           log(`  No verified match saved for "${item.title}".`);

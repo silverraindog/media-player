@@ -2,6 +2,7 @@ import type { CastMember, MediaMetadata } from '../types';
 import { isTauri } from '../lib/api';
 import { getFileCategory, parseTitleAndYear, SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
 import { cleanUniverseTitle, metadataTitleVariants, normalizeUniverseTitle } from '../shared/universeMatcher';
+import { isGenericDownloadMedia } from './excludedMedia';
 
 export interface FetchedLibraryMetadata {
   title?: string;
@@ -15,7 +16,7 @@ export interface FetchedLibraryMetadata {
   cast?: CastMember[];
   artist?: string;
   musicBrainzId?: string;
-  matchMode?: 'ranked';
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant';
 }
 
 export interface MetadataFetchDiagnostic {
@@ -40,8 +41,8 @@ export class MetadataBackendUnavailableError extends Error {
 }
 
 export class MetadataReviewRequiredError extends Error {
-  constructor() {
-    super('Provider results are ambiguous or too numerous to verify; review manually.');
+  constructor(message = 'Provider results are ambiguous or too numerous to verify; review manually.') {
+    super(message);
     this.name = 'MetadataReviewRequiredError';
   }
 }
@@ -54,6 +55,7 @@ const CATEGORY_FOLDER_NAMES = new Set([
 ]);
 
 export function isCategorizerFolderLabel(media: MediaMetadata): boolean {
+  if (isGenericDownloadMedia(media)) return true;
   const title = media.title.trim().toLowerCase().replace(/\s+/g, ' ');
   if (!CATEGORY_FOLDER_NAMES.has(title)) return false;
   const filename = media.path?.replace(/\\/g, '/').split('/').pop() || '';
@@ -105,13 +107,19 @@ function normalizedTitle(title: string): string {
   return title.toLowerCase().replace(/\s*\(\d{4}\)\s*$/, '').replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
-export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'>): string {
+export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'> & Partial<Pick<MediaMetadata, 'folderPath'>>): string {
   if (media.type === 'album') return media.title;
   const original = media.title;
   let title = original;
+  const withoutRange = title.replace(/\s+\b(?:19|20)\d{2}\s*-\s*(?:19|20)\d{2}\b(?:\s+(?:mkvking|yify|bone|rarbg))?\s*$/i, '');
+  if (withoutRange !== title) title = withoutRange.replace(/\s+\b(?:collection|trilogy|complete)\s*$/i, '');
+  title = title.replace(/\s{2,}(?:BONE|YIFY|RARBG|ETRG|JYK|OFT|KATRG)\s*$/i, '');
   const taggedCollection = title.match(/^\s*0[1-9]\s+(.+?)\s+-\s+(?:(?:(?:unrated|extended|theatrical|directors[\s-]cut)\s+)?(?:(?:action|adventure|animation|comedy|crime|documentary|drama|fantasy|horror|mystery|romance|sci[\s-]?fi|thriller)\s+)*)?((?:19|20)\d{2})(?:\s+(?:(?:eng|english|ita|italian|rus|russian)\s+)*(?:multi[\s-]*)?subs?)?\s*$/i);
   if (taggedCollection) title = `${taggedCollection[1]} ${taggedCollection[2]}`;
   if (media.type === 'series') {
+    if (media.folderPath && /(?:^|\/)(?:tv|tv shows?|television|shows?|series|anime)\//i.test(media.folderPath.replace(/\\/g, '/'))) {
+      title = title.replace(/\s+(?:0[1-9]|[1-9]\d)$/, '');
+    }
     title = title.replace(/(\b(?:19|20)\d{2}\b)\s+specials\s+-[a-z0-9][a-z0-9._-]*\s*$/i, '$1');
   }
   title = title.replace(/\s+ac3\s+[57][ .]1(?:\s+(?:ita|italian|eng|english))*\s+(?=h[ ._-]?265\b)/i, ' ');
@@ -143,7 +151,18 @@ export function trustedMediaYear(media: MediaMetadata): number | undefined {
   return undefined;
 }
 
+export function metadataLookupMedia(media: MediaMetadata): MediaMetadata {
+  const folder = media.folderPath?.replace(/\\/g, '/') || '';
+  if (media.type === 'movie' && /\s+(?:0[1-9]|[1-9]\d)$/.test(media.title) &&
+      /(?:^|\/)(?:tv|tv shows?|television|shows?|series|anime)\//i.test(folder) &&
+      folder.split('/').pop()?.trim() === media.title.trim()) {
+    return { ...media, type: 'series' };
+  }
+  return media;
+}
+
 export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMetadata): boolean {
+  media = metadataLookupMedia(media);
   if (media.type === 'album') {
     const artist = trustedAlbumArtist(media);
     return result.source === 'musicbrainz-audiodb' && !!artist && !!result.artist && !!result.musicBrainzId &&
@@ -152,6 +171,13 @@ export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMeta
   }
   const year = trustedMediaYear(media);
   const lookupTitle = libraryLookupTitle(media);
+  if (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant') {
+    const resultTitle = result.title;
+    return media.type === 'series' && !year && result.source === 'tmdb' && !!result.year &&
+      !!resultTitle && (result.matchMode === 'unique-title'
+        ? normalizeUniverseTitle(lookupTitle) === normalizeUniverseTitle(resultTitle)
+        : metadataTitleVariants(lookupTitle).some(variant => normalizeUniverseTitle(variant) === normalizeUniverseTitle(resultTitle)));
+  }
   if (result.matchMode === 'ranked') {
     const resultTitle = result.title;
     return result.source === 'tmdb' && !!resultTitle && !!year && !!result.year &&
@@ -171,6 +197,11 @@ export function trustedAlbumArtist(media: MediaMetadata): string | undefined {
 
 export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibraryMetadata): MediaMetadata {
   const updated = { ...media };
+  if (isVerifiedMatch(media, result)) updated.type = metadataLookupMedia(media).type;
+  if ((result.matchMode === 'unique-title' || result.matchMode === 'unique-variant') && isVerifiedMatch(media, result) && result.year) {
+    updated.year = result.year;
+    updated.yearSource = 'provider';
+  }
   if (isMissingText(updated.overview) && !isMissingText(result.overview)) updated.overview = result.overview!;
   if (isMissingText(updated.synopsis) && !isMissingText(result.overview)) updated.synopsis = result.overview;
   if (isMissingArtwork(updated.posterUrl) && !isMissingArtwork(result.posterUrl)) updated.posterUrl = result.posterUrl!;
@@ -187,6 +218,12 @@ export async function fetchLibraryMetadata(
   signal: AbortSignal,
   onDetails?: (details: MetadataLookupDetails) => void,
 ): Promise<FetchedLibraryMetadata | null> {
+  if (media.type !== 'album' &&
+      !/^the\s+(?:collection|trilogy)(?:\s+(?:19|20)\d{2})?(?:\s|$)/i.test(media.title.trim()) &&
+      /\b(?:collection|trilogy|complete)\b/i.test(media.title) &&
+      (/\b(?:collection|trilogy)\b/i.test(media.title) || /\bcomplete\b.*\b(?:movies?|films?|series|set)\b/i.test(media.title))) {
+    throw new MetadataReviewRequiredError('Collection or trilogy folders may contain multiple titles; review manually.');
+  }
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true });
@@ -197,6 +234,7 @@ export async function fetchLibraryMetadata(
     controller.abort();
   }, 30000);
   try {
+    const lookupMedia = metadataLookupMedia(media);
     const port = isTauri ? (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000 : undefined;
     const url = isTauri ? `http://127.0.0.1:${port}/api/media/fetch-art` : '/api/media/fetch-art';
     let response: Response;
@@ -204,7 +242,7 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: libraryLookupTitle(media), type: media.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, diagnostics: true }),
+        body: JSON.stringify({ title: libraryLookupTitle(lookupMedia), type: lookupMedia.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, diagnostics: true }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -225,10 +263,11 @@ export async function fetchLibraryMetadata(
       result.cast?.length ? 'cast' : '',
     ].filter(Boolean);
     let reason = 'Verified title and year';
-    if (verified && result.matchMode === 'ranked') reason = 'Ranked match using title variant or nearby year; verify manually';
+    if (verified && (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant')) reason = 'Unique TMDB series title or variant; local year unverified';
+    else if (verified && result.matchMode === 'ranked') reason = 'Ranked match using title variant or nearby year; verify manually';
     else if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
-    else if (normalizedTitle(libraryLookupTitle(media)) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
+    else if (normalizedTitle(libraryLookupTitle(lookupMedia)) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
     else if (media.type === 'album' && !verified) reason = 'Album artist cannot be verified; review this result manually';
     else if (media.type === 'album') reason = 'Verified album and artist';
     else if (!trustedMediaYear(media)) reason = 'Library year is unverified; review this result manually';

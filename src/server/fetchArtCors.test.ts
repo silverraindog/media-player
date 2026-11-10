@@ -75,6 +75,19 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     assert.equal(ambiguous.source, 'fallback');
     assert.equal(ambiguous.title, undefined);
     assert.ok(ambiguous.diagnostics.some((entry: { outcome: string }) => entry.outcome === 'Ambiguous results; review manually'));
+    const rankedLookup = (title: string) => fetch(url, {
+      method: 'POST', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, type: 'movie', year: 2024, requireProviderYear: true, allowRanked: true, diagnostics: true }),
+    }).then(response => response.json());
+    const ranked = await rankedLookup('Ambiguous');
+    assert.equal(ranked.matchMode, 'ranked');
+    assert.ok(ranked.diagnostics.some((entry: { outcome: string }) => entry.outcome.includes('popularity 20')));
+    const nearby = await rankedLookup('Nearby Year');
+    assert.equal(nearby.year, 2023);
+    assert.equal(nearby.matchMode, 'ranked');
+    const alternate = await rankedLookup('Local - Alternate');
+    assert.equal(alternate.title, 'Alternate');
+    assert.equal(alternate.matchMode, 'ranked');
     const keyResponse = await fetch(`http://127.0.0.1:${port}/api/settings/api-keys`, {
       method: 'PUT', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'OMDB_API_KEY', value: 'saved-test-key' }),

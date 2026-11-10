@@ -201,6 +201,27 @@ test('uses the cleaned filename for lookup and exact match verification', async 
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('ranked matches permit only title variants and years within one year', async () => {
+  const media: MediaMetadata = { ...item, type: 'movie', title: 'Il convento - Heretiks - The Convent', year: 2018, yearSource: 'user' };
+  const result = { source: 'tmdb', title: 'The Convent', year: 2019, matchMode: 'ranked' as const };
+  assert.equal(isVerifiedMatch(media, result), true);
+  assert.equal(isVerifiedMatch(media, { ...result, year: 2020 }), false);
+  assert.equal(isVerifiedMatch(media, { ...result, title: 'The Convent 2' }), false);
+  assert.equal(isVerifiedMatch(media, { ...result, source: 'omdb' }), false);
+  assert.equal(isVerifiedMatch({ ...media, yearSource: 'placeholder' }, result), false);
+  assert.equal(isVerifiedMatch(media, { ...result, matchMode: undefined }), false);
+  const originalFetch = globalThis.fetch;
+  try {
+    let details: MetadataLookupDetails | undefined;
+    globalThis.fetch = async (_url, init) => {
+      assert.equal(JSON.parse(String(init?.body)).allowRanked, true);
+      return Response.json({ success: true, ...result });
+    };
+    assert.ok(await fetchLibraryMetadata(media, new AbortController().signal, value => { details = value; }));
+    assert.match(details?.reason || '', /Ranked match/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('provider failures without a match are surfaced rather than recorded as no-match', async () => {
   const originalFetch = globalThis.fetch;
   try {

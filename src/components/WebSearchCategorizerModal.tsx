@@ -263,7 +263,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setShowBatchLog(true);
     setBatchLog([
       `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${categoryLabelCount} category labels and ${audioTrackCount} individual audio tracks excluded. ${sidecarCount} subtitle/metadata/artwork entries excluded.`,
-      'Fetch All checks all incomplete items, regardless of the current list filter. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB.',
+      'Fetch All checks all incomplete items, regardless of the current list filter. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB. Ranked TMDB matches may use a title variant or a year within one year and should be checked.',
     ]);
 
     const log = (message: string) => {
@@ -304,7 +304,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             !item.rating && itemData.rating && Number.isFinite(itemData.rating) ? 'rating' : '',
             !item.cast?.length && itemData.cast?.length ? 'cast' : '',
           ].filter(Boolean);
-          log(`  Saved verified match for "${item.title}"; filled: ${filled.join(', ') || 'no missing fields'}; existing metadata was preserved.`);
+          log(`  Saved ${itemData.matchMode === 'ranked' ? 'ranked match (verify manually)' : 'verified match'} for "${item.title}"; filled: ${filled.join(', ') || 'no missing fields'}; existing metadata was preserved.`);
         } else {
           noMatch++;
           log(`  No verified match saved for "${item.title}".`);

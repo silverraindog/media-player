@@ -59,7 +59,8 @@ import { registerUniverseRoutes } from './src/server/universeMatcher';
 import { registerProviderSearchRoutes } from './src/server/providerSearch';
 import { registerApiKeyRoutes } from './src/server/apiKeys';
 import { tauriCors } from './src/server/tauriCors';
-import { fetchTmdbMetadata } from './src/server/tmdbMetadata';
+import { fetchRankedTmdbMetadata, fetchTmdbMetadata } from './src/server/tmdbMetadata';
+import { normalizeUniverseTitle } from './src/shared/universeMatcher';
 import { fetchAlbumMetadata } from './src/server/albumMetadata';
 import { fetchMetadataWithDiagnostics } from './src/server/metadataRequestDiagnostics';
 
@@ -647,7 +648,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -660,6 +661,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   episodes?: any[];
   artist?: string;
   musicBrainzId?: string;
+  matchMode?: 'ranked';
 }> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
@@ -675,7 +677,13 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   if (requireProviderYear && (lowerType === 'movie' || lowerType === 'series')) {
     const tmdb = await fetchTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
     if (tmdb.metadata) return tmdb.metadata;
-    if (tmdb.unsafeToMatch) return { source: 'fallback' };
+    if (tmdb.unsafeToMatch) {
+      if (allowRanked) {
+        const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
+        if (ranked.metadata) return ranked.metadata;
+      }
+      return { source: 'fallback' };
+    }
   }
 
   // 1. Music Albums: Query iTunes Search API for 1000x1000 high-resolution original art
@@ -715,6 +723,19 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
 
   const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
   const secondaryData = secondaryResult.status === 'fulfilled' ? secondaryResult.value : null;
+
+  if (requireProviderYear && allowRanked && year && (lowerType === 'movie' || lowerType === 'series')) {
+    const omdbExact = omdbData?.Title && normalizeUniverseTitle(omdbData.Title) === normalizeUniverseTitle(cleanTitle) &&
+      parseInt(omdbData.Year, 10) === year;
+    const secondaryExact = secondaryData?.title && normalizeUniverseTitle(secondaryData.title) === normalizeUniverseTitle(cleanTitle) &&
+      secondaryData.year === year;
+    if (!omdbExact && secondaryExact && secondaryData) return secondaryData;
+    if (!omdbExact && !secondaryExact) {
+      const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
+      if (ranked.metadata) return ranked.metadata;
+      if (ranked.unsafeToMatch) return { source: 'fallback' };
+    }
+  }
 
   if (requireProviderYear && omdbData?.Title) {
     const poster = omdbData.Poster && omdbData.Poster !== 'N/A' ? omdbData.Poster : undefined;
@@ -901,7 +922,7 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
     const cleanTitle = String(title).trim();
     const diagnostics: MetadataDiagnostics | undefined = req.body.diagnostics === true ? [] : undefined;
     const artist = typeof req.body.artist === 'string' && req.body.artist.trim().length <= 300 ? req.body.artist.trim() : undefined;
-    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true, artist);
+    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true, artist, req.body.allowRanked === true);
 
     const postersSet = new Set<string>();
     if (art.posterUrl) postersSet.add(art.posterUrl);

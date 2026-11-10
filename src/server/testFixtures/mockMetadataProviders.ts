@@ -17,9 +17,19 @@ globalThis.fetch = async (input, init) => {
   if (url.hostname === 'api.themoviedb.org') {
     const query = url.searchParams.get('query');
     if (query === 'OMDb Test') return Response.json({ total_pages: 1, results: [] });
+    if (query === 'Nearby Year') return Response.json({
+      total_pages: 1,
+      results: url.searchParams.has('primary_release_year') ? [] :
+        [{ id: 101, title: 'Nearby Year', release_date: '2023-01-01', popularity: 12, vote_count: 7 }],
+    });
+    if (query === 'Local - Alternate') return Response.json({ total_pages: 1, results: [] });
+    if (query === 'Local') return Response.json({ total_pages: 1, results: [] });
+    if (query === 'Alternate') return Response.json({
+      total_pages: 1, results: [{ id: 102, title: 'Alternate', release_date: '2024-01-01', popularity: 5 }],
+    });
     const results = query === 'Ambiguous' ? [
-      { title: 'Ambiguous', release_date: '2024-01-01' },
-      { title: 'Ambiguous', release_date: '2024-02-01' },
+      { id: 1, title: 'Ambiguous', release_date: '2024-01-01', popularity: 5 },
+      { id: 2, title: 'Ambiguous', release_date: '2024-02-01', popularity: 20 },
     ] : [{ title: 'The First Omen', release_date: '2024-04-03', overview: 'Provider synopsis', poster_path: '/poster.jpg' }];
     return Response.json({ total_pages: 1, results });
   }

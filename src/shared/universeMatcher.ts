@@ -45,6 +45,16 @@ export function normalizeUniverseTitle(title: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
 }
 
+export function metadataTitleVariants(title: string): string[] {
+  const variants = [title.trim()];
+  const parts = title.split(/\s+-\s+/).map(part => part.trim());
+  if (parts.length > 1 && parts.length <= 4 && parts.every(part => part.length >= 3)) {
+    variants.push(...parts);
+  }
+  return variants.filter((value, index, list) =>
+    value && list.findIndex(other => normalizeUniverseTitle(other) === normalizeUniverseTitle(value)) === index);
+}
+
 export function selectConfidentCandidate(
   title: string, year: number | undefined, candidates: UniverseCandidate[]
 ): UniverseCandidate | null {

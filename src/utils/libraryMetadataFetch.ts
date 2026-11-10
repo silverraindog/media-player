@@ -1,7 +1,7 @@
 import type { CastMember, MediaMetadata } from '../types';
 import { isTauri } from '../lib/api';
 import { getFileCategory, parseTitleAndYear, SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
-import { cleanUniverseTitle, normalizeUniverseTitle } from '../shared/universeMatcher';
+import { cleanUniverseTitle, metadataTitleVariants, normalizeUniverseTitle } from '../shared/universeMatcher';
 
 export interface FetchedLibraryMetadata {
   title?: string;
@@ -15,6 +15,7 @@ export interface FetchedLibraryMetadata {
   cast?: CastMember[];
   artist?: string;
   musicBrainzId?: string;
+  matchMode?: 'ranked';
 }
 
 export interface MetadataFetchDiagnostic {
@@ -151,6 +152,12 @@ export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMeta
   }
   const year = trustedMediaYear(media);
   const lookupTitle = libraryLookupTitle(media);
+  if (result.matchMode === 'ranked') {
+    const resultTitle = result.title;
+    return result.source === 'tmdb' && !!resultTitle && !!year && !!result.year &&
+      Math.abs(year - result.year) <= 1 &&
+      metadataTitleVariants(lookupTitle).some(variant => normalizeUniverseTitle(variant) === normalizeUniverseTitle(resultTitle));
+  }
   return !!result.source && result.source !== 'fallback' && !!result.title &&
     !!lookupTitle && normalizedTitle(lookupTitle) === normalizedTitle(result.title) &&
     !!year && !!result.year && year === result.year;
@@ -188,7 +195,7 @@ export async function fetchLibraryMetadata(
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, 20000);
+  }, 30000);
   try {
     const port = isTauri ? (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000 : undefined;
     const url = isTauri ? `http://127.0.0.1:${port}/api/media/fetch-art` : '/api/media/fetch-art';
@@ -197,7 +204,7 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: libraryLookupTitle(media), type: media.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, diagnostics: true }),
+        body: JSON.stringify({ title: libraryLookupTitle(media), type: media.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, diagnostics: true }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -218,7 +225,8 @@ export async function fetchLibraryMetadata(
       result.cast?.length ? 'cast' : '',
     ].filter(Boolean);
     let reason = 'Verified title and year';
-    if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
+    if (verified && result.matchMode === 'ranked') reason = 'Ranked match using title variant or nearby year; verify manually';
+    else if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
     else if (normalizedTitle(libraryLookupTitle(media)) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
     else if (media.type === 'album' && !verified) reason = 'Album artist cannot be verified; review this result manually';

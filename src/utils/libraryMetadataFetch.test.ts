@@ -79,6 +79,31 @@ test('cleans explicit collection and encoding annotations without guessing seque
     ['The Visit 2015    -JYK', 'The Visit'],
     ['Hollow Man 2000 DC  BRRip  YIFY', 'Hollow Man'],
     ['The Sacrament 2013   -', 'The Sacrament'],
+    ['The Witches Of Eastwick 1987    anoXmous', 'The Witches Of Eastwick'],
+    ['Beauty And The Beast 1991    anoXmous', 'Beauty And The Beast'],
+    ['Swing VoteDvDrip-aXXo', 'Swing Vote'],
+    ['The MessengersDvDrip AC3-aXXo', 'The Messengers'],
+    ['December BoysDvDrip-FXG', 'December Boys'],
+    ['Snow White And The Seven Dwarfs 1937   DDP5 1  10bit-GalaxyRG265', 'Snow White And The Seven Dwarfs'],
+    ['The Strangers Chapter 2 2025     5 1 BONE', 'The Strangers Chapter 2'],
+    ['Happy Death Day 2U 2019   -MkvCage ws', 'Happy Death Day 2U'],
+    ['Order Of The Phoenix 2007    -ETRG', 'Order Of The Phoenix'],
+    ['Terrifier 2016 Uncut    AC3 -MgB', 'Terrifier'],
+    ['Scary Movie 4 2006    750MB-Mkvking', 'Scary Movie 4'],
+    ['Back To The Future Part II 1989 Remastered     5 1 BONE', 'Back To The Future Part II'],
+    ['Men in Black 2 2002    Dual Audio  ESub', 'Men in Black 2'],
+    ['scream vi 2023   dd5 1   rmteam', 'scream vi'],
+    ['Alien 3 1992 Assembly Cut     5 1 BONE', 'Alien 3'],
+    ['Eden Lake 2008   DDP5 1  10bit-GalaxyRG265', 'Eden Lake'],
+    ['Free Guy 2021    5 1-', 'Free Guy'],
+    ['Freaks 2018   1400MB DD5 1 -GalaxyRG', 'Freaks'],
+    ['Mercy 2023  AMZN  DDP5 1 H 264-FLUX', 'Mercy'],
+    ['Asteroid City 2023 REPACK  WEBRip 1400MB DD5 1 -GalaxyRG', 'Asteroid City'],
+    ['The Horse Whisperer 1998  DSNP  H264-GPRS', 'The Horse Whisperer'],
+    ['The Ring Two 2005   KATRG', 'The Ring Two'],
+    ['Terrifier 2 2022    5 1-', 'Terrifier 2'],
+    ['Interstellar 2014 2014    YIFY', 'Interstellar'],
+    ['2016 Terrifier 1912 BDRip  -HD MA', 'Terrifier'],
   ];
   for (const [title, expected] of examples) assert.equal(libraryLookupTitle({ title, type: 'movie' }), expected);
   assert.equal(libraryLookupTitle({ title: '10 Things I Hate About You (1999)', type: 'movie' }), '10 Things I Hate About You');
@@ -93,6 +118,9 @@ test('cleans explicit collection and encoding annotations without guessing seque
   assert.equal(libraryLookupTitle({ title: 'Movie 2024 DC Comics', type: 'movie' }), 'Movie DC Comics');
   assert.equal(libraryLookupTitle({ title: 'YIFY (2014)', type: 'movie' }), 'YIFY');
   assert.equal(libraryLookupTitle({ title: 'The Visit 2015 -JYK Story', type: 'movie' }), 'The Visit -JYK Story');
+  assert.equal(libraryLookupTitle({ title: 'The Bone Collector 1999', type: 'movie' }), 'The Bone Collector');
+  assert.equal(libraryLookupTitle({ title: 'Movie 2024 Remastered Story', type: 'movie' }), 'Movie Remastered Story');
+  assert.equal(libraryLookupTitle({ title: 'Swing VoteDvDrip Documentary', type: 'movie' }), 'Swing VoteDvDrip Documentary');
   assert.equal(libraryLookupTitle({ title: '01 Hellraiser I - Horror 1987 Eng Subs', type: 'album' }), '01 Hellraiser I - Horror 1987 Eng Subs');
 });
 
@@ -107,6 +135,8 @@ test('uses cleaned release filenames while still requiring the original title an
     { title: 'The Visit 2015    -JYK', clean: 'The Visit', year: 2015 },
     { title: 'Hollow Man 2000 DC  BRRip  YIFY', clean: 'Hollow Man', year: 2000 },
     { title: 'The Sacrament 2013   -', clean: 'The Sacrament', year: 2013 },
+    { title: 'Snow White And The Seven Dwarfs 1937   DDP5 1  10bit-GalaxyRG265', clean: 'Snow White And The Seven Dwarfs', year: 1937 },
+    { title: 'Swing VoteDvDrip-aXXo', clean: 'Swing Vote', year: 2008 },
   ];
   try {
     for (const example of examples) {

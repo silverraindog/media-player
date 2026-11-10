@@ -114,12 +114,14 @@ export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'>)
     title = title.replace(/(\b(?:19|20)\d{2}\b)\s+specials\s+-[a-z0-9][a-z0-9._-]*\s*$/i, '$1');
   }
   title = title.replace(/\s+ac3\s+[57][ .]1(?:\s+(?:ita|italian|eng|english))*\s+(?=h[ ._-]?265\b)/i, ' ');
-  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:(?:amzn|dc)\s+)?(?:brrip|bdrip|dvdrip|webrip|web[\s.-]?dl)\b.*$/i, '$1');
+  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:(?:amzn|nf|dsnp|dc|repack|cd[12])\s+)*(?:brrip|bdrip|dvdrip|webrip|web[\s.-]?(?:dl|rip)|hdtv|vhsrip)\b.*$/i, '$1');
+  title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?!(?:amzn|nf|dsnp|dc|ip)\s*$)(?:[-\s]*(?:remastered|unrated|uncut|dc|assembly\s+cut|special\s+cut|amzn|nf|dsnp|ip|ddp?\+?\s*[257][ .]?[01]|[57][ .]1|[68]ch|ac3|h[ ._-]?26[45]|av1|xvid|10[\s-]?bit|8[\s-]?bit|\d{2,5}mb|hq|dual\s+audio|esub|anoxmous|bone|yify|etrg|jyk|oft|rbg|rarbg|mgb|mkvking|mkvcage|mmkv|katrg|shaanig|rmteam|galaxyrg265|galaxyrg|psa|flux|gprs|qoq|onlyweb|cmrg|fgt|saon|ws)(?=$|[\s-]))+[-\s]*$/i, '$1');
   title = title.replace(/(\b(?:19|20)\d{2}\b)\s+(?:yify|-(?:oft|jyk)?)\s*$/i, '$1');
   title = title.replace(
     /(\b(?:19|20)\d{2}\b)(?:\s+(?:10[\s-]?bit|8[\s-]?bit|5[ .]1|7[ .]1|(?:eng|english)\s+subs?))+\s*$/i,
     '$1',
   );
+  title = title.replace(/(dvdrip)(?=[\s-]+(?:ac3[\s-]+)?(?:axxo|fxg|extratorrentrg)\s*$).*$/i, ' ');
   return cleanUniverseTitle(title).title || original;
 }
 

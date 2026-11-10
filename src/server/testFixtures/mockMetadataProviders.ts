@@ -15,6 +15,23 @@ globalThis.fetch = async (input, init) => {
     }] });
   }
   if (url.hostname === 'api.themoviedb.org') {
+    if (url.pathname === '/3/search/collection' && url.searchParams.get('query') === 'Wishmaster') {
+      return Response.json({ total_pages: 1, results: [
+        { id: 777, name: 'Wishmaster Collection', overview: 'A dark fantasy collection.' },
+      ] });
+    }
+    if (url.pathname === '/3/collection/777') {
+      return Response.json({
+        id: 777,
+        name: 'Wishmaster Collection',
+        overview: 'A dark fantasy collection.',
+        poster_path: '/wishmaster-collection.jpg',
+        parts: [
+          { title: 'Wishmaster', release_date: '1997-03-01', overview: 'The first djinn story.' },
+          { title: 'Wishmaster 2', release_date: '1999-03-12', overview: 'The djinn returns.' },
+        ],
+      });
+    }
     const query = url.searchParams.get('query');
     if (query === 'Доктор кто') return Response.json({ total_pages: 1, results: [] });
     if (query === 'The Evil Dead') return Response.json({ total_pages: 1, results: [

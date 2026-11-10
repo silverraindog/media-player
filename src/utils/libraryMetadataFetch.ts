@@ -16,13 +16,19 @@ export interface FetchedLibraryMetadata {
   cast?: CastMember[];
   artist?: string;
   musicBrainzId?: string;
-  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual';
+  collectionName?: string;
+  collectionOverview?: string;
+  collectionFilms?: NonNullable<MediaMetadata['collectionFilms']>;
+  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual' | 'unique-collection';
   candidates?: Array<{
     source: 'tmdb';
     title: string;
-    year: number;
+    year?: number;
     overview?: string;
     posterUrl?: string;
+    collectionId?: number;
+    candidateType?: 'movie' | 'collection';
+    collectionName?: string;
   }>;
 }
 
@@ -120,8 +126,8 @@ function collectionBase(title: string): string | undefined {
   return match && !/^the$/i.test(match[1]) ? match[1] : undefined;
 }
 
-export function isSingleFilmCollectionLookup(media: Pick<MediaMetadata, 'title' | 'type'>): boolean {
-  return media.type === 'movie' && !!collectionBase(media.title);
+export function isCollectionLookup(media: Pick<MediaMetadata, 'title' | 'type' | 'collectionFolder'>): boolean {
+  return media.type === 'movie' && (!!media.collectionFolder || !!collectionBase(media.title));
 }
 
 function hasNumberedSeriesContext(media: Pick<MediaMetadata, 'title' | 'type'> & Partial<Pick<MediaMetadata, 'folderPath' | 'path' | 'matchedFilename'>>): boolean {
@@ -163,6 +169,7 @@ export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'> 
 
 export function trustedMediaYear(media: MediaMetadata): number | undefined {
   if (!Number.isInteger(media.year) || media.year <= 0) return undefined;
+  if (isCollectionLookup(media)) return undefined;
   if (media.yearSource === 'placeholder') return undefined;
   if (media.yearSource === 'user' || media.yearSource === 'provider') return media.year;
   if (collectionBase(media.title)) return undefined;
@@ -214,6 +221,13 @@ export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMeta
   }
   const year = trustedMediaYear(media);
   const lookupTitle = libraryLookupTitle(media);
+  if (result.matchMode === 'unique-collection') {
+    const collectionName = result.collectionName || result.title;
+    const resultBase = collectionName?.replace(/\s+(?:collection|trilogy|complete)\s*$/i, '').trim();
+    return isCollectionLookup(media) && result.source === 'tmdb' && !!resultBase &&
+      normalizeUniverseTitle(lookupTitle) === normalizeUniverseTitle(resultBase) &&
+      !!result.collectionFilms?.length && !!result.overview;
+  }
   if (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant') {
     const resultTitle = result.title;
     if (media.type === 'series') {
@@ -249,6 +263,12 @@ export function trustedAlbumArtist(media: MediaMetadata): string | undefined {
 export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibraryMetadata): MediaMetadata {
   const updated = { ...media };
   if (isVerifiedMatch(media, result)) updated.type = metadataLookupMedia(media).type;
+  if (result.matchMode === 'unique-collection' && isVerifiedMatch(media, result)) {
+    updated.collectionOverview = result.collectionOverview;
+    updated.collectionFilms = result.collectionFilms;
+    updated.collectionFolder = true;
+    updated.overview = result.overview!;
+  }
   if ((result.matchMode === 'unique-title' || result.matchMode === 'unique-variant' || result.matchMode === 'manual') && isVerifiedMatch(media, result) && result.year) {
     updated.year = result.year;
     updated.yearSource = 'provider';
@@ -268,6 +288,7 @@ export async function fetchLibraryMetadata(
   media: MediaMetadata,
   signal: AbortSignal,
   onDetails?: (details: MetadataLookupDetails) => void,
+  selectedCollectionId?: number,
 ): Promise<FetchedLibraryMetadata | null> {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -287,7 +308,18 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: libraryLookupTitle(lookupMedia), type: lookupMedia.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, allowUniqueMovie: lookupMedia.type === 'movie' && !trustedMediaYear(media), diagnostics: true }),
+        body: JSON.stringify({
+          title: libraryLookupTitle(lookupMedia),
+          type: lookupMedia.type,
+          year: trustedMediaYear(media),
+          artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined,
+          requireProviderYear: true,
+          allowRanked: true,
+          allowUniqueMovie: lookupMedia.type === 'movie' && !trustedMediaYear(media) && !isCollectionLookup(lookupMedia),
+          collectionLookup: isCollectionLookup(lookupMedia),
+          selectedCollectionId,
+          diagnostics: true,
+        }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -308,7 +340,8 @@ export async function fetchLibraryMetadata(
       result.cast?.length ? 'cast' : '',
     ].filter(Boolean);
     let reason = 'Verified title and year';
-    if (verified && (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant')) reason = `Unique TMDB ${lookupMedia.type} title or variant; local year unverified${lookupMedia.type === 'movie' ? '; collection matched to one film' : ''}`;
+    if (verified && (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant')) reason = `Unique TMDB ${lookupMedia.type} title or variant; local year unverified`;
+    else if (verified && result.matchMode === 'unique-collection') reason = `Verified TMDB collection: ${result.collectionName || result.title}`;
     else if (verified && result.matchMode === 'ranked') reason = 'Ranked match using title variant or nearby year; verify manually';
     else if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
@@ -324,17 +357,20 @@ export async function fetchLibraryMetadata(
       : undefined;
     onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers,
       candidates: Array.isArray(result.candidates) ? result.candidates.filter(candidate =>
-        candidate?.source === 'tmdb' && typeof candidate.title === 'string' && Number.isInteger(candidate.year)) : undefined });
-    if ((!result.source || result.source === 'fallback') && isSingleFilmCollectionLookup(lookupMedia) && !trustedMediaYear(media) &&
+        candidate?.source === 'tmdb' && typeof candidate.title === 'string' &&
+        (candidate.candidateType === 'collection'
+          ? Number.isSafeInteger(candidate.collectionId)
+          : Number.isInteger(candidate.year))) : undefined });
+    if ((!result.source || result.source === 'fallback') && isCollectionLookup(lookupMedia) && !trustedMediaYear(media) &&
         providers?.some(({ provider, outcome }) => provider === 'TMDB' && outcome === 'No API token configured')) {
-      throw new Error('A TMDB token is required to match a collection without a trusted year.');
+      throw new Error('A TMDB token is required to find and describe a collection.');
     }
     if ((!result.source || result.source === 'fallback') && providers?.some(({ outcome }) =>
       /^(?:HTTP (?!404\b)\d+|Network error or timeout|Key, quota, or request rejected|No API key configured|Invalid provider response|Provider returned an error|Provider (?:queue is full|cooling down)|Response contained no title)/i.test(outcome))) {
       throw new Error('One or more metadata providers failed; check the provider details and retry.');
     }
     if ((!result.source || result.source === 'fallback') && providers?.some(({ outcome }) =>
-      /^(?:Ambiguous results|Too many results)/i.test(outcome))) {
+      /^(?:Ambiguous|Too many results)/i.test(outcome))) {
       throw new MetadataReviewRequiredError();
     }
     return verified ? result : null;

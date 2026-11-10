@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
 import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, libraryLookupTitle, mergeFetchedMetadata, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
-import { nodeToMediaMetadata, parseTitleAndYear, parsedFileToMediaMetadata } from './mediaExtractor';
+import { extractAllMediaFromSambaTree, extractAllMediaFromSambaTreeAsync, nodeToMediaMetadata, parseTitleAndYear, parsedFileToMediaMetadata } from './mediaExtractor';
 import { localDbFallback } from './localDatabaseFallback';
 
 const item: MediaMetadata = {
@@ -260,7 +260,7 @@ test('TV folder context corrects numbered entries but never guesses from a movie
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test('generic download containers are excluded and collections match one unique film', async () => {
+test('collection folders look up TMDB collections and retain the member descriptions', async () => {
   for (const title of ['drive-download-20261031T084432Z-1-001', 'New Folder (2)', 'Downloads']) {
     assert.equal(isCategorizerFolderLabel({ ...item, title, folderPath: `/media/${title}` }), true);
   }
@@ -272,25 +272,45 @@ test('generic download containers are excluded and collections match one unique 
   assert.equal(libraryLookupTitle({ title: 'The Collection', type: 'movie' }), 'The Collection');
   const originalFetch = globalThis.fetch;
   try {
-    const collection: MediaMetadata = { ...item, type: 'movie', title: 'The Evil Dead Collection 1981-2013 Mkvking', year: 1981, yearSource: 'folder' };
-    const movie = { source: 'tmdb', title: 'The Evil Dead', year: 1981, matchMode: 'unique-title' as const };
+    const collection: MediaMetadata = {
+      ...item,
+      type: 'movie',
+      title: 'The Evil Dead Collection 1981-2013 Mkvking',
+      year: 1981,
+      yearSource: 'folder',
+      overview: 'A single-film synopsis from an earlier lookup.',
+    };
+    const collectionResult = {
+      source: 'tmdb',
+      title: 'The Evil Dead Collection',
+      collectionName: 'The Evil Dead Collection',
+      collectionOverview: 'A collection overview.',
+      collectionFilms: [{ title: 'The Evil Dead', year: 1981, overview: 'Film synopsis.' }],
+      overview: 'Collection overview\nA collection overview.\n\nFilms in this collection\nThe Evil Dead (1981)\nFilm synopsis.',
+      matchMode: 'unique-collection' as const,
+    };
     let details: MetadataLookupDetails | undefined;
     globalThis.fetch = async (_url, init) => {
       const request = JSON.parse(String(init?.body));
       assert.equal(request.title, 'The Evil Dead');
-      assert.equal(request.allowUniqueMovie, true);
+      assert.equal(request.collectionLookup, true);
+      assert.equal(request.allowUniqueMovie, false);
       assert.equal(request.year, undefined);
-      return Response.json({ success: true, ...movie });
+      return Response.json({ success: true, ...collectionResult });
     };
-    assert.ok(await fetchLibraryMetadata(collection, new AbortController().signal, value => { details = value; }));
-    assert.match(details?.reason || '', /collection matched to one film/);
-    assert.equal(mergeFetchedMetadata(collection, movie).yearSource, 'provider');
-    assert.equal(isVerifiedMatch(collection, { ...movie, title: 'The Evil Dead 2' }), false);
-    assert.equal(isVerifiedMatch({ ...collection, title: 'The Evil Dead' }, movie), true);
+    const fetched = await fetchLibraryMetadata(collection, new AbortController().signal, value => { details = value; });
+    assert.ok(fetched);
+    assert.match(details?.reason || '', /Verified TMDB collection/);
+    const merged = mergeFetchedMetadata(collection, fetched!);
+    assert.equal(merged.overview, collectionResult.overview);
+    assert.equal(merged.collectionFilms?.[0].overview, 'Film synopsis.');
+    assert.equal(merged.collectionOverview, 'A collection overview.');
+    assert.equal(merged.yearSource, 'folder');
+    assert.equal(isVerifiedMatch(collection, { ...collectionResult, collectionName: 'The Evil Dead 2 Collection' }), false);
     assert.equal(trustedMediaYear({ ...collection, title: 'The Evil Dead Trilogy (2013)', year: 2013, yearSource: 'folder' }), undefined);
-    assert.equal(trustedMediaYear({ ...collection, yearSource: 'user' }), 1981);
+    assert.equal(trustedMediaYear({ ...collection, yearSource: 'user' }), undefined);
     globalThis.fetch = async () => Response.json({
-      success: true, source: 'fallback', diagnostics: [{ provider: 'TMDB', outcome: 'Ambiguous results without a trusted year; review manually' }],
+      success: true, source: 'fallback', diagnostics: [{ provider: 'TMDB', outcome: 'Ambiguous collection results; review manually' }],
     });
     await assert.rejects(fetchLibraryMetadata(collection, new AbortController().signal), MetadataReviewRequiredError);
     globalThis.fetch = async () => Response.json({
@@ -301,6 +321,34 @@ test('generic download containers are excluded and collections match one unique 
     assert.equal(await fetchLibraryMetadata({ ...item, title: 'The Collection', type: 'movie' }, new AbortController().signal), null);
     assert.equal(await fetchLibraryMetadata({ ...item, title: 'Greatest Collection', type: 'album' }, new AbortController().signal), null);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('scanner detects collection folders while preserving each member movie', async () => {
+  const tree = [{
+    id: 'collection',
+    name: 'Wishmaster',
+    path: '/Franchises/Wishmaster',
+    type: 'folder' as const,
+    children: ['Wishmaster (1997)', 'Wishmaster 2 (1999)'].map((title, index) => ({
+      id: `film-${index}`,
+      name: title,
+      path: `/Franchises/Wishmaster/${title}`,
+      type: 'folder' as const,
+      children: [{
+        id: `file-${index}`,
+        name: `${title}.mkv`,
+        path: `/Franchises/Wishmaster/${title}/${title}.mkv`,
+        type: 'file' as const,
+      }],
+    })),
+  }];
+  const scanned = extractAllMediaFromSambaTree(tree);
+  const collection = scanned.find(media => media.collectionFolder);
+  assert.equal(collection?.collectionFolder, true);
+  assert.equal(scanned.filter(media => media.type === 'movie').length, 3);
+  const asyncScanned = await extractAllMediaFromSambaTreeAsync(tree);
+  assert.equal(asyncScanned.find(media => media.collectionFolder)?.collectionFolder, true);
+  assert.equal(asyncScanned.filter(media => media.type === 'movie').length, 3);
 });
 
 test('provider failures without a match are surfaced rather than recorded as no-match', async () => {

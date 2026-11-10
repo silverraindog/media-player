@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { fetchRankedTmdbMetadata, fetchTmdbMetadata } from './tmdbMetadata';
+import { fetchRankedTmdbMetadata, fetchTmdbCollectionMetadata, fetchTmdbMetadata } from './tmdbMetadata';
 
 test('TMDB metadata searches exact movie and series titles and years safely', async () => {
   const originalFetch = globalThis.fetch;
@@ -145,6 +145,83 @@ test('TMDB metadata reports missing tokens, rejected tokens, and invalid respons
       'No API token configured', 'HTTP 401: API token rejected; check Settings', 'Invalid provider response',
     ]);
     assert.ok(!JSON.stringify(diagnostics).includes('test-token'));
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;
+    else process.env.TMDB_READ_ACCESS_TOKEN = originalToken;
+  }
+});
+
+test('TMDB collection lookup returns a combined overview and member film descriptions', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalToken = process.env.TMDB_READ_ACCESS_TOKEN;
+  process.env.TMDB_READ_ACCESS_TOKEN = 'collection-test-token';
+  const diagnostics: { provider: string; outcome: string }[] = [];
+  try {
+    globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.pathname === '/3/search/collection') {
+        assert.equal(url.searchParams.get('query'), 'Wishmaster');
+        return Response.json({ total_pages: 1, results: [
+          { id: 700, name: 'Wishmaster Collection', overview: 'A dark fantasy collection.' },
+        ] });
+      }
+      assert.equal(url.pathname, '/3/collection/700');
+      return Response.json({
+        id: 700,
+        name: 'Wishmaster Collection',
+        overview: 'A dark fantasy collection.',
+        poster_path: '/collection.jpg',
+        parts: [
+          { title: 'Wishmaster', release_date: '1997-03-01', overview: 'A sinister djinn is released.', poster_path: '/one.jpg' },
+          { title: 'Wishmaster 2', release_date: '1999-03-12', overview: 'The djinn returns.' },
+        ],
+      });
+    };
+    const result = await fetchTmdbCollectionMetadata('Wishmaster', diagnostics);
+    assert.equal(result.metadata?.matchMode, 'unique-collection');
+    assert.equal(result.metadata?.collectionFilms.length, 2);
+    assert.match(result.metadata?.overview || '', /A sinister djinn is released/);
+    assert.match(result.metadata?.overview || '', /The djinn returns/);
+    assert.equal(result.metadata?.posterUrl, 'https://image.tmdb.org/t/p/w500/collection.jpg');
+    assert.ok(diagnostics.some(entry => entry.outcome.includes('Verified collection')));
+    assert.ok(!JSON.stringify(diagnostics).includes('collection-test-token'));
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;
+    else process.env.TMDB_READ_ACCESS_TOKEN = originalToken;
+  }
+});
+
+test('TMDB collection lookup requires exact identity and exposes ambiguous collections for selection', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalToken = process.env.TMDB_READ_ACCESS_TOKEN;
+  process.env.TMDB_READ_ACCESS_TOKEN = 'collection-test-token';
+  try {
+    globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.pathname === '/3/search/collection') return Response.json({
+        total_pages: 1,
+        results: [
+          { id: 701, name: 'Wishmaster Collection' },
+          { id: 702, name: 'Wishmaster Collection' },
+          { id: 703, name: 'The Wishmaster Collection' },
+        ],
+      });
+      return Response.json({
+        id: Number(url.pathname.split('/').pop()),
+        name: url.pathname.endsWith('/703') ? 'The Wishmaster Collection' : 'Wishmaster Collection',
+        parts: [{ title: 'Wishmaster', overview: 'A synopsis.' }],
+      });
+    };
+    const ambiguous = await fetchTmdbCollectionMetadata('Wishmaster');
+    assert.equal(ambiguous.unsafeToMatch, true);
+    assert.deepEqual(ambiguous.candidates?.map(candidate => candidate.collectionId), [701, 702]);
+    const selected = await fetchTmdbCollectionMetadata('Wishmaster', undefined, 702);
+    assert.equal(selected.metadata?.collectionName, 'Wishmaster Collection');
+    assert.equal(selected.metadata?.collectionFilms.length, 1);
+    const mismatched = await fetchTmdbCollectionMetadata('Wishmaster', undefined, 703);
+    assert.equal(mismatched.metadata, undefined);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;

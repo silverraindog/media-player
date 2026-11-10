@@ -17,6 +17,9 @@ globalThis.fetch = async (input, init) => {
   if (url.hostname === 'api.themoviedb.org') {
     const query = url.searchParams.get('query');
     if (query === 'Доктор кто') return Response.json({ total_pages: 1, results: [] });
+    if (query === 'The Evil Dead') return Response.json({ total_pages: 1, results: [
+      { id: 88, title: 'The Evil Dead', release_date: '1981-10-15', overview: 'Film synopsis' },
+    ] });
     if (query === 'Futurama') return Response.json({ total_pages: 1, results: [
       { id: 33, name: 'Futurama', first_air_date: '1999-03-28', overview: 'Series synopsis' },
     ] });

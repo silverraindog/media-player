@@ -107,17 +107,36 @@ function normalizedTitle(title: string): string {
   return title.toLowerCase().replace(/\s*\(\d{4}\)\s*$/, '').replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
-export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'> & Partial<Pick<MediaMetadata, 'folderPath'>>): string {
+function collectionBase(title: string): string | undefined {
+  const match = title.match(/^\s*(.+?)\s+(?:collection|trilogy|complete)(?:\s+[\[(]?(?:19|20)\d{2}(?:\s*-\s*(?:19|20)\d{2})?[\])]?)?(?:\s+(?:mkvking|yify|bone|rarbg))?\s*$/i);
+  return match && !/^the$/i.test(match[1]) ? match[1] : undefined;
+}
+
+export function isSingleFilmCollectionLookup(media: Pick<MediaMetadata, 'title' | 'type'>): boolean {
+  return media.type === 'movie' && !!collectionBase(media.title);
+}
+
+function hasNumberedSeriesContext(media: Pick<MediaMetadata, 'title' | 'type'> & Partial<Pick<MediaMetadata, 'folderPath' | 'path' | 'matchedFilename'>>): boolean {
+  const match = media.title.match(/^(.+?)\s+(?:0[1-9]|[1-9]\d)$/);
+  if (!match) return false;
+  const paths = [media.folderPath, media.path].filter((path): path is string => !!path);
+  return paths.some(path => {
+    const segments = path.replace(/\\/g, '/').split('/').filter(Boolean);
+    if (segments.some(segment => /^(?:tv|tv shows?|television|shows?|series|anime|сериалы)$/i.test(segment))) return true;
+    return segments.slice(0, -1).some(segment => normalizedTitle(segment) === normalizedTitle(match[1])) &&
+      normalizedTitle(segments[segments.length - 1].replace(/\.[^.]+$/, '')) === normalizedTitle(media.title);
+  });
+}
+
+export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'> & Partial<Pick<MediaMetadata, 'folderPath' | 'path' | 'matchedFilename'>>): string {
   if (media.type === 'album') return media.title;
   const original = media.title;
-  let title = original;
-  const withoutRange = title.replace(/\s+\b(?:19|20)\d{2}\s*-\s*(?:19|20)\d{2}\b(?:\s+(?:mkvking|yify|bone|rarbg))?\s*$/i, '');
-  if (withoutRange !== title) title = withoutRange.replace(/\s+\b(?:collection|trilogy|complete)\s*$/i, '');
+  let title = collectionBase(original) || original;
   title = title.replace(/\s{2,}(?:BONE|YIFY|RARBG|ETRG|JYK|OFT|KATRG)\s*$/i, '');
   const taggedCollection = title.match(/^\s*0[1-9]\s+(.+?)\s+-\s+(?:(?:(?:unrated|extended|theatrical|directors[\s-]cut)\s+)?(?:(?:action|adventure|animation|comedy|crime|documentary|drama|fantasy|horror|mystery|romance|sci[\s-]?fi|thriller)\s+)*)?((?:19|20)\d{2})(?:\s+(?:(?:eng|english|ita|italian|rus|russian)\s+)*(?:multi[\s-]*)?subs?)?\s*$/i);
   if (taggedCollection) title = `${taggedCollection[1]} ${taggedCollection[2]}`;
   if (media.type === 'series') {
-    if (media.folderPath && /(?:^|\/)(?:tv|tv shows?|television|shows?|series|anime)\//i.test(media.folderPath.replace(/\\/g, '/'))) {
+    if (hasNumberedSeriesContext(media)) {
       title = title.replace(/\s+(?:0[1-9]|[1-9]\d)$/, '');
     }
     title = title.replace(/(\b(?:19|20)\d{2}\b)\s+specials\s+-[a-z0-9][a-z0-9._-]*\s*$/i, '$1');
@@ -137,7 +156,26 @@ export function libraryLookupTitle(media: Pick<MediaMetadata, 'title' | 'type'> 
 export function trustedMediaYear(media: MediaMetadata): number | undefined {
   if (!Number.isInteger(media.year) || media.year <= 0) return undefined;
   if (media.yearSource === 'placeholder') return undefined;
-  if (media.yearSource) return media.year;
+  if (media.yearSource === 'user' || media.yearSource === 'provider') return media.year;
+  if (collectionBase(media.title)) return undefined;
+
+  if (media.yearSource === 'filename' || media.yearSource === 'folder') {
+    const basename = (value?: string) => value?.replace(/\\/g, '/').split('/').filter(Boolean).pop();
+    const names = [media.title, media.matchedFilename, basename(media.folderPath), basename(media.path), basename(media.recommendedFolderStructure)];
+    if (media.yearSource === 'folder') {
+      for (const path of [media.path, media.recommendedFolderStructure]) {
+        const segments = path?.replace(/\\/g, '/').split('/').filter(Boolean) || [];
+        names.push(...segments.slice(0, -1).filter(name =>
+          normalizeUniverseTitle(cleanUniverseTitle(name).title) === normalizeUniverseTitle(cleanUniverseTitle(media.title).title)));
+      }
+    }
+    return names.some(name => {
+      if (!name) return false;
+      if (/\b(?:19|20)\d{2}\s*-\s*(?:19|20)\d{2}\b/.test(name)) return false;
+      const parsed = parseTitleAndYear(name);
+      return parsed.hasYear && parsed.year === media.year;
+    }) ? media.year : undefined;
+  }
 
   // Legacy items have no provenance: only a matching original name is evidence.
   const names = [media.matchedFilename, media.folderPath?.replace(/\\/g, '/').split('/').filter(Boolean).pop()];
@@ -152,10 +190,7 @@ export function trustedMediaYear(media: MediaMetadata): number | undefined {
 }
 
 export function metadataLookupMedia(media: MediaMetadata): MediaMetadata {
-  const folder = media.folderPath?.replace(/\\/g, '/') || '';
-  if (media.type === 'movie' && /\s+(?:0[1-9]|[1-9]\d)$/.test(media.title) &&
-      /(?:^|\/)(?:tv|tv shows?|television|shows?|series|anime)\//i.test(folder) &&
-      folder.split('/').pop()?.trim() === media.title.trim()) {
+  if (media.type === 'movie' && hasNumberedSeriesContext(media)) {
     return { ...media, type: 'series' };
   }
   return media;
@@ -173,7 +208,8 @@ export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMeta
   const lookupTitle = libraryLookupTitle(media);
   if (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant') {
     const resultTitle = result.title;
-    return media.type === 'series' && !year && result.source === 'tmdb' && !!result.year &&
+    return (media.type === 'series' || isSingleFilmCollectionLookup(media)) &&
+      !year && result.source === 'tmdb' && !!result.year &&
       !!resultTitle && (result.matchMode === 'unique-title'
         ? normalizeUniverseTitle(lookupTitle) === normalizeUniverseTitle(resultTitle)
         : metadataTitleVariants(lookupTitle).some(variant => normalizeUniverseTitle(variant) === normalizeUniverseTitle(resultTitle)));
@@ -218,12 +254,6 @@ export async function fetchLibraryMetadata(
   signal: AbortSignal,
   onDetails?: (details: MetadataLookupDetails) => void,
 ): Promise<FetchedLibraryMetadata | null> {
-  if (media.type !== 'album' &&
-      !/^the\s+(?:collection|trilogy)(?:\s+(?:19|20)\d{2})?(?:\s|$)/i.test(media.title.trim()) &&
-      /\b(?:collection|trilogy|complete)\b/i.test(media.title) &&
-      (/\b(?:collection|trilogy)\b/i.test(media.title) || /\bcomplete\b.*\b(?:movies?|films?|series|set)\b/i.test(media.title))) {
-    throw new MetadataReviewRequiredError('Collection or trilogy folders may contain multiple titles; review manually.');
-  }
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true });
@@ -242,7 +272,7 @@ export async function fetchLibraryMetadata(
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: libraryLookupTitle(lookupMedia), type: lookupMedia.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, diagnostics: true }),
+        body: JSON.stringify({ title: libraryLookupTitle(lookupMedia), type: lookupMedia.type, year: trustedMediaYear(media), artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined, requireProviderYear: true, allowRanked: true, allowUniqueMovie: isSingleFilmCollectionLookup(lookupMedia), diagnostics: true }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -263,7 +293,7 @@ export async function fetchLibraryMetadata(
       result.cast?.length ? 'cast' : '',
     ].filter(Boolean);
     let reason = 'Verified title and year';
-    if (verified && (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant')) reason = 'Unique TMDB series title or variant; local year unverified';
+    if (verified && (result.matchMode === 'unique-title' || result.matchMode === 'unique-variant')) reason = `Unique TMDB ${lookupMedia.type} title or variant; local year unverified${lookupMedia.type === 'movie' ? '; collection matched to one film' : ''}`;
     else if (verified && result.matchMode === 'ranked') reason = 'Ranked match using title variant or nearby year; verify manually';
     else if (!result.source || result.source === 'fallback') reason = 'No provider match returned';
     else if (!result.title) reason = 'Provider returned no title';
@@ -278,6 +308,10 @@ export async function fetchLibraryMetadata(
         entry && typeof entry.provider === 'string' && typeof entry.outcome === 'string')
       : undefined;
     onDetails?.({ source: result.source, returnedTitle: result.title, returnedYear: result.year, reason, fields, providers });
+    if ((!result.source || result.source === 'fallback') && isSingleFilmCollectionLookup(lookupMedia) && !trustedMediaYear(media) &&
+        providers?.some(({ provider, outcome }) => provider === 'TMDB' && outcome === 'No API token configured')) {
+      throw new Error('A TMDB token is required to match a collection without a trusted year.');
+    }
     if ((!result.source || result.source === 'fallback') && providers?.some(({ outcome }) =>
       /^(?:HTTP (?!404\b)\d+|Network error or timeout|Key, quota, or request rejected|No API key configured|Invalid provider response|Provider returned an error|Provider (?:queue is full|cooling down)|Response contained no title)/i.test(outcome))) {
       throw new Error('One or more metadata providers failed; check the provider details and retry.');

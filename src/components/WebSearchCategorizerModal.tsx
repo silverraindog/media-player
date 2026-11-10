@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, metadataLookupMedia, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, isSingleFilmCollectionLookup, libraryLookupTitle, metadataLookupMedia, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -283,8 +283,11 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       log(`Checking "${item.title}" (${item.type}${year ? `, ${year}` : ', unverified year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
       const lookupMedia = metadataLookupMedia(item);
       const lookupTitle = libraryLookupTitle(lookupMedia);
-      if (lookupMedia.type !== item.type) log(`  Using ${lookupMedia.type} lookup based on TV folder location.`);
+      if (lookupMedia.type !== item.type) log(`  Using ${lookupMedia.type} lookup based on TV path context.`);
       if (lookupTitle !== item.title) log(`  Lookup title: "${lookupTitle}".`);
+      if (isSingleFilmCollectionLookup(lookupMedia)) {
+        log('  Collection lookup selects one film, not the entire collection; verify the match.');
+      }
       try {
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
           if (details.providers?.length) {

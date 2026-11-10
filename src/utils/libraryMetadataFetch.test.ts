@@ -136,11 +136,11 @@ test('uses cleaned release filenames while still requiring the original title an
     { title: 'Hollow Man 2000 DC  BRRip  YIFY', clean: 'Hollow Man', year: 2000 },
     { title: 'The Sacrament 2013   -', clean: 'The Sacrament', year: 2013 },
     { title: 'Snow White And The Seven Dwarfs 1937   DDP5 1  10bit-GalaxyRG265', clean: 'Snow White And The Seven Dwarfs', year: 1937 },
-    { title: 'Swing VoteDvDrip-aXXo', clean: 'Swing Vote', year: 2008 },
+    { title: 'Swing VoteDvDrip-aXXo', clean: 'Swing Vote', year: 2008, yearSource: 'user' as const },
   ];
   try {
     for (const example of examples) {
-      const media: MediaMetadata = { ...item, type: 'movie', title: example.title, year: example.year, yearSource: 'filename' };
+      const media: MediaMetadata = { ...item, type: 'movie', title: example.title, year: example.year, yearSource: example.yearSource || 'filename' };
       globalThis.fetch = async (_url, init) => {
         const request = JSON.parse(String(init?.body));
         assert.equal(request.title, example.clean);
@@ -241,6 +241,12 @@ test('TV folder context corrects numbered entries but never guesses from a movie
   assert.equal(isVerifiedMatch(media, result), true);
   assert.equal(mergeFetchedMetadata(media, result).type, 'series');
   assert.equal(isVerifiedMatch({ ...media, folderPath: '/Movies/Доктор кто 01' }, result), false);
+  for (const path of ['/Franchises/Доктор кто/Доктор кто 01.mkv', '/Cartoons/Доктор кто/Доктор кто 01.mkv', '/Сериалы/Доктор кто 01.mkv']) {
+    const file = { ...media, folderPath: path.slice(0, path.lastIndexOf('/')), path };
+    assert.equal(isVerifiedMatch(file, result), true, path);
+    assert.equal(mergeFetchedMetadata(file, result).type, 'series', path);
+  }
+  assert.equal(isVerifiedMatch({ ...media, folderPath: '/Franchises/Other', path: '/Franchises/Other/Доктор кто 01.mkv' }, result), false);
   assert.equal(libraryLookupTitle({ title: 'Studio 60', type: 'series' }), 'Studio 60');
   const originalFetch = globalThis.fetch;
   try {
@@ -254,19 +260,43 @@ test('TV folder context corrects numbered entries but never guesses from a movie
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test('generic download containers are excluded but collections require review without a lookup', async () => {
+test('generic download containers are excluded and collections match one unique film', async () => {
   for (const title of ['drive-download-20261031T084432Z-1-001', 'New Folder (2)', 'Downloads']) {
     assert.equal(isCategorizerFolderLabel({ ...item, title, folderPath: `/media/${title}` }), true);
   }
   assert.equal(isCategorizerFolderLabel({ ...item, title: 'Downloads', folderPath: '/media/Downloads/Downloads', path: '/media/Downloads/Downloads.mkv' }), false);
   assert.equal(libraryLookupTitle({ title: 'Our Friends in the North      BONE', type: 'series' }), 'Our Friends in the North');
   assert.equal(libraryLookupTitle({ title: 'The Evil Dead Collection 1981-2013 Mkvking', type: 'movie' }), 'The Evil Dead');
+  assert.equal(libraryLookupTitle({ title: 'The Evil Dead Trilogy (2013)', type: 'movie' }), 'The Evil Dead');
   assert.equal(libraryLookupTitle({ title: 'The Collection (2012)', type: 'movie' }), 'The Collection');
   assert.equal(libraryLookupTitle({ title: 'The Collection', type: 'movie' }), 'The Collection');
   const originalFetch = globalThis.fetch;
   try {
-    globalThis.fetch = async () => { throw new Error('unexpected network request'); };
-    await assert.rejects(fetchLibraryMetadata({ ...item, title: 'The Evil Dead Collection 1981-2013 Mkvking' }, new AbortController().signal), MetadataReviewRequiredError);
+    const collection: MediaMetadata = { ...item, type: 'movie', title: 'The Evil Dead Collection 1981-2013 Mkvking', year: 1981, yearSource: 'folder' };
+    const movie = { source: 'tmdb', title: 'The Evil Dead', year: 1981, matchMode: 'unique-variant' as const };
+    let details: MetadataLookupDetails | undefined;
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'The Evil Dead');
+      assert.equal(request.allowUniqueMovie, true);
+      assert.equal(request.year, undefined);
+      return Response.json({ success: true, ...movie });
+    };
+    assert.ok(await fetchLibraryMetadata(collection, new AbortController().signal, value => { details = value; }));
+    assert.match(details?.reason || '', /collection matched to one film/);
+    assert.equal(mergeFetchedMetadata(collection, movie).yearSource, 'provider');
+    assert.equal(isVerifiedMatch(collection, { ...movie, title: 'The Evil Dead 2' }), false);
+    assert.equal(isVerifiedMatch({ ...collection, title: 'The Evil Dead' }, movie), false);
+    assert.equal(trustedMediaYear({ ...collection, title: 'The Evil Dead Trilogy (2013)', year: 2013, yearSource: 'folder' }), undefined);
+    assert.equal(trustedMediaYear({ ...collection, yearSource: 'user' }), 1981);
+    globalThis.fetch = async () => Response.json({
+      success: true, source: 'fallback', diagnostics: [{ provider: 'TMDB', outcome: 'Ambiguous results without a trusted year; review manually' }],
+    });
+    await assert.rejects(fetchLibraryMetadata(collection, new AbortController().signal), MetadataReviewRequiredError);
+    globalThis.fetch = async () => Response.json({
+      success: true, source: 'fallback', diagnostics: [{ provider: 'TMDB', outcome: 'No API token configured' }],
+    });
+    await assert.rejects(fetchLibraryMetadata(collection, new AbortController().signal), /TMDB token is required/);
     globalThis.fetch = async () => Response.json({ success: true, source: 'fallback' });
     assert.equal(await fetchLibraryMetadata({ ...item, title: 'The Collection', type: 'movie' }, new AbortController().signal), null);
     assert.equal(await fetchLibraryMetadata({ ...item, title: 'Greatest Collection', type: 'album' }, new AbortController().signal), null);
@@ -371,6 +401,8 @@ test('records detected and placeholder years without confusing a current-year re
   const currentYear = new Date().getFullYear();
   assert.equal(parseTitleAndYear(`Example (${currentYear}).mkv`).hasYear, true);
   assert.equal(parseTitleAndYear('Example.mkv').hasYear, false);
+  assert.equal(parseTitleAndYear('Example.2024').year, 2024);
+  assert.equal(parseTitleAndYear('Example.20261031.mkv').hasYear, false);
   const folder = nodeToMediaMetadata({ id: 'f', name: `Example (${currentYear})`, path: `Example (${currentYear})`, type: 'folder', mediaType: 'movie' });
   assert.equal(folder?.yearSource, 'folder');
   const file = nodeToMediaMetadata({ id: 'a', name: 'Example.mkv', path: 'Example.mkv', type: 'file', mediaType: 'movie' });
@@ -386,6 +418,12 @@ test('records detected and placeholder years without confusing a current-year re
     cleanFormattedFilename: 'Example.mkv', cleanFolderPath: 'Example', status: 'pending',
   });
   assert.equal(imported.yearSource, undefined);
+  const noYearSeries = nodeToMediaMetadata({
+    id: 's2', name: 'Our Friends in the North      BONE', path: '/Series/Our Friends in the North      BONE',
+    type: 'folder', mediaType: 'series',
+  });
+  assert.equal(noYearSeries?.yearSource, 'placeholder');
+  assert.equal(trustedMediaYear(noYearSeries!), undefined);
 });
 
 test('only trusts legacy years supported by the matching original name', () => {
@@ -394,6 +432,10 @@ test('only trusts legacy years supported by the matching original name', () => {
   assert.equal(trustedMediaYear({ ...item, yearSource: undefined, matchedFilename: 'Another (2020).mkv' }), undefined);
   assert.equal(trustedMediaYear({ ...item, yearSource: undefined }), undefined);
   assert.equal(trustedMediaYear({ ...item, yearSource: 'placeholder', matchedFilename: 'Example (2020).mkv' }), undefined);
+  assert.equal(trustedMediaYear({ ...item, title: 'Our Friends in the North      BONE', year: 2024, yearSource: 'filename', path: '/2024/Series/Our Friends in the North BONE' }), undefined);
+  assert.equal(trustedMediaYear({ ...item, title: 'Example', yearSource: 'folder', folderPath: '/Series/Example (2020)' }), 2020);
+  assert.equal(trustedMediaYear({ ...item, title: 'Example', yearSource: 'user' }), 2020);
+  assert.equal(trustedMediaYear({ ...item, title: 'Example', yearSource: 'provider' }), 2020);
 });
 
 test('omits untrusted years from lookup and asks for review', async () => {
@@ -409,6 +451,26 @@ test('omits untrusted years from lookup and asks for review', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('omits unsupported filename years and saves a unique series provider year', async () => {
+  const media: MediaMetadata = {
+    ...item, title: 'Our Friends in the North      BONE', year: 2024, yearSource: 'filename',
+    matchedFilename: 'Our Friends in the North      BONE', path: '/Series/Our Friends in the North BONE',
+  };
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'Our Friends in the North');
+      assert.equal(request.year, undefined);
+      return Response.json({ success: true, source: 'tmdb', title: 'Our Friends in the North', year: 1996, matchMode: 'unique-title' });
+    };
+    const result = await fetchLibraryMetadata(media, new AbortController().signal);
+    assert.ok(result);
+    assert.equal(mergeFetchedMetadata(media, result).year, 1996);
+    assert.equal(mergeFetchedMetadata(media, result).yearSource, 'provider');
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('surfaces failed responses and does not treat fallback data as a match', async () => {

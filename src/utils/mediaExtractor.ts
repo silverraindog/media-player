@@ -341,7 +341,7 @@ export function detectMediaType(filePath: string): MediaType {
 // Clean title and year from path or filename
 export function parseTitleAndYear(rawName: string): { title: string; year: number; hasYear: boolean; season?: number; episode?: number } {
   // Strip extension
-  let clean = rawName.replace(/\.[a-zA-Z0-9]{2,4}$/, '');
+  let clean = rawName.replace(/\.(?!(?:19|20)\d{2}$)[a-zA-Z0-9]{2,4}$/, '');
 
   // Check for season/episode
   let season: number | undefined;
@@ -359,7 +359,7 @@ export function parseTitleAndYear(rawName: string): { title: string; year: numbe
   }
 
   // Extract year
-  const yearMatch = clean.match(/[\(\[\.]?(19\d{2}|20\d{2})[\)\]\.]?/);
+  const yearMatch = clean.match(/(?<!\d)(19\d{2}|20\d{2})(?!\d)/);
   const year = yearMatch ? parseInt(yearMatch[1], 10) : new Date().getFullYear();
 
   // Clean dots, underscores, extra metadata

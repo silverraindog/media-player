@@ -84,6 +84,13 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
       entry.provider === 'TMDB' && entry.outcome === 'Result returned'));
     assert.ok(match.diagnostics.some((entry: { outcome: string }) =>
       entry.outcome.startsWith('Request: GET https://api.themoviedb.org/')));
+    const collectionResponse = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'The Evil Dead', type: 'movie', requireProviderYear: true, allowUniqueMovie: true, diagnostics: true }),
+    }).then(response => response.json());
+    assert.equal(collectionResponse.matchMode, 'unique-variant');
+    assert.equal(collectionResponse.title, 'The Evil Dead');
+    assert.equal(collectionResponse.year, 1981);
     const ambiguous = await lookup('Ambiguous');
     assert.equal(ambiguous.source, 'fallback');
     assert.equal(ambiguous.title, undefined);

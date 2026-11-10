@@ -648,7 +648,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false, allowUniqueMovie = false): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -675,6 +675,9 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   }
 
   if (requireProviderYear && (lowerType === 'movie' || lowerType === 'series')) {
+    if (lowerType === 'movie' && !year && allowUniqueMovie) {
+      return (await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, true)).metadata || { source: 'fallback' };
+    }
     const tmdb = await fetchTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
     if (tmdb.metadata) return tmdb.metadata;
     if (tmdb.unsafeToMatch) {
@@ -924,7 +927,7 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
     const cleanTitle = String(title).trim();
     const diagnostics: MetadataDiagnostics | undefined = req.body.diagnostics === true ? [] : undefined;
     const artist = typeof req.body.artist === 'string' && req.body.artist.trim().length <= 300 ? req.body.artist.trim() : undefined;
-    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true, artist, req.body.allowRanked === true);
+    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined, diagnostics, req.body.requireProviderYear === true, artist, req.body.allowRanked === true, req.body.allowUniqueMovie === true);
 
     const postersSet = new Set<string>();
     if (art.posterUrl) postersSet.add(art.posterUrl);

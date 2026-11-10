@@ -14,10 +14,14 @@ export interface TmdbMetadata {
 }
 
 export async function fetchRankedTmdbMetadata(
-  title: string, type: string, year: number | undefined, diagnostics?: Diagnostic[],
+  title: string, type: string, year: number | undefined, diagnostics?: Diagnostic[], allowUniqueMovie = false,
 ): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean }> {
   const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
-  if (!token || (!year && type !== 'series') || (type !== 'movie' && type !== 'series')) return {};
+  if ((!year && type !== 'series' && !(type === 'movie' && allowUniqueMovie)) || (type !== 'movie' && type !== 'series')) return {};
+  if (!token) {
+    diagnostics?.push({ provider: 'TMDB', outcome: 'No API token configured' });
+    return {};
+  }
   const variants = metadataTitleVariants(title);
   const candidates: Array<{ metadata: TmdbMetadata; variant: number; distance: number; popularity: number; votes: number; id: number }> = [];
   diagnostics?.push({ provider: 'TMDB', outcome: year

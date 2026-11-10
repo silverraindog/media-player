@@ -78,6 +78,15 @@ test('TMDB metadata searches exact movie and series titles and years safely', as
         globalThis.fetch = async () => new Response(null, { status: 503 });
         assert.equal((await fetchRankedTmdbMetadata('Skinamarink', 'movie', 2022)).unsafeToMatch, true);
         assert.equal((await fetchRankedTmdbMetadata('Skinamarink', 'movie', undefined)).metadata, undefined);
+        globalThis.fetch = async () => Response.json({ total_pages: 1, results: [
+          { id: 21, title: 'The Evil Dead', release_date: '1981-01-01' },
+        ] });
+        assert.equal((await fetchRankedTmdbMetadata('The Evil Dead', 'movie', undefined, diagnostics, true)).metadata?.matchMode, 'unique-variant');
+        globalThis.fetch = async () => Response.json({ total_pages: 1, results: [
+          { id: 21, title: 'The Evil Dead', release_date: '1981-01-01' },
+          { id: 22, title: 'The Evil Dead', release_date: '2013-01-01' },
+        ] });
+        assert.equal((await fetchRankedTmdbMetadata('The Evil Dead', 'movie', undefined, diagnostics, true)).unsafeToMatch, true);
         globalThis.fetch = async input => {
           const query = new URL(String(input)).searchParams.get('query');
           return Response.json({ total_pages: 1, results: query === 'Show' ? [

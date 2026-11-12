@@ -821,6 +821,13 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   {filteredUncategorized.map((item) => {
                     const missingSynopsis = isMissingSynopsis(item);
                     const missingArtwork = isMissingArtwork(item.posterUrl);
+                    const sourcePath = item.path || (
+                      item.folderPath && item.matchedFilename
+                        ? `${item.folderPath.replace(/[\\/]+$/, '')}/${item.matchedFilename}`
+                        : undefined
+                    );
+                    const sourceFileName = item.matchedFilename?.replace(/\\/g, '/').split('/').pop() ||
+                      sourcePath?.replace(/\\/g, '/').split('/').pop();
 
                     return (
                       <div
@@ -866,6 +873,21 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                               </span>
                             </div>
 
+                            {(sourceFileName || sourcePath) && (
+                              <div className="space-y-0.5 text-[10px] font-mono text-slate-400">
+                                {sourceFileName && (
+                                  <div className="break-all">
+                                    <span className="text-slate-500">File: </span>{sourceFileName}
+                                  </div>
+                                )}
+                                {sourcePath && (
+                                  <div className="break-all">
+                                    <span className="text-slate-500">Full path: </span>{sourcePath}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
                             {/* Defect Badges */}
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {!item.metadataFetchStatus && (
@@ -889,9 +911,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                                   <span>Missing Artwork</span>
                                 </span>
                               )}
-                              {item.recommendedFolderStructure && (
+                              {!sourcePath && item.recommendedFolderStructure && (
                                 <span className="text-[10px] font-mono text-slate-500 truncate max-w-[200px] hidden md:inline">
-                                  {item.recommendedFolderStructure}
+                                  Folder: {item.recommendedFolderStructure}
                                 </span>
                               )}
                             </div>

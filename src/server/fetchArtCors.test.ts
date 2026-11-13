@@ -42,19 +42,54 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
       }
     }
     assert.ok(ready, 'Backend did not start in time');
+    for (const [route, method] of [
+      ['/api/db/media', 'GET'],
+      ['/api/db/media/batch', 'POST'],
+      ['/api/db/media/example', 'DELETE'],
+      ['/api/vault/state', 'GET'],
+      ['/api/vault/state', 'POST'],
+    ]) {
+      const preflight = await fetch(`http://127.0.0.1:${port}${route}`, {
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'tauri://localhost',
+          'Access-Control-Request-Method': method,
+          'Access-Control-Request-Headers': 'content-type,priority,request-priority',
+        },
+      });
+      assert.equal(preflight.status, 204);
+      assert.equal(preflight.headers.get('access-control-allow-origin'), 'tauri://localhost');
+      assert.ok(preflight.headers.get('access-control-allow-methods')?.split(', ').includes(method));
+      const allowedHeaders = preflight.headers.get('access-control-allow-headers')?.toLowerCase().split(', ');
+      for (const header of ['content-type', 'priority', 'request-priority']) {
+        assert.ok(allowedHeaders?.includes(header), `${header} must be allowed`);
+      }
+      const untrustedPreflight = await fetch(`http://127.0.0.1:${port}${route}`, {
+        method: 'OPTIONS', headers: { Origin: 'https://example.com' },
+      });
+      assert.equal(untrustedPreflight.headers.get('access-control-allow-origin'), null);
+    }
     const savedMedia = await fetch(`http://127.0.0.1:${port}/api/db/media/batch`, {
       method: 'POST',
       headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: [{ id: 'persistence-test', type: 'movie', title: 'Saved title', overview: 'Saved synopsis', cast: [{ name: 'Actor' }] }] }),
     });
     assert.equal(savedMedia.status, 200);
+    assert.equal(savedMedia.headers.get('access-control-allow-origin'), 'tauri://localhost');
     const storedMedia = await fetch(`http://127.0.0.1:${port}/api/db/media`, {
       headers: { Origin: 'tauri://localhost' },
-    }).then(response => response.json());
-    const savedItem = storedMedia.items.find((item: { id: string }) => item.id === 'persistence-test');
+    });
+    assert.equal(storedMedia.headers.get('access-control-allow-origin'), 'tauri://localhost');
+    const storedMediaData = await storedMedia.json();
+    const savedItem = storedMediaData.items.find((item: { id: string }) => item.id === 'persistence-test');
     assert.equal(savedItem.title, 'Saved title');
     assert.equal(JSON.parse(savedItem.cast)[0].name, 'Actor');
     assert.equal(JSON.parse(savedItem.raw_data).overview, 'Saved synopsis');
+    const vaultState = await fetch(`http://127.0.0.1:${port}/api/vault/state`, {
+      headers: { Origin: 'tauri://localhost' },
+    });
+    assert.equal(vaultState.headers.get('access-control-allow-origin'), 'tauri://localhost');
+    assert.equal((await vaultState.json()).success, true);
     for (const origin of ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost', 'http://localhost:1420']) {
       const preflight = await fetch(url, {
         method: 'OPTIONS',

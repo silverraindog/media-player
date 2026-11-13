@@ -122,6 +122,8 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
 app.use('/api/media/fetch-art', tauriCors('POST, OPTIONS'));
+app.use('/api/db', tauriCors('GET, POST, DELETE, OPTIONS', 'Content-Type, Priority, Request-Priority'));
+app.use('/api/vault/state', tauriCors('GET, POST, OPTIONS', 'Content-Type, Priority, Request-Priority'));
 app.use(express.json({ limit: '10mb' }));
 let genAIClient: GoogleGenAI | null = null;
 registerApiKeyRoutes(app, getPersistentStorageInfo().dataDir, () => { genAIClient = null; });

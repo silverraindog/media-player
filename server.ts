@@ -648,7 +648,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false, allowUniqueMovie = false, collectionLookup = false, selectedCollectionId?: number): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false, allowUniqueMovie = false, collectionLookup = false, selectedCollectionId?: number, reviewYearMatches = false): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -685,6 +685,11 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   }
 
   if (requireProviderYear && (lowerType === 'movie' || lowerType === 'series')) {
+    if (reviewYearMatches && year && allowRanked) {
+      const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, allowUniqueMovie, true);
+      if (ranked.metadata) return ranked.metadata;
+      if (ranked.unsafeToMatch) return { source: 'fallback', candidates: ranked.candidates };
+    }
     if (lowerType === 'movie' && !year && allowUniqueMovie) {
       const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, true);
       if (ranked.metadata) return ranked.metadata;
@@ -693,7 +698,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
     const tmdb = await fetchTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
     if (tmdb.metadata) return tmdb.metadata;
     if (tmdb.unsafeToMatch) {
-      if (allowRanked) {
+      if (allowRanked && (!reviewYearMatches || !year)) {
         const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, allowUniqueMovie);
         if (ranked.metadata) return ranked.metadata;
         if (ranked.candidates?.length) return { source: 'fallback', candidates: ranked.candidates };
@@ -742,7 +747,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
   const secondaryData = secondaryResult.status === 'fulfilled' ? secondaryResult.value : null;
 
-  if (requireProviderYear && allowRanked && (year || lowerType === 'series') && (lowerType === 'movie' || lowerType === 'series')) {
+  if (requireProviderYear && allowRanked && (!reviewYearMatches || !year) && (year || lowerType === 'series') && (lowerType === 'movie' || lowerType === 'series')) {
     const omdbExact = omdbData?.Title && normalizeUniverseTitle(omdbData.Title) === normalizeUniverseTitle(cleanTitle) &&
       parseInt(omdbData.Year, 10) === year;
     const secondaryExact = secondaryData?.title && normalizeUniverseTitle(secondaryData.title) === normalizeUniverseTitle(cleanTitle) &&
@@ -955,6 +960,7 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
       req.body.allowUniqueMovie === true,
       req.body.collectionLookup === true,
       selectedCollectionId,
+      req.body.reviewYearMatches === true,
     );
 
     const postersSet = new Set<string>();

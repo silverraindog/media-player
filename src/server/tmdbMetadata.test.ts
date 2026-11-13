@@ -128,6 +128,33 @@ test('TMDB metadata searches exact movie and series titles and years safely', as
   }
 });
 
+test('review mode tries the exact year before the next and exposes ambiguous matches', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalToken = process.env.TMDB_READ_ACCESS_TOKEN;
+  process.env.TMDB_READ_ACCESS_TOKEN = 'test-token';
+  try {
+    let results = [
+      { id: 1, title: 'Example', release_date: '1999-01-01' },
+      { id: 2, title: 'Example', release_date: '2000-01-01' },
+      { id: 3, title: 'Example', release_date: '1998-01-01' },
+    ];
+    globalThis.fetch = async () => Response.json({ total_pages: 1, results });
+    assert.equal((await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true)).metadata?.year, 1999);
+    results = results.filter(result => result.id !== 1);
+    assert.equal((await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true)).metadata?.year, 2000);
+    results.push({ id: 4, title: 'Example', release_date: '2000-05-01' });
+    const ambiguous = await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true);
+    assert.equal(ambiguous.unsafeToMatch, true);
+    assert.deepEqual(ambiguous.candidates?.map(candidate => candidate.year), [2000, 2000]);
+    results = results.filter(result => result.id === 3);
+    assert.equal((await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true)).metadata, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;
+    else process.env.TMDB_READ_ACCESS_TOKEN = originalToken;
+  }
+});
+
 test('TMDB metadata reports missing tokens, rejected tokens, and invalid responses without exposing tokens', async () => {
   const originalFetch = globalThis.fetch;
   const originalToken = process.env.TMDB_READ_ACCESS_TOKEN;

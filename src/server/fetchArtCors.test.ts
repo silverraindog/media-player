@@ -159,6 +159,13 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     assert.equal(omdb.title, 'OMDb Test');
     assert.equal(omdb.year, 2024);
     assert.equal(omdb.overview, 'OMDb synopsis');
+    const omdbWhenTmdbFails = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'OMDb Unavailable', type: 'movie', year: 2024, requireProviderYear: true, allowRanked: true, reviewYearMatches: true, diagnostics: true }),
+    }).then(response => response.json());
+    assert.equal(omdbWhenTmdbFails.source, 'omdb');
+    assert.equal(omdbWhenTmdbFails.title, 'OMDb Unavailable');
+    assert.equal(omdbWhenTmdbFails.year, 2024);
     assert.ok(omdb.diagnostics.some((entry: { provider: string; outcome: string }) =>
       entry.provider === 'OMDb' && entry.outcome === 'Result returned'));
     const omdbRequest = omdb.diagnostics.find((entry: { provider: string; outcome: string }) =>

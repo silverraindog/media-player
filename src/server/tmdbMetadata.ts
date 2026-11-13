@@ -193,7 +193,7 @@ export async function fetchTmdbCollectionMetadata(
 
 export async function fetchRankedTmdbMetadata(
   title: string, type: string, year: number | undefined, diagnostics?: Diagnostic[], allowUniqueMovie = false, reviewYearMatches = false,
-): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean; candidates?: TmdbReviewCandidate[] }> {
+): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean; searchFailed?: boolean; candidates?: TmdbReviewCandidate[] }> {
   const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
   if ((!year && type !== 'series' && !(type === 'movie' && allowUniqueMovie)) || (type !== 'movie' && type !== 'series')) return {};
   if (!token) {
@@ -309,7 +309,7 @@ export async function fetchRankedTmdbMetadata(
       ? `${error.message}; no ranked match selected`
       : 'Network error or timeout during ranked search; no ranked match selected' });
     console.warn('[TMDB metadata] Ranked search failed or returned an invalid response.');
-    return { unsafeToMatch: true };
+    return { unsafeToMatch: true, searchFailed: true };
   }
 }
 

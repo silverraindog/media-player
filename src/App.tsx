@@ -167,6 +167,10 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
 
   // In Tauri desktop environment, route internal API calls directly via native IPC
   if (isTauri && urlStr.startsWith('/api/')) {
+    if (urlStr.startsWith('/api/db/') || urlStr.startsWith('/api/vault/state')) {
+      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+      return originalWindowFetch(`http://localhost:${backendPort}${urlStr}`, init);
+    }
     try {
       const data = await apiCall<any>(urlStr, init);
       return new Response(JSON.stringify(data), {
@@ -316,7 +320,7 @@ const fetchWithRetry = async (
     }
 
     // Fallback for API routes if all retries fail
-    if (effectiveUrl.includes('/api/')) {
+    if (effectiveUrl.includes('/api/') && !effectiveUrl.startsWith('/api/db/') && !effectiveUrl.startsWith('/api/vault/state')) {
       let bodyObj: any = null;
       if (priorityOptions.body && typeof priorityOptions.body === 'string') {
         try { bodyObj = JSON.parse(priorityOptions.body as string); } catch {}
@@ -1420,6 +1424,7 @@ function App() {
     fetchWithRetry('/api/db/media')
       .then((res) => res.json())
       .then((data) => {
+        if (!data.success || !Array.isArray(data.items)) throw new Error('Invalid saved media library response');
         if (data.success && Array.isArray(data.items) && data.items.length > 0) {
           setMediaLibrary((prev) => {
             const map = new Map<string, MediaMetadata>();
@@ -1504,11 +1509,20 @@ function App() {
           });
         }
       })
-      .catch((err) => console.warn('SQLite hydration:', err));
+      .catch((err) => {
+        console.error('SQLite hydration failed:', err);
+        showToast('Could not load the saved media library. Check the backend and restart; your database was not changed.');
+      });
   }, [isVaultLoaded]);
 
   useEffect(() => {
     requestNotificationPermission();
+  }, []);
+
+  useEffect(() => {
+    const handleMediaSaveError = () => showToast('Could not save the media library. Keep SambaVault open and check the backend.');
+    window.addEventListener('sambavault-media-save-error', handleMediaSaveError);
+    return () => window.removeEventListener('sambavault-media-save-error', handleMediaSaveError);
   }, []);
 
   const handlePlayMedia = (

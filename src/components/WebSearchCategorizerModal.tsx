@@ -307,9 +307,6 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           }
           if (details.providers?.length) {
             for (const provider of details.providers) log(`  ${provider.provider}: ${provider.outcome}.`);
-          } else if (needsReview) {
-            review++;
-            log(`  Awaiting your selection for "${item.title}".`);
           } else {
             log('  Provider details unavailable from this backend.');
           }
@@ -330,6 +327,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           const matchLabel = itemData.matchMode === 'ranked' || itemData.matchMode === 'unique-variant'
             ? 'inferred match (verify manually)' : 'verified match';
           log(`  Saved ${matchLabel} for "${item.title}"; filled: ${filled.join(', ') || 'no missing fields'}; existing metadata was preserved.`);
+        } else if (needsReview) {
+          review++;
+          log(`  Awaiting your selection for "${item.title}".`);
         } else {
           noMatch++;
           log(`  No verified match saved for "${item.title}".`);
@@ -397,7 +397,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
   if (!isOpen) return null;
 
-  const handleSearch = async (targetQuery?: string, targetType?: MediaType | 'all') => {
+  const handleSearch = async (targetQuery?: string, targetType?: MediaType | 'all', targetYear?: number) => {
     const q = (targetQuery || query).trim();
     if (!q) {
       setErrorMsg('Please enter a movie or series title to categorize.');
@@ -409,7 +409,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setIsSaved(false);
 
     try {
-      const parsedYear = yearHint ? parseInt(yearHint, 10) : undefined;
+      const parsedYear = targetQuery !== undefined
+        ? targetYear
+        : yearHint ? parseInt(yearHint, 10) : undefined;
       let media: MediaMetadata | null = await categorizeMediaWithRetry(
         q,
         targetType || mediaType,
@@ -832,8 +834,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                         ? `${item.folderPath.replace(/[\\/]+$/, '')}/${item.matchedFilename}`
                         : undefined
                     );
-                    const sourceFileName = item.matchedFilename?.replace(/\\/g, '/').split('/').pop() ||
-                      sourcePath?.replace(/\\/g, '/').split('/').pop();
+                    const sourceFileName = sourcePath?.replace(/\\/g, '/').split('/').pop() ||
+                      item.matchedFilename?.replace(/\\/g, '/').split('/').pop();
+                    const lookupYear = metadataLookupYear(item);
 
                     return (
                       <div
@@ -865,9 +868,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                               <span className="text-xs font-bold text-white truncate max-w-xs sm:max-w-sm">
                                 {item.title}
                               </span>
-                              {item.year && (
+                              {lookupYear && (
                                 <span className="text-[10px] text-slate-400 font-mono">
-                                  ({item.year})
+                                  ({lookupYear})
                                 </span>
                               )}
                               <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase ${
@@ -935,8 +938,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                               setActiveTabFilter('search');
                               setQuery(item.title);
                               setMediaType(item.type);
-                              if (item.year) setYearHint(item.year.toString());
-                              handleSearch(item.title, item.type);
+                              setYearHint(lookupYear?.toString() || '');
+                              handleSearch(item.title, item.type, lookupYear);
                             }}
                             className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                             title="One-click AI Web Search & Categorize"

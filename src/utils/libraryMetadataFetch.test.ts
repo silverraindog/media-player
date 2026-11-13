@@ -492,6 +492,9 @@ test('uses a matching video filename year for lookup without trusting conflictin
     path: '/Movies/Example/Example.1999.1080p.mkv', matchedFilename: 'Example.1999.1080p.mkv',
   };
   assert.equal(metadataLookupYear(media), 1999);
+  assert.equal(metadataLookupYear({ ...media, path: '/Movies/Example (2007).mkv', matchedFilename: 'Example (2007).mkv' }), 2007);
+  assert.equal(metadataLookupYear({ ...media, path: '/Movies/Example (2007 1080p).mkv', matchedFilename: 'Example (2007 1080p).mkv' }), 2007);
+  assert.equal(metadataLookupYear({ ...media, title: 'Starwars', path: '/Movies/Star Wars M09 E08 The Last Jedi (2017 360p re-blurip).mp4', matchedFilename: 'Starwars' }), undefined);
   assert.equal(metadataLookupYear({ ...media, matchedFilename: 'Another.1999.mkv', path: '/Movies/Another.1999.mkv' }), undefined);
   assert.equal(metadataLookupYear({ ...media, matchedFilename: 'Example.1999.mkv', path: '/Movies/Example.2000.mkv' }), undefined);
   assert.equal(metadataLookupYear({ ...media, matchedFilename: 'Example.20261031.mkv', path: '/Movies/Example.20261031.mkv' }), undefined);

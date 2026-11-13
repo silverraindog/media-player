@@ -688,7 +688,7 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
     if (reviewYearMatches && year && allowRanked) {
       const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, allowUniqueMovie, true);
       if (ranked.metadata) return ranked.metadata;
-      if (ranked.unsafeToMatch) return { source: 'fallback', candidates: ranked.candidates };
+      if (ranked.unsafeToMatch && !ranked.searchFailed) return { source: 'fallback', candidates: ranked.candidates };
     }
     if (lowerType === 'movie' && !year && allowUniqueMovie) {
       const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, true);

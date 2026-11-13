@@ -44,6 +44,7 @@ globalThis.fetch = async (input, init) => {
       { id: 33, name: 'Futurama', first_air_date: '1999-03-28', overview: 'Series synopsis' },
     ] });
     if (query === 'OMDb Test') return Response.json({ total_pages: 1, results: [] });
+    if (query === 'OMDb Unavailable') return new Response(null, { status: 503 });
     if (query === 'Nearby Year') return Response.json({
       total_pages: 1,
       results: url.searchParams.has('primary_release_year') ? [] :
@@ -60,9 +61,9 @@ globalThis.fetch = async (input, init) => {
     ] : [{ title: 'The First Omen', release_date: '2024-04-03', overview: 'Provider synopsis', poster_path: '/poster.jpg' }];
     return Response.json({ total_pages: 1, results });
   }
-  if (url.hostname === 'www.omdbapi.com' && url.searchParams.get('t') === 'OMDb Test') {
+  if (url.hostname === 'www.omdbapi.com' && ['OMDb Test', 'OMDb Unavailable'].includes(url.searchParams.get('t') || '')) {
     if (url.searchParams.get('apikey') !== 'saved-test-key') return new Response(null, { status: 401 });
-    return Response.json({ Response: 'True', Title: 'OMDb Test', Year: '2024', Plot: 'OMDb synopsis' });
+    return Response.json({ Response: 'True', Title: url.searchParams.get('t'), Year: '2024', Plot: 'OMDb synopsis' });
   }
   if (['www.omdbapi.com', 'itunes.apple.com', 'api.tvmaze.com'].includes(url.hostname)) {
     return new Response(null, { status: 503 });

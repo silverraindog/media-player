@@ -32,7 +32,7 @@ import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isCollectionLookup, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, metadataLookupMedia, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isCollectionLookup, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, metadataLookupMedia, metadataLookupYear, MetadataBackendUnavailableError, MetadataReviewRequiredError, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
 import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
@@ -228,6 +228,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const movieIncompleteCount = incompleteItems.filter((m) => m.type === 'movie').length;
 
   const filteredUncategorized = incompleteItems.filter((item) => {
+    if (reviewCandidates[item.id]?.length) return true;
     // Text search filter
     if (uncatSearchQuery.trim()) {
       const matchText = item.title.toLowerCase().includes(uncatSearchQuery.toLowerCase());
@@ -266,7 +267,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setShowBatchLog(true);
     setBatchLog([
       `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${categoryLabelCount} category labels and ${audioTrackCount} individual audio tracks excluded. ${sidecarCount} subtitle/metadata/artwork entries excluded.`,
-      'Fetch All checks all incomplete items, regardless of the current list filter. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB. Ranked TMDB matches may use a title variant or a year within one year and should be checked.',
+      'Fetch All checks all incomplete items, regardless of the current list filter. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB. TMDB checks the lookup year first, then the following year. Multiple matches require review.',
     ]);
 
     const log = (message: string) => {
@@ -282,7 +283,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     for (const item of items) {
       if (controller.signal.aborted) break;
       setBatchCurrentTitle(item.title);
-      const year = trustedMediaYear(item);
+      const year = metadataLookupYear(item);
       log(`Checking "${item.title}" (${item.type}${year ? `, ${year}` : ', unverified year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
       const lookupMedia = metadataLookupMedia(item);
       const lookupTitle = libraryLookupTitle(lookupMedia);
@@ -292,8 +293,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         log('  Looking up the TMDB collection and combining its overview with descriptions for its films.');
       }
       try {
+        let needsReview = false;
         const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
           if (details.candidates?.length) {
+            needsReview = true;
             setReviewCandidates(previous => ({ ...previous, [item.id]: details.candidates! }));
             log('  Multiple exact-title results; choose the correct TMDB result below.');
             for (const candidate of details.candidates) {
@@ -304,6 +307,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           }
           if (details.providers?.length) {
             for (const provider of details.providers) log(`  ${provider.provider}: ${provider.outcome}.`);
+          } else if (needsReview) {
+            review++;
+            log(`  Awaiting your selection for "${item.title}".`);
           } else {
             log('  Provider details unavailable from this backend.');
           }

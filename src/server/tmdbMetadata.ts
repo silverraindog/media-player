@@ -192,7 +192,7 @@ export async function fetchTmdbCollectionMetadata(
 }
 
 export async function fetchRankedTmdbMetadata(
-  title: string, type: string, year: number | undefined, diagnostics?: Diagnostic[], allowUniqueMovie = false,
+  title: string, type: string, year: number | undefined, diagnostics?: Diagnostic[], allowUniqueMovie = false, reviewYearMatches = false,
 ): Promise<{ metadata?: TmdbMetadata; unsafeToMatch?: boolean; candidates?: TmdbReviewCandidate[] }> {
   const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
   if ((!year && type !== 'series' && !(type === 'movie' && allowUniqueMovie)) || (type !== 'movie' && type !== 'series')) return {};
@@ -203,7 +203,7 @@ export async function fetchRankedTmdbMetadata(
   const variants = metadataTitleVariants(title);
   const candidates: Array<{ metadata: TmdbMetadata; variant: number; distance: number; popularity: number; votes: number; id: number }> = [];
   diagnostics?.push({ provider: 'TMDB', outcome: year
-    ? 'Trying ranked title variants and release years within one year; this may select a different film'
+    ? reviewYearMatches ? 'Trying the requested year, then the following year; multiple matches require review' : 'Trying ranked title variants and release years within one year; this may select a different film'
     : 'Trying title variants without a trusted year; only a unique result can be selected' });
   try {
     const searches = await Promise.allSettled(variants.map(async (query, variant) => {
@@ -257,7 +257,7 @@ export async function fetchRankedTmdbMetadata(
             !Number.isSafeInteger(result.id) || Number(result.id) <= 0) continue;
         const resultYear = Number(date.slice(0, 4));
         const distance = year ? Math.abs(resultYear - year) : 0;
-        if (distance > 1) continue;
+        if (distance > 1 || (reviewYearMatches && year && resultYear < year)) continue;
         candidates.push({
           metadata: {
             source: 'tmdb', title: name, year: resultYear, matchMode: 'ranked',
@@ -272,12 +272,20 @@ export async function fetchRankedTmdbMetadata(
         });
       }
     }
-    candidates.sort((a, b) => a.variant - b.variant || a.distance - b.distance ||
+    candidates.sort((a, b) => (reviewYearMatches ? a.distance - b.distance : a.variant - b.variant) ||
+      (reviewYearMatches ? a.variant - b.variant : a.distance - b.distance) ||
       b.popularity - a.popularity || b.votes - a.votes || a.id - b.id);
     const unique = candidates.filter((candidate, index) => candidates.findIndex(other => other.id === candidate.id) === index);
     if (!unique.length) {
       diagnostics?.push({ provider: 'TMDB', outcome: 'No ranked title variant and nearby year result found' });
       return {};
+    }
+    if (year && reviewYearMatches) {
+      const bestYear = unique.filter(candidate => candidate.distance === unique[0].distance);
+      if (bestYear.length > 1) {
+        diagnostics?.push({ provider: 'TMDB', outcome: `Ambiguous results for ${bestYear[0].metadata.year}; review manually` });
+        return { unsafeToMatch: true, candidates: bestYear.map(({ metadata }) => metadata) };
+      }
     }
     if (!year && unique.length !== 1) {
       diagnostics?.push({ provider: 'TMDB', outcome: 'Ambiguous results without a trusted year; review manually' });

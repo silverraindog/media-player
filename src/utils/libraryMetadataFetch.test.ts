@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { MediaMetadata } from '../types';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, libraryLookupTitle, mergeFetchedMetadata, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
+import { fetchLibraryMetadata, isCategorizerFolderLabel, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isVerifiedMatch, libraryLookupTitle, mergeFetchedMetadata, metadataLookupYear, MetadataBackendUnavailableError, MetadataReviewRequiredError, trustedMediaYear, type MetadataLookupDetails } from './libraryMetadataFetch';
 import { extractAllMediaFromSambaTree, extractAllMediaFromSambaTreeAsync, nodeToMediaMetadata, parseTitleAndYear, parsedFileToMediaMetadata } from './mediaExtractor';
 import { localDbFallback } from './localDatabaseFallback';
 
@@ -484,6 +484,34 @@ test('only trusts legacy years supported by the matching original name', () => {
   assert.equal(trustedMediaYear({ ...item, title: 'Example', yearSource: 'folder', folderPath: '/Series/Example (2020)' }), 2020);
   assert.equal(trustedMediaYear({ ...item, title: 'Example', yearSource: 'user' }), 2020);
   assert.equal(trustedMediaYear({ ...item, title: 'Example', yearSource: 'provider' }), 2020);
+});
+
+test('uses a matching video filename year for lookup without trusting conflicting or unrelated names', async () => {
+  const media: MediaMetadata = {
+    ...item, type: 'movie', title: 'Example', year: 2026, yearSource: 'placeholder',
+    path: '/Movies/Example/Example.1999.1080p.mkv', matchedFilename: 'Example.1999.1080p.mkv',
+  };
+  assert.equal(metadataLookupYear(media), 1999);
+  assert.equal(metadataLookupYear({ ...media, matchedFilename: 'Another.1999.mkv', path: '/Movies/Another.1999.mkv' }), undefined);
+  assert.equal(metadataLookupYear({ ...media, matchedFilename: 'Example.1999.mkv', path: '/Movies/Example.2000.mkv' }), undefined);
+  assert.equal(metadataLookupYear({ ...media, matchedFilename: 'Example.20261031.mkv', path: '/Movies/Example.20261031.mkv' }), undefined);
+  assert.equal(metadataLookupYear({ ...media, year: 2001, yearSource: 'user' }), 2001);
+  assert.equal(metadataLookupYear({ ...media, title: 'Example Collection', collectionFolder: true }), undefined);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.title, 'Example');
+      assert.equal(request.year, 1999);
+      assert.equal(request.reviewYearMatches, true);
+      return Response.json({ success: true, source: 'tmdb', title: 'Example', year: 2000, matchMode: 'ranked', overview: 'Synopsis' });
+    };
+    const result = await fetchLibraryMetadata(media, new AbortController().signal);
+    assert.ok(result);
+    assert.equal(mergeFetchedMetadata(media, result).year, 2000);
+    assert.equal(mergeFetchedMetadata(media, result).yearSource, 'provider');
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('omits untrusted years from lookup and asks for review', async () => {

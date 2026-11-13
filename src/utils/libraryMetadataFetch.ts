@@ -204,6 +204,23 @@ export function trustedMediaYear(media: MediaMetadata): number | undefined {
   return undefined;
 }
 
+export function metadataLookupYear(media: MediaMetadata): number | undefined {
+  const trusted = trustedMediaYear(media);
+  if (trusted || isCollectionLookup(media) || media.type === 'album') return trusted;
+  const title = normalizeUniverseTitle(libraryLookupTitle(metadataLookupMedia(media)));
+  const years = new Set<number>();
+  for (const path of [media.matchedFilename, media.path, media.recommendedFolderStructure]) {
+    const name = path?.replace(/\\/g, '/').split('/').pop();
+    if (!name || getFileCategory(name) !== 'video' || /\b(?:19|20)\d{2}\s*-\s*(?:19|20)\d{2}\b/.test(name)) continue;
+    const matches = name.match(/(?<!\d)(?:19|20)\d{2}(?!\d)/g);
+    if (!matches || new Set(matches).size !== 1) continue;
+    const parsed = parseTitleAndYear(name);
+    const filenameTitle = libraryLookupTitle({ ...metadataLookupMedia(media), title: parsed.title });
+    if (parsed.hasYear && normalizeUniverseTitle(filenameTitle) === title) years.add(parsed.year);
+  }
+  return years.size === 1 ? [...years][0] : undefined;
+}
+
 export function metadataLookupMedia(media: MediaMetadata): MediaMetadata {
   if (media.type === 'movie' && hasNumberedSeriesContext(media)) {
     return { ...media, type: 'series' };
@@ -219,7 +236,7 @@ export function isVerifiedMatch(media: MediaMetadata, result: FetchedLibraryMeta
       normalizeUniverseTitle(artist) === normalizeUniverseTitle(result.artist) &&
       !!result.title && normalizedTitle(media.title) === normalizedTitle(result.title);
   }
-  const year = trustedMediaYear(media);
+  const year = metadataLookupYear(media);
   const lookupTitle = libraryLookupTitle(media);
   if (result.matchMode === 'unique-collection') {
     const collectionName = result.collectionName || result.title;
@@ -273,6 +290,10 @@ export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibrar
     updated.year = result.year;
     updated.yearSource = 'provider';
   }
+  if (!trustedMediaYear(media) && metadataLookupYear(media) && isVerifiedMatch(media, result) && result.year) {
+    updated.year = result.year;
+    updated.yearSource = 'provider';
+  }
   if (isMissingText(updated.overview) && !isMissingText(result.overview)) updated.overview = result.overview!;
   if (isMissingText(updated.synopsis) && !isMissingText(result.overview)) updated.synopsis = result.overview;
   if (isMissingArtwork(updated.posterUrl) && !isMissingArtwork(result.posterUrl)) updated.posterUrl = result.posterUrl!;
@@ -311,11 +332,12 @@ export async function fetchLibraryMetadata(
         body: JSON.stringify({
           title: libraryLookupTitle(lookupMedia),
           type: lookupMedia.type,
-          year: trustedMediaYear(media),
+          year: metadataLookupYear(media),
           artist: media.type === 'album' ? trustedAlbumArtist(media) : undefined,
           requireProviderYear: true,
           allowRanked: true,
-          allowUniqueMovie: lookupMedia.type === 'movie' && !trustedMediaYear(media) && !isCollectionLookup(lookupMedia),
+          reviewYearMatches: true,
+          allowUniqueMovie: lookupMedia.type === 'movie' && !metadataLookupYear(media) && !isCollectionLookup(lookupMedia),
           collectionLookup: isCollectionLookup(lookupMedia),
           selectedCollectionId,
           diagnostics: true,
@@ -348,9 +370,9 @@ export async function fetchLibraryMetadata(
     else if (normalizedTitle(libraryLookupTitle(lookupMedia)) !== normalizedTitle(result.title)) reason = 'Title does not match the library item';
     else if (media.type === 'album' && !verified) reason = 'Album artist cannot be verified; review this result manually';
     else if (media.type === 'album') reason = 'Verified album and artist';
-    else if (!trustedMediaYear(media)) reason = 'Library year is unverified; review this result manually';
+    else if (!metadataLookupYear(media)) reason = 'Library year is unverified; review this result manually';
     else if (!result.year) reason = 'Provider returned no year; review this result manually';
-    else if (trustedMediaYear(media) !== result.year) reason = 'Year does not match the library item';
+    else if (metadataLookupYear(media) !== result.year) reason = 'Year does not match the library item';
     const providers = Array.isArray(result.diagnostics)
       ? result.diagnostics.filter((entry): entry is MetadataFetchDiagnostic =>
         entry && typeof entry.provider === 'string' && typeof entry.outcome === 'string')

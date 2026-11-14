@@ -70,7 +70,7 @@ test('overview choices can be selected and retried while the overview batch cont
       } else if (++selectionAttempts === 1) {
         body = { success: true, diagnostics: [{ provider: 'Wikipedia', outcome: 'No premise or overview section found; review manually' }] };
       } else {
-        body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/First_Show', license: 'CC BY-SA 4.0' } };
+        body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/First_Show', license: 'CC BY-SA 4.0', excerpt: 'introduction' } };
       }
     }
     await route.fulfill({ json: body });
@@ -87,7 +87,8 @@ test('overview choices can be selected and retried while the overview batch cont
     await option.click();
     await expect.poll(() => saved.size).toBe(1);
     await expect(option).toHaveCount(0);
-    expect(saved.get('show-0')).toMatchObject({ overview: 'Existing synopsis', franchiseOverview: { text: 'Show premise' } });
+    await expect(page.getByText('Saved the Wikipedia introduction for "First Show" as its separate overview.')).toBeVisible();
+    expect(saved.get('show-0')).toMatchObject({ overview: 'Existing synopsis', franchiseOverview: { text: 'Show premise', excerpt: 'introduction' } });
   } finally {
     releaseSecond();
   }

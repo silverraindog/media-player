@@ -336,6 +336,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         throw new Error(detail || 'The selected source has no usable overview.');
       }
       await onFetchLibraryMetadata(id, { franchiseOverview: result.overview });
+      if (result.overview.excerpt === 'introduction') {
+        setBatchMessage(`Saved the Wikipedia introduction for "${item.title}" as its separate overview.`);
+      }
       pendingOverviewSelections.current.delete(id);
       if (overviewBatchProcessing) overviewSelectionsSaved.current++;
       setOverviewCandidates(previous => {

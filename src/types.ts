@@ -44,6 +44,7 @@ export interface FranchiseOverview {
   source: 'TMDB' | 'Wikipedia';
   url: string;
   license?: string;
+  excerpt?: 'introduction';
 }
 
 export interface FranchiseCandidate {

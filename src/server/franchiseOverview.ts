@@ -100,10 +100,16 @@ export async function fetchFranchiseOverview(
   const url = new URL(page.fullurl);
   if (url.protocol !== 'https:' || url.hostname !== 'en.wikipedia.org') throw new FranchiseOverviewError('Wikipedia returned an invalid article URL.');
   const section = page.extract.match(/^==[ \t]*(?:Premise|Overview|Synopsis|Plot)[ \t]*==[ \t]*\n([\s\S]*?)(?=^==[ \t]*[^=]|$(?![\s\S]))/im);
-  const text = section?.[1]?.trim();
+  const sectionText = section?.[1]?.trim();
+  const introduction = chosen ? page.extract.split(/^==[ \t]*[^=].*?==[ \t]*$/m, 1)[0].trim() : '';
+  const text = sectionText || introduction;
   if (!text) {
     diagnostics.push({ provider: 'Wikipedia', outcome: 'No premise or overview section found; review manually' });
     return {};
   }
-  return { overview: { text, source: 'Wikipedia', url: url.toString(), license: 'CC BY-SA 4.0' } };
+  if (!sectionText) diagnostics.push({ provider: 'Wikipedia', outcome: 'Using the selected article introduction' });
+  return { overview: {
+    text, source: 'Wikipedia', url: url.toString(), license: 'CC BY-SA 4.0',
+    ...(!sectionText ? { excerpt: 'introduction' as const } : {}),
+  } };
 }

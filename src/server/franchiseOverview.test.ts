@@ -44,7 +44,7 @@ test('Wikipedia ambiguous results need selection and missing sections are not sa
       ] } });
       return Response.json({ query: { pages: [{
         pageid: 2, fullurl: 'https://en.wikipedia.org/wiki/Example_(TV_series)',
-        extract: 'Introduction\n\n== Production ==\nDetails.',
+        extract: '\n\n== Production ==\nDetails.',
       }] } });
     };
     const result = await fetchFranchiseOverview('Example', 'series', []);
@@ -53,6 +53,51 @@ test('Wikipedia ambiguous results need selection and missing sections are not sa
     assert.equal((await fetchFranchiseOverview('Example', 'series', diagnostics, result.candidates![1])).overview, undefined);
     assert.ok(diagnostics.some(entry => entry.outcome.includes('No premise or overview')));
     await assert.rejects(() => fetchFranchiseOverview('Example', 'series', [], { source: 'Wikipedia', title: 'Wrong', id: 99 }));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('a manually selected Wikipedia article can use its introduction when no premise section exists', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.searchParams.get('prop') === 'pageprops') return Response.json({ query: { pages: [
+        { pageid: 42, title: 'Example', pageprops: { 'wikibase-shortdesc': 'science fiction television franchise' } },
+      ] } });
+      return Response.json({ query: { pages: [{
+        pageid: 42, fullurl: 'https://en.wikipedia.org/wiki/Example',
+        extract: 'Example is a media franchise.\n\nThe stories share a premise.\n\n== Television series ==\nSeries details.',
+      }] } });
+    };
+    const candidates = await fetchFranchiseOverview('Example', 'series', []);
+    assert.equal(candidates.candidates?.length, 1);
+    const diagnostics: { provider: string; outcome: string }[] = [];
+    const selected = await fetchFranchiseOverview('Example', 'series', diagnostics, candidates.candidates![0]);
+    assert.deepEqual(selected.overview, {
+      text: 'Example is a media franchise.\n\nThe stories share a premise.',
+      source: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Example',
+      license: 'CC BY-SA 4.0', excerpt: 'introduction',
+    });
+    assert.ok(diagnostics.some(entry => entry.outcome === 'Using the selected article introduction'));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('automatic Wikipedia matches do not save an introduction without a premise section', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.searchParams.get('prop') === 'pageprops') return Response.json({ query: { pages: [
+        { pageid: 1, title: 'Example (franchise)' },
+      ] } });
+      return Response.json({ query: { pages: [{
+        pageid: 1, fullurl: 'https://en.wikipedia.org/wiki/Example_(franchise)',
+        extract: 'Example is a media franchise.\n\n== Television series ==\nDetails.',
+      }] } });
+    };
+    const diagnostics: { provider: string; outcome: string }[] = [];
+    assert.equal((await fetchFranchiseOverview('Example', 'series', diagnostics)).overview, undefined);
+    assert.ok(diagnostics.some(entry => entry.outcome.includes('No premise or overview')));
   } finally { globalThis.fetch = originalFetch; }
 });
 

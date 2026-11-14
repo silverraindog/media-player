@@ -926,7 +926,9 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Franchise / series overview</h3>
                     <p className="whitespace-pre-line text-slate-200 leading-relaxed">{media.franchiseOverview.text}</p>
                     <p className="text-slate-400">
-                      {media.franchiseOverview.source === 'Wikipedia' ? 'Excerpt from ' : 'Source: '}
+                      {media.franchiseOverview.source === 'Wikipedia'
+                        ? media.franchiseOverview.excerpt === 'introduction' ? 'Introduction excerpt from ' : 'Excerpt from '
+                        : 'Source: '}
                       <a className="text-indigo-300 underline" href={media.franchiseOverview.url} target="_blank" rel="noreferrer">{media.franchiseOverview.source}</a>
                       {media.franchiseOverview.license && <> · <a className="text-indigo-300 underline" href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer">{media.franchiseOverview.license}</a></>}
                     </p>

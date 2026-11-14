@@ -14,7 +14,7 @@ import { resolveMediaWithFallback } from './clientMediaResolver';
 import { normalizeFranchiseHierarchy } from './franchiseHierarchy';
 import { categorizeMediaWithRetry } from './metadataCategorizer';
 import { logger } from './loggerService';
-import { isExcludedPicturesPath, isGenericDownloadFolder } from './excludedMedia';
+import { isExcludedPicturesPath, isGenericDownloadFolder, isIgnoredMediaFile } from './excludedMedia';
 
 // Comprehensive Media Extension Definitions
 export const SUPPORTED_VIDEO_EXTENSIONS = [
@@ -97,6 +97,7 @@ export function isMediaFile(
   fileNameOrPath: string,
   config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG
 ): boolean {
+  if (isIgnoredMediaFile(fileNameOrPath)) return false;
   const ext = getFileExtension(fileNameOrPath);
   if (!ext) return false;
 
@@ -489,6 +490,7 @@ export function extractEpisodeInfoFromFilename(filename: string): {
 
 // Convert a Samba node or file path into a full MediaMetadata record
 export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = ''): MediaMetadata | null {
+  if (node.type === 'file' && isIgnoredMediaFile(node.name)) return null;
   const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
   const filePath = findFirstMediaFilePath(node, parentPath) || fullPath;
 
@@ -797,6 +799,7 @@ export function extractAllMediaFromSambaTree(
     for (const node of nodeList) {
       const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
       if (isExcludedPicturesPath(fullPath)) continue;
+      if (node.type === 'file' && isIgnoredMediaFile(node.name)) continue;
       if (isPathInsideExtras(fullPath, node.type === 'file')) continue;
 
       if (node.type === 'folder' && isGenericDownloadFolder(node.name)) {
@@ -919,6 +922,7 @@ export async function extractAllMediaFromSambaTreeAsync(
 
     const fullPath = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
     if (isExcludedPicturesPath(fullPath)) continue;
+    if (node.type === 'file' && isIgnoredMediaFile(node.name)) continue;
     if (isPathInsideExtras(fullPath, node.type === 'file')) continue;
 
     if (node.type === 'folder' && isGenericDownloadFolder(node.name)) {

@@ -48,6 +48,8 @@ The desktop app stores its library in `~/.media-player/media_vault.sqlite` and i
 
 Large imports are saved in smaller batches. Keep the application open until pending SQLite writes finish; if saving or loading fails, the app displays a warning. Do not delete the database when troubleshooting a missing library.
 
+Library scans and imports ignore `.txt` and `.torrent` files, including custom scan extensions. Existing entries for these files are hidden from the library; the files and saved records are not deleted.
+
 Close SambaVault before copying these files for backup or restoring them. Keep backups in a separate location; they contain library and potentially network configuration details. API keys and `.env` files are separate and should be protected, not shared. The backend also supports `SAMBA_VAULT_DATA_DIR` as an explicit storage override; changing it selects a different database.
 
 ### TMDB setup

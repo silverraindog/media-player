@@ -50,6 +50,8 @@ interface WebSearchCategorizerModalProps {
   mediaLibrary?: MediaMetadata[];
 }
 
+class OverviewRateLimitError extends Error {}
+
 const POPULAR_SEARCH_PRESETS = [
   { name: 'Breaking Bad', type: 'series', category: 'Crime / Drama' },
   { name: '24', type: 'series', category: 'Action / Thriller' },
@@ -96,6 +98,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [overviewBatchProcessing, setOverviewBatchProcessing] = useState(false);
   const pendingOverviewSelections = React.useRef(new Set<string>());
   const overviewSelectionsSaved = React.useRef(0);
+  const overviewRateLimited = React.useRef(false);
   const batchController = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
     if (!isOpen) batchController.current?.abort();
@@ -240,7 +243,11 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       }),
     });
     const data: { success?: boolean; overview?: FranchiseOverview; candidates?: FranchiseCandidate[]; error?: string; diagnostics?: Array<{ provider: string; outcome: string }> } = await response.json();
-    if (!response.ok || !data.success) throw new Error(data.error || `Overview lookup failed (HTTP ${response.status}).`);
+    if (!response.ok || !data.success) {
+      const message = data.error || `Overview lookup failed (HTTP ${response.status}).`;
+      if (response.status === 429) throw new OverviewRateLimitError(message);
+      throw new Error(message);
+    }
     if (data.overview) {
       const { source, text, url } = data.overview;
       const validUrl = source === 'Wikipedia' ? /^https:\/\/en\.wikipedia\.org\/wiki\// : /^https:\/\/www\.themoviedb\.org\/collection\/\d+$/;
@@ -268,6 +275,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setOverviewSelectionErrors({});
     pendingOverviewSelections.current.clear();
     overviewSelectionsSaved.current = 0;
+    overviewRateLimited.current = false;
     setShowBatchLog(true);
     setBatchLog([`Checking ${overviewItems.length} series and collections for separate franchise overviews. Existing synopses are preserved.`]);
     let completed = 0;
@@ -275,7 +283,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     let errors = 0;
     try {
       for (const item of overviewItems) {
-        if (controller.signal.aborted) break;
+        if (controller.signal.aborted || overviewRateLimited.current) break;
         setBatchCurrentTitle(item.title);
         try {
           const result = await requestOverview(item, controller.signal);
@@ -293,13 +301,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           if (controller.signal.aborted) break;
           errors++;
           const message = error instanceof Error ? error.message : String(error);
+          if (error instanceof OverviewRateLimitError) overviewRateLimited.current = true;
           setBatchErrors(previous => ({ ...previous, [item.id]: message }));
           setBatchLog(previous => [...previous, `${item.title}: ${message}`]);
         }
         completed++;
         setBatchProgress({ current: completed, total: overviewItems.length });
       }
-      setBatchMessage(`Overview lookup: ${saved + overviewSelectionsSaved.current} saved, ${pendingOverviewSelections.current.size} need selection, ${errors} failed; ${completed} checked.`);
+      const summary = `Overview lookup: ${saved + overviewSelectionsSaved.current} saved, ${pendingOverviewSelections.current.size} need selection, ${errors} failed; ${completed} checked.`;
+      setBatchMessage(overviewRateLimited.current ? `${summary} Stopped because Wikipedia rate limited requests. Wait before retrying.` : summary);
     } finally {
       setBatchProcessing(false);
       setOverviewBatchProcessing(false);
@@ -334,6 +344,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         return next;
       });
     } catch (error) {
+      if (error instanceof OverviewRateLimitError) overviewRateLimited.current = true;
       setOverviewSelectionErrors(previous => ({ ...previous, [id]: error instanceof Error ? error.message : String(error) }));
     } finally {
       setSavingCandidateId(null);

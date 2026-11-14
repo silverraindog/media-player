@@ -1,5 +1,17 @@
 import type { MediaMetadata } from '../types';
 
+export function isIgnoredMediaFile(path?: string): boolean {
+  if (!path) return false;
+  const name = path.replace(/\\/g, '/').split('/').pop() || '';
+  return /\.(?:txt|torrent)$/i.test(name);
+}
+
+export function isIgnoredMediaItem(item: MediaMetadata): boolean {
+  if (isIgnoredMediaFile(item.path)) return true;
+  if (!isIgnoredMediaFile(item.matchedFilename)) return false;
+  return !item.path || item.path === item.folderPath || item.path === item.recommendedFolderStructure;
+}
+
 export function isExcludedPicturesPath(path?: string): boolean {
   if (!path) return false;
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');

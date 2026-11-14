@@ -2,6 +2,12 @@ const originalFetch = globalThis.fetch;
 
 globalThis.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
+  if (url.hostname === 'en.wikipedia.org' && url.searchParams.get('titles')?.includes('Rate Limited')) {
+    return Response.json({ query: { pages: [{ pageid: 42, title: 'Rate Limited (TV series)' }] } });
+  }
+  if (url.hostname === 'en.wikipedia.org' && url.searchParams.get('pageids') === '42') {
+    return new Response(null, { status: 429 });
+  }
   if (url.hostname === 'musicbrainz.org') {
     return Response.json({ count: 1, 'release-groups': [{
       id: '1dc4c347-a1db-32aa-b14f-bc9cc507b843', title: 'Parachutes',

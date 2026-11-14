@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { isExcludedPicturesMedia } from './utils/excludedMedia';
+import { isExcludedPicturesMedia, isIgnoredMediaFile, isIgnoredMediaItem } from './utils/excludedMedia';
 import { MenuBar } from './components/MenuBar';
 import {
   Header,
@@ -1267,7 +1267,7 @@ function App() {
     } catch {}
     return CURATED_MEDIA_DATABASE;
   });
-  const mediaLibrary = useMemo(() => storedMediaLibrary.filter((item) => !isExcludedPicturesMedia(item)), [storedMediaLibrary]);
+  const mediaLibrary = useMemo(() => storedMediaLibrary.filter((item) => !isExcludedPicturesMedia(item) && !isIgnoredMediaItem(item)), [storedMediaLibrary]);
   const mediaLibraryRef = useRef(mediaLibrary);
   mediaLibraryRef.current = mediaLibrary;
 
@@ -1773,7 +1773,11 @@ function App() {
   };
 
   const handleBatchPushToSamba = (items: ParsedFileInfo[]) => {
-    const newMediaItems: MediaMetadata[] = items.map((it) => parsedFileToMediaMetadata(it));
+    const newMediaItems: MediaMetadata[] = items.filter((it) => !isIgnoredMediaFile(it.originalFilename)).map((it) => parsedFileToMediaMetadata(it));
+    if (!newMediaItems.length) {
+      showToast('No media imported: .txt and .torrent files are ignored.');
+      return;
+    }
     batchPushToSambaTree(newMediaItems);
 
     setMediaLibrary((prev) => {
@@ -1799,12 +1803,16 @@ function App() {
       ...prev,
     ]);
 
-    showToast(`Organized & pushed ${items.length} files to Samba share & All Media!`);
+    showToast(`Organized & pushed ${newMediaItems.length} files to Samba share & All Media!`);
     setActiveTab('explorer');
   };
 
   const handleBatchAddToLibrary = (items: ParsedFileInfo[]) => {
-    const newMediaItems: MediaMetadata[] = items.map((it) => parsedFileToMediaMetadata(it));
+    const newMediaItems: MediaMetadata[] = items.filter((it) => !isIgnoredMediaFile(it.originalFilename)).map((it) => parsedFileToMediaMetadata(it));
+    if (!newMediaItems.length) {
+      showToast('No media imported: .txt and .torrent files are ignored.');
+      return;
+    }
     setMediaLibrary((prev) => {
       const map = new Map<string, MediaMetadata>();
       prev.forEach((m) => map.set(m.title.toLowerCase(), m));
@@ -1816,7 +1824,7 @@ function App() {
       return Array.from(map.values());
     });
 
-    showToast(`Added ${items.length} items to All Media, TV Series, Movies, and Music Albums!`);
+    showToast(`Added ${newMediaItems.length} items to All Media, TV Series, Movies, and Music Albums!`);
   };
 
   const handlePopulateMediaLibraryFromSamba = async () => {
@@ -1852,9 +1860,13 @@ function App() {
 
   const handleImportFilesDirectly = async (filesOrNames: File[] | string[]) => {
     if (filesOrNames.length === 0) return;
-    showToast(`Importing ${filesOrNames.length} file(s) into Media Library...`);
-
-    const fileNames: string[] = filesOrNames.map((f) => (typeof f === 'string' ? f : f.name));
+    const fileNames = filesOrNames.map((f) => (typeof f === 'string' ? f : f.name)).filter((name) => !isIgnoredMediaFile(name));
+    if (!fileNames.length) {
+      showToast('No media imported: .txt and .torrent files are ignored.');
+      return;
+    }
+    const ignoredCount = filesOrNames.length - fileNames.length;
+    showToast(`Importing ${fileNames.length} file(s) into Media Library${ignoredCount ? `; ${ignoredCount} ignored` : ''}...`);
 
     try {
       // 1. Try server parser

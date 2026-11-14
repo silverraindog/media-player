@@ -94,6 +94,51 @@ test('overview choices can be selected and retried while the overview batch cont
   await expect(page.getByText('Overview lookup: 1 saved, 0 need selection, 0 failed; 2 checked.')).toBeVisible();
 });
 
+test('a rate-limited overview selection reports the cause and stops the running batch', async ({ page }) => {
+  const items = ['First Show', 'Second Show', 'Third Show'].map((title, index) => ({
+    id: `show-${index}`, title, type: 'series', year: 2000, overview: 'Existing synopsis',
+    posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0,
+    recommendedFolderStructure: title, recommendedFilenames: [],
+  }));
+  const checked: string[] = [];
+  let releaseSecond!: () => void;
+  const secondLookup = new Promise<void>(resolve => { releaseSecond = resolve; });
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let status = 200;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media') body = { success: true, items: [] };
+    else if (pathname === '/api/media/franchise-overview') {
+      const { title, selection } = request.postDataJSON();
+      if (selection) {
+        status = 429;
+        body = { error: 'Wikipedia rate limit reached (HTTP 429). Wait before retrying.' };
+      } else {
+        checked.push(title);
+        if (title === 'First Show') body = { success: true, candidates: [{ title: 'First Show', source: 'Wikipedia', id: 1 }] };
+        if (title === 'Second Show') await secondLookup;
+      }
+    }
+    await route.fulfill({ status, json: body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  await page.getByRole('button', { name: 'Fetch franchise overviews (3)' }).click();
+  try {
+    await expect.poll(() => checked.length).toBe(2);
+    await page.getByRole('button', { name: 'First Show (Wikipedia #1)' }).click();
+    await expect(page.getByRole('alert')).toHaveText('Wikipedia rate limit reached (HTTP 429). Wait before retrying.');
+  } finally {
+    releaseSecond();
+  }
+  await expect(page.getByText(/Stopped because Wikipedia rate limited requests/)).toBeVisible();
+  expect(checked).toEqual(['First Show', 'Second Show']);
+  await expect(page.getByRole('button', { name: 'First Show (Wikipedia #1)' })).toBeVisible();
+});
+
 test('Fetch All checks incomplete items and keeps complete items available for review', async ({ page }) => {
   const items = [
     { id: 'one', title: 'First Movie', type: 'movie', year: 2020, yearSource: 'user', overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },

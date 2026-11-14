@@ -76,6 +76,17 @@ test('series without a matching verified year requires selection', async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('a selected Wikipedia result that disappeared reports a specific error', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ query: { pages: [] } });
+    await assert.rejects(
+      () => fetchFranchiseOverview('Example', 'series', [], { source: 'Wikipedia', title: 'Example (TV series)', id: 2 }),
+      /selected Wikipedia result is no longer available/,
+    );
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('TMDB collection overview takes precedence over Wikipedia', async () => {
   const originalFetch = globalThis.fetch;
   const token = process.env.TMDB_READ_ACCESS_TOKEN;

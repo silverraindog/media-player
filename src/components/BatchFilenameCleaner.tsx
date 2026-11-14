@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ParsedFileInfo, MediaType, SambaConfig } from '../types';
 import { downloadTextFile } from '../utils/zipDownloader';
+import { isIgnoredMediaFile } from '../utils/excludedMedia';
 
 interface BatchFilenameCleanerProps {
   sambaConfig: SambaConfig;
@@ -44,15 +45,18 @@ export const BatchFilenameCleaner: React.FC<BatchFilenameCleanerProps> = ({
   const [inputText, setInputText] = useState(SAMPLE_RAW_FILES.join('\n'));
   const [parsedFiles, setParsedFiles] = useState<ParsedFileInfo[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [ignoredCount, setIgnoredCount] = useState(0);
   const [copiedScript, setCopiedScript] = useState<string | null>(null);
   const [activeScriptTab, setActiveScriptTab] = useState<'bash' | 'powershell' | 'cmd'>('bash');
 
   const handleParse = async () => {
-    const rawLines = inputText
+    const lines = inputText
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
-
+    const rawLines = lines.filter((line) => !isIgnoredMediaFile(line));
+    setIgnoredCount(lines.length - rawLines.length);
+    setParsedFiles([]);
     if (rawLines.length === 0) return;
 
     setIsProcessing(true);
@@ -82,6 +86,7 @@ export const BatchFilenameCleaner: React.FC<BatchFilenameCleanerProps> = ({
   const handleClear = () => {
     setInputText('');
     setParsedFiles([]);
+    setIgnoredCount(0);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -238,6 +243,7 @@ if exist "${f.originalFilename}" (
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
+                {ignoredCount > 0 && <p role="status" className="text-xs text-slate-400">Ignored {ignoredCount} .txt or .torrent file(s).</p>}
               </div>
             </div>
 

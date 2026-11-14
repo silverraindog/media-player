@@ -63,7 +63,7 @@ import { fetchRankedTmdbMetadata, fetchTmdbCollectionMetadata, fetchTmdbMetadata
 import { normalizeUniverseTitle } from './src/shared/universeMatcher';
 import { fetchAlbumMetadata } from './src/server/albumMetadata';
 import { fetchMetadataWithDiagnostics } from './src/server/metadataRequestDiagnostics';
-import { fetchFranchiseOverview } from './src/server/franchiseOverview';
+import { fetchFranchiseOverview, FranchiseOverviewError } from './src/server/franchiseOverview';
 import type { FranchiseCandidate } from './src/types';
 
 dotenv.config();
@@ -149,7 +149,11 @@ app.post('/api/media/franchise-overview', async (req: Request, res: Response) =>
     return res.json({ success: true, ...result, diagnostics });
   } catch (error) {
     console.warn('[Franchise overview] Lookup failed:', error instanceof Error ? error.message : 'Unknown error');
-    return res.status(502).json({ error: 'Franchise overview lookup failed; check the provider and retry.', diagnostics });
+    const knownError = error instanceof FranchiseOverviewError ? error : undefined;
+    return res.status(knownError?.rateLimited ? 429 : 502).json({
+      error: knownError?.message || 'Franchise overview lookup failed; check the provider and retry.',
+      diagnostics,
+    });
   }
 });
 

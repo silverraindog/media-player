@@ -42,6 +42,58 @@ test('franchise overviews are saved separately for complete items and survive re
   await expect(page.getByRole('button', { name: 'Fetch franchise overviews (0)' })).toBeVisible();
 });
 
+test('overview choices can be selected and retried while the overview batch continues', async ({ page }) => {
+  const items = ['First Show', 'Second Show'].map((title, index) => ({
+    id: `show-${index}`, title, type: 'series', year: 2000, overview: 'Existing synopsis',
+    posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0,
+    recommendedFolderStructure: title, recommendedFilenames: [],
+  }));
+  const saved = new Map<string, Record<string, unknown>>();
+  let releaseSecond!: () => void;
+  const secondLookup = new Promise<void>(resolve => { releaseSecond = resolve; });
+  let selectionAttempts = 0;
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media' && request.method() === 'POST') {
+      const item = request.postDataJSON() as Record<string, unknown>;
+      saved.set(item.id as string, item);
+    } else if (pathname === '/api/db/media') body = { success: true, items: [] };
+    else if (pathname === '/api/media/franchise-overview') {
+      const { title, selection } = request.postDataJSON();
+      if (title === 'Second Show') {
+        await secondLookup;
+      } else if (!selection) {
+        body = { success: true, candidates: [{ title: 'First Show (TV series)', source: 'Wikipedia', id: 1 }] };
+      } else if (++selectionAttempts === 1) {
+        body = { success: true, diagnostics: [{ provider: 'Wikipedia', outcome: 'No premise or overview section found; review manually' }] };
+      } else {
+        body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/First_Show', license: 'CC BY-SA 4.0' } };
+      }
+    }
+    await route.fulfill({ json: body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  await page.getByRole('button', { name: 'Fetch franchise overviews (2)' }).click();
+  try {
+    const option = page.getByRole('button', { name: 'First Show (TV series) (Wikipedia #1)' });
+    await expect(option).toBeEnabled();
+    await option.click();
+    await expect(page.getByRole('alert')).toHaveText('No premise or overview section found; review manually');
+    await option.click();
+    await expect.poll(() => saved.size).toBe(1);
+    await expect(option).toHaveCount(0);
+    expect(saved.get('show-0')).toMatchObject({ overview: 'Existing synopsis', franchiseOverview: { text: 'Show premise' } });
+  } finally {
+    releaseSecond();
+  }
+  await expect(page.getByText('Overview lookup: 1 saved, 0 need selection, 0 failed; 2 checked.')).toBeVisible();
+});
+
 test('Fetch All checks incomplete items and keeps complete items available for review', async ({ page }) => {
   const items = [
     { id: 'one', title: 'First Movie', type: 'movie', year: 2020, yearSource: 'user', overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },
@@ -169,6 +221,91 @@ test('Fetch All searches album entries once and excludes individual audio tracks
   expect(saved).toEqual(['album']);
   await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('2 individual audio tracks excluded');
   await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('Album artist cannot be verified; review this result manually');
+});
+
+test('Fetch All runs media types concurrently while keeping each type sequential', async ({ page }) => {
+  const items = (['movie', 'series', 'album'] as const).flatMap(type => [1, 2].map(number => ({
+    id: `${type}-${number}`, title: `${type} title ${number}`, type, year: 0,
+    overview: '', posterUrl: '', genres: [], rating: 0,
+    recommendedFolderStructure: `${type} title ${number}`, recommendedFilenames: [],
+  })));
+  const checked: string[] = [];
+  let releaseFirstRequests!: () => void;
+  const firstRequests = new Promise<void>(resolve => { releaseFirstRequests = resolve; });
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media' && request.method() === 'GET') body = { success: true, items: [] };
+    else if (pathname === '/api/media/fetch-art') {
+      const { title } = request.postDataJSON() as { title: string };
+      checked.push(title);
+      if (title.endsWith('1')) await firstRequests;
+      body = { success: true, source: 'omdb', title: 'Different title' };
+    }
+    await route.fulfill({ json: body });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  await page.getByRole('button', { name: 'Fetch All (6)' }).click();
+  try {
+    await expect.poll(() => checked.length).toBe(3);
+    expect(checked.sort()).toEqual(['album title 1', 'movie title 1', 'series title 1']);
+    await expect(page.getByRole('status')).toContainText('movie title 1');
+    await expect(page.getByRole('status')).toContainText('series title 1');
+    await expect(page.getByRole('status')).toContainText('album title 1');
+  } finally {
+    releaseFirstRequests();
+  }
+  await expect(page.getByRole('status')).toContainText('Finished: 6/6 checked');
+  expect(checked).toHaveLength(6);
+});
+
+test('backend failure stops new work across types while in-flight lookups finish', async ({ page }) => {
+  const items = (['movie', 'series', 'album'] as const).flatMap(type => [1, 2].map(number => ({
+    id: `${type}-${number}`, title: `${type} title ${number}`, type, year: 0,
+    overview: '', posterUrl: '', genres: [], rating: 0,
+    recommendedFolderStructure: `${type} title ${number}`, recommendedFilenames: [],
+  })));
+  const checked: string[] = [];
+  const saved: string[] = [];
+  let releaseRequests!: () => void;
+  const pendingRequests = new Promise<void>(resolve => { releaseRequests = resolve; });
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media' && request.method() === 'POST') saved.push(request.postDataJSON().id);
+    else if (pathname === '/api/db/media') body = { success: true, items: [] };
+    else if (pathname === '/api/media/fetch-art') {
+      const { title } = request.postDataJSON() as { title: string };
+      checked.push(title);
+      if (title.startsWith('movie')) {
+        await expect.poll(() => checked.length).toBe(3);
+        body = { success: true, fallback: true, source: 'local_storage_cache' };
+      } else {
+        await pendingRequests;
+        body = { success: true, source: 'omdb', title: 'Different title' };
+      }
+    }
+    await route.fulfill({ json: body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  await page.getByRole('button', { name: 'Fetch All (6)' }).click();
+  try {
+    await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('Failed to fetch or save "movie title 1"');
+  } finally {
+    releaseRequests();
+  }
+  await expect(page.getByRole('status')).toContainText('Stopped: 3/6 checked');
+  expect(checked.sort()).toEqual(['album title 1', 'movie title 1', 'series title 1']);
+  expect(saved.sort()).toEqual(['album-1', 'series-1']);
 });
 
 test('offline metadata responses stop the batch without marking items as no-match, and can be retried', async ({ page }) => {

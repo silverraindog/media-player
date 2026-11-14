@@ -1445,7 +1445,7 @@ function App() {
                     : sqliteItem.raw_data;
                 } catch {}
               }
-              if (parsedMedia?.metadataFetchStatus) fetchedMetadata.set(parsedMedia.id, parsedMedia);
+              if (parsedMedia?.metadataFetchStatus || parsedMedia?.franchiseOverview) fetchedMetadata.set(parsedMedia.id, parsedMedia);
 
               const resolvedFolder = parsedMedia?.folderPath ||
                 parsedMedia?.recommendedFolderStructure ||
@@ -1496,7 +1496,7 @@ function App() {
             const restoreFetchedMetadata = (item: MediaMetadata) => {
               const saved = fetchedMetadata.get(item.id);
               if (!saved) return item;
-              return { ...mergeFetchedMetadata(item, saved), metadataFetchStatus: saved.metadataFetchStatus };
+              return { ...mergeFetchedMetadata(item, saved), metadataFetchStatus: saved.metadataFetchStatus ?? item.metadataFetchStatus };
             };
             if (newItemsAdded) {
               const combined = Array.from(map.values());
@@ -3878,7 +3878,7 @@ function App() {
                 const current = mediaLibraryRef.current.find((item) => item.id === id);
                 if (!current) throw new Error('The library item no longer exists.');
                 const updated = metadata ? mergeFetchedMetadata(current, metadata) : { ...current };
-                updated.metadataFetchStatus = metadata ? 'matched' : 'no-match';
+                if (!metadata?.franchiseOverview) updated.metadataFetchStatus = metadata ? 'matched' : 'no-match';
                 if (isTauri) {
                   await apiCall('/api/db/media/batch', {
                     method: 'POST',

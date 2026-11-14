@@ -921,6 +921,18 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                   {media.overview}
                 </p>
 
+                {media.franchiseOverview && (
+                  <section className="space-y-2 border-t border-slate-800 pt-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Franchise / series overview</h3>
+                    <p className="whitespace-pre-line text-slate-200 leading-relaxed">{media.franchiseOverview.text}</p>
+                    <p className="text-slate-400">
+                      {media.franchiseOverview.source === 'Wikipedia' ? 'Excerpt from ' : 'Source: '}
+                      <a className="text-indigo-300 underline" href={media.franchiseOverview.url} target="_blank" rel="noreferrer">{media.franchiseOverview.source}</a>
+                      {media.franchiseOverview.license && <> · <a className="text-indigo-300 underline" href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer">{media.franchiseOverview.license}</a></>}
+                    </p>
+                  </section>
+                )}
+
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {media.genres.map((g, i) => (
                     <span key={i} className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700/60 text-[11px]">

@@ -63,6 +63,8 @@ import { fetchRankedTmdbMetadata, fetchTmdbCollectionMetadata, fetchTmdbMetadata
 import { normalizeUniverseTitle } from './src/shared/universeMatcher';
 import { fetchAlbumMetadata } from './src/server/albumMetadata';
 import { fetchMetadataWithDiagnostics } from './src/server/metadataRequestDiagnostics';
+import { fetchFranchiseOverview } from './src/server/franchiseOverview';
+import type { FranchiseCandidate } from './src/types';
 
 dotenv.config();
 dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
@@ -122,6 +124,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
 app.use('/api/media/fetch-art', tauriCors('POST, OPTIONS'));
+app.use('/api/media/franchise-overview', tauriCors('POST, OPTIONS'));
 app.use('/api/db', tauriCors('GET, POST, DELETE, OPTIONS', 'Content-Type, Priority, Request-Priority'));
 app.use('/api/vault/state', tauriCors('GET, POST, OPTIONS', 'Content-Type, Priority, Request-Priority'));
 app.use(express.json({ limit: '10mb' }));
@@ -129,6 +132,26 @@ let genAIClient: GoogleGenAI | null = null;
 registerApiKeyRoutes(app, getPersistentStorageInfo().dataDir, () => { genAIClient = null; });
 registerUniverseRoutes(app, getPersistentStorageInfo().dataDir);
 registerProviderSearchRoutes(app);
+app.post('/api/media/franchise-overview', async (req: Request, res: Response) => {
+  const { title, type, selection, year } = req.body || {};
+  if (typeof title !== 'string' || !title.trim() || title.length > 200 ||
+      (type !== 'collection' && type !== 'series') ||
+      (year !== undefined && (!Number.isInteger(year) || year < 1800 || year > 2100)) ||
+      (selection !== undefined && (!selection || typeof selection !== 'object' ||
+        (selection.source !== 'TMDB' && selection.source !== 'Wikipedia') ||
+        typeof selection.title !== 'string' || !Number.isSafeInteger(selection.id) || selection.id <= 0 ||
+        (type === 'series' && selection.source === 'TMDB')))) {
+    return res.status(400).json({ error: 'Invalid franchise overview request.' });
+  }
+  const diagnostics: Array<{ provider: string; outcome: string }> = [];
+  try {
+    const result = await fetchFranchiseOverview(title.trim(), type, diagnostics, selection as FranchiseCandidate | undefined, year);
+    return res.json({ success: true, ...result, diagnostics });
+  } catch (error) {
+    console.warn('[Franchise overview] Lookup failed:', error instanceof Error ? error.message : 'Unknown error');
+    return res.status(502).json({ error: 'Franchise overview lookup failed; check the provider and retry.', diagnostics });
+  }
+});
 
 // Lazy Google GenAI Client
 function getGenAI(): GoogleGenAI | null {

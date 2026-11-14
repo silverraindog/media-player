@@ -28,7 +28,8 @@ import {
   Loader2,
   SlidersHorizontal,
 } from 'lucide-react';
-import { MediaMetadata, MediaType } from '../types';
+import { MediaMetadata, MediaType, type FranchiseCandidate, type FranchiseOverview } from '../types';
+import { isTauri } from '../lib/api';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
@@ -89,6 +90,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [batchCurrentTitle, setBatchCurrentTitle] = useState('');
   const [batchLog, setBatchLog] = useState<string[]>([]);
   const [showBatchLog, setShowBatchLog] = useState(false);
+  const [overviewCandidates, setOverviewCandidates] = useState<Record<string, FranchiseCandidate[]>>({});
   const batchController = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
     if (!isOpen) batchController.current?.abort();
@@ -219,6 +221,102 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const categorizerItems = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item) && !isIndividualAudioTrack(item) && !isMetadataSidecar(item));
   const incompleteItems = categorizerItems.filter((m) => isMissingSynopsis(m) || isMissingArtwork(m.posterUrl));
   const completeItems = categorizerItems.filter((m) => !isMissingSynopsis(m) && !isMissingArtwork(m.posterUrl));
+  const overviewItems = categorizerItems.filter(m =>
+    (m.type === 'series' || isCollectionLookup(m)) && !m.franchiseOverview);
+
+  const requestOverview = async (item: MediaMetadata, signal: AbortSignal, selection?: FranchiseCandidate) => {
+    const port = (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000;
+    const url = isTauri ? `http://127.0.0.1:${port}/api/media/franchise-overview` : '/api/media/franchise-overview';
+    const response = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+      body: JSON.stringify({
+        title: libraryLookupTitle(metadataLookupMedia(item)),
+        type: isCollectionLookup(item) ? 'collection' : 'series', year: metadataLookupYear(item), selection,
+      }),
+    });
+    const data: { success?: boolean; overview?: FranchiseOverview; candidates?: FranchiseCandidate[]; error?: string; diagnostics?: Array<{ provider: string; outcome: string }> } = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || `Overview lookup failed (HTTP ${response.status}).`);
+    if (data.overview) {
+      const { source, text, url } = data.overview;
+      const validUrl = source === 'Wikipedia' ? /^https:\/\/en\.wikipedia\.org\/wiki\// : /^https:\/\/www\.themoviedb\.org\/collection\/\d+$/;
+      if ((source !== 'Wikipedia' && source !== 'TMDB') || typeof text !== 'string' || !text.trim() ||
+          typeof url !== 'string' || !validUrl.test(url)) throw new Error('Overview lookup returned an invalid response.');
+    }
+    if (data.candidates && (!Array.isArray(data.candidates) || data.candidates.some(candidate =>
+      !candidate || typeof candidate.title !== 'string' || !Number.isSafeInteger(candidate.id) || candidate.id <= 0 ||
+      (candidate.source !== 'TMDB' && candidate.source !== 'Wikipedia')))) {
+      throw new Error('Overview lookup returned invalid candidates.');
+    }
+    return data;
+  };
+
+  const handleOverviewBatch = async () => {
+    if (!overviewItems.length || batchProcessing) return;
+    const controller = new AbortController();
+    batchController.current = controller;
+    setBatchProcessing(true);
+    setBatchProgress({ current: 0, total: overviewItems.length });
+    setBatchMessage(null);
+    setBatchErrors({});
+    setOverviewCandidates({});
+    setShowBatchLog(true);
+    setBatchLog([`Checking ${overviewItems.length} series and collections for separate franchise overviews. Existing synopses are preserved.`]);
+    let completed = 0;
+    let saved = 0;
+    let errors = 0;
+    let review = 0;
+    try {
+      for (const item of overviewItems) {
+        if (controller.signal.aborted) break;
+        setBatchCurrentTitle(item.title);
+        try {
+          const result = await requestOverview(item, controller.signal);
+          if (controller.signal.aborted) break;
+          if (result.overview) {
+            await onFetchLibraryMetadata(item.id, { franchiseOverview: result.overview });
+            saved++;
+          } else if (result.candidates?.length) {
+            setOverviewCandidates(previous => ({ ...previous, [item.id]: result.candidates! }));
+            review++;
+          }
+          setBatchLog(previous => [...previous, `${item.title}: ${result.overview ? `saved ${result.overview.source} overview` : result.candidates?.length ? 'choose an overview source below' : 'no verified overview found'}.`,
+            ...(result.diagnostics || []).map(entry => `  ${entry.provider}: ${entry.outcome}`)]);
+        } catch (error) {
+          if (controller.signal.aborted) break;
+          errors++;
+          const message = error instanceof Error ? error.message : String(error);
+          setBatchErrors(previous => ({ ...previous, [item.id]: message }));
+          setBatchLog(previous => [...previous, `${item.title}: ${message}`]);
+        }
+        completed++;
+        setBatchProgress({ current: completed, total: overviewItems.length });
+      }
+      setBatchMessage(`Overview lookup: ${saved} saved, ${review} need selection, ${errors} failed; ${completed} checked.`);
+    } finally {
+      setBatchProcessing(false);
+      batchController.current = null;
+    }
+  };
+
+  const handleOverviewSelection = async (id: string, candidate: FranchiseCandidate) => {
+    const item = mediaLibrary.find(entry => entry.id === id);
+    if (!item) return;
+    setSavingCandidateId(id);
+    try {
+      const result = await requestOverview(item, new AbortController().signal, candidate);
+      if (!result.overview) throw new Error('The selected source has no usable overview.');
+      await onFetchLibraryMetadata(id, { franchiseOverview: result.overview });
+      setOverviewCandidates(previous => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+    } catch (error) {
+      setBatchMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingCandidateId(null);
+    }
+  };
 
   const missingSynopsisCount = incompleteItems.filter(isMissingSynopsis).length;
   const missingArtworkCount = incompleteItems.filter((m) => isMissingArtwork(m.posterUrl)).length;
@@ -713,6 +811,35 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   <span>{batchMessage}</span>
                 </div>
               )}
+              <div className="rounded-xl border border-slate-700 bg-slate-900 p-3 space-y-2">
+                <p className="text-xs text-slate-300">Find separate franchise and series overviews from TMDB and Wikipedia, including items that already have metadata. Existing synopses are kept.</p>
+                <button type="button" disabled={batchProcessing || !overviewItems.length} onClick={() => void handleOverviewBatch()}
+                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
+                  Fetch franchise overviews ({overviewItems.length})
+                </button>
+                {batchProcessing && !incompleteItems.length && <button type="button" onClick={() => batchController.current?.abort()}
+                  className="ml-2 rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white">
+                  Stop after current save
+                </button>}
+                {Object.entries(overviewCandidates).map(([id, candidates]) => (
+                  <div key={id} className="space-y-1">
+                    <p className="text-xs text-amber-300">Choose an overview for {mediaLibrary.find(item => item.id === id)?.title || id}:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {candidates.map(candidate => <span key={`${candidate.source}-${candidate.id}`} className="flex items-center gap-1">
+                        <button type="button" disabled={savingCandidateId === id || batchProcessing}
+                          onClick={() => void handleOverviewSelection(id, candidate)}
+                          className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-200">
+                          {candidate.title} ({candidate.source} #{candidate.id})
+                        </button>
+                        <a className="text-xs text-indigo-300 underline" target="_blank" rel="noreferrer"
+                          href={candidate.source === 'TMDB' ? `https://www.themoviedb.org/collection/${candidate.id}` : `https://en.wikipedia.org/?curid=${candidate.id}`}>
+                          View source
+                        </a>
+                      </span>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
               {batchLog.length > 0 && (
                 <section className="rounded-xl border border-slate-700 bg-slate-950 p-3 space-y-2" aria-label="Fetch All diagnostics">
                   <button type="button" onClick={() => setShowBatchLog(!showBatchLog)}

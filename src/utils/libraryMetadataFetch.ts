@@ -1,4 +1,4 @@
-import type { CastMember, MediaMetadata } from '../types';
+import type { CastMember, FranchiseOverview, MediaMetadata } from '../types';
 import { isTauri } from '../lib/api';
 import { getFileCategory, parseTitleAndYear, SUPPORTED_AUDIO_EXTENSIONS } from './mediaExtractor';
 import { cleanUniverseTitle, metadataTitleVariants, normalizeUniverseTitle } from '../shared/universeMatcher';
@@ -18,6 +18,7 @@ export interface FetchedLibraryMetadata {
   musicBrainzId?: string;
   collectionName?: string;
   collectionOverview?: string;
+  franchiseOverview?: FranchiseOverview;
   collectionFilms?: NonNullable<MediaMetadata['collectionFilms']>;
   matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual' | 'unique-collection';
   candidates?: Array<{
@@ -279,6 +280,7 @@ export function trustedAlbumArtist(media: MediaMetadata): string | undefined {
 
 export function mergeFetchedMetadata(media: MediaMetadata, result: FetchedLibraryMetadata): MediaMetadata {
   const updated = { ...media };
+  if (!updated.franchiseOverview && result.franchiseOverview) updated.franchiseOverview = result.franchiseOverview;
   if (isVerifiedMatch(media, result)) updated.type = metadataLookupMedia(media).type;
   if (result.matchMode === 'unique-collection' && isVerifiedMatch(media, result)) {
     updated.collectionOverview = result.collectionOverview;

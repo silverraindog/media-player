@@ -90,6 +90,18 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     });
     assert.equal(vaultState.headers.get('access-control-allow-origin'), 'tauri://localhost');
     assert.equal((await vaultState.json()).success, true);
+    const overviewPreflight = await fetch(`http://127.0.0.1:${port}/api/media/franchise-overview`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'tauri://localhost', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' },
+    });
+    assert.equal(overviewPreflight.headers.get('access-control-allow-origin'), 'tauri://localhost');
+    const overviewResponse = await fetch(`http://127.0.0.1:${port}/api/media/franchise-overview`, {
+      method: 'POST', headers: { Origin: 'tauri://localhost', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Wishmaster', type: 'collection' }),
+    });
+    assert.equal(overviewResponse.status, 200);
+    assert.equal(overviewResponse.headers.get('access-control-allow-origin'), 'tauri://localhost');
+    assert.equal((await overviewResponse.json()).overview.url, 'https://www.themoviedb.org/collection/777');
     for (const origin of ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost', 'http://localhost:1420']) {
       const preflight = await fetch(url, {
         method: 'OPTIONS',

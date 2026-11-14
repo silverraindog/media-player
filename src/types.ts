@@ -39,6 +39,19 @@ export interface CastMember {
   thumb?: string;
 }
 
+export interface FranchiseOverview {
+  text: string;
+  source: 'TMDB' | 'Wikipedia';
+  url: string;
+  license?: string;
+}
+
+export interface FranchiseCandidate {
+  title: string;
+  source: 'TMDB' | 'Wikipedia';
+  id: number;
+}
+
 export interface MediaMetadata {
   id: string;
   type: MediaType;
@@ -54,6 +67,7 @@ export interface MediaMetadata {
     posterUrl?: string;
   }>;
   collectionOverview?: string;
+  franchiseOverview?: FranchiseOverview;
   premiered?: string;
   overview: string;
   tagline?: string;

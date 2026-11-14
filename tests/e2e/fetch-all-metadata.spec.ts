@@ -1,5 +1,47 @@
 import { expect, test } from '@playwright/test';
 
+test('franchise overviews are saved separately for complete items and survive reload', async ({ page }) => {
+  const items = [
+    { id: 'series', title: 'Example Show', type: 'series', year: 2000, overview: 'Existing synopsis', posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0, recommendedFolderStructure: 'Example Show', recommendedFilenames: [] },
+    { id: 'collection', title: 'Example Collection', type: 'movie', collectionFolder: true, year: 2000, overview: 'Existing collection synopsis', posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0, recommendedFolderStructure: 'Example Collection', recommendedFilenames: [] },
+  ];
+  const saved = new Map<string, Record<string, unknown>>();
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media' && request.method() === 'POST') {
+      const item = request.postDataJSON() as Record<string, unknown>;
+      saved.set(item.id as string, item);
+    } else if (pathname === '/api/db/media') body = { success: true, items: Array.from(saved.values(), item => ({ id: item.id, title: item.title, raw_data: JSON.stringify(item) })) };
+    else if (pathname === '/api/media/franchise-overview') {
+      const requestBody = request.postDataJSON();
+      if (requestBody.title === 'Example Show') body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Example_Show', license: 'CC BY-SA 4.0' } };
+      else if (!requestBody.selection) body = { success: true, candidates: [
+        { title: 'Example Collection', source: 'TMDB', id: 1 }, { title: 'Example Collection', source: 'TMDB', id: 2 },
+      ] };
+      else body = { success: true, overview: { text: 'Collection premise', source: 'TMDB', url: `https://www.themoviedb.org/collection/${requestBody.selection.id}` } };
+    }
+    await route.fulfill({ json: body });
+  });
+  const openList = async () => {
+    await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+    await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  };
+  await page.goto('/');
+  await openList();
+  await page.getByRole('button', { name: 'Fetch franchise overviews (2)' }).click();
+  await expect(page.getByText('Overview lookup: 1 saved, 1 need selection, 0 failed; 2 checked.')).toBeVisible();
+  await page.getByRole('button', { name: 'Example Collection (TMDB #2)' }).click();
+  await expect.poll(() => saved.size).toBe(2);
+  expect(saved.get('series')).toMatchObject({ overview: 'Existing synopsis', franchiseOverview: { text: 'Show premise', source: 'Wikipedia' } });
+  expect(saved.get('collection')).toMatchObject({ overview: 'Existing collection synopsis', franchiseOverview: { text: 'Collection premise', url: 'https://www.themoviedb.org/collection/2' } });
+  await page.reload();
+  await openList();
+  await expect(page.getByRole('button', { name: 'Fetch franchise overviews (0)' })).toBeVisible();
+});
+
 test('Fetch All checks incomplete items and keeps complete items available for review', async ({ page }) => {
   const items = [
     { id: 'one', title: 'First Movie', type: 'movie', year: 2020, yearSource: 'user', overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },

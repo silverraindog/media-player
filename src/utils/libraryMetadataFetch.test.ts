@@ -398,6 +398,15 @@ test('fills missing fields without changing identity, paths, episodes, or existi
   assert.equal(isMissingArtwork(updated.posterUrl), false);
 });
 
+test('stores a separate franchise overview without replacing existing metadata', () => {
+  const media: MediaMetadata = { ...item, overview: 'Existing synopsis', metadataFetchStatus: 'matched' };
+  const franchiseOverview = { text: 'Franchise premise', source: 'Wikipedia' as const, url: 'https://en.wikipedia.org/wiki/Example', license: 'CC BY-SA 4.0' };
+  const updated = mergeFetchedMetadata(media, { franchiseOverview });
+  assert.equal(updated.overview, 'Existing synopsis');
+  assert.deepEqual(updated.franchiseOverview, franchiseOverview);
+  assert.deepEqual(mergeFetchedMetadata(updated, { franchiseOverview: { ...franchiseOverview, text: 'Other' } }).franchiseOverview, franchiseOverview);
+});
+
 test('treats placeholders as missing and refuses placeholder replacements', () => {
   assert.equal(isMissingSynopsis({ ...item, overview: 'No synopsis available', synopsis: '' }), true);
   assert.equal(isMissingSynopsis({ ...item, overview: '', synopsis: 'Actual synopsis' }), false);

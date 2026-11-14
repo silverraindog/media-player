@@ -34,6 +34,7 @@ export interface TmdbCollectionFilm {
 export interface TmdbCollectionMetadata {
   source: 'tmdb';
   title: string;
+  collectionId: number;
   collectionName: string;
   collectionOverview?: string;
   collectionFilms: TmdbCollectionFilm[];
@@ -57,7 +58,7 @@ export async function fetchTmdbCollectionMetadata(
   title: string,
   diagnostics?: Diagnostic[],
   selectedCollectionId?: number,
-): Promise<{ metadata?: TmdbCollectionMetadata; candidates?: TmdbReviewCandidate[]; unsafeToMatch?: boolean }> {
+): Promise<{ metadata?: TmdbCollectionMetadata; candidates?: TmdbReviewCandidate[]; unsafeToMatch?: boolean; noUsableDescription?: boolean }> {
   const token = process.env.TMDB_READ_ACCESS_TOKEN?.trim();
   if (!token) {
     diagnostics?.push({ provider: 'TMDB', outcome: 'No API token configured' });
@@ -111,6 +112,7 @@ export async function fetchTmdbCollectionMetadata(
     return {
       source: 'tmdb',
       title: details.name,
+      collectionId: id,
       collectionName: details.name,
       collectionOverview,
       collectionFilms,
@@ -180,7 +182,7 @@ export async function fetchTmdbCollectionMetadata(
     const metadata = await fetchDetails(exact[0].collectionId!);
     if (!metadata) {
       diagnostics?.push({ provider: 'TMDB', outcome: 'Exact collection found, but it contains no usable descriptions' });
-      return { unsafeToMatch: true };
+      return { unsafeToMatch: true, noUsableDescription: true };
     }
     diagnostics?.push({ provider: 'TMDB', outcome: `Verified collection: ${metadata.collectionName} (${metadata.collectionFilms.length} film(s))` });
     return { metadata };

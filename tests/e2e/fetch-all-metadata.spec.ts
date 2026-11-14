@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
 
-test('franchise overviews are saved separately for complete items and survive reload', async ({ page }) => {
+test('franchise overviews are saved separately for eligible items and survive reload', async ({ page }) => {
   const items = [
     { id: 'series', title: 'Example Show', type: 'series', year: 2000, overview: 'Existing synopsis', posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0, recommendedFolderStructure: 'Example Show', recommendedFilenames: [] },
-    { id: 'collection', title: 'Example Collection', type: 'movie', collectionFolder: true, year: 2000, overview: 'Existing collection synopsis', posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0, recommendedFolderStructure: 'Example Collection', recommendedFilenames: [] },
+    { id: 'collection', title: 'Example Collection', type: 'movie', collectionFolder: true, year: 2000, overview: '', posterUrl: '', genres: [], rating: 0, recommendedFolderStructure: 'Example Collection', recommendedFilenames: [] },
   ];
   const saved = new Map<string, Record<string, unknown>>();
   await page.route('**/api/**', async route => {
@@ -36,9 +36,63 @@ test('franchise overviews are saved separately for complete items and survive re
   await page.getByRole('button', { name: 'Example Collection (TMDB #2)' }).click();
   await expect.poll(() => saved.size).toBe(2);
   expect(saved.get('series')).toMatchObject({ overview: 'Existing synopsis', franchiseOverview: { text: 'Show premise', source: 'Wikipedia' } });
-  expect(saved.get('collection')).toMatchObject({ overview: 'Existing collection synopsis', franchiseOverview: { text: 'Collection premise', url: 'https://www.themoviedb.org/collection/2' } });
+  expect(saved.get('collection')).toMatchObject({ overview: '', franchiseOverview: { text: 'Collection premise', url: 'https://www.themoviedb.org/collection/2' } });
   await page.reload();
   await openList();
+  await expect(page.getByRole('button', { name: 'Fetch franchise overviews (0)' })).toBeVisible();
+});
+
+test('overview retries skip collections with existing metadata but still check eligible collections and series', async ({ page }) => {
+  const base = { type: 'movie', collectionFolder: true, year: 2000, overview: '', posterUrl: '', genres: [], rating: 0, recommendedFilenames: [] };
+  const items = [
+    { ...base, id: 'synopsis', title: 'Has Synopsis', overview: 'Existing synopsis' },
+    { ...base, id: 'poster', title: 'Has Poster', posterUrl: 'https://example.com/poster.jpg' },
+    { ...base, id: 'fanart', title: 'Has Fanart', fanartUrl: 'https://example.com/fanart.jpg' },
+    { ...base, id: 'matched', title: 'Already Matched', metadataFetchStatus: 'matched' },
+    { ...base, id: 'films', title: 'Has Films', collectionFilms: [{ title: 'First film' }] },
+    { ...base, id: 'collection-overview', title: 'Has Collection Overview', collectionOverview: 'A collection description.' },
+    { ...base, id: 'saved', title: 'Saved Overview', franchiseOverview: { text: 'Saved', source: 'TMDB', url: 'https://www.themoviedb.org/collection/1' } },
+    { ...base, id: 'series', title: 'Existing Series', type: 'series', collectionFolder: false, overview: 'Existing series synopsis', posterUrl: 'https://example.com/poster.jpg' },
+    { ...base, id: 'missing', title: 'Unfetched', overview: 'No synopsis available', posterUrl: 'https://images.unsplash.com/placeholder.jpg', metadataFetchStatus: 'no-match' },
+  ].map(item => ({ ...item, recommendedFolderStructure: item.title }));
+  const checked: string[] = [];
+  const saved = new Map<string, Record<string, unknown>>();
+  let limited = true;
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    let status = 200;
+    let body: Record<string, unknown> = { success: true };
+    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+    else if (pathname === '/api/db/media' && request.method() === 'POST') {
+      const item = request.postDataJSON() as Record<string, unknown>;
+      saved.set(item.id as string, item);
+    } else if (pathname === '/api/db/media') {
+      body = { success: true, items: Array.from(saved.values(), item => ({ id: item.id, title: item.title, raw_data: JSON.stringify(item) })) };
+    } else if (pathname === '/api/media/franchise-overview') {
+      const { title } = request.postDataJSON() as { title: string };
+      checked.push(title);
+      if (title === 'Unfetched' && limited) {
+        status = 429;
+        body = { error: 'Wikipedia rate limit reached (HTTP 429). Wait before retrying.' };
+      } else {
+        body = { success: true, overview: { text: 'Fetched overview', source: 'Wikipedia', url: `https://en.wikipedia.org/wiki/${title.replace(/ /g, '_')}` } };
+      }
+    }
+    await route.fulfill({ status, json: body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+  await page.getByRole('button', { name: 'Fetch franchise overviews (2)' }).click();
+  await expect(page.getByText(/Stopped because Wikipedia rate limited requests/)).toBeVisible();
+  expect(checked).toEqual(['Existing Series', 'Unfetched']);
+  limited = false;
+  await page.getByRole('button', { name: 'Fetch franchise overviews (1)' }).click();
+  await expect(page.getByText('Overview lookup: 1 saved, 0 need selection, 0 failed; 1 checked.')).toBeVisible();
+  expect(checked).toEqual(['Existing Series', 'Unfetched', 'Unfetched']);
+  expect(saved.get('series')).toMatchObject({ overview: 'Existing series synopsis', franchiseOverview: { text: 'Fetched overview' } });
+  expect(saved.get('missing')).toMatchObject({ franchiseOverview: { text: 'Fetched overview' } });
   await expect(page.getByRole('button', { name: 'Fetch franchise overviews (0)' })).toBeVisible();
 });
 

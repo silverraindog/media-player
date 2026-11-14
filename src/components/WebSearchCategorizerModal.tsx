@@ -230,7 +230,11 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const incompleteItems = categorizerItems.filter((m) => isMissingSynopsis(m) || isMissingArtwork(m.posterUrl));
   const completeItems = categorizerItems.filter((m) => !isMissingSynopsis(m) && !isMissingArtwork(m.posterUrl));
   const overviewItems = categorizerItems.filter(m =>
-    (m.type === 'series' || isCollectionLookup(m)) && !m.franchiseOverview);
+    !m.franchiseOverview && (m.type === 'series' || (
+      isCollectionLookup(m) && m.metadataFetchStatus !== 'matched' &&
+      isMissingSynopsis(m) && isMissingArtwork(m.posterUrl) && isMissingArtwork(m.fanartUrl) &&
+      isMissingText(m.collectionOverview) && !m.collectionFilms?.length
+    )));
 
   const requestOverview = async (item: MediaMetadata, signal: AbortSignal, selection?: FranchiseCandidate) => {
     const port = (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000;
@@ -857,7 +861,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 </div>
               )}
               <div className="rounded-xl border border-slate-700 bg-slate-900 p-3 space-y-2">
-                <p className="text-xs text-slate-300">Find separate franchise and series overviews from TMDB and Wikipedia, including items that already have metadata. Existing synopses are kept.</p>
+                <p className="text-xs text-slate-300">Find separate franchise and series overviews from TMDB and Wikipedia. Collections with existing metadata are skipped; series can still be checked. Existing synopses are kept.</p>
                 <button type="button" disabled={batchProcessing || !!savingCandidateId || !overviewItems.length} onClick={() => void handleOverviewBatch()}
                   className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
                   Fetch franchise overviews ({overviewItems.length})

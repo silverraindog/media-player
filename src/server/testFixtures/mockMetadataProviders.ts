@@ -56,8 +56,8 @@ globalThis.fetch = async (input, init) => {
       total_pages: 1, results: [{ id: 102, title: 'Alternate', release_date: '2024-01-01', popularity: 5 }],
     });
     const results = query === 'Ambiguous' ? [
-      { id: 1, title: 'Ambiguous', release_date: '2024-01-01', popularity: 5 },
-      { id: 2, title: 'Ambiguous', release_date: '2024-02-01', popularity: 20 },
+      { id: 1, title: 'Ambiguous', release_date: '2024-01-01', popularity: 5, overview: 'Less popular match' },
+      { id: 2, title: 'Ambiguous', release_date: '2024-02-01', popularity: 20, overview: 'More popular match' },
     ] : [{ title: 'The First Omen', release_date: '2024-04-03', overview: 'Provider synopsis', poster_path: '/poster.jpg' }];
     return Response.json({ total_pages: 1, results });
   }

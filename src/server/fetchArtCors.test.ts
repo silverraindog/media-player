@@ -164,8 +164,10 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Ambiguous', type: 'movie', year: 2024, requireProviderYear: true, allowRanked: true, reviewYearMatches: true, diagnostics: true }),
     }).then(response => response.json());
-    assert.equal(review.source, 'fallback');
-    assert.equal(review.candidates.length, 2);
+    assert.equal(review.source, 'tmdb');
+    assert.equal(review.matchMode, 'ranked');
+    assert.equal(review.overview, 'More popular match');
+    assert.ok(review.diagnostics.some((entry: { outcome: string }) => entry.outcome.includes('may be incorrect')));
     const nearby = await rankedLookup('Nearby Year');
     assert.equal(nearby.year, 2023);
     assert.equal(nearby.matchMode, 'ranked');

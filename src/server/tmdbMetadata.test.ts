@@ -128,26 +128,43 @@ test('TMDB metadata searches exact movie and series titles and years safely', as
   }
 });
 
-test('review mode tries the exact year before the next and exposes ambiguous matches', async () => {
+test('review mode prefers the exact year and ranks same-title matches by popularity', async () => {
   const originalFetch = globalThis.fetch;
   const originalToken = process.env.TMDB_READ_ACCESS_TOKEN;
   process.env.TMDB_READ_ACCESS_TOKEN = 'test-token';
   try {
     let results = [
       { id: 1, title: 'Example', release_date: '1999-01-01' },
-      { id: 2, title: 'Example', release_date: '2000-01-01' },
+      { id: 2, title: 'Example', release_date: '2000-01-01', popularity: 2 },
       { id: 3, title: 'Example', release_date: '1998-01-01' },
     ];
     globalThis.fetch = async () => Response.json({ total_pages: 1, results });
     assert.equal((await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true)).metadata?.year, 1999);
     results = results.filter(result => result.id !== 1);
     assert.equal((await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true)).metadata?.year, 2000);
-    results.push({ id: 4, title: 'Example', release_date: '2000-05-01' });
-    const ambiguous = await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true);
-    assert.equal(ambiguous.unsafeToMatch, true);
-    assert.deepEqual(ambiguous.candidates?.map(candidate => candidate.year), [2000, 2000]);
+    results.push({ id: 4, title: 'Example', release_date: '2000-05-01', popularity: 20 });
+    const diagnostics: { provider: string; outcome: string }[] = [];
+    const ranked = await fetchRankedTmdbMetadata('Example', 'movie', 1999, diagnostics, false, true);
+    assert.equal(ranked.metadata?.year, 2000);
+    assert.ok(diagnostics.some(entry => entry.outcome.includes('popularity 20')));
+    assert.ok(diagnostics.some(entry => entry.outcome.includes('may be incorrect')));
+    results.push({ id: 6, title: 'Example', release_date: '2000-09-01' });
+    const missingPopularity = await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true);
+    assert.equal(missingPopularity.unsafeToMatch, true);
+    assert.equal(missingPopularity.candidates?.length, 3);
+    results.push({ id: 5, title: 'Example', release_date: '1999-01-01', popularity: 1 });
+    assert.equal((await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true)).metadata?.year, 1999);
     results = results.filter(result => result.id === 3);
     assert.equal((await fetchRankedTmdbMetadata('Example', 'movie', 1999, undefined, false, true)).metadata, undefined);
+    globalThis.fetch = async input => {
+      const query = new URL(String(input)).searchParams.get('query');
+      return Response.json({ total_pages: 1, results: query === 'First' || query === 'Second'
+        ? [{ id: query === 'First' ? 1 : 2, title: query, release_date: '1999-01-01', popularity: 20 }]
+        : [] });
+    };
+    const ambiguous = await fetchRankedTmdbMetadata('First - Second', 'movie', 1999, undefined, false, true);
+    assert.equal(ambiguous.unsafeToMatch, true);
+    assert.deepEqual(ambiguous.candidates?.map(candidate => candidate.title), ['First', 'Second']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;

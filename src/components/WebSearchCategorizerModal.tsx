@@ -267,7 +267,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setShowBatchLog(true);
     setBatchLog([
       `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${categoryLabelCount} category labels and ${audioTrackCount} individual audio tracks excluded. ${sidecarCount} subtitle/metadata/artwork entries excluded.`,
-      'Fetch All checks all incomplete items, regardless of the current list filter. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB. TMDB checks the lookup year first, then the following year. Multiple matches require review.',
+      'Fetch All checks all incomplete items, regardless of the current list filter. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB. TMDB checks the lookup year first, then the following year. Same-title, same-year matches use the most popular result when scores are available and may be incorrect; other ambiguous matches require review.',
     ]);
 
     const log = (message: string) => {

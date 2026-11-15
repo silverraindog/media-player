@@ -363,6 +363,19 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
 
               <button
+                id="tab-franchises"
+              onClick={() => setActiveTab('franchises')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'franchises'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Sparkles className={`w-4 h-4 ${activeTab === 'franchises' ? 'text-indigo-300' : 'text-indigo-400'}`} />
+              <span>Franchises & Collections</span>
+            </button>
+
+              <button
                 id="tab-sqlite-vault"
               onClick={() => setActiveTab('sqlite-vault')}
               className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${

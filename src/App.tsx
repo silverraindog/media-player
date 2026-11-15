@@ -22,6 +22,7 @@ import { WatchHistoryTab } from './components/WatchHistoryTab';
 import { MusicTab } from './components/MusicTab';
 import { YouTubeTab } from './components/YouTubeTab';
 import { ConsoleTab } from './components/ConsoleTab';
+import { FranchisesTab } from './components/FranchisesTab';
 import { SettingsTab } from './components/SettingsTab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
@@ -3837,6 +3838,17 @@ function App() {
         {activeTab === 'music' && (
           <ErrorBoundary tabName="Music Hub">
             <MusicTab
+              mediaLibrary={mediaLibrary}
+              onPlayMedia={(media, track) => handlePlayMedia(media, undefined, track)}
+              onOpenDetails={(media) => setDetailModalMedia(media)}
+              sambaConfig={sambaConfig}
+            />
+          </ErrorBoundary>
+        )}
+
+        {activeTab === 'franchises' && (
+          <ErrorBoundary tabName="Franchises Hub">
+            <FranchisesTab
               mediaLibrary={mediaLibrary}
               onPlayMedia={(media, track) => handlePlayMedia(media, undefined, track)}
               onOpenDetails={(media) => setDetailModalMedia(media)}

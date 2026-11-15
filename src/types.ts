@@ -413,6 +413,7 @@ export type AppTab =
   | 'history'
   | 'dedup'
   | 'stats'
+  | 'franchises'
   | 'cleaner'
   | 'samba-mount'
   | 'explorer'

@@ -150,8 +150,10 @@ app.post('/api/media/franchise-overview', async (req: Request, res: Response) =>
   } catch (error) {
     console.warn('[Franchise overview] Lookup failed:', error instanceof Error ? error.message : 'Unknown error');
     const knownError = error instanceof FranchiseOverviewError ? error : undefined;
-    return res.status(knownError?.rateLimited ? 429 : 502).json({
+    if (knownError?.retryAfterSeconds !== undefined) res.set('Retry-After', String(knownError.retryAfterSeconds));
+    return res.status(knownError?.providerStatus ?? 502).json({
       error: knownError?.message || 'Franchise overview lookup failed; check the provider and retry.',
+      ...(knownError?.retryAfterSeconds !== undefined ? { retryAfterSeconds: knownError.retryAfterSeconds } : {}),
       diagnostics,
     });
   }

@@ -1,15 +1,17 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { fetchFranchiseOverview } from './franchiseOverview';
+import { APP_VERSION } from '../version';
 
 test('Wikipedia overview lookup verifies identity and extracts a premise with attribution', async () => {
   const originalFetch = globalThis.fetch;
   const token = process.env.TMDB_READ_ACCESS_TOKEN;
   delete process.env.TMDB_READ_ACCESS_TOKEN;
   try {
-    globalThis.fetch = async input => {
+    globalThis.fetch = async (input, init) => {
       const url = new URL(String(input));
       assert.equal(url.hostname, 'en.wikipedia.org');
+      assert.equal(new Headers(init?.headers).get('User-Agent'), `SambaVault/${APP_VERSION} (https://github.com/silverraindog/media-player)`);
       if (url.searchParams.get('prop') === 'pageprops') return Response.json({ query: { pages: [
         { pageid: 1, title: 'Example (franchise)' },
         { pageid: 2, title: 'Unrelated (franchise)' },
@@ -175,5 +177,63 @@ test('Wikipedia is used when a verified TMDB collection has no descriptions', as
     globalThis.fetch = originalFetch;
     if (token === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN;
     else process.env.TMDB_READ_ACCESS_TOKEN = token;
+  }
+});
+
+test('Wikipedia lookups are serialized across concurrent requests', async () => {
+  const originalFetch = globalThis.fetch;
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  try {
+    globalThis.fetch = async () => {
+      calls++;
+      if (calls === 1) await blocked;
+      return Response.json({ query: { pages: [] } });
+    };
+    const first = fetchFranchiseOverview('First', 'series', []);
+    const second = fetchFranchiseOverview('Second', 'series', []);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls, 1);
+    release();
+    await Promise.all([first, second]);
+    assert.equal(calls, 2);
+  } finally {
+    release();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Wikipedia cooldown honors Retry-After seconds, HTTP dates, and the five-second default', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
+  let now = 1_000_000;
+  let calls = 0;
+  Date.now = () => now;
+  try {
+    globalThis.fetch = async () => {
+      calls++;
+      if (calls === 1) return new Response(null, { status: 429, headers: { 'Retry-After': '3' } });
+      if (calls === 2) return new Response(null, { status: 503, headers: { 'Retry-After': new Date(now + 10_000).toUTCString() } });
+      if (calls === 3) return new Response(null, { status: 429 });
+      return Response.json({ query: { pages: [] } });
+    };
+    await assert.rejects(() => fetchFranchiseOverview('Example', 'series', []), /Wait at least 3 seconds/);
+    await assert.rejects(() => fetchFranchiseOverview('Example', 'series', []), /Wait at least 3 seconds/);
+    assert.equal(calls, 1);
+    now += 3000;
+    await assert.rejects(() => fetchFranchiseOverview('Example', 'series', []), /HTTP 503.*10 seconds/);
+    await assert.rejects(() => fetchFranchiseOverview('Example', 'series', []), /HTTP 503.*10 seconds/);
+    assert.equal(calls, 2);
+    now += 10_000;
+    await assert.rejects(() => fetchFranchiseOverview('Example', 'series', []), /Wait at least 5 seconds/);
+    await assert.rejects(() => fetchFranchiseOverview('Example', 'series', []), /Wait at least 5 seconds/);
+    assert.equal(calls, 3);
+    now += 5000;
+    await fetchFranchiseOverview('Example', 'series', []);
+    assert.equal(calls, 4);
+  } finally {
+    Date.now = originalNow;
+    globalThis.fetch = originalFetch;
   }
 });

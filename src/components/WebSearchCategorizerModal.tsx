@@ -99,6 +99,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const pendingOverviewSelections = React.useRef(new Set<string>());
   const overviewSelectionsSaved = React.useRef(0);
   const overviewRateLimited = React.useRef(false);
+  const overviewPauseMessage = React.useRef('');
   const batchController = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
     if (!isOpen) batchController.current?.abort();
@@ -246,10 +247,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         type: isCollectionLookup(item) ? 'collection' : 'series', year: metadataLookupYear(item), selection,
       }),
     });
-    const data: { success?: boolean; overview?: FranchiseOverview; candidates?: FranchiseCandidate[]; error?: string; diagnostics?: Array<{ provider: string; outcome: string }> } = await response.json();
+    const data: { success?: boolean; overview?: FranchiseOverview; candidates?: FranchiseCandidate[]; error?: string; retryAfterSeconds?: number; diagnostics?: Array<{ provider: string; outcome: string }> } = await response.json();
     if (!response.ok || !data.success) {
       const message = data.error || `Overview lookup failed (HTTP ${response.status}).`;
-      if (response.status === 429) throw new OverviewRateLimitError(message);
+      if (response.status === 429 || (response.status === 503 && typeof data.retryAfterSeconds === 'number')) throw new OverviewRateLimitError(message);
       throw new Error(message);
     }
     if (data.overview) {
@@ -280,6 +281,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     pendingOverviewSelections.current.clear();
     overviewSelectionsSaved.current = 0;
     overviewRateLimited.current = false;
+    overviewPauseMessage.current = '';
     setShowBatchLog(true);
     setBatchLog([`Checking ${overviewItems.length} series and collections for separate franchise overviews. Existing synopses are preserved.`]);
     let completed = 0;
@@ -305,7 +307,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           if (controller.signal.aborted) break;
           errors++;
           const message = error instanceof Error ? error.message : String(error);
-          if (error instanceof OverviewRateLimitError) overviewRateLimited.current = true;
+          if (error instanceof OverviewRateLimitError) {
+            overviewRateLimited.current = true;
+            overviewPauseMessage.current = message;
+          }
           setBatchErrors(previous => ({ ...previous, [item.id]: message }));
           setBatchLog(previous => [...previous, `${item.title}: ${message}`]);
         }
@@ -313,7 +318,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         setBatchProgress({ current: completed, total: overviewItems.length });
       }
       const summary = `Overview lookup: ${saved + overviewSelectionsSaved.current} saved, ${pendingOverviewSelections.current.size} need selection, ${errors} failed; ${completed} checked.`;
-      setBatchMessage(overviewRateLimited.current ? `${summary} Stopped because Wikipedia rate limited requests. Wait before retrying.` : summary);
+      setBatchMessage(overviewRateLimited.current ? `${summary} Stopped: ${overviewPauseMessage.current}` : summary);
     } finally {
       setBatchProcessing(false);
       setOverviewBatchProcessing(false);
@@ -351,7 +356,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         return next;
       });
     } catch (error) {
-      if (error instanceof OverviewRateLimitError) overviewRateLimited.current = true;
+      if (error instanceof OverviewRateLimitError) {
+        overviewRateLimited.current = true;
+        overviewPauseMessage.current = error.message;
+      }
       setOverviewSelectionErrors(previous => ({ ...previous, [id]: error instanceof Error ? error.message : String(error) }));
     } finally {
       setSavingCandidateId(null);

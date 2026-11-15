@@ -1,13 +1,64 @@
 import { normalizeUniverseTitle } from '../shared/universeMatcher';
 import { fetchMetadataWithDiagnostics, type MetadataDiagnostic } from './metadataRequestDiagnostics';
 import { fetchTmdbCollectionMetadata } from './tmdbMetadata';
+import { APP_VERSION } from '../version';
 import type { FranchiseCandidate, FranchiseOverview } from '../types';
 
 export class FranchiseOverviewError extends Error {
-  constructor(message: string, readonly rateLimited = false) {
+  constructor(
+    message: string,
+    readonly retryAfterSeconds?: number,
+    readonly providerStatus?: 429 | 503,
+  ) {
     super(message);
     this.name = 'FranchiseOverviewError';
   }
+}
+
+let wikipediaQueue: Promise<void> = Promise.resolve();
+let wikipediaRetryAt = 0;
+let wikipediaPauseStatus: 429 | 503 = 429;
+
+function wikipediaPauseError(status: 429 | 503, retryAfterSeconds: number): FranchiseOverviewError {
+  const reason = status === 429 ? 'Wikipedia rate limit reached (HTTP 429).' : 'Wikipedia is temporarily unavailable (HTTP 503).';
+  return new FranchiseOverviewError(`${reason} Wait at least ${retryAfterSeconds} seconds before retrying.`, retryAfterSeconds, status);
+}
+
+function wikipediaRetryDelay(value: string | null): number {
+  if (value && /^\d+$/.test(value.trim())) {
+    return Math.min(Number(value.trim()) * 1000, Number.MAX_SAFE_INTEGER - Date.now());
+  }
+  const date = value && /[a-z]/i.test(value) ? Date.parse(value) : NaN;
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 5000;
+}
+
+async function requestWikipedia(url: URL, diagnostics: MetadataDiagnostic[]): Promise<unknown> {
+  const request = wikipediaQueue.then(async () => {
+    const remaining = wikipediaRetryAt - Date.now();
+    if (remaining > 0) throw wikipediaPauseError(wikipediaPauseStatus, Math.ceil(remaining / 1000));
+    wikipediaRetryAt = 0;
+    let response: Response;
+    try {
+      response = await fetchMetadataWithDiagnostics(url, {
+        headers: { 'User-Agent': `SambaVault/${APP_VERSION} (https://github.com/silverraindog/media-player)`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(8000),
+      }, 'Wikipedia', diagnostics, ['action', 'prop', 'titles', 'pageids']);
+    } catch (error) {
+      if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+        throw new FranchiseOverviewError('Wikipedia request timed out. Retry when the connection is available.');
+      }
+      throw new FranchiseOverviewError('Could not connect to Wikipedia. Check the connection and retry.');
+    }
+    if (response.status === 429 || response.status === 503) {
+      wikipediaPauseStatus = response.status;
+      wikipediaRetryAt = Date.now() + wikipediaRetryDelay(response.headers.get('Retry-After'));
+      throw wikipediaPauseError(response.status, Math.ceil(Math.max(0, wikipediaRetryAt - Date.now()) / 1000));
+    }
+    if (!response.ok) throw new FranchiseOverviewError(`Wikipedia request failed (HTTP ${response.status}).`);
+    return response.json();
+  });
+  wikipediaQueue = request.then(() => undefined, () => undefined);
+  return request;
 }
 
 export async function fetchFranchiseOverview(
@@ -42,24 +93,7 @@ export async function fetchFranchiseOverview(
       title,
     ].join('|'),
   }).toString();
-  const request = async (url: URL): Promise<unknown> => {
-    let response: Response;
-    try {
-      response = await fetchMetadataWithDiagnostics(url, {
-        headers: { 'User-Agent': 'SambaVault/0.0.2 (metadata lookup)' },
-        signal: AbortSignal.timeout(8000),
-      }, 'Wikipedia', diagnostics, ['action', 'prop', 'titles', 'pageids']);
-    } catch (error) {
-      if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
-        throw new FranchiseOverviewError('Wikipedia request timed out. Retry when the connection is available.');
-      }
-      throw new FranchiseOverviewError('Could not connect to Wikipedia. Check the connection and retry.');
-    }
-    if (response.status === 429) throw new FranchiseOverviewError('Wikipedia rate limit reached (HTTP 429). Wait before retrying.', true);
-    if (!response.ok) throw new FranchiseOverviewError(`Wikipedia request failed (HTTP ${response.status}).`);
-    return response.json();
-  };
-  const searchData = await request(search) as { query?: { pages?: unknown[] } };
+  const searchData = await requestWikipedia(search, diagnostics) as { query?: { pages?: unknown[] } };
   if (!Array.isArray(searchData.query?.pages)) throw new FranchiseOverviewError('Wikipedia returned an invalid search response.');
   const base = normalizeUniverseTitle(title);
   const candidates = searchData.query.pages.flatMap((entry): Array<FranchiseCandidate & { verifiedYear?: number; franchise: boolean }> => {
@@ -92,7 +126,7 @@ export async function fetchFranchiseOverview(
     action: 'query', format: 'json', formatversion: '2', prop: 'extracts|info',
     inprop: 'url', explaintext: '1', exsectionformat: 'wiki', pageids: String(candidate.id),
   }).toString();
-  const extractData = await request(extractUrl) as { query?: { pages?: Array<{ pageid?: number; extract?: unknown; fullurl?: unknown }> } };
+  const extractData = await requestWikipedia(extractUrl, diagnostics) as { query?: { pages?: Array<{ pageid?: number; extract?: unknown; fullurl?: unknown }> } };
   const page = extractData.query?.pages?.[0];
   if (page?.pageid !== candidate.id || typeof page.extract !== 'string' || typeof page.fullurl !== 'string') {
     throw new FranchiseOverviewError('Wikipedia returned an invalid article response.');

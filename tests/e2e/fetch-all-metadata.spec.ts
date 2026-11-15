@@ -85,7 +85,7 @@ test('overview retries skip collections with existing metadata but still check e
   await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
   await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
   await page.getByRole('button', { name: 'Fetch franchise overviews (2)' }).click();
-  await expect(page.getByText(/Stopped because Wikipedia rate limited requests/)).toBeVisible();
+  await expect(page.getByText(/Stopped: Wikipedia rate limit reached/)).toBeVisible();
   expect(checked).toEqual(['Existing Series', 'Unfetched']);
   limited = false;
   await page.getByRole('button', { name: 'Fetch franchise overviews (1)' }).click();
@@ -149,7 +149,10 @@ test('overview choices can be selected and retried while the overview batch cont
   await expect(page.getByText('Overview lookup: 1 saved, 0 need selection, 0 failed; 2 checked.')).toBeVisible();
 });
 
-test('a rate-limited overview selection reports the cause and stops the running batch', async ({ page }) => {
+for (const providerStatus of [429, 503]) test(`a paused overview selection reports HTTP ${providerStatus} and stops the running batch`, async ({ page }) => {
+  const providerError = providerStatus === 429
+    ? 'Wikipedia rate limit reached (HTTP 429). Wait at least 12 seconds before retrying.'
+    : 'Wikipedia is temporarily unavailable (HTTP 503). Wait at least 12 seconds before retrying.';
   const items = ['First Show', 'Second Show', 'Third Show'].map((title, index) => ({
     id: `show-${index}`, title, type: 'series', year: 2000, overview: 'Existing synopsis',
     posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0,
@@ -168,13 +171,12 @@ test('a rate-limited overview selection reports the cause and stops the running 
     else if (pathname === '/api/media/franchise-overview') {
       const { title, selection } = request.postDataJSON();
       if (selection) {
-        status = 429;
-        body = { error: 'Wikipedia rate limit reached (HTTP 429). Wait before retrying.' };
+        status = providerStatus;
+        body = { error: providerError, retryAfterSeconds: 12 };
       } else {
         checked.push(title);
         if (title === 'First Show') body = { success: true, candidates: [{ title: 'First Show', source: 'Wikipedia', id: 1 }] };
         if (title === 'Second Show') await secondLookup;
-      }
     }
     await route.fulfill({ status, json: body });
   });
@@ -185,14 +187,15 @@ test('a rate-limited overview selection reports the cause and stops the running 
   try {
     await expect.poll(() => checked.length).toBe(2);
     await page.getByRole('button', { name: 'First Show (Wikipedia #1)' }).click();
-    await expect(page.getByRole('alert')).toHaveText('Wikipedia rate limit reached (HTTP 429). Wait before retrying.');
+    await expect(page.getByRole('alert')).toHaveText(providerError);
   } finally {
     releaseSecond();
   }
-  await expect(page.getByText(/Stopped because Wikipedia rate limited requests/)).toBeVisible();
+  await expect(page.getByText(`Stopped: ${providerError}`, { exact: false })).toBeVisible();
   expect(checked).toEqual(['First Show', 'Second Show']);
   await expect(page.getByRole('button', { name: 'First Show (Wikipedia #1)' })).toBeVisible();
 });
+}
 
 test('Fetch All checks incomplete items and keeps complete items available for review', async ({ page }) => {
   const items = [

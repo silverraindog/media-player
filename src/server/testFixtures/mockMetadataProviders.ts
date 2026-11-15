@@ -6,7 +6,7 @@ globalThis.fetch = async (input, init) => {
     return Response.json({ query: { pages: [{ pageid: 42, title: 'Rate Limited (TV series)' }] } });
   }
   if (url.hostname === 'en.wikipedia.org' && url.searchParams.get('pageids') === '42') {
-    return new Response(null, { status: 429 });
+    return new Response(null, { status: 429, headers: { 'Retry-After': '30' } });
   }
   if (url.hostname === 'musicbrainz.org') {
     return Response.json({ count: 1, 'release-groups': [{

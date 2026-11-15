@@ -109,7 +109,17 @@ test('fetch-art handles Tauri preflight and responses on the real backend', asyn
     assert.equal(limitedOverview.status, 429);
     const limitedBody = await limitedOverview.json();
     assert.match(limitedBody.error, /Wikipedia rate limit reached \(HTTP 429\)/);
+    assert.ok(limitedBody.retryAfterSeconds > 0 && limitedBody.retryAfterSeconds <= 30);
+    assert.equal(limitedOverview.headers.get('retry-after'), String(limitedBody.retryAfterSeconds));
     assert.ok(limitedBody.diagnostics.some((entry: { outcome: string }) => entry.outcome.startsWith('Response: HTTP 429')));
+    const duringCooldown = await fetch(`http://127.0.0.1:${port}/api/media/franchise-overview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Rate Limited', type: 'series' }),
+    });
+    assert.equal(duringCooldown.status, 429);
+    const cooldownBody = await duringCooldown.json();
+    assert.ok(cooldownBody.retryAfterSeconds > 0);
+    assert.equal(cooldownBody.diagnostics.length, 0);
     for (const origin of ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost', 'http://localhost:1420']) {
       const preflight = await fetch(url, {
         method: 'OPTIONS',

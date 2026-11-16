@@ -166,7 +166,7 @@ pub async fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> R
 
 #[tauri::command]
 pub async fn get_vault_state(app_handle: AppHandle) -> Result<Option<String>, String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state. json");
+    let state_file = get_data_dir(&app_handle).join("vault_state.json");
     if state_file.exists() {
         let content = fs::read_to_string(&state_file).map_err(|e| e.to_string())?;
         Ok(Some(content))
@@ -177,7 +177,7 @@ pub async fn get_vault_state(app_handle: AppHandle) -> Result<Option<String>, St
 
 #[tauri::command]
 pub async fn save_vault_state(app_handle: AppHandle, state_json: String) -> Result<(), String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state. json");
+    let state_file = get_data_dir(&app_handle).join("vault_state.json");
     fs::write(&state_file, &state_json).map_err(|e| e.to_string())
 }
 

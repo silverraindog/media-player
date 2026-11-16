@@ -28,7 +28,8 @@ fn wait_for_backend(child: &mut Child) -> Result<(), String> {
             stream.set_read_timeout(Some(Duration::from_secs(1)));
 
             let mut response = String::new();
-            if stream.write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").is_err() {
+            let http_request = b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+            if stream.write_all(http_request).is_err() {
                 continue;
             }
 
@@ -141,7 +142,7 @@ fn main() {
         .manage(vlc_player::VlcPlayerState::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
-                Ok(());
+                Ok(())
             } else {
                 let backend = start_packaged_backend(app)?;
                 *app.state::<BackendProcess>().0.lock().unwrap() = Some(backend);

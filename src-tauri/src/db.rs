@@ -1,8 +1,7 @@
-use rusqlite::{params, Connection, Result};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri::AppHandle;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MediaItem {
@@ -137,24 +136,7 @@ pub async fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> R
 
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, file_path, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))
-             ON CONFLICT(id) DO UPDATE SET
-               media_type = excluded.media_type,
-               title = excluded.title,
-               original_title = excluded.original_title,
-               synopsis = excluded.synopsis,
-               year = excluded.year,
-               rating = excluded.rating,
-               poster_url = excluded.poster_url,
-               fanart_url = excluded.fanart_url,
-               genres = excluded.genres,
-               cast = excluded.cast,
-               recommended_folder = excluded.recommended_folder,
-               raw_data = excluded.raw_data,
-               file_path = excluded.file_path,
-               file_size_bytes = excluded.file_size_bytes,
-               updated_at = datetime('now')"
+            "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, file_path, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))"
         ).map_err(|e| e.to_string())?;
 
         for media in items {
@@ -184,19 +166,19 @@ pub async fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> R
 
 #[tauri::command]
 pub async fn get_vault_state(app_handle: AppHandle) -> Result<Option<String>, String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state.json");
+    let state_file = get_data_dir(&app_handle).join("vault_state. json");
     if state_file.exists() {
         let content = fs::read_to_string(&state_file).map_err(|e| e.to_string())?;
         Ok(Some(content))
     } else {
-        Ok(None)
+        return Err(String::from("No vault state file found"));
     }
 }
 
 #[tauri::command]
 pub async fn save_vault_state(app_handle: AppHandle, state_json: String) -> Result<(), String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state.json");
-    fs::write(&state_file, state_json).map_err(|e| e.to_string())
+    let state_file = get_data_dir(&app_handle).join("vault_state. json");
+    fs::write(&state_file, &state_json).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -205,6 +187,12 @@ pub async fn vault_save_state(app_handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn vault_get_state(app_handle: AppHandle) -> Result<Option<String>, String> {
-    get_vault_state(app_handle).await.map_err(|e| format!("Vault state read task failed: {}", e))
+pub async fn vault_get_state(app_handle: AppHandle) -> Result<(), String> {
+    let result = get_vault_state(app_handle).await;
+    let error_msg = if let Err(e) = result {
+        format!("Vault state read task failed: {}", e)
+    } else {
+        "vault_get_state".to_string()
+    };
+    Err(error_msg)
 }

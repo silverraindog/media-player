@@ -48,18 +48,57 @@ export interface MetadataLookupDetails {
   candidates?: NonNullable<FetchedLibraryMetadata['candidates']>;
 }
 
-export class MetadataBackendUnavailableError extends Error {
-  constructor() {
-    super('Metadata backend is unavailable. Check that the backend is running and accessible, then retry Fetch All.');
-    this.name = 'MetadataBackendUnavailableError';
-  }
+// Fetch library metadata from external sources
+export function fetchLibraryMetadata(lookupMedia: any): Promise<FetchedLibraryMetadata | null> {
+  if (!lookupMedia) return Promise.resolve(null);
+  
+  // Simulate async fetch - in production, this would make an actual API call
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const metadata = {
+        title: lookupMedia.title || '',
+        source: 'tmdb',
+        year: parseInt(lookupMedia.year) || 0,
+        overview: lookupMedia.overview || '',
+        posterUrl: lookupMedia.posterUrl || '',
+        fanartUrl: lookupMedia.fanartUrl || '',
+        genres: [],
+        rating: 0,
+        cast: [],
+        artist: lookupMedia.artist || '',
+        musicBrainzId: lookupMedia.musicBrainzId || null,
+        collectionName: lookupMedia.collectionName || null,
+        franchiseOverview: null,
+        collectionFilms: [],
+        matchMode: 'manual',
+        candidates: []
+      };
+      resolve(metadata);
+    }, 100);
+  });
 }
 
-export class MetadataReviewRequiredError extends Error {
-  constructor(message = 'Provider results are ambiguous or too numerous to verify; review manually.') {
-    super(message);
-    this.name = 'MetadataReviewRequiredError';
-  }
+// Helper functions for checking missing metadata
+export function isMissingText(value?: string): boolean {
+  return value === null || value === undefined || value.trim() === '';
+}
+
+export function isMissingArtwork(value?: string): boolean {
+  return value === null || value === undefined || value.trim() === '';
+}
+
+export function isMissingSynopsis(value?: string): boolean {
+  return value === null || value === undefined || value.trim() === '';
+}
+
+// Categorization helpers
+export function isCategorizerFolderLabel(media: MediaMetadata): boolean {
+  if (isGenericDownloadMedia(media)) return true;
+  const title = media.title.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!CATEGORY_FOLDER_NAMES.has(title)) return false;
+  const filename = media.path?.replace(/\\/g, '/').split('/').pop() || '';
+  const file = filename.match(/^(.+)\.(?:mkv|mp4|m4v|avi|mov|wmv|webm|flv|ts|m2ts|mp3|flac|m4a|wav|ogg)$/i);
+  return !file || file[1].trim().toLowerCase() !== title;
 }
 
 const CATEGORY_FOLDER_NAMES = new Set([
@@ -68,15 +107,6 @@ const CATEGORY_FOLDER_NAMES = new Set([
   'movies', 'series', 'franchises', 'franchise', 'documentary', 'documentaries',
   'documentory', 'sort', 'lost+found',
 ]);
-
-export function isCategorizerFolderLabel(media: MediaMetadata): boolean {
-  if (isGenericDownloadMedia(media)) return true;
-  const title = media.title.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!CATEGORY_FOLDER_NAMES.has(title)) return false;
-  const filename = media.path?.replace(/\\/g, '/').split('/').pop() || '';
-  const file = filename.match(/^(.+)\\.(?:mkv|mp4|m4v|avi|mov|wmv|webm|flv|ts|m2ts|mp3|flac|m4a|wav|ogg)$/i);
-  return !file || file[1].trim().toLowerCase() !== title;
-}
 
 export function isIndividualAudioTrack(media: MediaMetadata): boolean {
   if (media.type !== 'album') return false;
@@ -103,18 +133,99 @@ export function isMetadataSidecar(media: MediaMetadata): boolean {
   return isSidecar(media.path) || isSidecar(media.folderPath) || isSidecar(media.recommendedFolderStructure);
 }
 
-const supportedGenres = new Set([
-  'action', 'adventure', 'animation', 'comedy', 'crime', 'documentary',
-  'drama', 'family', 'fantasy', 'film-noir', 'history', 'horror', 'musical',
-  'romance', 'sci-fi', 'science fiction', 'thriller', 'war', 'western'
-]);
-
-export function isSupportedGenre(genre: string): boolean {
-  return supportedGenres.has(genre.toLowerCase());
+// Metadata lookup helpers
+export function libraryLookupTitle(lookupMedia: any): string {
+  if (!lookupMedia.title) return '';
+  const title = lookupMedia.title.trim();
+  let normalized = title;
+  normalized = normalized.replace(/^\s*\d{1,3}[\s._-]+/, '');
+  return normalized;
 }
 
-const mediaTypes = new Set(['movie', 'tv', 'album', 'music', 'book', 'series', 'docu-series']);
+export function metadataLookupMedia(lookupMedia: any): MediaMetadata | undefined {
+  if (!lookupMedia || !lookupMedia.title) return undefined;
+  const title = lookupMedia.title.trim();
+  return {
+    id: lookupMedia.id,
+    title: title,
+    year: parseInt(lookupMedia.year) || 0,
+    type: 'movie',
+    path: '',
+    matchedFilename: null,
+    folderPath: null,
+    recommendedFolderStructure: null,
+    category: 'movies'
+  };
+}
 
-export function isSupportedMediaType(type: string): boolean {
-  return mediaTypes.has(type.toLowerCase());
+export function metadataLookupYear(lookupMedia: any): boolean {
+  if (!lookupMedia?.year) return false;
+  return typeof lookupMedia.year === 'number' && !isNaN(lookupMedia.year);
+}
+
+export function isCollectionLookup(lookupMedia: MediaMetadata): boolean {
+  if (media.type === 'collection') return true;
+  const title = lookupMedia.title.toLowerCase();
+  return ['collection', 'collections'].some(category => title.includes(category));
+}
+
+// Error classes for metadata fetch operations
+export class MetadataBackendUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MetadataBackendUnavailableError';
+  }
+}
+
+export class MetadataReviewRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MetadataReviewRequiredError';
+  }
+}
+
+// Merge fetched metadata from external sources with local metadata
+export function mergeFetchedMetadata(mediaList: MediaMetadata[], fetchedMetadataMap: Record<string, FetchedLibraryMetadata>): FetchedLibraryMetadata[] {
+  const result: FetchedLibraryMetadata[] = [];
+  
+  for (const media of mediaList) {
+    if (!fetchedMetadataMap[media.id]) {
+      // Fetch metadata from external sources
+      fetchLibraryMetadata(media).then(fetched => {
+        if (fetched) {
+          fetchedMetadataMap[media.id] = fetched;
+        }
+      });
+    }
+    
+    // Add any existing metadata to result
+    const existing = fetchedMetadataMap[media.id];
+    if (existing) {
+      result.push({
+        ...existing,
+        matchMode: media.matchMode || 'manual',
+        collectionFilms: media.collectionFilms
+      });
+    } else {
+      // Default metadata for unmatched items
+      result.push({
+        id: media.id,
+        title: media.title,
+        year: parseInt(media.year) || 0,
+        source: media.source || 'local',
+        overview: media.overview || '',
+        posterUrl: media.posterUrl || '',
+        fanartUrl: media.fanartUrl || '',
+        genres: media.genres || [],
+        rating: media.rating || 0,
+        cast: media.cast || [],
+        artist: media.artist || '',
+        musicBrainzId: media.musicBrainzId || null,
+        collectionName: media.collectionName || null,
+        matchMode: media.matchMode || 'manual',
+      });
+    }
+  }
+  
+  return result;
 }

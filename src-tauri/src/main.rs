@@ -1,21 +1,20 @@
 use std::fs;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
 
 mod ai;
-mod db;
 mod vlc_player;
 mod commands;
 
 struct BackendProcess(Mutex<Option<Child>>);
 
 fn wait_for_backend(child: &mut Child) -> Result<(), String> {
-    let address = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
     let deadline = Instant::now() + Duration::from_secs(20);
 
     while Instant::now() < deadline {
@@ -66,7 +65,7 @@ fn start_packaged_backend(app: &tauri::App) -> Result<Child, Box<dyn std::error:
     let server_path = runtime_dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
     let ffprobe_path = runtime_dir.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
 
-    for required_path in &[&node_path, &server_path, &ffmpeg_path, &ffprobe_path] {
+    for required_path in &[&node_path, &server_path, &ffprobe_path] {
         if !required_path.is_file() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -170,10 +169,9 @@ fn main() {
             commands::check_path_integrity,
             commands::check_path_metadata,
             commands::resolve_path_verbose,
-            commands::debug_path_resolution,
             commands::find_episode_media_file,
-            db::vault_save_state,
-            db::vault_get_state,
+            commands::vault_save_state,
+            commands::vault_get_state,
             commands::cleanup_transcoded_file,
             commands::vault_purge_transcode_cache,
             commands::fix_path_permissions,

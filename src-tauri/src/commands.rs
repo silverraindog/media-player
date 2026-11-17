@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::collections::HashMap;
 
 #[tauri::command]
 pub async fn perform_fast_scan() -> Result<(), String> {
@@ -106,8 +107,13 @@ pub async fn vault_save_state() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn vault_get_state() -> Result<Option<String>, String> {
-    // Implementation would go here
-    Ok(None)
+    let state_file = get_data_dir(&AppHandle::default()).join("vault_state.json");
+    if state_file.exists() {
+        let content = fs::read_to_string(&state_file).map_err(|e| e.to_string())?;
+        Ok(Some(content))
+    } else {
+        return Err(String::from("No vault state file found"));
+    }
 }
 
 #[tauri::command]

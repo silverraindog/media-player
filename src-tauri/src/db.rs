@@ -1,7 +1,7 @@
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MediaItem {
@@ -72,101 +72,24 @@ pub fn init_db(app_handle: &AppHandle) -> Result<()> {
     let conn = Connection::open(path)?;
 
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS media_items (
-            id TEXT PRIMARY KEY,
-            media_type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            original_title TEXT,
-            synopsis TEXT NOT NULL,
-            year INTEGER,
-            rating REAL,
-            poster_url TEXT,
-            fanart_url TEXT,
-            genres TEXT,
-            cast TEXT,
-            recommended_folder TEXT,
-            raw_data TEXT,
-            file_size_bytes INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now')),
-            file_path TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS series_watch_progress (
-            id TEXT PRIMARY KEY,
-            series_id TEXT NOT NULL,
-            series_title TEXT NOT NULL,
-            season_number INTEGER NOT NULL,
-            episode_number INTEGER NOT NULL,
-            episode_title TEXT NOT NULL,
-            playback_position_seconds INTEGER DEFAULT 0,
-            total_duration_seconds INTEGER DEFAULT 0,
-            progress_percentage REAL DEFAULT 0.0,
-            is_completed INTEGER DEFAULT 0,
-            last_watched_at TEXT DEFAULT (datetime('now')),
-            notes TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS watch_history_log (
-            id TEXT PRIMARY KEY,
-            media_id TEXT NOT NULL,
-            episode_number INTEGER NOT NULL,
-            watched_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS user_watchlist (
-            id TEXT PRIMARY KEY,
-            series_id TEXT NOT NULL,
-            series_title TEXT NOT NULL,
-            season_number INTEGER NOT NULL,
-            episode_number INTEGER NOT NULL,
-            episode_title TEXT NOT NULL,
-            watched_at TEXT DEFAULT (datetime('now'))
-        );
-    ).map_err(|e| e.to_string())?;
+        r#"CREATE TABLE IF NOT EXISTS media_items (id TEXT PRIMARY KEY, media_type TEXT NOT NULL, title TEXT NOT NULL, original_title TEXT, synopsis TEXT NOT NULL, year INTEGER, rating REAL, poster_url TEXT, fanart_url TEXT, genres TEXT, cast TEXT, recommended_folder TEXT, raw_data TEXT, file_size_bytes INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')), file_path TEXT)
+CREATE TABLE IF NOT EXISTS series_watch_progress (id TEXT PRIMARY KEY, series_id TEXT NOT NULL, series_title TEXT NOT NULL, season_number INTEGER NOT NULL, episode_number INTEGER NOT NULL, episode_title TEXT NOT NULL, playback_position_seconds INTEGER DEFAULT 0, total_duration_seconds INTEGER DEFAULT 0, progress_percentage REAL DEFAULT 0.0, is_completed INTEGER DEFAULT 0, last_watched_at TEXT DEFAULT (datetime('now')), notes TEXT)
+CREATE TABLE IF NOT EXISTS watch_history_log (id TEXT PRIMARY KEY, media_id TEXT NOT NULL, episode_number INTEGER NOT NULL, watched_at TEXT DEFAULT (datetime('now')))
+CREATE TABLE IF NOT EXISTS user_watchlist (id TEXT PRIMARY KEY, series_id TEXT NOT NULL, series_title TEXT NOT NULL, season_number INTEGER NOT NULL, episode_number INTEGER NOT NULL, episode_title TEXT NOT NULL, watched_at TEXT DEFAULT (datetime('now')));"#,
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
 #[tauri::command]
-pub async fn save_media_batch(app_handle: AppHandle, items: Vec<MediaItem>) -> Result<(), String> {
-    let path = get_db_path(&app_handle);
-    let mut conn = Connection::open(path).map_err(|e| e.to_string())?;
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-    {
-        let mut stmt = tx.prepare(
-            "INSERT INTO media_items (id, media_type, title, original_title, synopsis, year, rating, poster_url, fanart_url, genres, cast, recommended_folder, raw_data, file_size_bytes, file_path, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, datetime('now'))"
-        ).map_err(|e| e.to_string())?;
-
-        for media in items {
-            stmt.execute(params![
-                media.id,
-                media.media_type,
-                media.title,
-                media.original_title,
-                media.synopsis,
-                media.year,
-                media.rating,
-                media.poster_url,
-                media.fanart_url,
-                media.genres,
-                media.cast,
-                media.recommended_folder,
-                media.raw_data,
-                media.file_size_bytes,
-                media.file_path,
-            ]).map_err(|e| e.to_string())?;
-        }
-    }
-
-    tx.commit().map_err(|e| e.to_string())?;
+pub async fn vault_save_state() -> Result<(), String> {
     Ok(())
 }
 
 #[tauri::command]
-pub async fn get_vault_state(app_handle: AppHandle) -> Result<Option<String>, String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state.json");
+pub async fn vault_get_state() -> Result<Option<String>, String> {
+    let state_file = get_data_dir(&AppHandle::default()).join("vault_state.json");
     if state_file.exists() {
         let content = fs::read_to_string(&state_file).map_err(|e| e.to_string())?;
         Ok(Some(content))
@@ -176,23 +99,102 @@ pub async fn get_vault_state(app_handle: AppHandle) -> Result<Option<String>, St
 }
 
 #[tauri::command]
-pub async fn save_vault_state(app_handle: AppHandle, state_json: String) -> Result<(), String> {
-    let state_file = get_data_dir(&app_handle).join("vault_state.json");
-    fs::write(&state_file, &state_json).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn vault_save_state(app_handle: AppHandle) -> Result<(), String> {
+pub async fn vault_purge_transcode_cache() -> Result<(), String> {
+    let cache_dir = get_data_dir(&AppHandle::default()).join(".samba-vault/cache");
+    if cache_dir.exists() {
+        let _ = fs::remove_all(&cache_dir);
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn vault_get_state(app_handle: AppHandle) -> Result<(), String> {
-    let result = get_vault_state(app_handle).await;
-    let error_msg = if let Err(e) = result {
-        format!("Vault state read task failed: {}", e)
+pub async fn cleanup_transcoded_file(path: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        // Only delete files ending with _transcode.mkv
+        if parent.join(path)
+            .exists()
+            .map_err(|_| ())
+            .unwrap()
+            .ends_with("transcode.mkv")
+        {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn fix_path_permissions(path: &str) -> Result<bool, String> {
+    if let Some(parent) = path.parent() {
+        // chmod 755 on parent directories
+        let _ = fs::set_permissions(parent.join(path).as_ref().unwrap(), std::os::unix::fs::PermissionsExt::chmod(0o755));
+        Ok(true)
     } else {
-        "vault_get_state".to_string()
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn run_samba_diagnostic() -> Result<String, String> {
+    let status = if std::process::Command::new("ping").arg("-c").arg("1").arg("8.8.8.8").spawn().is_ok() {
+        "Network connectivity OK"
+    } else {
+        "Network connectivity check failed"
     };
-    Err(error_msg)
+
+    let mounted = list_mounted_volumes().await;
+    let diagnostic = format!(
+        "Mounts: {}\nNetwork: {}\n",
+        mounted, status
+    );
+
+    Ok(diagnostic)
+}
+
+#[tauri::command]
+pub async fn scan_and_import_volumes() -> Result<String, String> {
+    let volumes = list_mounted_volumes().await;
+    let result = if volumes.is_empty() {
+        "No mounted volumes found".to_string()
+    } else {
+        format!("Scanning {} volume(s)", volumes.len())
+    };
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn transcode_media_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // This function would implement the actual transcoding logic
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn check_ffmpeg_codecs() -> Result<Vec<String>, String> {
+    // Implementation would go here
+    Ok(vec![])
+}
+
+#[tauri::command]
+pub async fn set_custom_ffmpeg_path(path: &str) -> Result<(), String> {
+    // Implementation would go here
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_detected_ffmpeg_path() -> Result<String, String> {
+    // Implementation would go here
+    Ok("".to_string())
+}
+
+#[tauri::command]
+pub async fn validate_ffmpeg_sidecar(path: &str) -> Result<bool, String> {
+    // Implementation would go here
+    Ok(false)
+}
+
+#[tauri::command]
+pub async fn check_bundled_ffmpeg() -> Result<bool, String> {
+    // Implementation would go here
+    Ok(false)
 }

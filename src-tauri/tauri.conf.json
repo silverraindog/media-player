@@ -1,106 +1,29 @@
 {
-  "build": {
-    "beforeBuildCommand": {
-      "script": "npm run build:tauri",
-      "cwd": ".."
-    },
-    "beforeDevCommand": "npm run dev",
-    "devPath": "http://localhost:3000",
-    "distDir": "../dist-frontend",
-    "withGlobalTauri": true
-  },
-  "package": {
-    "productName": "SambaVault",
-    "version": "0.0.2"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": true,
-      "fs": {
-        "all": true,
-        "scope": [
-          "/Volumes/**",
-          "$HOME/**",
-          "$TEMP/**",
-          "/opt/homebrew/**",
-          "/usr/local/**",
-          "/usr/bin/**",
-          "/bin/**",
-          "/opt/**",
-          "**"
-        ]
-      },
-      "protocol": {
-        "all": false,
-        "asset": true,
-        "assetScope": [
-          "**",
-          "/Volumes/**",
-          "\\\\*\\*",
-          "$HOME/**",
-          "$TEMP/**"
-        ]
-      },
-      "shell": {
-        "all": false,
-        "execute": true,
-        "sidecar": true,
-        "open": true,
-        "scope": [
-          { "name": "binaries/ffmpeg", "sidecar": true, "args": true },
-          { "name": "binaries/ffprobe", "sidecar": true, "args": true },
-          { "name": "ffmpeg", "sidecar": true, "args": true },
-          { "name": "ffprobe", "sidecar": true, "args": true },
-          { "name": "ffmpeg", "cmd": "ffmpeg", "args": true },
-          { "name": "ffprobe", "cmd": "ffprobe", "args": true },
-          { "name": "homebrew-ffmpeg", "cmd": "/opt/homebrew/bin/ffmpeg", "args": true },
-          { "name": "homebrew-ffprobe", "cmd": "/opt/homebrew/bin/ffprobe", "args": true },
-          { "name": "usr-local-ffmpeg", "cmd": "/usr/local/bin/ffmpeg", "args": true },
-          { "name": "usr-local-ffprobe", "cmd": "/usr/local/bin/ffprobe", "args": true },
-          { "name": "usr-bin-ffmpeg", "cmd": "/usr/bin/ffmpeg", "args": true },
-          { "name": "usr-bin-ffprobe", "cmd": "/usr/bin/ffprobe", "args": true },
-          { "name": "bin-ffmpeg", "cmd": "/bin/ffmpeg", "args": true },
-          { "name": "bin-ffprobe", "cmd": "/bin/ffprobe", "args": true }
-        ]
-      }
-    },
-    "bundle": {
-      "active": true,
-      "category": "DeveloperTool",
-      "copyright": "",
-      "deb": {
-        "depends": []
-      },
-      "externalBin": [
-        "binaries/ffmpeg",
-        "binaries/ffprobe"
-      ],
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/128x128@2x.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
-      ],
-      "identifier": "com.sambavault.app",
-      "resources": [
-        "backend-runtime/**/*",
-        "vlc/**/*"
-      ],
-      "shortDescription": "",
-      "targets": "all"
-    },
-    "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: tauri: http://localhost:3000 http://127.0.0.1:3000; connect-src 'self' asset: tauri: http://localhost:3000 http://127.0.0.1:3000 ws://localhost:3000 ws://127.0.0.1:3000 https:; media-src 'self' asset: tauri: blob: data: http://localhost:3000 http://127.0.0.1:3000; img-src 'self' asset: tauri: blob: data: http://localhost:3000 http://127.0.0.1:3000 https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-    },
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "identifier": "com.sambavault.app",
+  "productName": "SambaVault",
+  "version": "1.0.0",
+  "app": {
     "windows": [
       {
-        "fullscreen": false,
-        "height": 800,
+        "title": "SambaVault",
+        "width": 800,
+        "height": 600,
         "resizable": true,
-        "title": "SambaVault Media Manager",
-        "width": 1200
+        "fullscreen": false
       }
+    ]
+  },
+  "build": {
+    "frontendDist": "../dist-frontend"
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
     ]
   }
 }

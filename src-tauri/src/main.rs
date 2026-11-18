@@ -1,8 +1,5 @@
 use std::fs;
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,7 +20,7 @@ fn wait_for_backend(child: &mut Child) -> Result<(), String> {
         }
 
         // Check for health endpoint BEFORE waiting another interval
-        if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
+        if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
             stream.set_read_timeout(Some(Duration::from_secs(1)));
 
             let mut response = String::new();
@@ -81,14 +78,14 @@ fn start_packaged_backend(app: &tauri::App) -> Result<Child, Box<dyn std::error:
         .env("NODE_ENV", "production")
         .env("HOST", "127.0.0.1")
         .env("PORT", "3000")
-        .env("FFMPEG_PATH", std::env::var("FFMPEG_PATH").unwrap_or("ffmpeg"))
-        .env("FFPROBE_PATH", std::env::var("FFPROBE_PATH").unwrap_or("ffprobe"))
+        .env("FFMPEG_PATH", std::env::var("FFMPEG_PATH").unwrap_or("ffmpeg".to_string()))
+        .env("FFPROBE_PATH", std::env::var("FFPROBE_PATH").unwrap_or("ffprobe".to_string()))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
 
     let stdout_read = thread::spawn(move || -> std::io::Result<()> {
-        let mut reader = BufReader::new(child.stdout.take().unwrap_or_else(|| std::process::Stdio::null(),));
+        let mut reader = BufReader::new(child.stdout.take().unwrap_or_else(|| std::process::Stdio::null()));
         for line in reader.lines().flatten() {
             eprintln!("[SambaVault backend] {}", line);
         }
@@ -96,7 +93,7 @@ fn start_packaged_backend(app: &tauri::App) -> Result<Child, Box<dyn std::error:
     });
 
     let stderr_read = thread::spawn(move || -> std::io::Result<()> {
-        let mut reader = BufReader::new(child.stderr.take().unwrap_or_else(|| std::process::Stdio::null(),));
+        let mut reader = BufReader::new(child.stderr.take().unwrap_or_else(|| std::process::Stdio::null()));
         for line in reader.lines().flatten() {
             eprintln!("[SambaVault backend] {}", line);
         }
@@ -115,14 +112,15 @@ fn start_packaged_backend(app: &tauri::App) -> Result<Child, Box<dyn std::error:
         }
     }
 
-    let child_handle = child.take();
+    // Save child to state BEFORE taking it (Child doesn't implement Iterator, can't call .take())
+    *app.state::<BackendProcess>().0.lock().unwrap() = Some(child);
 
     std::thread::sleep(Duration::from_millis(100));
 
     Ok(())
 }
 
-fn transcode_media_file(input_path: &str, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn transcode_media_file(_input_path: &str, _output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // This function would implement the actual transcoding logic
     Ok(())
 }

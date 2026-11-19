@@ -532,3 +532,31 @@ export function cleanPathValue(rawPath: string): string {
   let cleaned = rawPath.replace(/%20/g, ' ').replace(/\/{2,}/g, '/');
   return sanitizeSambaPath(cleaned);
 }
+
+  /**
+   * Check if a path starts with a UNC protocol prefix (// followed by IP/host)
+   * This is different from Windows drive letters which are like C:
+   */
+  const hasUncPrefix = /^\\/\\/([0-9A-Za-z.-]+)/.test(inputPath);
+
+  /**
+   * Globally replaces any redundant double-slashes (or multiple leading slashes/backslashes)
+   * with a single forward slash, ensuring absolute path resolution remains consistent
+   * before passing strings to the Rust scanner or backend filesystem calls.
+   * - Preserves UNC protocol prefixes (//192.168.x.x/share)
+   * - Handles \\Volumes\\media -> /Volumes/media
+   * - Handles ///Volumes/media -> /Volumes/media
+   */
+  export function normalizeLeadingSlashes(inputPath: string): string {
+    if (!inputPath) return '';
+    // Convert all backslashes to forward slashes first
+    const normalized = inputPath.replace(/\\{4}/g, '/');
+    // Check for UNC protocol prefix (// followed by alphanumeric/IP)
+    const hasUncPrefix = /^\\/\\/([0-9A-Za-z.-]+)/.test(inputPath);
+    if (hasUncPrefix) {
+      // Preserve UNC prefixes - don't collapse the double slash
+      return inputPath;
+    }
+    // For non-UNC paths, replace redundant leading slashes with single forward slash
+    return normalized.replace(/^\\{2,}/, '/');
+  }

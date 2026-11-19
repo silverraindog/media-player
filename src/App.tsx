@@ -594,6 +594,7 @@ function App() {
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
+  const [quickSyncSpinnerVisible, setQuickSyncSpinnerVisible] = useState(false);
   const [lastScanSummary, setLastScanSummary] = useState<LastScanSummary | null>(null);
 
   useEffect(() => {
@@ -3437,6 +3438,8 @@ function App() {
       setSyncProgress(p => ({ ...p, currentStep: 45, phaseDescription: 'Processing discovered directories...' }));
 
       if (topDirs.length === 0) {
+        setQuickSyncSpinnerVisible(true);
+        setTimeout(() => setQuickSyncSpinnerVisible(false), 800);
         topDirs = [
           { name: 'Movies', path: 'Movies', isDirectory: true, subFolders: ['Interstellar (2014)', 'Dune - Part Two (2024)', 'Avatar - The Way of Water (2022)', 'Oppenheimer (2023)', 'The Dark Knight (2008)'] },
           { name: 'Series', path: 'Series', isDirectory: true, subFolders: ['Breaking Bad (2008)', 'Severance (2022)', 'Stranger Things (2016)', 'The Last of Us (2023)'] },
@@ -3628,6 +3631,19 @@ function App() {
         >
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
           <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* QuickSync zero-dir spinner (shown ~800 ms when quick-scan returns no top-level dirs) */}
+      {quickSyncSpinnerVisible && (
+        <div className="fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center gap-2 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-indigo-400/30 px-6 py-5 shadow-2xl">
+          <div
+            className="h-10 w-10 rounded-full border-4 border-slate-500/30 border-t-indigo-400 animate-spin"
+            aria-hidden="true"
+          />
+          <span className="text-xs text-slate-300 font-medium text-center leading-tight">
+            QuickSync: share returned no folders — populating default set…
+          </span>
         </div>
       )}
 

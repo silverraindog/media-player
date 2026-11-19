@@ -57,6 +57,16 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v5
+      - name: Update Cargo Version in root and Dry-Run Publish
+        run: |
+          export VERSION=${{ github.event.release.tag_name }}
+          sed -i "s/0.0.0/$VERSION/g" Cargo.toml
+          cargo publish --dry-run --allow-dirty
+      - name: Update Cargo Version in src-tauri and Dry-Run Publish
+        run: |
+          export VERSION=${{ github.event.release.tag_name }}
+          sed -i "s/0.0.0/$VERSION/g" src-tauri/Cargo.toml
+          cargo publish --dry-run --allow-dirty
 
       - name: Clean Lockfile for Fresh Cross-Platform Resolution
         shell: bash

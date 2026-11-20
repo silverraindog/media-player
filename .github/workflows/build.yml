@@ -1,4 +1,5 @@
 name: Build and Package Desktop App
+
 on:
   push:
     branches: [ main ]
@@ -12,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: 24
 
@@ -32,7 +33,7 @@ jobs:
 
       - name: Upload Browser Diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: startup-smoke-diagnostics
           path: |
@@ -42,6 +43,7 @@ jobs:
 
   build-desktop:
     name: Build (${{ matrix.platform }})
+    needs: startup-smoke-test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,46 +58,32 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
-      - name: Update Cargo Version in root and Dry-Run Publish
-        run: |
-          export VERSION=${{ github.event.release.tag_name }}
-          sed -i "s/0.0.0/$VERSION/g" Cargo.toml
-          cargo publish --dry-run --allow-dirty
-      - name: Update Cargo Version in src-tauri and Dry-Run Publish
-        run: |
-          export VERSION=${{ github.event.release.tag_name }}
-          sed -i "s/0.0.0/$VERSION/g" src-tauri/Cargo.toml
-          cargo publish --dry-run --allow-dirty
+        uses: actions/checkout@v4
 
       - name: Clean Lockfile for Fresh Cross-Platform Resolution
         shell: bash
         run: rm -f bun.lock bun.lockb yarn.lock pnpm-lock.yaml package-lock.json
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: Determine Version
+      - name: Determine Version & Sync Configs
         id: ver
         shell: bash
         run: |
-          echo "🔍 Extracting version from package.json..."
           VERSION=$(node -p "require('./package.json').version")
-          echo "✅ Version detected: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          echo "🔄 Synchronizing all config files to $VERSION (Commit: ${{ github.sha }}, Date: $BUILD_DATE)..."
           node scripts/sync-version.cjs "$VERSION" "${{ github.sha }}" "$BUILD_DATE"
-          echo "✨ Synchronization complete."
 
       - name: Install System Dependencies (Linux Only)
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev ffmpeg
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev librsvg2-dev ffmpeg
 
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -116,12 +104,12 @@ jobs:
         shell: pwsh
         run: |
           choco install ffmpeg --yes --no-progress
-          $toolsPath = Join-Path $env:ChocolateyInstall 'lib\ffmpeg\tools'
+          $toolsPath = Join-Path $env:ChocolateyInstall 'lib/ffmpeg/tools'
           $ffmpeg = Get-ChildItem -Path $toolsPath -Filter ffmpeg.exe -File -Recurse |
-            Where-Object { $_.FullName -match '[\\/]bin[\\/]ffmpeg\.exe$' } |
+            Where-Object { $_.FullName -match '\\bin\\ffmpeg\.exe$' } |
             Select-Object -First 1
           $ffprobe = Get-ChildItem -Path $toolsPath -Filter ffprobe.exe -File -Recurse |
-            Where-Object { $_.FullName -match '[\\/]bin[\\/]ffprobe\.exe$' } |
+            Where-Object { $_.FullName -match '\\bin\\ffprobe\.exe$' } |
             Select-Object -First 1
           if (-not $ffmpeg -or -not $ffprobe) {
             throw "Could not locate FFmpeg and FFprobe executables under $toolsPath"
@@ -145,34 +133,31 @@ jobs:
           test -f /Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib
 
       - name: Build Tauri Desktop Application
-        uses: tauri-apps/tauri-action@v0.5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: tauri-apps/tauri-action@v0
         with:
           projectPath: "./"
 
       - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: SambaVault-v${{ steps.ver.outputs.version }}-${{ matrix.platform }}
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
-          archive: false
 
   deploy-release:
     name: Create GitHub Release
     needs: build-desktop
-    # Only run this step when code is pushed to the main branch
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Determine Version
         id: ver
@@ -182,7 +167,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download All Installers
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           pattern: SambaVault-v*
           merge-multiple: true

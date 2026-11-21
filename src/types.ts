@@ -395,7 +395,7 @@ export type AppTab =
   | 'sqlite-vault'
   | 'youtube'
   | 'console'
-  | 'settings';
+  | 'collections';
 
 export interface WatchHistoryItem {
   id: string;

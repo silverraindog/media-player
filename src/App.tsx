@@ -69,6 +69,7 @@ import {
   probeLocalNetwork,
   scanSambaVolume,
   performFastScan,
+import { CollectionsTab } from './components/CollectionsTab';
   normalizeScannedRelativePath,
   resolveLocalMountPath,
   VolumeMountInfo,
@@ -4198,6 +4199,7 @@ function App() {
               onPlayMedia={(media, track) => handlePlayMedia(media, undefined, track)}
               onOpenDetails={(media) => setDetailModalMedia(media)}
               sambaConfig={sambaConfig}
+        {activeTab === 'collections' && <CollectionsTab />}
             />
           </ErrorBoundary>
         )}

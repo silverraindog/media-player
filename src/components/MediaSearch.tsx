@@ -63,6 +63,8 @@ import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
+import { extractFranchiseRoot } from '../utils/duplicateDetector';
+import { KNOWN_FRANCHISES_MAP } from '../utils/franchiseHierarchy';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
@@ -216,6 +218,18 @@ export function getSafeGenres(genres: any): string[] {
 export function getSafeRating(rating: any): number {
   const num = Number(rating);
   return !isNaN(num) ? num : 8.0;
+}
+
+export interface UniverseCollection {
+  id: string;
+  name: string;
+  overview: string;
+  posterUrl: string;
+  fanartUrl?: string;
+  movies: MediaMetadata[];
+  series: MediaMetadata[];
+  music: MediaMetadata[];
+  items: MediaMetadata[];
 }
 
 export const MediaSearch: React.FC<MediaSearchProps> = ({
@@ -434,6 +448,45 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const diagnosticFileInputRef = useRef<HTMLInputElement>(null);
   const [isDiagnosticImportArmed, setIsDiagnosticImportArmed] = useState(false);
+  const [activeCollectionTab, setActiveCollectionTab] = useState<'all' | 'collections' | 'movie' | 'series' | 'album'>('all');
+  const [selectedUniverseModal, setSelectedUniverseModal] = useState<UniverseCollection | null>(null);
+  const universeCollections = useMemo(() => {
+    const map = new Map<string, UniverseCollection>();
+
+    safeMediaLibrary.forEach((m) => {
+      const rootKey = extractFranchiseRoot(m.title);
+      const knownKey = Object.keys(KNOWN_FRANCHISES_MAP).find(
+        (k) => rootKey.includes(k) || m.title.toLowerCase().includes(k)
+      );
+      const known = knownKey ? KNOWN_FRANCHISES_MAP[knownKey] : null;
+
+      const universeName = known ? known.franchiseName : (m.genres?.[0] ? `${m.genres[0]} Universe` : m.title);
+      const universeId = rootKey || universeName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+
+      if (!map.has(universeId)) {
+        map.set(universeId, {
+          id: universeId,
+          name: universeName,
+          overview: known?.overview || m.overview || `Connected collection of media in the ${universeName} universe.`,
+          posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80',
+          fanartUrl: m.fanartUrl,
+          movies: [],
+          series: [],
+          music: [],
+          items: [],
+        });
+      }
+
+      const col = map.get(universeId)!;
+      col.items.push(m);
+      if (m.type === 'movie') col.movies.push(m);
+      else if (m.type === 'series') col.series.push(m);
+      else if (m.type === 'album') col.music.push(m);
+      else col.movies.push(m);
+    });
+
+    return Array.from(map.values()).filter((c) => c.items.length > 1 || KNOWN_FRANCHISES_MAP[c.id]);
+  }, [safeMediaLibrary]);
 
   // Determine Min and Max Year across library
   const { minLibraryYear, maxLibraryYear } = useMemo(() => {
@@ -3126,9 +3179,151 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             </div>
           )}
 
-          {/* Media Results Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-            {sortedAndFilteredMedia.slice(0, displayedCount).map((media) => {
+          {/* Top Collections Panel with Movies, Series, Music & Collections */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-wrap items-center justify-between gap-4 mb-6">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-xl bg-indigo-600/20 text-indigo-400">
+                <Layers className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">Media Collections & Universes</h3>
+                <p className="text-xs text-slate-400">Browse unified franchise collections or filter by media type</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => {
+                  setActiveCollectionTab('collections');
+                  setSelectedType('all');
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  activeCollectionTab === 'collections'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                    : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5 text-amber-300" />
+                <span>Collections / Universes ({universeCollections.length})</span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveCollectionTab('all');
+                  setSelectedType('all');
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                  activeCollectionTab === 'all' && selectedType === 'all'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
+                }`}
+              >
+                <span>All Media ({allCount})</span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveCollectionTab('movie');
+                  setSelectedType('movie');
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  activeCollectionTab === 'movie' || selectedType === 'movie'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
+                }`}
+              >
+                <Film className="w-3.5 h-3.5 text-emerald-300" />
+                <span>Movies ({moviesCount})</span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveCollectionTab('series');
+                  setSelectedType('series');
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  activeCollectionTab === 'series' || selectedType === 'series'
+                    ? 'bg-cyan-600 text-white shadow-md'
+                    : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
+                }`}
+              >
+                <Tv className="w-3.5 h-3.5 text-cyan-300" />
+                <span>Series ({seriesCount})</span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveCollectionTab('album');
+                  setSelectedType('album');
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  activeCollectionTab === 'album' || selectedType === 'album'
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
+                }`}
+              >
+                <Music className="w-3.5 h-3.5 text-purple-300" />
+                <span>Music ({albumsCount})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Media Results Grid or Collections Grid */}
+          {activeCollectionTab === 'collections' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {universeCollections.map((col) => (
+                <div
+                  key={col.id}
+                  onClick={() => setSelectedUniverseModal(col)}
+                  className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-2xl overflow-hidden shadow-xl flex flex-col group cursor-pointer transition-all hover:scale-[1.01]"
+                >
+                  <div className="relative h-48 sm:h-52 bg-slate-950 overflow-hidden">
+                    <img
+                      src={col.posterUrl}
+                      alt={col.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
+                    <div className="absolute top-3 left-3 flex flex-wrap gap-1.5">
+                      {col.movies.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/90 text-white text-[10px] font-bold shadow">
+                          🎬 {col.movies.length} Movie{col.movies.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                      {col.series.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-md bg-cyan-500/90 text-white text-[10px] font-bold shadow">
+                          📺 {col.series.length} Series
+                        </span>
+                      )}
+                      {col.music.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-md bg-purple-500/90 text-white text-[10px] font-bold shadow">
+                          🎵 {col.music.length} Album{col.music.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                    <div>
+                      <h4 className="text-base font-bold text-white group-hover:text-indigo-400 transition-colors">
+                        {col.name}
+                      </h4>
+                      <p className="mt-1 text-xs text-slate-300 line-clamp-2 leading-relaxed">
+                        {col.overview}
+                      </p>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-mono text-[11px]">
+                        {col.items.length} Total items joined in universe
+                      </span>
+                      <button className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-xs shadow transition-colors">
+                        Explore Universe
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+              {sortedAndFilteredMedia.slice(0, displayedCount).map((media) => {
               const isPushed = pushedIds[media.id];
               const isCopied = copiedNfoId === media.id;
               const isSavedWatchlist = watchlistIds.has(media.id);
@@ -3197,7 +3392,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       {/* Genre Affinity Match Score Badge */}
                       {sortBy === 'affinity' && affinity.percentage > 0 && (
                         <span
-                          className="px-2 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[10px] font-bold flex items-center gap-1 shadow-md backdrop-blur-xs"
+                          className="px-2 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[10px] font-bold flex items-center gap-1 shadow-md backdrop-blur-sm"
                           title={`Affinity Score: ${affinity.score.toFixed(1)} based on ${affinity.topMatchingGenre} watch history`}
                         >
                           <Target className="w-2.5 h-2.5 text-emerald-400" />
@@ -3652,6 +3847,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             })}
             <div ref={observerTarget} className="h-10" />
           </div>
+        )}
         </main>
       </div>
 
@@ -3659,7 +3855,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       {showAffinityBreakdownModal && (
         <div
           id="genre-affinity-breakdown-modal"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
         >
           <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-5 max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
@@ -3763,6 +3959,166 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         mediaLibrary={mediaLibrary}
         watchedItemsMap={watchedItemsMap}
       />
+
+      {/* Universe / Franchise Collection Detail Modal */}
+      {selectedUniverseModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
+          <div className="w-full max-w-4xl bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100 max-h-[90vh] flex flex-col">
+            <div className="relative h-48 sm:h-64 bg-slate-900 overflow-hidden shrink-0">
+              <img
+                src={selectedUniverseModal.posterUrl}
+                alt={selectedUniverseModal.name}
+                className="w-full h-full object-cover opacity-80"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/60 to-transparent" />
+              <div className="absolute top-4 right-4">
+                <button
+                  onClick={() => setSelectedUniverseModal(null)}
+                  className="p-2 rounded-xl bg-black/60 hover:bg-black text-slate-300 hover:text-white transition-colors cursor-pointer border border-slate-700"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="absolute bottom-6 left-6 right-6">
+                <span className="px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 text-xs font-semibold mb-2 inline-flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Franchise Universe Collection</span>
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+                  {selectedUniverseModal.name}
+                </h2>
+                <p className="mt-1 text-xs sm:text-sm text-slate-300 max-w-2xl line-clamp-2">
+                  {selectedUniverseModal.overview}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-6 flex-1 overflow-y-auto space-y-6">
+              {selectedUniverseModal.movies.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
+                    <Film className="w-4 h-4" />
+                    <span>Movies ({selectedUniverseModal.movies.length})</span>
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {selectedUniverseModal.movies.map((mov) => (
+                      <div
+                        key={mov.id}
+                        onClick={() => {
+                          setSelectedUniverseModal(null);
+                          onOpenDetails(mov);
+                        }}
+                        className="bg-slate-900 hover:bg-slate-855 border border-slate-800 hover:border-indigo-500/50 rounded-xl p-3 flex items-center gap-3 cursor-pointer transition"
+                      >
+                        <img src={mov.posterUrl} alt={mov.title} className="w-12 h-16 object-cover rounded-lg shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-bold text-white truncate">{mov.title}</h4>
+                          <p className="text-[11px] text-slate-400">{mov.year} • ★ {mov.rating}</p>
+                          <p className="text-[11px] text-slate-300 truncate mt-1">{mov.overview}</p>
+                        </div>
+                        {onPlayMedia && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedUniverseModal(null);
+                              onPlayMedia(mov);
+                            }}
+                            className="p-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shrink-0 shadow"
+                            title="Play Movie"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-white" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedUniverseModal.series.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
+                    <Tv className="w-4 h-4" />
+                    <span>TV Series ({selectedUniverseModal.series.length})</span>
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {selectedUniverseModal.series.map((ser) => (
+                      <div
+                        key={ser.id}
+                        onClick={() => {
+                          setSelectedUniverseModal(null);
+                          onOpenDetails(ser);
+                        }}
+                        className="bg-slate-900 hover:bg-slate-855 border border-slate-800 hover:border-indigo-500/50 rounded-xl p-3 flex items-center gap-3 cursor-pointer transition"
+                      >
+                        <img src={ser.posterUrl} alt={ser.title} className="w-12 h-16 object-cover rounded-lg shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-bold text-white truncate">{ser.title}</h4>
+                          <p className="text-[11px] text-slate-400">{ser.year} • {ser.seasons?.length || 1} Season(s)</p>
+                          <p className="text-[11px] text-slate-300 truncate mt-1">{ser.overview}</p>
+                        </div>
+                        {onPlayMedia && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedUniverseModal(null);
+                              onPlayMedia(ser);
+                            }}
+                            className="p-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shrink-0 shadow"
+                            title="Play Series"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-white" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedUniverseModal.music.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold text-purple-400 flex items-center gap-2">
+                    <Music className="w-4 h-4" />
+                    <span>Music & Soundtracks ({selectedUniverseModal.music.length})</span>
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {selectedUniverseModal.music.map((mus) => (
+                      <div
+                        key={mus.id}
+                        onClick={() => {
+                          setSelectedUniverseModal(null);
+                          onOpenDetails(mus);
+                        }}
+                        className="bg-slate-900 hover:bg-slate-855 border border-slate-800 hover:border-purple-500/50 rounded-xl p-3 flex items-center gap-3 cursor-pointer transition"
+                      >
+                        <img src={mus.posterUrl} alt={mus.title} className="w-12 h-16 object-cover rounded-lg shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-bold text-white truncate">{mus.title}</h4>
+                          <p className="text-[11px] text-slate-400">{mus.year} • Music Album</p>
+                          <p className="text-[11px] text-slate-300 truncate mt-1">{mus.overview}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-slate-900 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                Total media items joined in {selectedUniverseModal.name}: <strong className="text-white">{selectedUniverseModal.items.length}</strong>
+              </span>
+              <button
+                onClick={() => setSelectedUniverseModal(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
+              >
+                Close Collection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

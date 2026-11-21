@@ -103,9 +103,9 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
 
   // Filter and sort genres for display
   const processedGenres = useMemo(() => {
-    if (!statsData) return [];
+    if (!statsData || !statsData.genreDistribution) return [];
 
-    let list = statsData.genreDistribution.map((item) => {
+    let list = (statsData.genreDistribution || []).map((item) => {
       // If filtering by media type, adjust values
       if (selectedMediaType === 'movie') {
         const estBytes = item.movieCount > 0 ? (item.totalBytes * item.movieCount) / item.totalCount : 0;
@@ -229,8 +229,8 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
 
   // Top heaviest media items
   const heaviestItems = useMemo(() => {
-    if (!statsData) return [];
-    let items = statsData.largestItems;
+    if (!statsData || !statsData.largestItems) return [];
+    let items = statsData.largestItems || [];
     if (selectedMediaType !== 'all') {
       items = items.filter((i) => i.mediaType === selectedMediaType);
     }
@@ -867,7 +867,7 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart
-                  data={statsData.decadeDistribution}
+                  data={statsData?.decadeDistribution || []}
                   margin={{ top: 10, right: 10, left: -10, bottom: 20 }}
                 >
                   <defs>

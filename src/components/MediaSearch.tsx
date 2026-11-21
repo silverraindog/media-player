@@ -460,14 +460,15 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       );
       const known = knownKey ? KNOWN_FRANCHISES_MAP[knownKey] : null;
 
-      const universeName = known ? known.franchiseName : (m.genres?.[0] ? `${m.genres[0]} Universe` : m.title);
-      const universeId = rootKey || universeName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+      const genreGroup = m.genres?.[0] || 'General';
+      const universeName = known ? known.franchiseName : `${genreGroup} Universe`;
+      const universeId = knownKey || rootKey || universeName.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
       if (!map.has(universeId)) {
         map.set(universeId, {
           id: universeId,
           name: universeName,
-          overview: known?.overview || m.overview || `Connected collection of media in the ${universeName} universe.`,
+          overview: known?.overview || m.overview || `Curated collection and universe for ${universeName} media and releases.`,
           posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80',
           fanartUrl: m.fanartUrl,
           movies: [],
@@ -485,7 +486,21 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       else col.movies.push(m);
     });
 
-    return Array.from(map.values()).filter((c) => c.items.length > 1 || KNOWN_FRANCHISES_MAP[c.id]);
+    const collections = Array.from(map.values());
+    if (collections.length === 0 && safeMediaLibrary.length > 0) {
+      collections.push({
+        id: 'all-media-universe',
+        name: 'Main Media Universe',
+        overview: 'Unified collection of all media items in your library.',
+        posterUrl: safeMediaLibrary[0]?.posterUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80',
+        movies: safeMediaLibrary.filter(m => m.type === 'movie'),
+        series: safeMediaLibrary.filter(m => m.type === 'series'),
+        music: safeMediaLibrary.filter(m => m.type === 'album'),
+        items: safeMediaLibrary,
+      });
+    }
+
+    return collections;
   }, [safeMediaLibrary]);
 
   // Determine Min and Max Year across library

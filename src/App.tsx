@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { MenuBar } from './components/MenuBar';
+import {
+  checkMacVolume, MenuBar } from './components/MenuBar';
 import {
   Header,
 } from './components/Header';
@@ -67,9 +68,9 @@ import {
   checkMacVolume,
   listMountedVolumes,
   probeLocalNetwork,
+  CollectionsTab,
   scanSambaVolume,
   performFastScan,
-import { CollectionsTab } from './components/CollectionsTab';
   normalizeScannedRelativePath,
   resolveLocalMountPath,
   VolumeMountInfo,
@@ -4200,7 +4201,8 @@ function App() {
               onOpenDetails={(media) => setDetailModalMedia(media)}
               sambaConfig={sambaConfig}
         {activeTab === 'collections' && <CollectionsTab />}
-            />
+        </ErrorBoundary>
+        {activeTab === 'youtube' && (
           </ErrorBoundary>
         )}
 

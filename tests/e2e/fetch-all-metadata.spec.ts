@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test('franchise overviews are saved separately for eligible items and survive reload', async ({ page }) => {
   const items = [
-    { id: 'series', title: 'Example Show', type: 'series', year: 2000, overview: 'Existing synopsis', posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0, recommendedFolderStructure: 'Example Show', recommendedFilenames: [] },
+    { id: 'series', title: 'Example Show', type: 'series', year: 2000, overview: 'Existing synopsis', posterUrl: 'https://example.com', genres: [], rating: 0, recommendedFolderStructure: 'Example Show', recommendedFilenames: [] },
     { id: 'collection', title: 'Example Collection', type: 'movie', collectionFolder: true, year: 2000, overview: '', posterUrl: '', genres: [], rating: 0, recommendedFolderStructure: 'Example Collection', recommendedFilenames: [] },
   ];
   const saved = new Map<string, Record<string, unknown>>();
@@ -17,11 +17,11 @@ test('franchise overviews are saved separately for eligible items and survive re
     } else if (pathname === '/api/db/media') body = { success: true, items: Array.from(saved.values(), item => ({ id: item.id, title: item.title, raw_data: JSON.stringify(item) })) };
     else if (pathname === '/api/media/franchise-overview') {
       const requestBody = request.postDataJSON();
-      if (requestBody.title === 'Example Show') body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Example_Show', license: 'CC BY-SA 4.0' } };
+      if (requestBody.title === 'Example Show') body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://wikipedia.org', license: 'CC BY-SA 4.0' } };
       else if (!requestBody.selection) body = { success: true, candidates: [
         { title: 'Example Collection', source: 'TMDB', id: 1 }, { title: 'Example Collection', source: 'TMDB', id: 2 },
       ] };
-      else body = { success: true, overview: { text: 'Collection premise', source: 'TMDB', url: `https://www.themoviedb.org/collection/${requestBody.selection.id}` } };
+      else body = { success: true, overview: { text: 'Collection premise', source: 'TMDB', url: `https://themoviedb.org{requestBody.selection.id}` } };
     }
     await route.fulfill({ json: body });
   });
@@ -36,7 +36,7 @@ test('franchise overviews are saved separately for eligible items and survive re
   await page.getByRole('button', { name: 'Example Collection (TMDB #2)' }).click();
   await expect.poll(() => saved.size).toBe(2);
   expect(saved.get('series')).toMatchObject({ overview: 'Existing synopsis', franchiseOverview: { text: 'Show premise', source: 'Wikipedia' } });
-  expect(saved.get('collection')).toMatchObject({ overview: '', franchiseOverview: { text: 'Collection premise', url: 'https://www.themoviedb.org/collection/2' } });
+  expect(saved.get('collection')).toMatchObject({ overview: '', franchiseOverview: { text: 'Collection premise', url: 'https://themoviedb.org' } });
   await page.reload();
   await openList();
   await expect(page.getByRole('button', { name: 'Fetch franchise overviews (0)' })).toBeVisible();
@@ -46,14 +46,14 @@ test('overview retries skip collections with existing metadata but still check e
   const base = { type: 'movie', collectionFolder: true, year: 2000, overview: '', posterUrl: '', genres: [], rating: 0, recommendedFilenames: [] };
   const items = [
     { ...base, id: 'synopsis', title: 'Has Synopsis', overview: 'Existing synopsis' },
-    { ...base, id: 'poster', title: 'Has Poster', posterUrl: 'https://example.com/poster.jpg' },
-    { ...base, id: 'fanart', title: 'Has Fanart', fanartUrl: 'https://example.com/fanart.jpg' },
+    { ...base, id: 'poster', title: 'Has Poster', posterUrl: 'https://example.com' },
+    { ...base, id: 'fanart', title: 'Has Fanart', fanartUrl: 'https://example.com' },
     { ...base, id: 'matched', title: 'Already Matched', metadataFetchStatus: 'matched' },
     { ...base, id: 'films', title: 'Has Films', collectionFilms: [{ title: 'First film' }] },
     { ...base, id: 'collection-overview', title: 'Has Collection Overview', collectionOverview: 'A collection description.' },
-    { ...base, id: 'saved', title: 'Saved Overview', franchiseOverview: { text: 'Saved', source: 'TMDB', url: 'https://www.themoviedb.org/collection/1' } },
-    { ...base, id: 'series', title: 'Existing Series', type: 'series', collectionFolder: false, overview: 'Existing series synopsis', posterUrl: 'https://example.com/poster.jpg' },
-    { ...base, id: 'missing', title: 'Unfetched', overview: 'No synopsis available', posterUrl: 'https://images.unsplash.com/placeholder.jpg', metadataFetchStatus: 'no-match' },
+    { ...base, id: 'saved', title: 'Saved Overview', franchiseOverview: { text: 'Saved', source: 'TMDB', url: 'https://themoviedb.org' } },
+    { ...base, id: 'series', title: 'Existing Series', type: 'series', collectionFolder: false, overview: 'Existing series synopsis', posterUrl: 'https://example.com' },
+    { ...base, id: 'missing', title: 'Unfetched', overview: 'No synopsis available', posterUrl: 'https://unsplash.com', metadataFetchStatus: 'no-match' },
   ].map(item => ({ ...item, recommendedFolderStructure: item.title }));
   const checked: string[] = [];
   const saved = new Map<string, Record<string, unknown>>();
@@ -76,7 +76,7 @@ test('overview retries skip collections with existing metadata but still check e
         status = 429;
         body = { error: 'Wikipedia rate limit reached (HTTP 429). Wait before retrying.' };
       } else {
-        body = { success: true, overview: { text: 'Fetched overview', source: 'Wikipedia', url: `https://en.wikipedia.org/wiki/${title.replace(/ /g, '_')}` } };
+        body = { success: true, overview: { text: 'Fetched overview', source: 'Wikipedia', url: `https://wikipedia.org{title.replace(/ /g, '_')}` } };
       }
     }
     await route.fulfill({ status, json: body });
@@ -95,11 +95,10 @@ test('overview retries skip collections with existing metadata but still check e
   expect(saved.get('missing')).toMatchObject({ franchiseOverview: { text: 'Fetched overview' } });
   await expect(page.getByRole('button', { name: 'Fetch franchise overviews (0)' })).toBeVisible();
 });
-
 test('overview choices can be selected and retried while the overview batch continues', async ({ page }) => {
   const items = ['First Show', 'Second Show'].map((title, index) => ({
     id: `show-${index}`, title, type: 'series', year: 2000, overview: 'Existing synopsis',
-    posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0,
+    posterUrl: 'https://example.com', genres: [], rating: 0,
     recommendedFolderStructure: title, recommendedFilenames: [],
   }));
   const saved = new Map<string, Record<string, unknown>>();
@@ -124,7 +123,7 @@ test('overview choices can be selected and retried while the overview batch cont
       } else if (++selectionAttempts === 1) {
         body = { success: true, diagnostics: [{ provider: 'Wikipedia', outcome: 'No premise or overview section found; review manually' }] };
       } else {
-        body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/First_Show', license: 'CC BY-SA 4.0', excerpt: 'introduction' } };
+        body = { success: true, overview: { text: 'Show premise', source: 'Wikipedia', url: 'https://wikipedia.org', license: 'CC BY-SA 4.0', excerpt: 'introduction' } };
       }
     }
     await route.fulfill({ json: body });
@@ -149,58 +148,59 @@ test('overview choices can be selected and retried while the overview batch cont
   await expect(page.getByText('Overview lookup: 1 saved, 0 need selection, 0 failed; 2 checked.')).toBeVisible();
 });
 
-for (const providerStatus of [429, 503]) test(`a paused overview selection reports HTTP ${providerStatus} and stops the running batch`, async ({ page }) => {
-  const providerError = providerStatus === 429
-    ? 'Wikipedia rate limit reached (HTTP 429). Wait at least 12 seconds before retrying.'
-    : 'Wikipedia is temporarily unavailable (HTTP 503). Wait at least 12 seconds before retrying.';
-  const items = ['First Show', 'Second Show', 'Third Show'].map((title, index) => ({
-    id: `show-${index}`, title, type: 'series', year: 2000, overview: 'Existing synopsis',
-    posterUrl: 'https://example.com/poster.jpg', genres: [], rating: 0,
-    recommendedFolderStructure: title, recommendedFilenames: [],
-  }));
-  const checked: string[] = [];
-  let releaseSecond!: () => void;
-  const secondLookup = new Promise<void>(resolve => { releaseSecond = resolve; });
-  await page.route('**/api/**', async route => {
-    const request = route.request();
-    const pathname = new URL(request.url()).pathname;
-    let status = 200;
-    let body: Record<string, unknown> = { success: true };
-    if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
-    else if (pathname === '/api/db/media') body = { success: true, items: [] };
-    else if (pathname === '/api/media/franchise-overview') {
-      const { title, selection } = request.postDataJSON();
-      if (selection) {
-        status = providerStatus;
-        body = { error: providerError, retryAfterSeconds: 12 };
-      } else {
-        checked.push(title);
-        if (title === 'First Show') body = { success: true, candidates: [{ title: 'First Show', source: 'Wikipedia', id: 1 }] };
-        if (title === 'Second Show') await secondLookup;
+for (const providerStatus of Array.of(429, 503)) {
+  test(`a paused overview selection reports HTTP ${providerStatus} and stops the running batch`, async ({ page }) => {
+    const providerError = providerStatus === 429
+      ? 'Wikipedia rate limit reached (HTTP 429). Wait at least 12 seconds before retrying.'
+      : 'Wikipedia is temporarily unavailable (HTTP 503). Wait at least 12 seconds before retrying.';
+    const items = ['First Show', 'Second Show', 'Third Show'].map((title, index) => ({
+      id: `show-${index}`, title, type: 'series', year: 2000, overview: 'Existing synopsis',
+      posterUrl: 'https://example.com', genres: [], rating: 0,
+      recommendedFolderStructure: title, recommendedFilenames: [],
+    }));
+    const checked: string[] = [];
+    let releaseSecond!: () => void;
+    const secondLookup = new Promise<void>(resolve => { releaseSecond = resolve; });
+    await page.route('**/api/**', async route => {
+      const request = route.request();
+      const pathname = new URL(request.url()).pathname;
+      let status = 200;
+      let body: Record<string, unknown> = { success: true };
+      if (pathname === '/api/vault/state' && request.method() === 'GET') body = { success: true, state: { mediaLibrary: items } };
+      else if (pathname === '/api/db/media') body = { success: true, items: [] };
+      else if (pathname === '/api/media/franchise-overview') {
+        const { title, selection } = request.postDataJSON();
+        if (selection) {
+          status = providerStatus;
+          body = { error: providerError, retryAfterSeconds: 12 };
+        } else {
+          checked.push(title);
+          if (title === 'First Show') body = { success: true, candidates: [{ title: 'First Show', source: 'Wikipedia', id: 1 }] };
+          if (title === 'Second Show') await secondLookup;
+        }
+      }
+      await route.fulfill({ status, json: body });
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
+    await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
+    await page.getByRole('button', { name: 'Fetch franchise overviews (3)' }).click();
+    try {
+      await expect.poll(() => checked.length).toBe(2);
+      await page.getByRole('button', { name: 'First Show (Wikipedia #1)' }).click();
+      await expect(page.getByRole('alert')).toHaveText(providerError);
+    } finally {
+      releaseSecond();
     }
-    await route.fulfill({ status, json: body });
+    await expect(page.getByText(`Stopped: ${providerError}`, { exact: false })).toBeVisible();
+    expect(checked).toEqual(['First Show', 'Second Show']);
+    await expect(page.getByRole('button', { name: 'First Show (Wikipedia #1)' })).toBeVisible();
   });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Web Search & Categorize' }).first().click();
-  await page.getByRole('button', { name: /Missing & Unfetched/ }).click();
-  await page.getByRole('button', { name: 'Fetch franchise overviews (3)' }).click();
-  try {
-    await expect.poll(() => checked.length).toBe(2);
-    await page.getByRole('button', { name: 'First Show (Wikipedia #1)' }).click();
-    await expect(page.getByRole('alert')).toHaveText(providerError);
-  } finally {
-    releaseSecond();
-  }
-  await expect(page.getByText(`Stopped: ${providerError}`, { exact: false })).toBeVisible();
-  expect(checked).toEqual(['First Show', 'Second Show']);
-  await expect(page.getByRole('button', { name: 'First Show (Wikipedia #1)' })).toBeVisible();
-});
 }
-
 test('Fetch All checks incomplete items and keeps complete items available for review', async ({ page }) => {
   const items = [
     { id: 'one', title: 'First Movie', type: 'movie', year: 2020, yearSource: 'user', overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/first.mkv', recommendedFolderStructure: 'First', recommendedFilenames: [] },
-    { id: 'two', title: 'Second Movie', type: 'movie', year: 2021, overview: 'Existing synopsis', posterUrl: 'https://example.com/existing.jpg', genres: ['Drama'], rating: 8, path: '/media/second.mkv', recommendedFolderStructure: 'Second', recommendedFilenames: [] },
+    { id: 'two', title: 'Second Movie', type: 'movie', year: 2021, overview: 'Existing synopsis', posterUrl: 'https://example.com', genres: ['Drama'], rating: 8, path: '/media/second.mkv', recommendedFolderStructure: 'Second', recommendedFilenames: [] },
     { id: 'three', title: 'Third Movie', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/third.mkv', recommendedFolderStructure: 'Third', recommendedFilenames: [] },
     { id: 'four', title: 'Fourth Movie', type: 'movie', year: 2020, overview: '', posterUrl: '', genres: [], rating: 0, path: '/media/fourth.mkv', recommendedFolderStructure: 'Fourth', recommendedFilenames: [] },
     { id: 'picture', title: 'Picture Folder Video', type: 'movie', year: 2022, overview: '', posterUrl: '', genres: [], rating: 0, path: '/Volumes/media/Pictures/album/video.mp4', recommendedFolderStructure: '/Volumes/media/Pictures/album', recommendedFilenames: [] },
@@ -231,7 +231,7 @@ test('Fetch All checks incomplete items and keeps complete items available for r
       const { title } = request.postDataJSON() as { title: string };
       checked.push(title);
       if (title === 'First Movie') {
-        body = { success: true, source: 'omdb', title, year: 2020, overview: 'Fetched synopsis', posterUrl: 'https://example.com/new.jpg', diagnostics: [{ provider: 'OMDb', outcome: 'Result returned' }] };
+        body = { success: true, source: 'omdb', title, year: 2020, overview: 'Fetched synopsis', posterUrl: 'https://example.com', diagnostics: [{ provider: 'OMDb', outcome: 'Result returned' }] };
       } else if (title === 'Second Movie') {
         body = { success: true, source: 'fallback', title };
       } else if (title === 'Fourth Movie') {
@@ -277,7 +277,7 @@ test('Fetch All checks incomplete items and keeps complete items available for r
   await expect(log).toContainText('Failed to fetch or save "Third Movie": Metadata lookup failed (HTTP 500)');
   await expect(log).toContainText('Title does not match the library item; source: itunes; returned: Different title');
   await expect(log).toContainText('No verified match saved for "Fourth Movie"');
-  expect(saved.get('one')).toMatchObject({ id: 'one', path: '/media/first.mkv', overview: 'Fetched synopsis', posterUrl: 'https://example.com/new.jpg', metadataFetchStatus: 'matched' });
+  expect(saved.get('one')).toMatchObject({ id: 'one', path: '/media/first.mkv', overview: 'Fetched synopsis', posterUrl: 'https://example.com', metadataFetchStatus: 'matched' });
   expect(saved.has('two')).toBe(false);
   expect(saved.has('three')).toBe(false);
   expect(saved.get('four')).toMatchObject({ metadataFetchStatus: 'no-match' });
@@ -309,7 +309,7 @@ test('Fetch All searches album entries once and excludes individual audio tracks
     else if (pathname === '/api/media/fetch-art') {
       const { title } = request.postDataJSON();
       checked.push(title);
-      body = { success: true, title, source: 'itunes', posterUrl: 'https://example.com/album.jpg' };
+      body = { success: true, title, source: 'itunes', posterUrl: 'https://example.com' };
     }
     await route.fulfill({ json: body });
   });
@@ -325,9 +325,8 @@ test('Fetch All searches album entries once and excludes individual audio tracks
   await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('2 individual audio tracks excluded');
   await expect(page.getByRole('log', { name: 'Fetch All log' })).toContainText('Album artist cannot be verified; review this result manually');
 });
-
 test('Fetch All runs media types concurrently while keeping each type sequential', async ({ page }) => {
-  const items = (['movie', 'series', 'album'] as const).flatMap(type => [1, 2].map(number => ({
+  const items = (['movie', 'series', 'album'] as const).flatMap(type => Array.of(1, 2).map(number => ({
     id: `${type}-${number}`, title: `${type} title ${number}`, type, year: 0,
     overview: '', posterUrl: '', genres: [], rating: 0,
     recommendedFolderStructure: `${type} title ${number}`, recommendedFilenames: [],
@@ -368,7 +367,7 @@ test('Fetch All runs media types concurrently while keeping each type sequential
 });
 
 test('backend failure stops new work across types while in-flight lookups finish', async ({ page }) => {
-  const items = (['movie', 'series', 'album'] as const).flatMap(type => [1, 2].map(number => ({
+  const items = (['movie', 'series', 'album'] as const).flatMap(type => Array.of(1, 2).map(number => ({
     id: `${type}-${number}`, title: `${type} title ${number}`, type, year: 0,
     overview: '', posterUrl: '', genres: [], rating: 0,
     recommendedFolderStructure: `${type} title ${number}`, recommendedFilenames: [],
@@ -430,7 +429,7 @@ test('offline metadata responses stop the batch without marking items as no-matc
     else if (pathname === '/api/media/fetch-art') {
       requests++;
       body = online
-        ? { success: true, source: 'omdb', title: request.postDataJSON().title, year: 2020, overview: 'Synopsis', posterUrl: 'https://example.com/poster.jpg' }
+        ? { success: true, source: 'omdb', title: request.postDataJSON().title, year: 2020, overview: 'Synopsis', posterUrl: 'https://example.com' }
         : { success: true, fallback: true, source: 'local_storage_cache' };
     }
     await route.fulfill({ json: body });

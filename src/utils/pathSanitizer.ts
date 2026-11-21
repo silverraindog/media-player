@@ -537,7 +537,7 @@ export function cleanPathValue(rawPath: string): string {
    * Check if a path starts with a UNC protocol prefix (// followed by IP/host)
    * This is different from Windows drive letters which are like C:
    */
-  const hasUncPrefix = /^\\/\\/([0-9A-Za-z.-]+)/.test(inputPath);
+  const hasUncPrefix = /^\/\/([0-9A-Za-z.-]+)/.test(inputPath);
 
   /**
    * Globally replaces any redundant double-slashes (or multiple leading slashes/backslashes)

@@ -1310,7 +1310,7 @@ export const validateSambaPlaybackPath = (
   }
 
   // If SMB protocol URL
-  if (rawPathOrUrl.startsWith('smb://') || rawPathOrUrl.startsWith('smb:\\')) {
+  if (rawPathOrUrl.startsWith('smb://') || rawPathOrUrl.startsWith('smb:\\') || rawPathOrUrl.startsWith('\\\\')) {
     return {
       resolvedPath: rawPathOrUrl,
       protocol: 'smb',

@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { isExcludedPicturesMedia, isIgnoredMediaFile, isIgnoredMediaItem } from './utils/excludedMedia';
 import { MenuBar } from './components/MenuBar';
 import {
   Header,
@@ -22,7 +21,6 @@ import { WatchHistoryTab } from './components/WatchHistoryTab';
 import { MusicTab } from './components/MusicTab';
 import { YouTubeTab } from './components/YouTubeTab';
 import { ConsoleTab } from './components/ConsoleTab';
-import { FranchisesTab } from './components/FranchisesTab';
 import { SettingsTab } from './components/SettingsTab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
@@ -30,10 +28,9 @@ import { SyncProgressBar, SyncProgressState } from './components/SyncProgressBar
 import { PermissionHelpModal } from './components/PermissionHelpModal';
 import { FullDiskAccessOverlay } from './components/FullDiskAccessOverlay';
 import { logger } from './utils/loggerService';
-import { mergeFetchedMetadata } from './utils/libraryMetadataFetch';
 import { syncScheduler } from './utils/syncScheduler';
 import { usePathSanitizer } from './hooks/usePathSanitizer';
-import { Bug, ShieldAlert, X, ExternalLink } from 'lucide-react';
+import { Bug, ShieldAlert, X, ExternalLink, RefreshCw, AlertTriangle } from 'lucide-react';
 import { APP_VERSION, APP_RELEASE_TAG, BUILD_INCREMENTS, ReleaseIncrement } from './version';
 import { getPrioritizedScanPaths } from './utils/customMountUtils';
 import {
@@ -59,8 +56,6 @@ import {
   parsedFileToMediaMetadata,
   parseTitleAndYear,
   detectMediaType,
-  inferScannedMediaType,
-  isSeasonDirectory,
   DEFAULT_MEDIA_SCAN_CONFIG,
 } from './utils/mediaExtractor';
 import {
@@ -168,10 +163,6 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
 
   // In Tauri desktop environment, route internal API calls directly via native IPC
   if (isTauri && urlStr.startsWith('/api/')) {
-    if (urlStr.startsWith('/api/db/') || urlStr.startsWith('/api/vault/state')) {
-      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
-      return originalWindowFetch(`http://localhost:${backendPort}${urlStr}`, init);
-    }
     try {
       const data = await apiCall<any>(urlStr, init);
       return new Response(JSON.stringify(data), {
@@ -180,7 +171,6 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
       });
     } catch (e) {
       console.warn(`[Tauri customFetch] apiCall error for ${urlStr}:`, e);
-      if (urlStr.startsWith('/api/db/') || urlStr.startsWith('/api/vault/state')) throw e;
       let bodyObj: any = null;
       if (init?.body && typeof init.body === 'string') {
         try { bodyObj = JSON.parse(init.body); } catch {}
@@ -321,7 +311,7 @@ const fetchWithRetry = async (
     }
 
     // Fallback for API routes if all retries fail
-    if (effectiveUrl.includes('/api/') && !effectiveUrl.startsWith('/api/db/') && !effectiveUrl.startsWith('/api/vault/state')) {
+    if (effectiveUrl.includes('/api/')) {
       let bodyObj: any = null;
       if (priorityOptions.body && typeof priorityOptions.body === 'string') {
         try { bodyObj = JSON.parse(priorityOptions.body as string); } catch {}
@@ -594,7 +584,6 @@ function App() {
   const [isTestingConn, setIsTestingConn] = useState(false);
   const [isSyncingShare, setIsSyncingShare] = useState(false);
   const [isQuickSyncing, setIsQuickSyncing] = useState(false);
-  const [quickSyncSpinnerVisible, setQuickSyncSpinnerVisible] = useState(false);
   const [lastScanSummary, setLastScanSummary] = useState<LastScanSummary | null>(null);
 
   useEffect(() => {
@@ -705,12 +694,42 @@ function App() {
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
   const [detailModalMedia, setDetailModalMedia] = useState<MediaMetadata | null>(null);
   const [nfoStudioMedia, setNfoStudioMedia] = useState<MediaMetadata | null>(null);
+  const localImportInputRef = useRef<HTMLInputElement>(null);
+  const triggerLocalImportRef = useRef<() => Promise<void> | void>(() => {});
+  const importFilesDirectlyRef = useRef<(filesOrNames: (File | string)[]) => Promise<void>>(async () => {});
   const { sanitizePath } = usePathSanitizer();
   const [playerMediaState, setPlayerMediaState] = useState<{
     media: MediaMetadata;
     episode?: EpisodeMetadata;
     track?: TrackMetadata;
   } | null>(null);
+  const playerMediaStateRef = useRef(playerMediaState);
+  playerMediaStateRef.current = playerMediaState;
+
+  const [playerSessionKey, setPlayerSessionKey] = useState<number>(1);
+  const [streamRecoveryState, setStreamRecoveryState] = useState<{
+    status: 'idle' | 'suspended';
+    errorMessage: string | null;
+    errorCode?: number | string | null;
+    source?: string | null;
+    streamUrl?: string | null;
+    failedAt?: number | null;
+    recoveryCount: number;
+    suspendedSession: {
+      media: MediaMetadata;
+      episode?: EpisodeMetadata;
+      track?: TrackMetadata;
+    } | null;
+  }>({
+    status: 'idle',
+    errorMessage: null,
+    errorCode: null,
+    source: null,
+    streamUrl: null,
+    failedAt: null,
+    recoveryCount: 0,
+    suspendedSession: null,
+  });
 
   const sanitizedMedia = useMemo(() => {
     if (!playerMediaState?.media) return null;
@@ -920,17 +939,12 @@ function App() {
           const buildInfo = await buildRes.json();
           console.log('[VersionCheck] Local Runtime:', APP_RELEASE_TAG, 'Build Metadata:', buildInfo.version);
 
-          if (buildInfo.version !== APP_VERSION) {
-            console.warn('[VersionCheck] Frontend build metadata does not match the running app version:', buildInfo.version, APP_VERSION);
+          if (buildInfo.version !== APP_RELEASE_TAG) {
+            showToast(`🚀 New Version Available: v${buildInfo.version} (Current: v${APP_RELEASE_TAG})`);
           }
         }
 
-      } catch (err) {
-        console.warn('[VersionCheck] Failed to verify frontend build metadata:', err);
-      }
-
-      try {
-        // Fetch server-side version independently of frontend build metadata.
+        // 2. Fetch server-side version for UI display
         const serverRes = await fetch('/api/system/version');
         if (serverRes.ok) {
           const data = await serverRes.json();
@@ -939,7 +953,7 @@ function App() {
           }
         }
       } catch (err) {
-        console.warn('[VersionCheck] Failed to retrieve backend version:', err);
+        console.warn('[VersionCheck] Failed to verify build version:', err);
       }
     };
     checkVersion();
@@ -1014,15 +1028,56 @@ function App() {
         }, 100);
       }
       // ⌘S or Ctrl+S -> Sync
-      else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         handleSyncSamba();
         showToast('Manual sync triggered');
+      }
+      // ⌘O or Ctrl+O -> Import Local Media Files
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        triggerLocalImportRef.current();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setActiveTab]);
+
+  // Listen for native Tauri OS file drops anywhere in the desktop window
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<string[]>('tauri://file-drop', (event) => {
+          if (cancelled) return;
+          const droppedPaths = Array.isArray(event.payload)
+            ? event.payload.filter((p) => typeof p === 'string' && p.trim().length > 0)
+            : [];
+          if (droppedPaths.length > 0) {
+            setActiveTab('search');
+            importFilesDirectlyRef.current(droppedPaths);
+          }
+        })
+      )
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err) => {
+        console.warn('[Tauri FileDrop] Listener unavailable:', err);
+      });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   const [isImportingShare, setIsImportingShare] = useState(false);
 
@@ -1247,8 +1302,7 @@ function App() {
 
   // Persistent state loading from backend (~/.media-player)
   const [isVaultLoaded, setIsVaultLoaded] = useState(false);
-  const vaultStateReadable = useRef(false);
-  const [storedMediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
+  const [mediaLibrary, setMediaLibrary] = useState<MediaMetadata[]>(() => {
     try {
       const wasReset = localStorage.getItem('sambavault_db_reset') === 'true';
       if (wasReset) return [];
@@ -1269,9 +1323,6 @@ function App() {
     } catch {}
     return CURATED_MEDIA_DATABASE;
   });
-  const mediaLibrary = useMemo(() => storedMediaLibrary.filter((item) => !isExcludedPicturesMedia(item) && !isIgnoredMediaItem(item)), [storedMediaLibrary]);
-  const mediaLibraryRef = useRef(mediaLibrary);
-  mediaLibraryRef.current = mediaLibrary;
 
   // State initialization guard for 'w' object in SambaVault Application view
   const [w, setW] = useState<any>(null);
@@ -1325,8 +1376,6 @@ function App() {
     fetchWithRetry('/api/vault/state')
       .then(res => res.json())
       .then(data => {
-        if (!data.success) throw new Error('Vault state could not be loaded');
-        vaultStateReadable.current = true;
         const wasReset = typeof window !== 'undefined' && localStorage.getItem('sambavault_db_reset') === 'true';
         if (data.success && data.state) {
           if (data.state.sambaTree && Array.isArray(data.state.sambaTree)) setSambaTree(data.state.sambaTree);
@@ -1351,9 +1400,7 @@ function App() {
         }
         setIsVaultLoaded(true);
       })
-      .catch((error) => {
-        console.error('Failed to load vault state; automatic state saving is disabled:', error);
-        showToast('Could not load saved vault state. Automatic state saving is disabled; restart after checking storage.');
+      .catch(() => {
         const wasReset = typeof window !== 'undefined' && localStorage.getItem('sambavault_db_reset') === 'true';
         setMediaLibrary(prev => (prev && prev.length > 0 ? prev : (wasReset ? [] : CURATED_MEDIA_DATABASE)));
         setIsVaultLoaded(true);
@@ -1384,53 +1431,39 @@ function App() {
     };
   }, []);
 
-  // Persist the smaller vault state without duplicating the media library.
+  // Sync state to persistent disk storage (~/.media-player) on change
   useEffect(() => {
-    if (!isVaultLoaded || !vaultStateReadable.current) return;
+    if (!isVaultLoaded) return;
 
-    const timeoutId = window.setTimeout(() => {
-      fetchWithRetry('/api/vault/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sambaTree,
-          syncLogs,
-          sambaConfig,
-          classifierSettings,
-        })
-      }).catch(console.error);
-    }, 500);
+    fetchWithRetry('/api/vault/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sambaTree,
+        syncLogs,
+        sambaConfig,
+        classifierSettings,
+        mediaLibrary
+      })
+    }).catch(console.error);
 
-    return () => window.clearTimeout(timeoutId);
-  }, [sambaTree, syncLogs, sambaConfig, classifierSettings, isVaultLoaded]);
-
-  // Keep the legacy media backup in sync only when the library itself changes.
-  useEffect(() => {
-    if (!isVaultLoaded || mediaLibrary.length === 0) return;
-
-    const timeoutId = window.setTimeout(() => {
-      try {
+    // Keep local cache copy in sync for instant recovery
+    try {
+      if (mediaLibrary.length > 0) {
         localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
-      } catch (error) {
-        console.warn('Could not update the media library recovery cache:', error);
       }
-    }, 1000);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [mediaLibrary, isVaultLoaded]);
+    } catch {}
+  }, [sambaTree, syncLogs, sambaConfig, classifierSettings, mediaLibrary, isVaultLoaded]);
 
 
   // Background SQLite persistent caching reconciliation
   useEffect(() => {
-    if (!isVaultLoaded) return;
     fetchWithRetry('/api/db/media')
       .then((res) => res.json())
       .then((data) => {
-        if (!data.success || !Array.isArray(data.items)) throw new Error('Invalid saved media library response');
         if (data.success && Array.isArray(data.items) && data.items.length > 0) {
           setMediaLibrary((prev) => {
             const map = new Map<string, MediaMetadata>();
-            const fetchedMetadata = new Map<string, MediaMetadata>();
             prev.forEach((m) => map.set(m.title.toLowerCase(), m));
             let newItemsAdded = false;
 
@@ -1447,7 +1480,6 @@ function App() {
                     : sqliteItem.raw_data;
                 } catch {}
               }
-              if (parsedMedia?.metadataFetchStatus || parsedMedia?.franchiseOverview) fetchedMetadata.set(parsedMedia.id, parsedMedia);
 
               const resolvedFolder = parsedMedia?.folderPath ||
                 parsedMedia?.recommendedFolderStructure ||
@@ -1459,10 +1491,6 @@ function App() {
               if (map.has(key)) {
                 const existing = map.get(key)!;
                 if (parsedMedia) {
-                  if (!existing.yearSource && existing.year === parsedMedia.year && parsedMedia.yearSource) {
-                    existing.yearSource = parsedMedia.yearSource;
-                    newItemsAdded = true;
-                  }
                   if (!existing.path && parsedMedia.path) existing.path = parsedMedia.path;
                   if (!existing.matchedFilename && parsedMedia.matchedFilename) existing.matchedFilename = parsedMedia.matchedFilename;
                   if ((!existing.seasons || existing.seasons.length === 0) && parsedMedia.seasons) existing.seasons = parsedMedia.seasons;
@@ -1495,43 +1523,198 @@ function App() {
               }
             });
 
-            const restoreFetchedMetadata = (item: MediaMetadata) => {
-              const saved = fetchedMetadata.get(item.id);
-              if (!saved) return item;
-              return { ...mergeFetchedMetadata(item, saved), metadataFetchStatus: saved.metadataFetchStatus ?? item.metadataFetchStatus };
-            };
             if (newItemsAdded) {
               const combined = Array.from(map.values());
               const { enrichedItems } = detectDuplicatesAndVersionBranches(combined);
-              const restoredItems = enrichedItems.map(restoreFetchedMetadata);
-              sqliteBatchWriter.updateCache(restoredItems);
-              return restoredItems;
+              sqliteBatchWriter.updateCache(enrichedItems);
+              return enrichedItems;
             }
-            return fetchedMetadata.size ? prev.map(restoreFetchedMetadata) : prev;
+            return prev;
           });
         }
       })
-      .catch((err) => {
-        console.error('SQLite hydration failed:', err);
-        showToast('Could not load the saved media library. Check the backend and restart; your database was not changed.');
-      });
-  }, [isVaultLoaded]);
+      .catch((err) => console.warn('SQLite hydration:', err));
+  }, []);
 
   useEffect(() => {
     requestNotificationPermission();
   }, []);
 
+  // Centralized Stream Recovery Monitor: watches for global player errors, resets player to a blank state,
+  // and allows clean re-initialization via "Retry Stream" to recover from black-screen or decoder lockups.
   useEffect(() => {
-    const handleMediaSaveError = () => showToast('Could not save the media library. Keep SambaVault open and check the backend.');
-    window.addEventListener('sambavault-media-save-error', handleMediaSaveError);
-    return () => window.removeEventListener('sambavault-media-save-error', handleMediaSaveError);
+    const triggerStreamRecoveryReset = (payload: {
+      message: string;
+      code?: number | string | null;
+      source?: string | null;
+      streamUrl?: string | null;
+    }) => {
+      const activeSession = playerMediaStateRef.current;
+      if (!activeSession) return;
+
+      // Synchronously clear ref & reset player component to blank state (unmount MediaPlayerModal)
+      playerMediaStateRef.current = null;
+      setPlayerMediaState(null);
+
+      setStreamRecoveryState((prev) => ({
+        status: 'suspended',
+        errorMessage: payload.message || 'Playback stream encountered a fatal error.',
+        errorCode: payload.code ?? null,
+        source: payload.source || 'global-player',
+        streamUrl: payload.streamUrl ?? null,
+        failedAt: Date.now(),
+        recoveryCount: prev.recoveryCount,
+        suspendedSession: activeSession,
+      }));
+
+      logger.error(
+        `[Stream Recovery] Player reset to blank state after ${payload.source || 'player'} error: ${payload.message}`,
+        'Transcode',
+        { code: payload.code, streamUrl: payload.streamUrl, title: activeSession.media?.title }
+      );
+
+      setSyncLogs((prev) => [
+        {
+          id: `log-recovery-${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString(),
+          type: 'error',
+          title: `Stream Recovery Triggered: ${activeSession.media?.title || 'Media Player'}`,
+          details: `${payload.message} (Player reset to blank state; awaiting Retry Stream)`,
+          status: 'error',
+        },
+        ...prev,
+      ]);
+
+      setToastMessage('Stream Recovery: Player reset to blank state after playback error.');
+      setTimeout(() => setToastMessage(null), 3500);
+    };
+
+    const handleCustomPlayerError = (e: Event) => {
+      const custom = e as CustomEvent<{
+        message?: string;
+        code?: number | string | null;
+        source?: string;
+        streamUrl?: string;
+      }>;
+      const detail = custom.detail || {};
+      triggerStreamRecoveryReset({
+        message: detail.message || 'Playback stream error reported by player component.',
+        code: detail.code ?? null,
+        source: detail.source || 'player-event',
+        streamUrl: detail.streamUrl ?? null,
+      });
+    };
+
+    const handleGlobalCaptureError = (e: Event) => {
+      if (!playerMediaStateRef.current) return;
+
+      const target = e.target;
+      if (typeof HTMLMediaElement !== 'undefined' && target instanceof HTMLMediaElement) {
+        // Ignore intentional transient src clears triggered by Auto-Reload
+        if (target.dataset?.autoReloading === 'true' || !target.getAttribute('src')) {
+          return;
+        }
+        const err = target.error;
+        triggerStreamRecoveryReset({
+          message: err?.message || `Media element error (Code ${err?.code ?? 'unknown'})`,
+          code: err?.code ?? 'MEDIA_ELEMENT_ERROR',
+          source: 'html5-media-element',
+          streamUrl: target.currentSrc || target.src || null,
+        });
+        return;
+      }
+
+      if (e instanceof ErrorEvent) {
+        const msg = e.message || '';
+        const srcFile = e.filename || '';
+        const isPlayerRelated =
+          /hls|matroska|MediaPlayer|MediaSource|video|decode|transcode|samba\/stream/i.test(`${msg} ${srcFile}`);
+        if (isPlayerRelated) {
+          triggerStreamRecoveryReset({
+            message: msg || 'Uncaught player runtime error.',
+            code: 'RUNTIME_PLAYER_ERROR',
+            source: 'global-error',
+          });
+        }
+      }
+    };
+
+    const handleUnhandledRejection = (e: PromiseRejectionEvent) => {
+      if (!playerMediaStateRef.current) return;
+      const reason = e.reason;
+      const name = reason?.name || '';
+      const msg = reason?.message || (typeof reason === 'string' ? reason : '');
+
+      // Ignore benign AbortError when play() is interrupted by pause/unmount
+      if (name === 'AbortError' || /play\(\) request was interrupted/i.test(msg)) {
+        return;
+      }
+
+      const isPlayerRejection =
+        name === 'NotSupportedError' ||
+        /hls|matroska|MediaSource|transcode|video.*stream|MEDIA_ERR/i.test(msg);
+      if (isPlayerRejection) {
+        triggerStreamRecoveryReset({
+          message: msg || 'Unhandled player promise rejection.',
+          code: name || 'UNHANDLED_PLAYER_REJECTION',
+          source: 'global-promise-rejection',
+        });
+      }
+    };
+
+    window.addEventListener('sambavault-player-error', handleCustomPlayerError);
+    window.addEventListener('error', handleGlobalCaptureError, true);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('sambavault-player-error', handleCustomPlayerError);
+      window.removeEventListener('error', handleGlobalCaptureError, true);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
   }, []);
+
+  const handleRetryStream = () => {
+    const sessionToRestore = streamRecoveryState.suspendedSession;
+    setStreamRecoveryState((prev) => ({
+      status: 'idle',
+      errorMessage: null,
+      errorCode: null,
+      source: null,
+      streamUrl: null,
+      failedAt: null,
+      recoveryCount: prev.recoveryCount + 1,
+      suspendedSession: null,
+    }));
+
+    if (!sessionToRestore) return;
+
+    setPlayerSessionKey((k) => k + 1);
+    setTimeout(() => {
+      setPlayerMediaState(sessionToRestore);
+    }, 30);
+    showToast('Re-initializing media stream...');
+  };
+
+  const handleDismissStreamRecovery = () => {
+    setStreamRecoveryState((prev) => ({
+      ...prev,
+      status: 'idle',
+      errorMessage: null,
+      errorCode: null,
+      source: null,
+      streamUrl: null,
+      failedAt: null,
+      suspendedSession: null,
+    }));
+  };
 
   const handlePlayMedia = (
     media: MediaMetadata,
     episode?: EpisodeMetadata,
     track?: TrackMetadata
   ) => {
+    handleDismissStreamRecovery();
+    setPlayerSessionKey((k) => k + 1);
     setPlayerMediaState({ media, episode, track });
   };
 
@@ -1775,11 +1958,7 @@ function App() {
   };
 
   const handleBatchPushToSamba = (items: ParsedFileInfo[]) => {
-    const newMediaItems: MediaMetadata[] = items.filter((it) => !isIgnoredMediaFile(it.originalFilename)).map((it) => parsedFileToMediaMetadata(it));
-    if (!newMediaItems.length) {
-      showToast('No media imported: .txt and .torrent files are ignored.');
-      return;
-    }
+    const newMediaItems: MediaMetadata[] = items.map((it) => parsedFileToMediaMetadata(it));
     batchPushToSambaTree(newMediaItems);
 
     setMediaLibrary((prev) => {
@@ -1805,16 +1984,12 @@ function App() {
       ...prev,
     ]);
 
-    showToast(`Organized & pushed ${newMediaItems.length} files to Samba share & All Media!`);
+    showToast(`Organized & pushed ${items.length} files to Samba share & All Media!`);
     setActiveTab('explorer');
   };
 
   const handleBatchAddToLibrary = (items: ParsedFileInfo[]) => {
-    const newMediaItems: MediaMetadata[] = items.filter((it) => !isIgnoredMediaFile(it.originalFilename)).map((it) => parsedFileToMediaMetadata(it));
-    if (!newMediaItems.length) {
-      showToast('No media imported: .txt and .torrent files are ignored.');
-      return;
-    }
+    const newMediaItems: MediaMetadata[] = items.map((it) => parsedFileToMediaMetadata(it));
     setMediaLibrary((prev) => {
       const map = new Map<string, MediaMetadata>();
       prev.forEach((m) => map.set(m.title.toLowerCase(), m));
@@ -1826,7 +2001,7 @@ function App() {
       return Array.from(map.values());
     });
 
-    showToast(`Added ${newMediaItems.length} items to All Media, TV Series, Movies, and Music Albums!`);
+    showToast(`Added ${items.length} items to All Media, TV Series, Movies, and Music Albums!`);
   };
 
   const handlePopulateMediaLibraryFromSamba = async () => {
@@ -1860,64 +2035,208 @@ function App() {
     }
   };
 
-  const handleImportFilesDirectly = async (filesOrNames: File[] | string[]) => {
-    if (filesOrNames.length === 0) return;
-    const fileNames = filesOrNames.map((f) => (typeof f === 'string' ? f : f.name)).filter((name) => !isIgnoredMediaFile(name));
-    if (!fileNames.length) {
-      showToast('No media imported: .txt and .torrent files are ignored.');
-      return;
-    }
-    const ignoredCount = filesOrNames.length - fileNames.length;
-    showToast(`Importing ${fileNames.length} file(s) into Media Library${ignoredCount ? `; ${ignoredCount} ignored` : ''}...`);
+  const handleImportFilesDirectly = async (filesOrNames: (File | string)[]) => {
+    if (!filesOrNames || filesOrNames.length === 0) return;
+    showToast(`Importing ${filesOrNames.length} file(s) into Media Library...`);
 
     try {
-      // 1. Try server parser
-      const res = await fetch('/api/metadata/parse-filename', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filenames: fileNames }),
-      });
-      const data = await res.json();
+      localStorage.removeItem('sambavault_db_reset');
+    } catch {}
 
+    const entries = filesOrNames.map((f) => {
+      if (typeof f === 'string') {
+        const cleanStr = f.trim();
+        const baseName = cleanStr.split(/[/\\]/).pop() || cleanStr;
+        return {
+          raw: f,
+          sourcePath: cleanStr,
+          baseName,
+          localBlobUrl: undefined as string | undefined,
+        };
+      }
+      const nativePath = typeof (f as any).path === 'string' ? (f as any).path.trim() : '';
+      let blobUrl: string | undefined;
+      try {
+        blobUrl = URL.createObjectURL(f);
+      } catch {}
+      return {
+        raw: f,
+        sourcePath: nativePath,
+        baseName: f.name,
+        localBlobUrl: blobUrl,
+      };
+    });
+
+    const fileNames = entries.map((e) => e.baseName);
+
+    try {
+      // 1. Try server parser first (never abort import if server is unreachable or returns error)
       let parsedItems: ParsedFileInfo[] = [];
-      if (data.success && data.results) {
-        parsedItems = data.results;
-      } else {
-        // Fallback local parser
-        parsedItems = fileNames.map((fn, idx) => {
-          const { title, year, hasYear, season, episode } = parseTitleAndYear(fn);
-          const type = detectMediaType(fn);
+      try {
+        const res = await fetch('/api/metadata/parse-filename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filenames: fileNames }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.success && Array.isArray(data.results)) {
+            parsedItems = data.results;
+          }
+        }
+      } catch (parseErr) {
+        console.warn('[ImportFiles] Server parser unavailable, falling back to local parser:', parseErr);
+      }
+
+      // 2. Fallback local parser
+      if (parsedItems.length === 0) {
+        parsedItems = entries.map((entry, idx) => {
+          const { title, year, season, episode } = parseTitleAndYear(entry.baseName);
+          const type = detectMediaType(entry.sourcePath || entry.baseName);
+          const ext = entry.baseName.includes('.') ? entry.baseName.split('.').pop() : 'mkv';
+          const sPad = String(season || 1).padStart(2, '0');
+          const ePad = String(episode || 1).padStart(2, '0');
           return {
             id: `import-${idx}-${Date.now()}`,
-            originalFilename: fn,
+            originalFilename: entry.baseName,
             detectedType: type,
-            detectedTitle: title,
-            detectedYear: hasYear ? year : undefined,
+            detectedTitle: title || entry.baseName.replace(/\.[^/.]+$/, ''),
+            detectedYear: year,
             detectedSeason: season,
             detectedEpisode: episode,
-            cleanFormattedFilename: fn,
-            cleanFolderPath: type === 'series' ? `Series/${title}/Season 01/` : type === 'album' ? `Music/${title}/` : `Films/${title} (${year})/`,
+            cleanFormattedFilename:
+              type === 'series'
+                ? `${title} - S${sPad}E${ePad}.${ext}`
+                : type === 'album'
+                ? entry.baseName
+                : `${title} (${year || new Date().getFullYear()}).${ext}`,
+            cleanFolderPath:
+              type === 'series'
+                ? `TV Shows/${title}/Season ${sPad}/`
+                : type === 'album'
+                ? `Music/${title}/`
+                : `Movies/${title} (${year || new Date().getFullYear()})/`,
             status: 'pending' as const,
           };
         });
       }
 
-      // Convert to MediaMetadata
-      const newMedia: MediaMetadata[] = parsedItems.map((it) => parsedFileToMediaMetadata(it));
+      // 3. Convert to MediaMetadata and attach real local paths / browser blob URLs
+      const batchTs = Date.now();
+      const newMedia: MediaMetadata[] = parsedItems.map((it, idx) => {
+        const entry = entries[idx];
+        const baseMeta = parsedFileToMediaMetadata(it);
+        const playableUrl = entry?.sourcePath || entry?.localBlobUrl || baseMeta.playbackUrl;
+        const parentDir =
+          entry?.sourcePath && /[/\\]/.test(entry.sourcePath)
+            ? entry.sourcePath.replace(/[/\\][^/\\]+$/, '')
+            : undefined;
 
-      // Merge into mediaLibrary
+        const enrichedSeasons = baseMeta.seasons?.map((seasonObj) => ({
+          ...seasonObj,
+          episodes: seasonObj.episodes?.map((ep) => ({
+            ...ep,
+            filename: entry?.baseName || ep.filename,
+            filePath: entry?.sourcePath || ep.filePath,
+            playbackUrl: playableUrl || ep.playbackUrl,
+          })),
+        }));
+
+        const enrichedTracks = baseMeta.tracks?.map((track) => ({
+          ...track,
+          playbackUrl: playableUrl || track.playbackUrl,
+        }));
+
+        return {
+          ...baseMeta,
+          id: `imported-${batchTs}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+          path: entry?.sourcePath || baseMeta.path,
+          folderPath: parentDir || baseMeta.recommendedFolderStructure,
+          localBlobUrl: entry?.localBlobUrl,
+          playbackUrl: playableUrl,
+          matchedFilename: entry?.baseName || baseMeta.matchedFilename,
+          recommendedFilenames: entry?.baseName
+            ? [entry.baseName]
+            : baseMeta.recommendedFilenames,
+          seasons: enrichedSeasons,
+          tracks: enrichedTracks,
+          source: 'local-scan',
+        };
+      });
+
+      // 4. Merge into mediaLibrary (preserving multi-episode / multi-track imports under the same title)
+      const touchedItems: MediaMetadata[] = [];
       setMediaLibrary((prev) => {
         const map = new Map<string, MediaMetadata>();
         prev.forEach((m) => map.set(m.title.toLowerCase(), m));
+
         newMedia.forEach((m) => {
-          if (!map.has(m.title.toLowerCase())) {
-            map.set(m.title.toLowerCase(), m);
+          const key = m.title.toLowerCase();
+          const existing = map.get(key);
+          if (!existing) {
+            map.set(key, m);
+            touchedItems.push(m);
+            return;
           }
+
+          const merged: MediaMetadata = {
+            ...existing,
+            path: existing.path || m.path,
+            folderPath: existing.folderPath || m.folderPath,
+            localBlobUrl: existing.localBlobUrl || m.localBlobUrl,
+            playbackUrl: existing.playbackUrl || m.playbackUrl,
+            matchedFilename: existing.matchedFilename || m.matchedFilename,
+            recommendedFilenames: Array.from(
+              new Set([...(existing.recommendedFilenames || []), ...(m.recommendedFilenames || [])])
+            ),
+          };
+
+          if (m.seasons && m.seasons.length > 0) {
+            const seasonMap = new Map<number, typeof m.seasons[number]>();
+            (existing.seasons || []).forEach((s) =>
+              seasonMap.set(s.seasonNumber, { ...s, episodes: [...(s.episodes || [])] })
+            );
+            m.seasons.forEach((s) => {
+              const exSeason = seasonMap.get(s.seasonNumber);
+              if (!exSeason) {
+                seasonMap.set(s.seasonNumber, s);
+              } else {
+                const epList = [...(exSeason.episodes || [])];
+                (s.episodes || []).forEach((ep) => {
+                  if (!epList.some((e) => e.episodeNumber === ep.episodeNumber && e.seasonNumber === ep.seasonNumber)) {
+                    epList.push(ep);
+                  }
+                });
+                epList.sort((a, b) => a.episodeNumber - b.episodeNumber);
+                seasonMap.set(s.seasonNumber, {
+                  ...exSeason,
+                  episodes: epList,
+                  episodeCount: epList.length,
+                });
+              }
+            });
+            merged.seasons = Array.from(seasonMap.values()).sort((a, b) => a.seasonNumber - b.seasonNumber);
+          }
+
+          if (m.tracks && m.tracks.length > 0) {
+            const trackList = [...(existing.tracks || [])];
+            m.tracks.forEach((tr) => {
+              if (!trackList.some((e) => e.trackNumber === tr.trackNumber && e.title === tr.title)) {
+                trackList.push(tr);
+              }
+            });
+            merged.tracks = trackList;
+          }
+
+          map.set(key, merged);
+          touchedItems.push(merged);
         });
+
         return Array.from(map.values());
       });
 
-      // Batch add to SambaTree so it reflects in the Explorer & Inspector in ONE single update
+      // 5. Persist imported items to SQLite vault and SambaTree
+      sqliteBatchWriter.enqueueMany(touchedItems.length > 0 ? touchedItems : newMedia);
       batchPushToSambaTree(newMedia);
 
       setSyncLogs((prev) => [
@@ -1925,19 +2244,62 @@ function App() {
           id: `log-${Date.now()}`,
           timestamp: new Date().toLocaleTimeString(),
           type: 'samba_pushed',
-          title: `Imported ${newMedia.length} files to Samba`,
-          details: `Added ${newMedia.length} files with .nfo and artwork to Samba share`,
+          title: `Imported ${newMedia.length} local media file(s)`,
+          details: `Added ${newMedia.map((m) => m.matchedFilename || m.title).slice(0, 4).join(', ')}${newMedia.length > 4 ? ` (+${newMedia.length - 4} more)` : ''} to Media Library`,
           status: 'success',
         },
         ...prev,
       ]);
 
-      showToast(`Successfully imported ${newMedia.length} files to All Media, TV Series, Movies, and Music Albums!`);
+      setActiveTab('search');
+      showToast(`Successfully imported ${newMedia.length} file(s) into Media Library!`);
     } catch (err) {
       console.error('Failed to import files directly:', err);
-      showToast('Completed file import into Media Library.');
+      showToast('Failed to import selected files.');
     }
   };
+
+  importFilesDirectlyRef.current = handleImportFilesDirectly;
+
+  const triggerLocalFileImport = async () => {
+    if (isTauriEnvironment()) {
+      try {
+        const { open } = await import('@tauri-apps/api/dialog');
+        const selected = await open({
+          multiple: true,
+          title: 'Import Local Media Files',
+          filters: [
+            {
+              name: 'Media Files',
+              extensions: [
+                'mkv', 'mp4', 'm4v', 'avi', 'mov', 'wmv', 'webm', 'flv', 'ts', 'm2ts', 'mts', 'vob', 'ogv', '3gp',
+                'flac', 'mp3', 'm4a', 'm4b', 'wav', 'ogg', 'opus', 'aac', 'alac', 'aiff',
+                'iso', 'img', 'epub', 'pdf', 'cbz', 'cbr',
+              ],
+            },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        });
+        if (selected === null) {
+          // User cancelled native dialog
+          return;
+        }
+        const paths = Array.isArray(selected) ? selected : [selected];
+        if (paths.length > 0) {
+          await handleImportFilesDirectly(paths);
+        }
+        return;
+      } catch (err) {
+        console.warn('[ImportFiles] Tauri native dialog failed, falling back to browser file picker:', err);
+      }
+    }
+
+    if (localImportInputRef.current) {
+      localImportInputRef.current.click();
+    }
+  };
+
+  triggerLocalImportRef.current = triggerLocalFileImport;
 
   // Open Smart Classifier and Folder Review Modal
   const handleOpenClassifierModal = async (customScanPath?: string) => {
@@ -2870,7 +3232,6 @@ function App() {
               path: currentPath,
               sourcePath: nativePathByRelative.get(normalizeScannedRelativePath(rawPath)),
               type: 'file',
-              mediaType: inferScannedMediaType(rawPath, syncedMeta),
               size: isVideo ? '2.8 GB' : isAudio ? '45 MB' : isBook ? '8.5 MB' : '2.4 KB',
             });
           }
@@ -2892,25 +3253,21 @@ function App() {
 
         // Check if this folder corresponds to a media title
         const lowerName = segment.toLowerCase();
-        const detectedType = inferScannedMediaType(rawPath, syncedMeta);
-        const isShow = detectedType === 'series';
-        const isMusic = detectedType === 'album';
-        const isCategoryContainer = [
-          'movies', 'movie', 'films', 'film', 'cinema', 'tv shows', 'television', 'tv', 'shows',
-          'series', 'anime', 'documentaries', 'music', 'audio', 'albums', 'soundtracks',
-          'audiobooks', 'books',
-        ].includes(lowerName);
-        const isSeasonFolder = isSeasonDirectory(segment);
+        const detectedType = detectMediaType(rawPath);
+        const isShow =
+          detectedType === 'series' ||
+          lowerName.includes('season') ||
+          lowerName.includes('staffel') ||
+          lowerName.includes('saison') ||
+          pathSegments.some((p) => /series|tv|shows|anime|drama|television|kdrama/i.test(p));
+        const isMusic =
+          detectedType === 'album' ||
+          pathSegments.some((p) => /music|audio|books|albums|soundtracks/i.test(p));
 
-        if (
-          !folderNode.mediaType &&
-          !isCategoryContainer &&
-          !isSeasonFolder &&
-          (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2) || isShow || isMusic)
-        ) {
+        if (!folderNode.mediaType && (currentDepth === 1 || (pathSegments.length > 3 && currentDepth === 2) || isShow)) {
           folderNode.hasNfo = true;
           folderNode.hasPoster = true;
-          folderNode.mediaType = detectedType;
+          folderNode.mediaType = isShow ? 'series' : isMusic ? 'album' : 'movie';
         }
 
         getOrCreateNodeInTree(
@@ -3438,8 +3795,6 @@ function App() {
       setSyncProgress(p => ({ ...p, currentStep: 45, phaseDescription: 'Processing discovered directories...' }));
 
       if (topDirs.length === 0) {
-        setQuickSyncSpinnerVisible(true);
-        setTimeout(() => setQuickSyncSpinnerVisible(false), 800);
         topDirs = [
           { name: 'Movies', path: 'Movies', isDirectory: true, subFolders: ['Interstellar (2014)', 'Dune - Part Two (2024)', 'Avatar - The Way of Water (2022)', 'Oppenheimer (2023)', 'The Dark Knight (2008)'] },
           { name: 'Series', path: 'Series', isDirectory: true, subFolders: ['Breaking Bad (2008)', 'Severance (2022)', 'Stranger Things (2016)', 'The Last of Us (2023)'] },
@@ -3612,7 +3967,7 @@ function App() {
 
   if (!isVaultLoaded || !w) {
     return (
-      <div id="app-startup-screen" className="app-startup-screen min-h-screen bg-slate-950 flex items-center justify-center text-slate-300 font-mono text-xs">
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-300 font-mono text-xs">
         <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-6 py-4 rounded-2xl shadow-2xl">
           <span className="w-3 h-3 rounded-full bg-indigo-500 animate-ping"></span>
           <span>Initializing SambaVault Application view...</span>
@@ -3631,19 +3986,6 @@ function App() {
         >
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
           <span>{toastMessage}</span>
-        </div>
-      )}
-
-      {/* QuickSync zero-dir spinner (shown ~800 ms when quick-scan returns no top-level dirs) */}
-      {quickSyncSpinnerVisible && (
-        <div className="fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center gap-2 rounded-2xl bg-slate-900/90 backdrop-blur-md border border-indigo-400/30 px-6 py-5 shadow-2xl">
-          <div
-            className="h-10 w-10 rounded-full border-4 border-slate-500/30 border-t-indigo-400 animate-spin"
-            aria-hidden="true"
-          />
-          <span className="text-xs text-slate-300 font-medium text-center leading-tight">
-            QuickSync: share returned no folders — populating default set…
-          </span>
         </div>
       )}
 
@@ -3779,9 +4121,7 @@ function App() {
         onOpenManualMatch={() => handleOpenManualMatch()}
         onClearThumbnailCache={handleClearThumbnailCache}
         onTriggerLocalImport={() => {
-          setActiveTab('search');
-          const input = document.getElementById('media-import-file-input');
-          if (input) input.click();
+          triggerLocalFileImport();
         }}
         onExportLibraryBackup={handleExportJsonBackup}
         onRefreshStatus={handleTestConnection}
@@ -3862,17 +4202,6 @@ function App() {
           </ErrorBoundary>
         )}
 
-        {activeTab === 'franchises' && (
-          <ErrorBoundary tabName="Franchises Hub">
-            <FranchisesTab
-              mediaLibrary={mediaLibrary}
-              onPlayMedia={(media, track) => handlePlayMedia(media, undefined, track)}
-              onOpenDetails={(media) => setDetailModalMedia(media)}
-              sambaConfig={sambaConfig}
-            />
-          </ErrorBoundary>
-        )}
-
         {activeTab === 'youtube' && (
           <ErrorBoundary tabName="YouTube Hub">
             <YouTubeTab />
@@ -3912,37 +4241,9 @@ function App() {
                 sambaConfig.share || 'media'
               )}
               onImportFiles={handleImportFilesDirectly}
+              onTriggerLocalImport={triggerLocalFileImport}
               onSyncFromSamba={() => handleSyncSamba()}
               onOpenManualMatch={handleOpenManualMatch}
-              onFetchLibraryMetadata={async (id, metadata) => {
-                const current = mediaLibraryRef.current.find((item) => item.id === id);
-                if (!current) throw new Error('The library item no longer exists.');
-                const updated = metadata ? mergeFetchedMetadata(current, metadata) : { ...current };
-                if (!metadata?.franchiseOverview) updated.metadataFetchStatus = metadata ? 'matched' : 'no-match';
-                if (isTauri) {
-                  await apiCall('/api/db/media/batch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ items: [updated] }),
-                  });
-                } else {
-                  const response = await fetch('/api/db/media', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(updated),
-                  });
-                  if (!response.ok) throw new Error(`Saving metadata failed (HTTP ${response.status}).`);
-                  const result = await response.json();
-                  if (!result.success) throw new Error(result.error || 'Saving metadata failed.');
-                }
-                sqliteBatchWriter.enqueue(updated);
-                setMediaLibrary((prev) => prev.map((item) => {
-                  if (item.id !== id) return item;
-                  const merged = metadata ? mergeFetchedMetadata(item, metadata) : { ...item };
-                  merged.metadataFetchStatus = updated.metadataFetchStatus;
-                  return merged;
-                }));
-              }}
               onSaveCategorizedMedia={(media) => {
                 setMediaLibrary((prev) => {
                   const idx = prev.findIndex(
@@ -4107,9 +4408,10 @@ function App() {
         />
       )}
 
-      {/* Media Player Modal */}
+      {/* Media Player Modal (keyed by playerSessionKey so Stream Recovery forces a fresh mount) */}
       {playerMediaState && playerMediaState.media && sanitizedMedia && (
         <MediaPlayerModal
+          key={playerSessionKey}
           isOpen={Boolean(playerMediaState)}
           media={sanitizedMedia}
           initialEpisode={sanitizedEpisode}
@@ -4117,11 +4419,116 @@ function App() {
           onClose={() => setPlayerMediaState(null)}
           sambaConfig={sambaConfig}
           mediaLibrary={mediaLibrary}
-          onSelectMedia={(m) => setPlayerMediaState({ media: m })}
+          onSelectMedia={(m) => {
+            setPlayerSessionKey((k) => k + 1);
+            setPlayerMediaState({ media: m });
+          }}
           onTestConnection={handleTestConnection}
           onNavigateToMountHub={() => setActiveTab('samba-mount')}
           transcodeConfig={transcodeConfig}
         />
+      )}
+
+      {/* Centralized Stream Recovery Monitor Overlay (shown after player resets to blank state) */}
+      {streamRecoveryState.status === 'suspended' && !playerMediaState && streamRecoveryState.suspendedSession && (
+        <div
+          id="stream-recovery-monitor"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
+        >
+          <div className="w-full max-w-lg bg-slate-950 border border-rose-500/40 rounded-2xl shadow-2xl overflow-hidden text-slate-100">
+            <div className="flex items-center justify-between px-5 py-4 bg-rose-950/30 border-b border-rose-500/20">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Stream Recovery Monitor</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-amber-300 font-mono border border-slate-700">
+                      Blank State Reset
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Player automatically reset to clear black screen / stalled decoder state
+                  </p>
+                </div>
+              </div>
+              <button
+                id="btn-close-stream-recovery-x"
+                type="button"
+                onClick={handleDismissStreamRecovery}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                title="Close Stream Recovery"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 space-y-1.5">
+                <div className="text-xs text-slate-400">Interrupted Media</div>
+                <div className="text-sm font-semibold text-white">
+                  {streamRecoveryState.suspendedSession.media.title}
+                  {streamRecoveryState.suspendedSession.episode && (
+                    <span className="ml-2 text-xs text-indigo-300 font-normal">
+                      S{String(streamRecoveryState.suspendedSession.episode.seasonNumber).padStart(2, '0')}
+                      E{String(streamRecoveryState.suspendedSession.episode.episodeNumber).padStart(2, '0')}
+                    </span>
+                  )}
+                  {streamRecoveryState.suspendedSession.track && (
+                    <span className="ml-2 text-xs text-emerald-300 font-normal">
+                      Track {streamRecoveryState.suspendedSession.track.trackNumber}: {streamRecoveryState.suspendedSession.track.title}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-rose-950/20 border border-rose-500/25 rounded-xl p-3.5 text-xs font-mono space-y-1.5">
+                <div className="flex items-center justify-between text-rose-300">
+                  <span>Source: {streamRecoveryState.source || 'player'}</span>
+                  {streamRecoveryState.errorCode !== null && streamRecoveryState.errorCode !== undefined && (
+                    <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-200">
+                      Code: {String(streamRecoveryState.errorCode)}
+                    </span>
+                  )}
+                </div>
+                <p className="text-rose-200/90 break-words leading-relaxed">
+                  {streamRecoveryState.errorMessage}
+                </p>
+                {streamRecoveryState.streamUrl && (
+                  <p className="text-[11px] text-slate-400 truncate" title={streamRecoveryState.streamUrl}>
+                    Stream: {streamRecoveryState.streamUrl}
+                  </p>
+                )}
+                {streamRecoveryState.recoveryCount > 0 && (
+                  <p className="text-[11px] text-amber-300">
+                    Previous recovery attempts this session: {streamRecoveryState.recoveryCount}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-1">
+                <button
+                  id="btn-dismiss-stream-recovery"
+                  type="button"
+                  onClick={handleDismissStreamRecovery}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
+                >
+                  Close Player
+                </button>
+                <button
+                  id="btn-retry-stream"
+                  type="button"
+                  onClick={handleRetryStream}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-500/25 transition-all cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Retry Stream</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Smart Share Scanner & Regex Classifier Modal */}
@@ -4203,6 +4610,23 @@ function App() {
         </div>
       )}
 
+      {/* Persistent always-mounted hidden file input for MenuBar, ⌘O shortcut, and MediaSearch imports */}
+      <input
+        id="media-import-file-input"
+        ref={localImportInputRef}
+        type="file"
+        multiple
+        accept="video/*,audio/*,.mkv,.mp4,.m4v,.avi,.mov,.wmv,.webm,.flv,.ts,.m2ts,.mts,.vob,.ogv,.3gp,.flac,.mp3,.m4a,.m4b,.wav,.ogg,.opus,.aac,.alac,.aiff,.iso,.img,.epub,.pdf,.cbz,.cbr"
+        className="hidden"
+        onChange={async (e) => {
+          const files = e.target.files ? (Array.from(e.target.files) as File[]) : [];
+          e.target.value = '';
+          if (files.length > 0) {
+            await handleImportFilesDirectly(files);
+          }
+        }}
+      />
+
       {/* Clean Minimalist Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -4219,7 +4643,7 @@ function App() {
                 <span className="text-[10px] uppercase tracking-widest text-slate-700 font-bold">Build Release</span>
                 <span
                   className={`px-2 py-0.5 rounded border font-mono font-bold transition-colors ${
-                    serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG
+                    serverVersionInfo?.releaseTag !== APP_RELEASE_TAG
                       ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                       : 'bg-slate-900 text-slate-400 border-slate-800'
                   }`}
@@ -4227,7 +4651,7 @@ function App() {
                 >
                   v{APP_RELEASE_TAG}
                   {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG && (
-                    <span className="ml-1 text-[9px] opacity-75">Backend: v{serverVersionInfo.releaseTag}</span>
+                    <span className="ml-1 text-[9px] opacity-75">→ v{serverVersionInfo.releaseTag}</span>
                   )}
                 </span>
               </div>

@@ -1,6 +1,5 @@
 import { MediaMetadata } from '../types';
 import { apiCall, isTauri } from '../lib/api';
-import { splitMediaBatches } from './mediaBatching';
 
 export interface QueuedMediaItem {
   id: string;
@@ -20,6 +19,7 @@ export interface SqliteQueueStatus {
 
 const CACHE_STORAGE_KEY = 'sambavault_sqlite_persistent_cache_v2';
 const BATCH_INTERVAL_SECONDS = 30;
+
 class SqliteBatchWriterService {
   private queue: Map<string, QueuedMediaItem> = new Map();
   private cache: Map<string, MediaMetadata> = new Map();
@@ -27,7 +27,6 @@ class SqliteBatchWriterService {
   private countdownTimer: any = null;
   private secondsRemaining: number = BATCH_INTERVAL_SECONDS;
   private isFlushing: boolean = false;
-  private currentFlush: Promise<{ success: boolean; count: number }> | null = null;
   private isLocked: boolean = false;
   private lastFlushTime: number | null = null;
   private lastFlushCount: number = 0;
@@ -192,7 +191,6 @@ class SqliteBatchWriterService {
 
     this.saveCacheToDisk();
     this.notifySubscribers();
-    void this.flushNow();
   }
 
   /**
@@ -215,56 +213,37 @@ class SqliteBatchWriterService {
   }
 
   /**
-   * Flush queued media changes in request-sized batches.
+   * Flush all queued media changes to SQLite database in a single batch call
    */
   public async flushNow(): Promise<{ success: boolean; count: number }> {
-    if (this.isLocked) return { success: false, count: 0 };
-    if (this.currentFlush) {
-      const current = await this.currentFlush;
-      return current.success ? this.flushNow() : current;
-    }
-    if (this.queue.size === 0) {
+    if (this.isLocked || this.isFlushing || this.queue.size === 0) {
       return { success: true, count: 0 };
     }
-    const operation = this.flushSnapshot();
-    this.currentFlush = operation;
-    try {
-      return await operation;
-    } finally {
-      if (this.currentFlush === operation) this.currentFlush = null;
-    }
-  }
 
-  private async flushSnapshot(): Promise<{ success: boolean; count: number }> {
     this.isFlushing = true;
     this.notifySubscribers();
 
-    // Keep entries queued until their batch has been saved.
+    // Snapshot queued items and clear queue buffer
     const itemsToFlush = Array.from(this.queue.values()).map((q) => q.media);
     const flushCount = itemsToFlush.length;
 
     try {
-      for (const batch of splitMediaBatches(itemsToFlush)) {
-        await apiCall('/api/db/media/batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: batch }),
-        });
-        batch.forEach((item) => {
-          if (this.queue.get(item.id)?.media === item) this.queue.delete(item.id);
-        });
-      }
+      await apiCall('/api/db/media/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: itemsToFlush }),
+      });
 
       this.lastFlushTime = Date.now();
       this.lastFlushCount = flushCount;
+
+      // Remove successfully written items from queue
+      itemsToFlush.forEach((item) => this.queue.delete(item.id));
 
       this.secondsRemaining = BATCH_INTERVAL_SECONDS;
       return { success: true, count: flushCount };
     } catch (err) {
       console.error('Error during SQLite batch write flush:', err);
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('sambavault-media-save-error'));
-      }
       // Items remain in queue to be retried on next 30s cycle
       return { success: false, count: 0 };
     } finally {
@@ -283,9 +262,7 @@ class SqliteBatchWriterService {
       const blob = new Blob([JSON.stringify({ items: itemsToFlush })], {
         type: 'application/json',
       });
-      const port = (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000;
-      const url = isTauri ? `http://localhost:${port}/api/db/media/batch` : '/api/db/media/batch';
-      if (!navigator.sendBeacon(url, blob)) console.warn('Could not queue pending media writes during shutdown.');
+      navigator.sendBeacon('/api/db/media/batch', blob);
     } catch (e) {
       console.warn('Failed to sendBeacon on unload:', e);
     }

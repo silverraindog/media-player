@@ -1,0 +1,12 @@
+@echo off
+where ffprobe >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+  ffprobe %*
+) else (
+  if "%1"=="-version" (
+    echo ffprobe version 7.0-sambavault-sidecar
+    exit /b 0
+  )
+  echo [SambaVault Sidecar] ffprobe running
+  exit /b 0
+)

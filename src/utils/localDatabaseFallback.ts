@@ -211,8 +211,6 @@ class LocalDatabaseFallbackService {
       const url = new URL(urlStr, 'http://localhost');
       const path = url.pathname;
 
-      if (path === '/api/media/fetch-art') return null;
-
       if (path === '/api/db/history') {
         if (method === 'GET') {
           const limit = Number(url.searchParams.get('limit') || '100');

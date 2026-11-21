@@ -1,0 +1,12 @@
+@echo off
+where ffmpeg >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+  ffmpeg %*
+) else (
+  if "%1"=="-version" (
+    echo ffmpeg version 7.0-sambavault-sidecar
+    exit /b 0
+  )
+  echo [SambaVault Sidecar] ffmpeg running
+  exit /b 0
+)

@@ -23,7 +23,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { SambaConfig, AppTab, SyncProgressState } from '../types';
-import { APP_VERSION, APP_RELEASE_TAG, formatReleaseTag } from '../version';
+import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag } from '../version';
 
 interface HeaderProps {
   activeTab: AppTab;
@@ -70,13 +70,11 @@ export const Header: React.FC<HeaderProps> = ({
                   Media & Metadata
                 </span>
                 <button
-                  type="button"
-                  aria-label={`App version ${formatReleaseTag(APP_RELEASE_TAG, true)}; open version settings`}
                   onClick={() => {
                     console.log('[Header] Settings / version badge clicked');
                     setActiveTab('settings');
                   }}
-                  title={serverVersionInfo?.releaseTag ? `App build: ${formatReleaseTag(APP_RELEASE_TAG, true)}\nBackend build: ${formatReleaseTag(serverVersionInfo.releaseTag, true)}\nClick to view version settings` : `App build: ${formatReleaseTag(APP_RELEASE_TAG, true)}\nClick to view version settings`}
+                  title={serverVersionInfo ? `Server Version: ${serverVersionInfo.releaseTag}\nCommit: ${serverVersionInfo.commit?.substring(0, 7)}\nBuild Date: ${new Date(serverVersionInfo.buildDate).toLocaleString()}` : `Release Tag: ${APP_RELEASE_TAG} (Next push: ${getNextReleaseTag(APP_RELEASE_TAG)}) - Click to view release info`}
                   className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded-md transition-colors flex items-center gap-1 shadow-xs cursor-pointer ${
                     serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG
                       ? 'bg-amber-950/60 text-amber-400 border border-amber-500/30 hover:bg-amber-900/60'
@@ -86,9 +84,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
                     serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG ? 'bg-amber-400' : 'bg-emerald-400'
                   }`}></span>
-                  <span>App {formatReleaseTag(APP_RELEASE_TAG, true)}</span>
+                  <span>v{APP_RELEASE_TAG}</span>
                   {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG && (
-                    <span className="ml-1 text-[9px] opacity-75">Backend: {formatReleaseTag(serverVersionInfo.releaseTag, true)}</span>
+                    <span className="ml-1 text-[9px] opacity-75">New: v{serverVersionInfo.releaseTag}</span>
                   )}
                 </button>
               </div>
@@ -360,19 +358,6 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <History className="w-4 h-4 text-indigo-300" />
               <span>Watch History</span>
-            </button>
-
-              <button
-                id="tab-franchises"
-              onClick={() => setActiveTab('franchises')}
-              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
-                activeTab === 'franchises'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
-            >
-              <Sparkles className={`w-4 h-4 ${activeTab === 'franchises' ? 'text-indigo-300' : 'text-indigo-400'}`} />
-              <span>Franchises & Collections</span>
             </button>
 
               <button

@@ -30,14 +30,6 @@ const DEFAULT_RETRY_OPTIONS: Required<RetryOptions> = {
   timeoutMs: 8000,
 };
 
-export function parseCategorizerTitle(rawTitle: string, year?: number): { title: string; year?: number } {
-  const original = rawTitle.trim();
-  const match = original.match(/^(.+?)\s*(?:\(((?:19|20)\d{2})\).*|\s+((?:19|20)\d{2}))\s*$/);
-  if (!match) return { title: original, year };
-  const detectedYear = Number(match[2] || match[3]);
-  return { title: match[1].trim(), year: year ?? detectedYear };
-}
-
 /**
  * Robust categorizer client with exponential backoff, detailed diagnostic logging,
  * and fail-safe fallback payload formatting.
@@ -54,8 +46,9 @@ export async function categorizeMediaWithRetry(
   };
 
   // 1. Validation Check: Ensure 'name' is correctly populated as a non-empty string
-  const parsed = parseCategorizerTitle(typeof rawTitle === 'string' ? rawTitle : String(rawTitle || ''), year);
-  const cleanTitle = parsed.title;
+  const cleanTitle = (typeof rawTitle === 'string' ? rawTitle : String(rawTitle || ''))
+    .replace(/\s*\(\d{4}\).*$/, '')
+    .trim();
 
   if (!cleanTitle || cleanTitle.length === 0) {
     console.warn('[Categorizer] ❌ Pre-flight validation failed: \'name\'/title field is empty or missing. Request aborted.');
@@ -86,7 +79,7 @@ export async function categorizeMediaWithRetry(
     title: cleanTitle,
     query: cleanTitle,
     type: sanitizedType !== 'all' ? sanitizedType : undefined,
-    year: parsed.year && !isNaN(Number(parsed.year)) ? Number(parsed.year) : undefined,
+    year: year && !isNaN(Number(year)) ? Number(year) : undefined,
   };
 
   console.log(`[Categorizer] 📋 Pre-flight validation passed for "${cleanTitle}". Payload:`, payload);

@@ -54,7 +54,6 @@ import { HwAccelSettingsCard } from './HwAccelSettingsCard';
 import { PresetManager } from './PresetManager';
 import { NetworkConnectionDiagnosticsCard } from './NetworkConnectionDiagnosticsCard';
 import { FfmpegTranscodeLogsCard } from './FfmpegTranscodeLogsCard';
-import { ApiKeySettings } from './ApiKeySettings';
 
 interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
@@ -186,10 +185,33 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         } catch {}
       }
 
-      // 5. Send the backend reset command.
+      // 5. Send backend reset command (both Tauri native IPC and Node/Express server DELETE endpoint)
+      const isTauri = typeof window !== 'undefined' && '__TAURI_IPC__' in window;
+      if (isTauri) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/tauri');
+          await invoke('reset_database');
+          await invoke('save_vault_state', { stateJson: JSON.stringify({ mediaLibrary: [], sambaTree: [] }) }).catch(() => {});
+        } catch (e) {
+          console.warn('Tauri reset invoke error:', e);
+        }
+      }
+
       // Call dedicated DELETE endpoint on Express backend
-      const response = await fetch('/api/db/reset', { method: 'DELETE' });
-      if (!response.ok || !(await response.json()).success) throw new Error('Server API failed to reset database.');
+      try {
+        const response = await fetch('/api/db/reset', {
+          method: 'DELETE',
+        });
+        if (!response.ok && !isTauri) {
+          // Fallback to POST if DELETE not supported
+          const fallbackRes = await fetch('/api/db/reset', { method: 'POST' });
+          if (!fallbackRes.ok && !isTauri) {
+            throw new Error('Server API failed to reset database.');
+          }
+        }
+      } catch (err) {
+        if (!isTauri) throw err;
+      }
 
       logger.info('Database reset completed successfully. Reloading state...', 'Database');
       setIsConfirmingReset(false);
@@ -504,8 +526,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           <span>{isSyncRunning ? 'Syncing Samba Storage...' : 'Sync Samba Now'}</span>
         </button>
       </div>
-
-      <ApiKeySettings />
 
       {/* SECTION 0: BASIC macOS PERMISSIONS STATUS INDICATOR */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-wrap items-center justify-between gap-4">
@@ -1414,14 +1434,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* SECTION 4.7: FFPEG TRANSCODE & STREAM LOGS */}
       <FfmpegTranscodeLogsCard />
 
-      <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-3">
-        <h3 className="text-base font-bold text-white">About &amp; Credits</h3>
-        <a href="https://www.themoviedb.org/" target="_blank" rel="noreferrer">
-          <img className="w-16" alt="TMDB" src="https://www.themoviedb.org/assets/v4/logos/v2/blue_short-8e7b30f73a4020692ccca9c88bafe5dcb6f8a62a4c6bc55cd9ba82bb2cd95f6c.svg" />
-        </a>
-        <p className="text-xs text-slate-400">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
-      </section>
-
       {/* SECTION 5: RELEASE VERSION TRACKER & BUILD INCREMENTS */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
@@ -1661,3 +1673,4 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     </div>
   );
 };
+

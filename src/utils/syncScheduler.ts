@@ -365,4 +365,3 @@ export class SyncSchedulerEngine {
 }
 
 export const syncScheduler = new SyncSchedulerEngine();
-\n  // Ensure sync state is properly broadcast after successful completion\n  logger.info('Sync state broadcast to UI components.', 'Scheduler');\n}

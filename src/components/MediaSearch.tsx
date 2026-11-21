@@ -56,7 +56,6 @@ import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, 
 import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
-import { UniverseMatcherModal } from './UniverseMatcherModal';
 import { BulkSubtitlesModal } from './BulkSubtitlesModal';
 import { logger } from '../utils/loggerService';
 import { listMountedVolumes } from '../utils/tauriBridge';
@@ -64,7 +63,6 @@ import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { inferScannedMediaType, isPathInsideExtras } from '../utils/mediaExtractor';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
@@ -76,10 +74,10 @@ interface MediaSearchProps {
   onPlayMedia?: (media: MediaMetadata, episode?: EpisodeMetadata, track?: TrackMetadata) => void;
   sambaConfig: SambaConfig;
   onImportFiles?: (files: File[] | string[]) => Promise<void> | void;
+  onTriggerLocalImport?: () => void;
   onSyncFromSamba?: () => void;
   onOpenManualMatch?: (rawPathOrName?: string, mediaType?: MediaType) => void;
   onSaveCategorizedMedia?: (media: MediaMetadata) => void;
-  onFetchLibraryMetadata: (id: string, metadata: import('../utils/libraryMetadataFetch').FetchedLibraryMetadata | null) => Promise<void>;
   isSyncing?: boolean;
   scanRootPath?: string;
   selectedMediaType?: 'all' | MediaType;
@@ -220,21 +218,6 @@ export function getSafeRating(rating: any): number {
   return !isNaN(num) ? num : 8.0;
 }
 
-function getEffectiveMediaType(media: MediaMetadata): MediaType {
-  return inferScannedMediaType(
-    media.folderPath || media.recommendedFolderStructure || media.path || media.title,
-    {
-      detectedType: media.type,
-      primaryCategory: media.primaryCategory,
-      genres: media.genres,
-    }
-  );
-}
-
-function isStandaloneExtrasEntry(media: MediaMetadata): boolean {
-  return isPathInsideExtras(media.folderPath || media.recommendedFolderStructure || media.path || '');
-}
-
 export const MediaSearch: React.FC<MediaSearchProps> = ({
   mediaLibrary = [],
   sambaTree,
@@ -245,10 +228,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   sambaConfig,
   scanRootPath,
   onImportFiles,
+  onTriggerLocalImport,
   onSyncFromSamba,
   onOpenManualMatch,
   onSaveCategorizedMedia,
-  onFetchLibraryMetadata,
   isSyncing = false,
   selectedMediaType,
   onSelectMediaType,
@@ -257,12 +240,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 }) => {
   const safeMediaLibrary = useMemo(() => {
     if (!Array.isArray(mediaLibrary)) return [];
-    return mediaLibrary.filter((media) => !isStandaloneExtrasEntry(media)).map((m) => ({
+    return mediaLibrary.map((m) => ({
       ...m,
       genres: getSafeGenres(m.genres),
       rating: getSafeRating(m.rating),
       title: m.title || 'Untitled',
-      type: getEffectiveMediaType(m),
+      type: m.type || 'series',
       year: m.year || 2024,
       posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
       overview: m.overview || '',
@@ -353,21 +336,11 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   // Recently Added state (loaded from SQLite)
   const [recentlyAdded, setRecentlyAdded] = useState<MediaMetadata[]>([]);
-  const [isRecentLoading, setIsRecentLoading] = useState(true);
-  const [recentMediaError, setRecentMediaError] = useState<string | null>(null);
+  const [isRecentLoading, setIsRecentLoading] = useState(false);
   const recentScrollRef = useRef<HTMLDivElement>(null);
-  const visibleRecentlyAdded = useMemo(
-    () =>
-      recentlyAdded
-        .filter((item) => !isStandaloneExtrasEntry(item))
-        .map((item) => ({ ...item, type: getEffectiveMediaType(item) }))
-        .filter((item) => selectedType === 'all' || item.type === selectedType),
-    [recentlyAdded, selectedType]
-  );
 
   // Web Search Categorizer Modal State
   const [isCategorizerModalOpen, setIsCategorizerModalOpen] = useState(false);
-  const [isUniverseMatcherOpen, setIsUniverseMatcherOpen] = useState(false);
   const [isBulkSubtitlesModalOpen, setIsBulkSubtitlesModalOpen] = useState(false);
   const [categorizerInitialQuery, setCategorizerInitialQuery] = useState('');
   const [categorizerInitialType, setCategorizerInitialType] = useState<MediaType | 'all'>('all');
@@ -459,6 +432,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   }, [mediaLibrary]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const diagnosticFileInputRef = useRef<HTMLInputElement>(null);
+  const [isDiagnosticImportArmed, setIsDiagnosticImportArmed] = useState(false);
 
   // Determine Min and Max Year across library
   const { minLibraryYear, maxLibraryYear } = useMemo(() => {
@@ -496,12 +471,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   // Fetch Top 10 Recently Added from SQLite
   const fetchRecentMedia = async () => {
     setIsRecentLoading(true);
-    setRecentMediaError(null);
     try {
       const res = await fetch('/api/db/media/recent?limit=50');
-      if (!res.ok) {
-        throw new Error(`Recent media request failed with HTTP ${res.status}`);
-      }
       const data = await res.json();
       if (data.success && Array.isArray(data.items)) {
         // Map SQLite db rows to MediaMetadata
@@ -533,12 +504,9 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
           };
         });
         setRecentlyAdded(mapped);
-      } else {
-        throw new Error('Recent media response was not in the expected format');
       }
     } catch (err) {
       console.error('Failed to fetch recent media from SQLite:', err);
-      setRecentMediaError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsRecentLoading(false);
     }
@@ -1354,6 +1322,89 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     }
   };
 
+  const logFullFileDiagnostics = (
+    source: 'selected' | 'dropped',
+    filesArray: File[],
+    dataTransfer?: DataTransfer
+  ) => {
+    const inspectedFiles = filesArray.map((file, index) => {
+      const ownProps: Record<string, any> = {};
+      try {
+        for (const key of Object.getOwnPropertyNames(file)) {
+          const val = (file as any)[key];
+          if (typeof val !== 'function') ownProps[key] = val;
+        }
+      } catch {}
+
+      const protoProps: Record<string, any> = {};
+      try {
+        const proto = Object.getPrototypeOf(file);
+        if (proto) {
+          for (const key of Object.getOwnPropertyNames(proto)) {
+            if (key === 'constructor') continue;
+            try {
+              const val = (file as any)[key];
+              if (typeof val !== 'function') protoProps[key] = val;
+            } catch {}
+          }
+        }
+      } catch {}
+
+      return {
+        index,
+        source,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified,
+        lastModifiedISO: file.lastModified ? new Date(file.lastModified).toISOString() : null,
+        webkitRelativePath: file.webkitRelativePath,
+        nativePath: (file as any).path ?? null,
+        constructorName: file?.constructor?.name ?? null,
+        isFileInstance: file instanceof File,
+        isBlobInstance: file instanceof Blob,
+        ownProps,
+        protoProps,
+        rawFile: file,
+      };
+    });
+
+    console.group(`[Diagnostic Import] Inspecting ${filesArray.length} ${source} File object(s) BEFORE parser runs`);
+    console.table(
+      inspectedFiles.map(({ index, source: src, name, size, type, lastModified, webkitRelativePath, nativePath, constructorName }) => ({
+        index,
+        source: src,
+        name,
+        size,
+        type: type || '(empty)',
+        lastModified,
+        webkitRelativePath: webkitRelativePath || '(empty)',
+        nativePath: nativePath ?? '(none)',
+        constructorName,
+      }))
+    );
+    inspectedFiles.forEach((entry) => {
+      console.log(`[Diagnostic Import] File[${entry.index}] full inspection:`, entry);
+    });
+    if (dataTransfer) {
+      const itemsSummary = Array.from(dataTransfer.items || []).map((item, idx) => {
+        let entryFullPath: string | null = null;
+        try {
+          const webkitEntry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null;
+          entryFullPath = webkitEntry?.fullPath ?? null;
+        } catch {}
+        return { index: idx, kind: item.kind, type: item.type, entryFullPath };
+      });
+      console.log('[Diagnostic Import] DataTransfer metadata:', {
+        dropEffect: dataTransfer.dropEffect,
+        effectAllowed: dataTransfer.effectAllowed,
+        types: Array.from(dataTransfer.types || []),
+        items: itemsSummary,
+      });
+    }
+    console.groupEnd();
+  };
+
   // Drag and drop handler
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -1368,18 +1419,41 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0 && onImportFiles) {
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const filesArray = Array.from(e.dataTransfer.files) as File[];
-      await onImportFiles(filesArray);
+      if (isDiagnosticImportArmed) {
+        logFullFileDiagnostics('dropped', filesArray, e.dataTransfer);
+      }
+      if (onImportFiles) {
+        await onImportFiles(filesArray);
+      }
     }
   };
 
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0 && onImportFiles) {
+    if (e.target.files && e.target.files.length > 0) {
       const filesArray = Array.from(e.target.files) as File[];
-      await onImportFiles(filesArray);
+      if (isDiagnosticImportArmed) {
+        logFullFileDiagnostics('selected', filesArray);
+      }
+      if (onImportFiles) {
+        await onImportFiles(filesArray);
+      }
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleDiagnosticFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const filesArray = Array.from(e.target.files) as File[];
+      logFullFileDiagnostics('selected', filesArray);
+      if (onImportFiles) {
+        await onImportFiles(filesArray);
+      }
+      if (diagnosticFileInputRef.current) {
+        diagnosticFileInputRef.current.value = '';
       }
     }
   };
@@ -1411,22 +1485,28 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
         ref={fileInputRef}
         type="file"
         multiple
+        accept="video/*,audio/*,.mkv,.mp4,.m4v,.avi,.mov,.wmv,.webm,.flv,.ts,.m2ts,.mts,.vob,.ogv,.3gp,.flac,.mp3,.m4a,.m4b,.wav,.ogg,.opus,.aac,.alac,.aiff,.iso,.img,.epub,.pdf,.cbz,.cbr"
         className="hidden"
         onChange={handleFileInputChange}
       />
 
+      {/* Temporary hidden file input for Diagnostic Import */}
+      <input
+        ref={diagnosticFileInputRef}
+        id="diagnostic-import-file-input"
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleDiagnosticFileInputChange}
+      />
+
       {/* Web Search & Categorizer Modal */}
-      {isUniverseMatcherOpen && (
-        <UniverseMatcherModal items={mediaLibrary} onClose={() => setIsUniverseMatcherOpen(false)}
-          onOpenDetails={onOpenDetails} onFetchLibraryMetadata={onFetchLibraryMetadata} />
-      )}
       <WebSearchCategorizerModal
         isOpen={isCategorizerModalOpen}
         onClose={() => setIsCategorizerModalOpen(false)}
         initialQuery={categorizerInitialQuery}
         initialType={categorizerInitialType}
         mediaLibrary={mediaLibrary}
-        onFetchLibraryMetadata={onFetchLibraryMetadata}
         onOpenApiDebugger={onOpenApiDebugger}
         onSaveCategorizedMedia={(media) => {
           if (onSaveCategorizedMedia) {
@@ -1466,14 +1546,72 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             <p className="mt-2 text-sm text-slate-300 leading-relaxed">
               Populated with <span className="text-white font-semibold">{allCount}</span> total items ({seriesCount} TV Series, {moviesCount} Movies, and {albumsCount} Music Albums) categorized across Sci-Fi, Drama, Comedy, Action, and more.
             </p>
+            {isDragging && (
+              <div className="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-xs font-medium">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Drop media files to import into your library</span>
+              </div>
+            )}
           </div>
 
-          {/* Quick Actions: Web Search Categorizer & Ingestion */}
+          {/* Quick Actions: Web Search Categorizer, Import Files & Ingestion */}
           <div className="flex flex-wrap items-center gap-3 shrink-0">
-            <button type="button" onClick={() => setIsUniverseMatcherOpen(true)}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 text-indigo-300 hover:text-white text-xs font-semibold border border-indigo-500/30">
-              <Layers className="w-4 h-4" /> Universe Matcher
+            {(onTriggerLocalImport || onImportFiles) && (
+              <button
+                id="btn-import-local-files"
+                type="button"
+                onClick={() => {
+                  if (onTriggerLocalImport) {
+                    onTriggerLocalImport();
+                  } else {
+                    fileInputRef.current?.click();
+                  }
+                }}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold shadow-lg shadow-cyan-500/25 transition cursor-pointer"
+                title="Import local video, audio, or media files (⌘O) — or drag and drop files here"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Import Files</span>
+              </button>
+            )}
+
+            <button
+              id="btn-diagnostic-import"
+              type="button"
+              onClick={() => {
+                setIsDiagnosticImportArmed(true);
+                console.info('[Diagnostic Import] Armed: logging full File properties before parsing (select files now or drop files onto the banner / button).');
+                diagnosticFileInputRef.current?.click();
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(true);
+              }}
+              onDrop={async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(false);
+                setIsDiagnosticImportArmed(true);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  const filesArray = Array.from(e.dataTransfer.files) as File[];
+                  logFullFileDiagnostics('dropped', filesArray, e.dataTransfer);
+                  if (onImportFiles) {
+                    await onImportFiles(filesArray);
+                  }
+                }
+              }}
+              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition cursor-pointer shadow-sm ${
+                isDiagnosticImportArmed
+                  ? 'bg-amber-600/30 hover:bg-amber-600/40 text-amber-200 border-amber-400/70 ring-1 ring-amber-400/40'
+                  : 'bg-slate-800 hover:bg-slate-750 text-amber-300 hover:text-amber-200 border-amber-500/40'
+              }`}
+              title="Temporary: Select or drop files here to log full File properties (webkitRelativePath, lastModified, type, etc.) to console before parsing"
+            >
+              <Bug className="w-4 h-4 text-amber-400" />
+              <span>Diagnostic Import</span>
             </button>
+
             <button
               id="btn-open-web-categorizer"
               onClick={() => {
@@ -1655,8 +1793,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
           ref={recentScrollRef}
           className="flex gap-4 overflow-x-auto pb-3 pt-1 scroll-smooth scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900"
         >
-          {visibleRecentlyAdded.length > 0 ? (
-            visibleRecentlyAdded.map((item) => {
+          {recentlyAdded.length > 0 ? (
+            recentlyAdded.map((item) => {
               const isSavedWatchlist = watchlistIds.has(item.id);
               return (
                 <div
@@ -1672,20 +1810,6 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       alt={item.title}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                      onError={(event) => {
-                        const image = event.currentTarget;
-                        if (
-                          item.fanartUrl &&
-                          item.posterUrl &&
-                          item.posterUrl !== item.fanartUrl &&
-                          image.dataset.fallback !== 'used'
-                        ) {
-                          image.dataset.fallback = 'used';
-                          image.src = item.posterUrl;
-                        } else {
-                          image.style.display = 'none';
-                        }
-                      }}
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
 
@@ -1797,15 +1921,9 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                 </div>
               );
             })
-          ) : isRecentLoading ? (
+          ) : (
             <div className="w-full py-8 text-center text-xs text-slate-400 font-mono">
               Loading recent media from SQLite database...
-            </div>
-          ) : (
-            <div className="w-full py-4 text-center text-xs text-slate-400 font-mono">
-              {recentMediaError
-                ? 'Recently added media could not be loaded.'
-                : 'No recently added media is available yet.'}
             </div>
           )}
         </div>
@@ -3044,20 +3162,6 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       alt={media.title}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-70 group-hover:opacity-85"
-                      onError={(event) => {
-                        const image = event.currentTarget;
-                        if (
-                          media.fanartUrl &&
-                          media.posterUrl &&
-                          media.posterUrl !== media.fanartUrl &&
-                          image.dataset.fallback !== 'used'
-                        ) {
-                          image.dataset.fallback = 'used';
-                          image.src = media.posterUrl;
-                        } else {
-                          image.style.display = 'none';
-                        }
-                      }}
                     />
 
                     {/* Hover Tooltip - delayed by 10s as requested to prevent obstructing action buttons */}

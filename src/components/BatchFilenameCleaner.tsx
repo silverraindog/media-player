@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { ParsedFileInfo, MediaType, SambaConfig } from '../types';
 import { downloadTextFile } from '../utils/zipDownloader';
-import { isIgnoredMediaFile } from '../utils/excludedMedia';
+import { parseTitleAndYear, detectMediaType } from '../utils/mediaExtractor';
 
 interface BatchFilenameCleanerProps {
   sambaConfig: SambaConfig;
@@ -45,21 +45,50 @@ export const BatchFilenameCleaner: React.FC<BatchFilenameCleanerProps> = ({
   const [inputText, setInputText] = useState(SAMPLE_RAW_FILES.join('\n'));
   const [parsedFiles, setParsedFiles] = useState<ParsedFileInfo[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [ignoredCount, setIgnoredCount] = useState(0);
   const [copiedScript, setCopiedScript] = useState<string | null>(null);
   const [activeScriptTab, setActiveScriptTab] = useState<'bash' | 'powershell' | 'cmd'>('bash');
 
   const handleParse = async () => {
-    const lines = inputText
+    const rawLines = inputText
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
-    const rawLines = lines.filter((line) => !isIgnoredMediaFile(line));
-    setIgnoredCount(lines.length - rawLines.length);
-    setParsedFiles([]);
+
     if (rawLines.length === 0) return;
 
     setIsProcessing(true);
+
+    const parseLocally = (lines: string[]): ParsedFileInfo[] =>
+      lines.map((fn, idx) => {
+        const baseName = fn.split(/[/\\]/).pop() || fn;
+        const { title, year, season, episode } = parseTitleAndYear(baseName);
+        const type = detectMediaType(baseName);
+        const ext = baseName.includes('.') ? baseName.split('.').pop() : 'mkv';
+        const sPad = String(season || 1).padStart(2, '0');
+        const ePad = String(episode || 1).padStart(2, '0');
+        return {
+          id: `batch-local-${idx}-${Date.now()}`,
+          originalFilename: fn,
+          detectedType: type,
+          detectedTitle: title || baseName.replace(/\.[^/.]+$/, ''),
+          detectedYear: year,
+          detectedSeason: season,
+          detectedEpisode: episode,
+          cleanFormattedFilename:
+            type === 'series'
+              ? `${title} - S${sPad}E${ePad}.${ext}`
+              : type === 'album'
+              ? baseName
+              : `${title} (${year || new Date().getFullYear()}).${ext}`,
+          cleanFolderPath:
+            type === 'series'
+              ? `TV Shows/${title}/Season ${sPad}/`
+              : type === 'album'
+              ? `Music/${title}/`
+              : `Movies/${title} (${year || new Date().getFullYear()})/`,
+          status: 'pending' as const,
+        };
+      });
 
     try {
       const res = await fetch('/api/metadata/parse-filename', {
@@ -68,12 +97,17 @@ export const BatchFilenameCleaner: React.FC<BatchFilenameCleanerProps> = ({
         body: JSON.stringify({ filenames: rawLines }),
       });
 
-      const data = await res.json();
-      if (data.success && data.results) {
-        setParsedFiles(data.results);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.results)) {
+          setParsedFiles(data.results);
+          return;
+        }
       }
+      setParsedFiles(parseLocally(rawLines));
     } catch (err) {
-      console.error('Failed to parse:', err);
+      console.warn('Server parse failed, falling back to local filename parser:', err);
+      setParsedFiles(parseLocally(rawLines));
     } finally {
       setIsProcessing(false);
     }
@@ -86,14 +120,14 @@ export const BatchFilenameCleaner: React.FC<BatchFilenameCleanerProps> = ({
   const handleClear = () => {
     setInputText('');
     setParsedFiles([]);
-    setIgnoredCount(0);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
+    if (e.target.files && e.target.files.length > 0) {
       const filesList = Array.from(e.target.files) as File[];
-      const names = filesList.map((f) => f.name);
+      const names = filesList.map((f) => (f as any).path || f.name);
       setInputText((prev) => (prev ? `${prev}\n${names.join('\n')}` : names.join('\n')));
+      e.target.value = '';
     }
   };
 
@@ -243,7 +277,6 @@ if exist "${f.originalFilename}" (
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
-                {ignoredCount > 0 && <p role="status" className="text-xs text-slate-400">Ignored {ignoredCount} .txt or .torrent file(s).</p>}
               </div>
             </div>
 

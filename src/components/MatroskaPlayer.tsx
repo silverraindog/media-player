@@ -157,10 +157,23 @@ export const MatroskaPlayer: React.FC<MatroskaPlayerProps> = ({
                 className="w-full h-full object-contain bg-black"
                 onLoadedMetadata={() => setVideoPlaybackError(null)}
                 onError={(e) => {
+                  const vid = e.currentTarget;
                   console.warn('[MatroskaPlayer] Native MKV playback error, fallback recommended:', e);
-                  setVideoPlaybackError(
-                    'Media source format not supported by browser HTML5 player. MKV files containing HEVC/H.265 video or DTS/AC3 audio require fast transcoding.'
-                  );
+                  const msg = 'Media source format not supported by browser HTML5 player. MKV files containing HEVC/H.265 video or DTS/AC3 audio require fast transcoding.';
+                  setVideoPlaybackError(msg);
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(
+                      new CustomEvent('sambavault-player-error', {
+                        detail: {
+                          source: 'matroska-player',
+                          code: vid.error?.code ?? 'MKV_PLAYBACK_ERROR',
+                          message: msg,
+                          streamUrl,
+                          fatal: true,
+                        },
+                      })
+                    );
+                  }
                 }}
               />
               

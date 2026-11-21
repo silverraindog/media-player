@@ -13,6 +13,7 @@ import { generateMetadataFile } from '../utils/nfoGenerator';
 import { sqliteBatchWriter } from '../services/sqliteBatchWriter';
 import { downloadMediaBundleZip } from '../utils/zipDownloader';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
+import { saveMediaToTauriDb } from '../utils/tauriBridge';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 
 interface MediaDetailModalProps {
@@ -208,11 +209,27 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         localStorage.setItem('sambavault_media_library_v2', JSON.stringify(stored));
       } catch (e) {}
 
-      // 3. Save to the server SQLite vault.
+      // 3. Persist to Tauri SQLite
+      saveMediaToTauriDb(updated).catch(() => {});
+
+      // 4. Save to server SQLite vault
       await apiCall('/api/db/media', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
+        body: JSON.stringify({
+          id: updated.id,
+          media_type: updated.type,
+          title: updated.title,
+          original_title: updated.originalTitle || updated.title,
+          synopsis: updated.overview || (updated as any).synopsis || '',
+          year: updated.year,
+          rating: updated.rating,
+          poster_url: updated.posterUrl,
+          fanart_url: updated.fanartUrl,
+          genres: JSON.stringify(updated.genres),
+          cast: updated.cast ? JSON.stringify(updated.cast) : null,
+          recommended_folder: updated.recommendedFolderStructure,
+          raw_data: updated.source || 'gemini-ai'
+        })
       });
     } catch (err) {
       console.error('Failed to persist media change to database:', err);
@@ -917,23 +934,9 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
                   <p className="text-indigo-300 italic font-medium text-xs">"{media.tagline}"</p>
                 )}
 
-                <p className="whitespace-pre-line text-slate-200 leading-relaxed text-xs sm:text-sm font-normal">
+                <p className="text-slate-200 leading-relaxed text-xs sm:text-sm font-normal">
                   {media.overview}
                 </p>
-
-                {media.franchiseOverview && (
-                  <section className="space-y-2 border-t border-slate-800 pt-3">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Franchise / series overview</h3>
-                    <p className="whitespace-pre-line text-slate-200 leading-relaxed">{media.franchiseOverview.text}</p>
-                    <p className="text-slate-400">
-                      {media.franchiseOverview.source === 'Wikipedia'
-                        ? media.franchiseOverview.excerpt === 'introduction' ? 'Introduction excerpt from ' : 'Excerpt from '
-                        : 'Source: '}
-                      <a className="text-indigo-300 underline" href={media.franchiseOverview.url} target="_blank" rel="noreferrer">{media.franchiseOverview.source}</a>
-                      {media.franchiseOverview.license && <> · <a className="text-indigo-300 underline" href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer">{media.franchiseOverview.license}</a></>}
-                    </p>
-                  </section>
-                )}
 
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {media.genres.map((g, i) => (

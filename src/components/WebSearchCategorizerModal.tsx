@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
   X,
   Search,
@@ -28,19 +27,15 @@ import {
   Loader2,
   SlidersHorizontal,
 } from 'lucide-react';
-import { MediaMetadata, MediaType, type FranchiseCandidate, type FranchiseOverview } from '../types';
-import { isTauri } from '../lib/api';
+import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { fetchLibraryMetadata, isCategorizerFolderLabel, isCollectionLookup, isIndividualAudioTrack, isMetadataSidecar, isMissingArtwork, isMissingSynopsis, isMissingText, libraryLookupTitle, metadataLookupMedia, metadataLookupYear, MetadataBackendUnavailableError, MetadataReviewRequiredError, type FetchedLibraryMetadata, type MetadataLookupDetails } from '../utils/libraryMetadataFetch';
-import { ProviderSearch } from './ProviderSearch';
 
 interface WebSearchCategorizerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveCategorizedMedia: (media: MediaMetadata) => void;
-  onFetchLibraryMetadata: (id: string, metadata: FetchedLibraryMetadata | null) => Promise<void>;
   onPlayMedia?: (media: MediaMetadata) => void;
   onOpenInNfoStudio?: (media: MediaMetadata) => void;
   onOpenManualMatch?: (media: MediaMetadata) => void;
@@ -49,8 +44,6 @@ interface WebSearchCategorizerModalProps {
   initialType?: MediaType | 'all';
   mediaLibrary?: MediaMetadata[];
 }
-
-class OverviewRateLimitError extends Error {}
 
 const POPULAR_SEARCH_PRESETS = [
   { name: 'Breaking Bad', type: 'series', category: 'Crime / Drama' },
@@ -71,7 +64,6 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   isOpen,
   onClose,
   onSaveCategorizedMedia,
-  onFetchLibraryMetadata,
   onPlayMedia,
   onOpenInNfoStudio,
   onOpenManualMatch,
@@ -80,31 +72,12 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   initialType = 'all',
   mediaLibrary = [],
 }) => {
-  const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized' | 'complete'>('search');
-  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'unfetched' | 'synopsis' | 'artwork' | 'series' | 'movie'>('all');
+  const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
+  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'synopsis' | 'artwork' | 'series' | 'movie'>('all');
   const [uncatSearchQuery, setUncatSearchQuery] = useState('');
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
-  const [batchErrors, setBatchErrors] = useState<Record<string, string>>({});
-  const [reviewCandidates, setReviewCandidates] = useState<Record<string, NonNullable<FetchedLibraryMetadata['candidates']>>>({});
-  const [savingCandidateId, setSavingCandidateId] = useState<string | null>(null);
-  const [batchCurrentTitle, setBatchCurrentTitle] = useState('');
-  const [batchActiveTitles, setBatchActiveTitles] = useState<Partial<Record<MediaType, string>>>({});
-  const [batchLog, setBatchLog] = useState<string[]>([]);
-  const [showBatchLog, setShowBatchLog] = useState(false);
-  const [overviewCandidates, setOverviewCandidates] = useState<Record<string, FranchiseCandidate[]>>({});
-  const [overviewSelectionErrors, setOverviewSelectionErrors] = useState<Record<string, string>>({});
-  const [overviewBatchProcessing, setOverviewBatchProcessing] = useState(false);
-  const pendingOverviewSelections = React.useRef(new Set<string>());
-  const overviewSelectionsSaved = React.useRef(0);
-  const overviewRateLimited = React.useRef(false);
-  const overviewPauseMessage = React.useRef('');
-  const batchController = React.useRef<AbortController | null>(null);
-  React.useEffect(() => {
-    if (!isOpen) batchController.current?.abort();
-    return () => batchController.current?.abort();
-  }, [isOpen]);
 
   const [query, setQuery] = useState(initialQuery);
   const [mediaType, setMediaType] = useState<MediaType | 'all'>(initialType);
@@ -224,157 +197,26 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   }, [initialQuery, initialType]);
 
-  const categoryLabelCount = mediaLibrary.filter(isCategorizerFolderLabel).length;
-  const audioTrackCount = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item) && isIndividualAudioTrack(item)).length;
-  const sidecarCount = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item) && !isIndividualAudioTrack(item) && isMetadataSidecar(item)).length;
-  const categorizerItems = mediaLibrary.filter((item) => !isCategorizerFolderLabel(item) && !isIndividualAudioTrack(item) && !isMetadataSidecar(item));
-  const incompleteItems = categorizerItems.filter((m) => isMissingSynopsis(m) || isMissingArtwork(m.posterUrl));
-  const completeItems = categorizerItems.filter((m) => !isMissingSynopsis(m) && !isMissingArtwork(m.posterUrl));
-  const overviewItems = categorizerItems.filter(m =>
-    !m.franchiseOverview && (m.type === 'series' || (
-      isCollectionLookup(m) && m.metadataFetchStatus !== 'matched' &&
-      isMissingSynopsis(m) && isMissingArtwork(m.posterUrl) && isMissingArtwork(m.fanartUrl) &&
-      isMissingText(m.collectionOverview) && !m.collectionFilms?.length
-    )));
-
-  const requestOverview = async (item: MediaMetadata, signal: AbortSignal, selection?: FranchiseCandidate) => {
-    const port = (window as Window & { __EXPRESS_PORT__?: number }).__EXPRESS_PORT__ || 3000;
-    const url = isTauri ? `http://127.0.0.1:${port}/api/media/franchise-overview` : '/api/media/franchise-overview';
-    const response = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-      body: JSON.stringify({
-        title: libraryLookupTitle(metadataLookupMedia(item)),
-        type: isCollectionLookup(item) ? 'collection' : 'series', year: metadataLookupYear(item), selection,
-      }),
-    });
-    const data: { success?: boolean; overview?: FranchiseOverview; candidates?: FranchiseCandidate[]; error?: string; retryAfterSeconds?: number; diagnostics?: Array<{ provider: string; outcome: string }> } = await response.json();
-    if (!response.ok || !data.success) {
-      const message = data.error || `Overview lookup failed (HTTP ${response.status}).`;
-      if (response.status === 429 || (response.status === 503 && typeof data.retryAfterSeconds === 'number')) throw new OverviewRateLimitError(message);
-      throw new Error(message);
-    }
-    if (data.overview) {
-      const { source, text, url } = data.overview;
-      const validUrl = source === 'Wikipedia' ? /^https:\/\/en\.wikipedia\.org\/wiki\// : /^https:\/\/www\.themoviedb\.org\/collection\/\d+$/;
-      if ((source !== 'Wikipedia' && source !== 'TMDB') || typeof text !== 'string' || !text.trim() ||
-          typeof url !== 'string' || !validUrl.test(url)) throw new Error('Overview lookup returned an invalid response.');
-    }
-    if (data.candidates && (!Array.isArray(data.candidates) || data.candidates.some(candidate =>
-      !candidate || typeof candidate.title !== 'string' || !Number.isSafeInteger(candidate.id) || candidate.id <= 0 ||
-      (candidate.source !== 'TMDB' && candidate.source !== 'Wikipedia')))) {
-      throw new Error('Overview lookup returned invalid candidates.');
-    }
-    return data;
+  const isMissingSynopsis = (m: MediaMetadata): boolean => {
+    const text = (m.overview || (m as any).synopsis || '').trim();
+    return !text || text.toLowerCase().includes('placeholder') || text.toLowerCase().includes('no synopsis');
   };
 
-  const handleOverviewBatch = async () => {
-    if (!overviewItems.length || batchProcessing || savingCandidateId) return;
-    const controller = new AbortController();
-    batchController.current = controller;
-    setBatchProcessing(true);
-    setOverviewBatchProcessing(true);
-    setBatchProgress({ current: 0, total: overviewItems.length });
-    setBatchMessage(null);
-    setBatchErrors({});
-    setOverviewCandidates({});
-    setOverviewSelectionErrors({});
-    pendingOverviewSelections.current.clear();
-    overviewSelectionsSaved.current = 0;
-    overviewRateLimited.current = false;
-    overviewPauseMessage.current = '';
-    setShowBatchLog(true);
-    setBatchLog([`Checking ${overviewItems.length} series and collections for separate franchise overviews. Existing synopses are preserved.`]);
-    let completed = 0;
-    let saved = 0;
-    let errors = 0;
-    try {
-      for (const item of overviewItems) {
-        if (controller.signal.aborted || overviewRateLimited.current) break;
-        setBatchCurrentTitle(item.title);
-        try {
-          const result = await requestOverview(item, controller.signal);
-          if (controller.signal.aborted) break;
-          if (result.overview) {
-            await onFetchLibraryMetadata(item.id, { franchiseOverview: result.overview });
-            saved++;
-          } else if (result.candidates?.length) {
-            pendingOverviewSelections.current.add(item.id);
-            setOverviewCandidates(previous => ({ ...previous, [item.id]: result.candidates! }));
-          }
-          setBatchLog(previous => [...previous, `${item.title}: ${result.overview ? `saved ${result.overview.source} overview` : result.candidates?.length ? 'choose an overview source below' : 'no verified overview found'}.`,
-            ...(result.diagnostics || []).map(entry => `  ${entry.provider}: ${entry.outcome}`)]);
-        } catch (error) {
-          if (controller.signal.aborted) break;
-          errors++;
-          const message = error instanceof Error ? error.message : String(error);
-          if (error instanceof OverviewRateLimitError) {
-            overviewRateLimited.current = true;
-            overviewPauseMessage.current = message;
-          }
-          setBatchErrors(previous => ({ ...previous, [item.id]: message }));
-          setBatchLog(previous => [...previous, `${item.title}: ${message}`]);
-        }
-        completed++;
-        setBatchProgress({ current: completed, total: overviewItems.length });
-      }
-      const summary = `Overview lookup: ${saved + overviewSelectionsSaved.current} saved, ${pendingOverviewSelections.current.size} need selection, ${errors} failed; ${completed} checked.`;
-      setBatchMessage(overviewRateLimited.current ? `${summary} Stopped: ${overviewPauseMessage.current}` : summary);
-    } finally {
-      setBatchProcessing(false);
-      setOverviewBatchProcessing(false);
-      batchController.current = null;
-    }
+  const isMissingArtwork = (m: MediaMetadata): boolean => {
+    return !m.posterUrl || m.posterUrl.trim() === '';
   };
 
-  const handleOverviewSelection = async (id: string, candidate: FranchiseCandidate) => {
-    const item = mediaLibrary.find(entry => entry.id === id);
-    if (!item) {
-      setOverviewSelectionErrors(previous => ({ ...previous, [id]: 'The library item no longer exists.' }));
-      return;
-    }
-    setSavingCandidateId(id);
-    setOverviewSelectionErrors(previous => {
-      const next = { ...previous };
-      delete next[id];
-      return next;
-    });
-    try {
-      const result = await requestOverview(item, new AbortController().signal, candidate);
-      if (!result.overview) {
-        const detail = result.diagnostics?.map(entry => entry.outcome).find(outcome => /no premise or overview/i.test(outcome));
-        throw new Error(detail || 'The selected source has no usable overview.');
-      }
-      await onFetchLibraryMetadata(id, { franchiseOverview: result.overview });
-      if (result.overview.excerpt === 'introduction') {
-        setBatchMessage(`Saved the Wikipedia introduction for "${item.title}" as its separate overview.`);
-      }
-      pendingOverviewSelections.current.delete(id);
-      if (overviewBatchProcessing) overviewSelectionsSaved.current++;
-      setOverviewCandidates(previous => {
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
-    } catch (error) {
-      if (error instanceof OverviewRateLimitError) {
-        overviewRateLimited.current = true;
-        overviewPauseMessage.current = error.message;
-      }
-      setOverviewSelectionErrors(previous => ({ ...previous, [id]: error instanceof Error ? error.message : String(error) }));
-    } finally {
-      setSavingCandidateId(null);
-    }
-  };
+  const incompleteItems = mediaLibrary.filter(
+    (m) => isMissingSynopsis(m) || isMissingArtwork(m)
+  );
 
   const missingSynopsisCount = incompleteItems.filter(isMissingSynopsis).length;
-  const missingArtworkCount = incompleteItems.filter((m) => isMissingArtwork(m.posterUrl)).length;
-  const unfetchedCount = incompleteItems.filter((m) => !m.metadataFetchStatus).length;
+  const missingArtworkCount = incompleteItems.filter(isMissingArtwork).length;
 
   const seriesIncompleteCount = incompleteItems.filter((m) => m.type === 'series').length;
   const movieIncompleteCount = incompleteItems.filter((m) => m.type === 'movie').length;
 
   const filteredUncategorized = incompleteItems.filter((item) => {
-    if (reviewCandidates[item.id]?.length) return true;
     // Text search filter
     if (uncatSearchQuery.trim()) {
       const matchText = item.title.toLowerCase().includes(uncatSearchQuery.toLowerCase());
@@ -386,10 +228,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       return isMissingSynopsis(item);
     }
     if (uncatSubFilter === 'artwork') {
-      return isMissingArtwork(item.posterUrl);
-    }
-    if (uncatSubFilter === 'unfetched') {
-      return !item.metadataFetchStatus;
+      return isMissingArtwork(item);
     }
     if (uncatSubFilter === 'series') {
       return item.type === 'series';
@@ -401,157 +240,40 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   });
 
   const handleBatchCategorizeAll = async () => {
-    if (incompleteItems.length === 0 || batchProcessing || savingCandidateId) return;
-    const items = [...incompleteItems];
-    const controller = new AbortController();
-    batchController.current = controller;
+    if (incompleteItems.length === 0 || batchProcessing) return;
     setBatchProcessing(true);
-    setBatchProgress({ current: 0, total: items.length });
+    setBatchProgress({ current: 0, total: incompleteItems.length });
     setBatchMessage(null);
-    setBatchErrors({});
-    setReviewCandidates({});
-    setShowBatchLog(true);
-    setBatchLog([
-      `Starting: ${items.length} incomplete items; ${completeItems.length} already have a synopsis and poster; ${categoryLabelCount} category labels and ${audioTrackCount} individual audio tracks excluded. ${sidecarCount} subtitle/metadata/artwork entries excluded.`,
-      'Fetch All checks all incomplete items, regardless of the current list filter. Movies, series and albums run concurrently, one item per type at a time. Movies and series use TMDB when configured, with OMDb, TVMaze and iTunes fallbacks; albums use MusicBrainz and TheAudioDB. TMDB checks the lookup year first, then the following year. Same-title, same-year matches use the most popular result when scores are available and may be incorrect; other ambiguous matches require review.',
-    ]);
 
-    const log = (message: string) => {
-      setBatchLog((previous) => [...previous, message]);
-    };
+    let successCount = 0;
+    for (let i = 0; i < incompleteItems.length; i++) {
+      const item = incompleteItems[i];
+      setBatchProgress({ current: i + 1, total: incompleteItems.length });
+      try {
+        const itemData = await categorizeMediaWithRetry(
+          item.title,
+          item.type,
+          item.year,
+          { maxRetries: 2, timeoutMs: 7000 }
+        ) || await resolveMediaWithFallback(item.title, item.type, item.year);
 
-    let matched = 0;
-    let noMatch = 0;
-    let review = 0;
-    let failed = 0;
-    let completed = 0;
-    let backendUnavailable = false;
-    const processType = async (type: MediaType) => {
-      for (const item of items.filter(entry => entry.type === type)) {
-        if (controller.signal.aborted || backendUnavailable) break;
-        setBatchActiveTitles(previous => ({ ...previous, [type]: item.title }));
-        const year = metadataLookupYear(item);
-        log(`Checking "${item.title}" (${item.type}${year ? `, ${year}` : ', unverified year'}); missing: ${[isMissingSynopsis(item) ? 'synopsis' : '', isMissingArtwork(item.posterUrl) ? 'poster' : ''].filter(Boolean).join(', ')}.`);
-        const lookupMedia = metadataLookupMedia(item);
-        const lookupTitle = libraryLookupTitle(lookupMedia);
-        if (lookupMedia.type !== item.type) log(`  Using ${lookupMedia.type} lookup based on TV path context.`);
-        if (lookupTitle !== item.title) log(`  Lookup title: "${lookupTitle}".`);
-        if (isCollectionLookup(lookupMedia)) {
-          log('  Looking up the TMDB collection and combining its overview with descriptions for its films.');
+        if (itemData) {
+          onSaveCategorizedMedia(itemData);
+          successCount++;
         }
-        try {
-          let needsReview = false;
-          const itemData = await fetchLibraryMetadata(item, controller.signal, (details: MetadataLookupDetails) => {
-            if (details.candidates?.length) {
-              needsReview = true;
-              setReviewCandidates(previous => ({ ...previous, [item.id]: details.candidates! }));
-              log(`  "${item.title}": Multiple exact-title results; choose the correct TMDB result below.`);
-              for (const candidate of details.candidates) {
-                log(candidate.candidateType === 'collection'
-                  ? `  "${item.title}": TMDB collection option: ${candidate.title}.`
-                  : `  "${item.title}": TMDB option: ${candidate.title}${candidate.year ? ` (${candidate.year})` : ''}.`);
-              }
-            }
-            if (details.providers?.length) {
-              for (const provider of details.providers) log(`  "${item.title}": ${provider.provider}: ${provider.outcome}.`);
-            } else {
-              log(`  "${item.title}": Provider details unavailable from this backend.`);
-            }
-            log(`  "${item.title}": ${details.reason}; source: ${details.source || 'none'}; returned: ${details.returnedTitle || 'no title'}${details.returnedYear ? ` (${details.returnedYear})` : ''}; fields: ${details.fields.join(', ') || 'none'}.`);
-          });
-          if (controller.signal.aborted) break;
-          await onFetchLibraryMetadata(item.id, itemData);
-          if (itemData) {
-            matched++;
-            const filled = [
-              isMissingSynopsis(item) && !isMissingText(itemData.overview) ? 'synopsis' : '',
-              isMissingArtwork(item.posterUrl) && !isMissingArtwork(itemData.posterUrl) ? 'poster' : '',
-              isMissingArtwork(item.fanartUrl) && !isMissingArtwork(itemData.fanartUrl) ? 'fanart' : '',
-              !item.genres?.length && itemData.genres?.length ? 'genres' : '',
-              !item.rating && itemData.rating && Number.isFinite(itemData.rating) ? 'rating' : '',
-              !item.cast?.length && itemData.cast?.length ? 'cast' : '',
-            ].filter(Boolean);
-            const matchLabel = itemData.matchMode === 'ranked' || itemData.matchMode === 'unique-variant'
-              ? 'inferred match (verify manually)' : 'verified match';
-            log(`  Saved ${matchLabel} for "${item.title}"; filled: ${filled.join(', ') || 'no missing fields'}; existing metadata was preserved.`);
-          } else if (needsReview) {
-            review++;
-            log(`  Awaiting your selection for "${item.title}".`);
-          } else {
-            noMatch++;
-            log(`  No verified match saved for "${item.title}".`);
-          }
-        } catch (e) {
-          if (controller.signal.aborted) break;
-          const message = e instanceof Error ? e.message : String(e);
-          setBatchErrors((prev) => ({ ...prev, [item.id]: message }));
-          if (e instanceof MetadataReviewRequiredError) {
-            log(`  Manual review required for "${item.title}": ${message}`);
-            review++;
-          } else {
-            console.warn(`Failed to fetch metadata for ${item.title}:`, e);
-            log(`  Failed to fetch or save "${item.title}": ${message}`);
-            failed++;
-            if (e instanceof MetadataBackendUnavailableError) backendUnavailable = true;
-          }
-        }
-        completed++;
-        setBatchProgress({ current: completed, total: items.length });
-        if (backendUnavailable) break;
+      } catch (e) {
+        console.warn(`Failed to auto-categorize ${item.title}:`, e);
       }
-      setBatchActiveTitles(previous => {
-        const next = { ...previous };
-        delete next[type];
-        return next;
-      });
-    };
-    await Promise.all((['movie', 'series', 'album'] as const).map(processType));
-    batchController.current = null;
-    setBatchCurrentTitle('');
-    setBatchProcessing(false);
-    const summary = `${controller.signal.aborted || backendUnavailable ? 'Stopped' : 'Finished'}: ${completed}/${items.length} checked, ${matched} matched, ${noMatch} without a verified match, ${review} requiring manual review, ${failed} failed.`;
-    setBatchMessage(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
-    log(backendUnavailable ? `${summary} Metadata backend unavailable; retry after restoring the connection.` : summary);
-  };
-
-  const handleSelectReviewCandidate = async (
-    item: MediaMetadata,
-    candidate: NonNullable<FetchedLibraryMetadata['candidates']>[number],
-  ) => {
-    setSavingCandidateId(item.id);
-    try {
-      let selectedMetadata: FetchedLibraryMetadata;
-      if (candidate.candidateType === 'collection' && candidate.collectionId) {
-        const selected = await fetchLibraryMetadata(item, new AbortController().signal, undefined, candidate.collectionId);
-        if (!selected) throw new Error('The selected TMDB collection could not be verified or had no usable descriptions.');
-        selectedMetadata = selected;
-      } else {
-        selectedMetadata = { ...candidate, matchMode: 'manual' };
-      }
-      await onFetchLibraryMetadata(item.id, selectedMetadata);
-      setReviewCandidates(previous => {
-        const next = { ...previous };
-        delete next[item.id];
-        return next;
-      });
-      setBatchErrors(previous => {
-        const next = { ...previous };
-        delete next[item.id];
-        return next;
-      });
-      setBatchLog(previous => [...previous, `  Saved your selection: ${candidate.title}${candidate.year ? ` (${candidate.year})` : ''} for "${item.title}".`]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setBatchErrors(previous => ({ ...previous, [item.id]: message }));
-      setBatchLog(previous => [...previous, `  Could not save selected result for "${item.title}": ${message}`]);
-    } finally {
-      setSavingCandidateId(null);
     }
+
+    setBatchProcessing(false);
+    setBatchMessage(`Batch categorization complete! Updated ${successCount} of ${incompleteItems.length} items.`);
+    setTimeout(() => setBatchMessage(null), 5000);
   };
 
   if (!isOpen) return null;
 
-  const handleSearch = async (targetQuery?: string, targetType?: MediaType | 'all', targetYear?: number) => {
+  const handleSearch = async (targetQuery?: string, targetType?: MediaType | 'all') => {
     const q = (targetQuery || query).trim();
     if (!q) {
       setErrorMsg('Please enter a movie or series title to categorize.');
@@ -563,9 +285,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setIsSaved(false);
 
     try {
-      const parsedYear = targetQuery !== undefined
-        ? targetYear
-        : yearHint ? parseInt(yearHint, 10) : undefined;
+      const parsedYear = yearHint ? parseInt(yearHint, 10) : undefined;
       let media: MediaMetadata | null = await categorizeMediaWithRetry(
         q,
         targetType || mediaType,
@@ -731,8 +451,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     onClose();
   };
 
-  return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-3xl bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-slate-800 shrink-0">
@@ -772,10 +492,6 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             >
               <X className="w-5 h-5" />
             </button>
-            <button type="button" onClick={() => setActiveTabFilter('complete')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold ${activeTabFilter === 'complete' ? 'bg-emerald-700 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'}`}>
-              Has metadata ({completeItems.length})
-            </button>
           </div>
         </div>
 
@@ -804,7 +520,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             }`}
           >
             <ListFilter className="w-3.5 h-3.5 text-amber-400" />
-            <span>Missing &amp; Unfetched</span>
+            <span>Uncategorized Media</span>
             <span
               className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
                 activeTabFilter === 'uncategorized'
@@ -827,93 +543,41 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
                     <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Missing &amp; Unfetched Media</span>
+                    <span>Dedicated View Filter: Uncategorized Media</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    Showing items missing a synopsis or poster. Category folder labels, individual audio tracks and subtitle/metadata/artwork entries are excluded; albums remain eligible. Existing metadata is kept.
+                    These {incompleteItems.length} files currently lack an official synopsis or artwork. Use one-click triggers to re-categorize or manually match.
                   </p>
-                  {audioTrackCount > 0 && <p className="text-[11px] text-slate-400">{audioTrackCount} audio track entries excluded. Only albums already in the library are searched.</p>}
                 </div>
 
                 {incompleteItems.length > 0 && (
-                  batchProcessing ? (
-                    <button type="button" onClick={() => batchController.current?.abort()}
-                      className="shrink-0 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold cursor-pointer">
-                      Stop after current save
-                    </button>
-                  ) : (
                   <button
                     type="button"
-                    disabled={!!savingCandidateId || overviewBatchProcessing}
+                    disabled={batchProcessing}
                     onClick={handleBatchCategorizeAll}
                     className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Fetch All ({incompleteItems.length})</span>
+                    {batchProcessing ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Processing ({batchProgress.current}/{batchProgress.total})...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Auto-Categorize All ({incompleteItems.length})</span>
+                      </>
+                    )}
                   </button>
-                  )
                 )}
               </div>
 
-              {batchProcessing && (
-                <div role="status" className="text-xs text-slate-300 flex items-center gap-2">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Checked {batchProgress.current}/{batchProgress.total}; {batchProgress.total - batchProgress.current} remaining. Checking: {Object.values(batchActiveTitles).join(', ') || batchCurrentTitle}
-                </div>
-              )}
               {/* Batch feedback message */}
               {batchMessage && (
-                <div role="status" className="p-3 bg-slate-900 border border-slate-700 rounded-xl text-xs text-slate-200 flex items-center gap-2">
+                <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>{batchMessage}</span>
                 </div>
-              )}
-              <div className="rounded-xl border border-slate-700 bg-slate-900 p-3 space-y-2">
-                <p className="text-xs text-slate-300">Find separate franchise and series overviews from TMDB and Wikipedia. Collections with existing metadata are skipped; series can still be checked. Existing synopses are kept.</p>
-                <button type="button" disabled={batchProcessing || !!savingCandidateId || !overviewItems.length} onClick={() => void handleOverviewBatch()}
-                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
-                  Fetch franchise overviews ({overviewItems.length})
-                </button>
-                {batchProcessing && !incompleteItems.length && <button type="button" onClick={() => batchController.current?.abort()}
-                  className="ml-2 rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-bold text-white">
-                  Stop after current save
-                </button>}
-                {Object.entries(overviewCandidates).map(([id, candidates]) => (
-                  <div key={id} className="space-y-1">
-                    <p className="text-xs text-amber-300">Choose an overview for {mediaLibrary.find(item => item.id === id)?.title || id}:</p>
-                    <div className="flex flex-wrap gap-2">
-                      {candidates.map(candidate => <span key={`${candidate.source}-${candidate.id}`} className="flex items-center gap-1">
-                        <button type="button" disabled={!!savingCandidateId || (batchProcessing && !overviewBatchProcessing)}
-                          onClick={() => void handleOverviewSelection(id, candidate)}
-                          className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:border-amber-400 disabled:opacity-50">
-                          {candidate.title} ({candidate.source} #{candidate.id})
-                        </button>
-                        <a className="text-xs text-indigo-300 underline" target="_blank" rel="noreferrer"
-                          href={candidate.source === 'TMDB' ? `https://www.themoviedb.org/collection/${candidate.id}` : `https://en.wikipedia.org/?curid=${candidate.id}`}>
-                          View source
-                        </a>
-                      </span>)}
-                    </div>
-                    {savingCandidateId === id && <p className="text-xs text-slate-400" role="status">Saving selected overview...</p>}
-                    {overviewSelectionErrors[id] && <p className="text-xs text-red-300" role="alert">{overviewSelectionErrors[id]}</p>}
-                  </div>
-                ))}
-              </div>
-              {batchLog.length > 0 && (
-                <section className="rounded-xl border border-slate-700 bg-slate-950 p-3 space-y-2" aria-label="Fetch All diagnostics">
-                  <button type="button" onClick={() => setShowBatchLog(!showBatchLog)}
-                    className="text-xs font-bold text-indigo-300" aria-expanded={showBatchLog}>
-                    {showBatchLog ? 'Hide' : 'Show'} Fetch All log ({batchLog.length} entries)
-                  </button>
-                  {showBatchLog && (
-                    <>
-                      <p className="text-[11px] text-slate-400">Contains library titles and years. Review before sharing. Cleared when the next Fetch All starts.</p>
-                      <div role="log" aria-label="Fetch All log" className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-slate-300">
-                        {batchLog.join('\n')}
-                      </div>
-                    </>
-                  )}
-                </section>
               )}
 
               {/* Sub-Filters & Quick Search */}
@@ -930,17 +594,6 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     }`}
                   >
                     All ({incompleteItems.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('unfetched')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'unfetched'
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    Not Checked ({unfetchedCount})
                   </button>
                   <button
                     type="button"
@@ -1007,34 +660,29 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
                   <div className="text-xs font-bold text-white">No items found matching this filter!</div>
                   <p className="text-[11px] text-slate-400">
-                    No media matches the selected filter.
+                    All scanned library media have complete synopsis and artwork metadata.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
                   {filteredUncategorized.map((item) => {
-                    const missingSynopsis = isMissingSynopsis(item);
-                    const missingArtwork = isMissingArtwork(item.posterUrl);
-                    const sourcePath = item.path || (
-                      item.folderPath && item.matchedFilename
-                        ? `${item.folderPath.replace(/[\\/]+$/, '')}/${item.matchedFilename}`
-                        : undefined
-                    );
-                    const sourceFileName = sourcePath?.replace(/\\/g, '/').split('/').pop() ||
-                      item.matchedFilename?.replace(/\\/g, '/').split('/').pop();
-                    const lookupYear = metadataLookupYear(item);
+                    const isMissingSynopsis =
+                      !item.synopsis ||
+                      item.synopsis.trim() === '' ||
+                      item.synopsis.toLowerCase().includes('placeholder') ||
+                      item.synopsis.toLowerCase().includes('no synopsis');
+                    const isMissingArtwork = !item.posterUrl || item.posterUrl.trim() === '';
 
                     return (
                       <div
                         key={item.id}
-                        className="flex flex-col gap-3 p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 transition"
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 transition"
                       >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         {/* Media Item Info */}
                         <div className="flex items-center gap-3 min-w-0">
                           {/* Thumbnail / Artwork Placeholder */}
                           <div className="w-11 h-14 rounded-lg bg-slate-950 border border-slate-800 shrink-0 overflow-hidden flex items-center justify-center relative">
-                            {item.posterUrl && !missingArtwork ? (
+                            {item.posterUrl && !isMissingArtwork ? (
                               <img
                                 src={item.posterUrl}
                                 alt={item.title}
@@ -1054,9 +702,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                               <span className="text-xs font-bold text-white truncate max-w-xs sm:max-w-sm">
                                 {item.title}
                               </span>
-                              {lookupYear && (
+                              {item.year && (
                                 <span className="text-[10px] text-slate-400 font-mono">
-                                  ({lookupYear})
+                                  ({item.year})
                                 </span>
                               )}
                               <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase ${
@@ -1068,47 +716,23 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                               </span>
                             </div>
 
-                            {(sourceFileName || sourcePath) && (
-                              <div className="space-y-0.5 text-[10px] font-mono text-slate-400">
-                                {sourceFileName && (
-                                  <div className="break-all">
-                                    <span className="text-slate-500">File: </span>{sourceFileName}
-                                  </div>
-                                )}
-                                {sourcePath && (
-                                  <div className="break-all">
-                                    <span className="text-slate-500">Full path: </span>{sourcePath}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
                             {/* Defect Badges */}
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              {!item.metadataFetchStatus && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-200">Not checked by Fetch All</span>
-                              )}
-                              {item.metadataFetchStatus === 'no-match' && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950 text-amber-200">No verified match or provider unavailable</span>
-                              )}
-                              {batchErrors[item.id] && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950 text-red-200">Fetch failed: {batchErrors[item.id]}</span>
-                              )}
-                              {missingSynopsis && (
+                              {isMissingSynopsis && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950/80 border border-red-800/70 text-red-300 flex items-center gap-1 font-medium">
                                   <FileQuestion className="w-3 h-3" />
                                   <span>Missing Synopsis</span>
                                 </span>
                               )}
-                              {missingArtwork && (
+                              {isMissingArtwork && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950/80 border border-amber-800/70 text-amber-300 flex items-center gap-1 font-medium">
                                   <ImageOff className="w-3 h-3" />
                                   <span>Missing Artwork</span>
                                 </span>
                               )}
-                              {!sourcePath && item.recommendedFolderStructure && (
+                              {item.recommendedFolderStructure && (
                                 <span className="text-[10px] font-mono text-slate-500 truncate max-w-[200px] hidden md:inline">
-                                  Folder: {item.recommendedFolderStructure}
+                                  {item.recommendedFolderStructure}
                                 </span>
                               )}
                             </div>
@@ -1124,8 +748,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                               setActiveTabFilter('search');
                               setQuery(item.title);
                               setMediaType(item.type);
-                              setYearHint(lookupYear?.toString() || '');
-                              handleSearch(item.title, item.type, lookupYear);
+                              if (item.year) setYearHint(item.year.toString());
+                              handleSearch(item.title, item.type);
                             }}
                             className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                             title="One-click AI Web Search & Categorize"
@@ -1147,26 +771,6 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                             </button>
                           )}
                         </div>
-                        </div>
-                        {!!reviewCandidates[item.id]?.length && (
-                          <div className="space-y-2 border-t border-slate-700 pt-3">
-                            <p className="text-xs text-amber-200">TMDB found multiple possible matches. Select the correct title or collection:</p>
-                            <div className="flex flex-wrap gap-2">
-                              {reviewCandidates[item.id].map((candidate, index) => (
-                                <button
-                                  key={`${candidate.candidateType || 'movie'}:${candidate.collectionId || candidate.title}:${candidate.year || ''}:${index}`}
-                                  type="button"
-                                  disabled={!!savingCandidateId}
-                                  onClick={() => handleSelectReviewCandidate(item, candidate)}
-                                  className="flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-left text-xs text-white hover:border-amber-400 disabled:opacity-50"
-                                >
-                                  {candidate.posterUrl && <img src={candidate.posterUrl} alt="" className="h-10 w-7 rounded object-cover" />}
-                                  <span>{candidate.title}{candidate.year ? ` (${candidate.year})` : ' (collection)'}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
                     );
                   })}
@@ -1176,25 +780,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           )}
 
           {/* TAB 2: WEB SEARCH & CATEGORIZE VIEW */}
-          {activeTabFilter === 'complete' && (
-            <section className="space-y-3">
-              <p className="text-sm text-slate-400">These items have a synopsis and poster. Review or manually correct them if needed.</p>
-              {completeItems.length === 0 && <p className="text-sm text-slate-400">No items with a synopsis and poster found.</p>}
-              {completeItems.map((item) => (
-                <div key={item.id} className="flex items-start gap-3 rounded-xl bg-slate-900 p-3 text-sm">
-                  <img src={item.posterUrl} alt={`${item.title} poster`} className="w-12 rounded" referrerPolicy="no-referrer" />
-                  <div className="flex-1 space-y-1">
-                    <strong>{item.title} {item.year ? `(${item.year})` : ''}</strong>
-                    <p className="text-xs text-slate-400">{isMissingText(item.overview) ? item.synopsis : item.overview}</p>
-                  </div>
-                  {onOpenManualMatch && <button type="button" onClick={() => onOpenManualMatch(item)} className="rounded bg-slate-700 px-3 py-1">Manual Match</button>}
-                </div>
-              ))}
-            </section>
-          )}
           {activeTabFilter === 'search' && (
             <>
-              <ProviderSearch key={`${query}:${mediaType}`} initialTitle={query} type={mediaType === 'album' ? 'all' : mediaType} />
               {/* Reminder banner for uncategorized media if any */}
               {incompleteItems.length > 0 && (
                 <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 flex items-center justify-between gap-2">
@@ -1549,7 +1136,6 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           </div>
         )}
       </div>
-    </div>,
-    document.body
+    </div>
   );
 };

@@ -94,10 +94,20 @@ export const MusicTab: React.FC<MusicTabProps> = ({
     playlists.find(p => p.id === selectedPlaylistId) || null
   , [playlists, selectedPlaylistId]);
 
-  // Keep the Music hub exclusive to items classified as music/audio.
+  // Filter media items that are albums or audio books with defensive checks
   const musicItems = useMemo(() => {
     if (!Array.isArray(mediaLibrary)) return [];
-    return mediaLibrary.filter((media) => media?.type === 'album');
+    return mediaLibrary.filter((m) => {
+      if (!m) return false;
+      const folder = (m.recommendedFolderStructure || '').toLowerCase();
+      const genres = Array.isArray(m.genres) ? m.genres : [];
+      return (
+        m.type === 'album' ||
+        folder.includes('music') ||
+        folder.includes('audio') ||
+        genres.some((g) => typeof g === 'string' && /music|audio|album|rock|electronic|pop|jazz|classical/i.test(g))
+      );
+    });
   }, [mediaLibrary]);
 
   // Extract all unique genres safely

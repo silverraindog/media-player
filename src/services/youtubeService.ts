@@ -1,4 +1,4 @@
-import { fetchWithRateLimitHandling } from '../utils/rateLimitHandler';
+// src/services/youtubeService.ts
 
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
@@ -40,52 +40,40 @@ export interface YouTubeVideo {
 /**
  * Fetch the authenticated user's YouTube subscriptions.
  */
-/**
- * Fetch the authenticated user's YouTube subscriptions with rate limit handling.
- */
 export const fetchSubscriptions = async (token: string): Promise<YouTubeSubscription[]> => {
-  const apiUrl = `${YOUTUBE_API_BASE}/subscriptions?part=snippet&mine=true&maxResults=50`;
-  
-  // The apiCall wrapper must return a Promise resolving to a raw Fetch Response object
-  const apiCall = async () => {
-    const response = await fetch(apiUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    return response;
-  };
+  const response = await fetch(`${YOUTUBE_API_BASE}/subscriptions?part=snippet&mine=true&maxResults=50`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
 
-  try {
-    const responseJson = await fetchWithRateLimitHandling(apiCall, apiUrl);
-    return responseJson.items || [];
-  } catch (e) {
-    console.error('Rate-limited or network failure fetching subscriptions:', e);
-    // Return an empty array or throw, depending on required failure behavior
-    return []; 
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error?.message || 'Failed to fetch YouTube subscriptions.');
   }
+
+  const data = await response.json();
+  return data.items || [];
 };
 
 /**
- * Fetch latest videos from a specific channel using its uploads playlist, with rate limit handling.
+ * Fetch latest videos from a specific channel using its uploads playlist.
  */
 export const fetchChannelUploads = async (token: string, channelId: string, maxResults = 4): Promise<YouTubeVideo[]> => {
   const uploadsPlaylistId = 'UU' + channelId.slice(2);
-  const apiUrl = `${YOUTUBE_API_BASE}/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${maxResults}`;
-  
-  // The apiCall wrapper must return a Promise resolving to a raw Fetch Response object
-  const apiCall = async () => {
-    const response = await fetch(apiUrl, {
+  const response = await fetch(
+    `${YOUTUBE_API_BASE}/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${maxResults}`,
+    {
       headers: { Authorization: `Bearer ${token}` },
-    });
-    return response;
-  };
+    }
+  );
 
-  try {
-    const responseJson = await fetchWithRateLimitHandling(apiCall, apiUrl);
-    return responseJson.items || [];
-  } catch (e) {
-    console.error(`Rate-limited or network failure fetching uploads for ${channelId}:`, e);
+  if (!response.ok) {
+    // Some channels might not have public uploads playlists, log warning and return empty
+    console.warn(`Failed to fetch uploads for channel ${channelId}`);
     return [];
   }
+
+  const data = await response.json();
+  return data.items || [];
 };
 
 /**

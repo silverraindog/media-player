@@ -73,13 +73,13 @@ export function stripVirtualFranchiseSuffix(inputPath: string): string {
   let cleaned = inputPath;
 
   // Pattern 1: /<Folder>/<Folder> (Main Series) or /<Folder>/<Folder> (2004)
-  cleaned = cleaned.replace(/\/([^/]+)\/\1\s+\((?:Main Series|Universe|\d{4})\)(?=\/|$)/gi, '/$1');
+  cleaned = cleaned.replace(/\/([^/]+)\/\1\s+\((?:Main Series|\d{4})\)(?=\/|$)/gi, '/$1');
 
   // Pattern 2: /<Folder> (Main Series) directly (e.g. end of path or standalone segment)
   cleaned = cleaned.replace(/\/([^/]+)\s+\(Main Series\)(?=\/|$)/gi, '/$1');
 
   // Pattern 3: Leading segment: "<Folder>/<Folder> (Main Series)"
-  cleaned = cleaned.replace(/^([^/]+)\/\1\s+\((?:Main Series|Universe|\d{4})\)(?=\/|$)/i, '$1');
+  cleaned = cleaned.replace(/^([^/]+)\/\1\s+\((?:Main Series|\d{4})\)(?=\/|$)/i, '$1');
   cleaned = cleaned.replace(/^([^/]+)\s+\(Main Series\)(?=\/|$)/i, '$1');
 
   return cleaned;
@@ -184,8 +184,13 @@ export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsoluteP
   if (!rawPath) return '';
   let trimmed = rawPath.normalize('NFC').trim();
 
-  // If already an HTTP/HTTPS stream URL or blob/data URI, return preserved URL
-  if (/^(https?|blob|data):/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
+  // Preserve blob/data URIs verbatim (must check BEFORE http/https match because blob:http:// contains http://)
+  if (/^(blob|data):/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  // If already an HTTP/HTTPS stream URL, return preserved URL
+  if (/^https?:/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
     const match = trimmed.match(/https?:\/\/.+/i) || trimmed.match(/https?:.+/i);
     return match ? match[0].replace(/^(https?):\/+([^\/])/i, '$1://$2') : trimmed;
   }
@@ -241,6 +246,11 @@ export function sanitizeSambaPath(rawPath: string, options?: { preserveAbsoluteP
 export function extractCleanLocalPath(rawPath: string, defaultShare = 'media'): string {
   if (!rawPath) return '';
   let path = rawPath.trim();
+
+  // Preserve web, blob, and data URLs untouched
+  if (/^(https?|blob|data):/i.test(path)) {
+    return path;
+  }
 
   // 1. Recursive percent-decoding (up to 4 passes)
   let prev = '';
@@ -322,8 +332,13 @@ export function getMountedDisplayPath(rawPath: string, mountRootPath: string, sh
   if (!rawPath) return '';
   const trimmed = rawPath.trim();
 
+  // Preserve blob/data URIs verbatim before checking http/https
+  if (/^(blob|data):/i.test(trimmed)) {
+    return trimmed;
+  }
+
   // Web stream URLs should be displayed as URLs, not combined with /Volumes/<share>
-  if (/^(https?|blob|data):/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
+  if (/^https?:/i.test(trimmed) || trimmed.includes('https:/') || trimmed.includes('http:/')) {
     const match = trimmed.match(/https?:\/\/.+/i) || trimmed.match(/https?:.+/i);
     return match ? match[0].replace(/^(https?):\/+([^\/])/i, '$1://$2') : trimmed;
   }
@@ -533,30 +548,3 @@ export function cleanPathValue(rawPath: string): string {
   return sanitizeSambaPath(cleaned);
 }
 
-  /**
-   * Check if a path starts with a UNC protocol prefix (// followed by IP/host)
-   * This is different from Windows drive letters which are like C:
-   */
-  const hasUncPrefix = /^\/\/([0-9A-Za-z.-]+)/.test(inputPath);
-
-  /**
-   * Globally replaces any redundant double-slashes (or multiple leading slashes/backslashes)
-   * with a single forward slash, ensuring absolute path resolution remains consistent
-   * before passing strings to the Rust scanner or backend filesystem calls.
-   * - Preserves UNC protocol prefixes (//192.168.x.x/share)
-   * - Handles \\Volumes\\media -> /Volumes/media
-   * - Handles ///Volumes/media -> /Volumes/media
-   */
-  export function normalizeLeadingSlashes(inputPath: string): string {
-    if (!inputPath) return '';
-    // Convert all backslashes to forward slashes first
-    const normalized = inputPath.replace(/\\{4}/g, '/');
-    // Check for UNC protocol prefix (// followed by alphanumeric/IP)
-    const hasUncPrefix = /^\\/\\/([0-9A-Za-z.-]+)/.test(inputPath);
-    if (hasUncPrefix) {
-      // Preserve UNC prefixes - don't collapse the double slash
-      return inputPath;
-    }
-    // For non-UNC paths, replace redundant leading slashes with single forward slash
-    return normalized.replace(/^\\{2,}/, '/');
-  }

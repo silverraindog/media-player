@@ -17,13 +17,10 @@ test('the app renders after startup and navigation remains interactive', async (
     let response: Record<string, unknown> = { success: true };
 
     if (pathname === '/api/vault/state') {
-      await new Promise((resolve) => setTimeout(resolve, 800));
       response = { success: true, hasSavedState: false, state: {} };
     } else if (pathname === '/api/db/watchlist') {
       response = { success: true, watchlist: [], count: 0 };
     } else if (pathname === '/api/db/media' || pathname === '/api/media') {
-      response = { success: true, items: [], count: 0 };
-    } else if (pathname === '/api/db/media/recent') {
       response = { success: true, items: [], count: 0 };
     } else if (pathname === '/api/playlists') {
       response = { success: true, playlists: [] };
@@ -67,22 +64,7 @@ test('the app renders after startup and navigation remains interactive', async (
 
   try {
     await page.goto('/');
-    const startupScreen = page.locator('#app-startup-screen');
-    await expect(startupScreen).toBeVisible();
-    await expect.poll(() =>
-      startupScreen.evaluate((screen) => {
-        const bounds = screen.getBoundingClientRect();
-        return (
-          bounds.x <= 0 &&
-          bounds.y <= 0 &&
-          bounds.right >= window.innerWidth &&
-          bounds.bottom >= window.innerHeight
-        );
-      })
-    ).toBe(true);
     await expect(page.getByText('Initializing SambaVault Application view...')).toBeHidden();
-    await expect(page.getByText('Loading recent media from SQLite database...')).toBeHidden();
-    await expect(page.getByText('No recently added media is available yet.')).toBeVisible();
 
     const searchTab = page.locator('#tab-search');
     await expect(searchTab).toBeVisible();

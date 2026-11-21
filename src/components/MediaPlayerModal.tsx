@@ -40,9 +40,6 @@ import {
   TranscodeConfig,
 } from '../types';
 import { MatroskaPlayer } from './MatroskaPlayer';
-import { VlcPlayer } from './VlcPlayer';
-import { isMalformedMediaSource } from '../utils/mediaSourceDiagnostics';
-import { reloadDirectMedia } from '../utils/reloadDirectMedia';
 import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
 import { getMountedDisplayPath, extractCleanLocalPath } from '../utils/pathSanitizer';
@@ -177,9 +174,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   const stallStartTimeRef = useRef<number | null>(null);
   const isAutoReloadingRef = useRef<boolean>(false);
-  const cancelReloadRef = useRef<(() => void) | null>(null);
-  const reloadAttemptsRef = useRef(0);
-  const playbackStableSinceRef = useRef<number | null>(null);
   const lastPlaybackTimeRef = useRef<number>(0);
   const lastTimeAdvanceRef = useRef<number>(Date.now());
 
@@ -300,15 +294,19 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     setCurrentTrack(initialTrack);
   }, [initialTrack]);
 
-  // Determine active media path resolved to mounted local path (e.g. /Volumes/media/...)
+  // Determine active media path resolved to mounted local path (e.g. /Volumes/media/...) or direct blob/http URL
   const activeFilePath = useMemo(() => {
     let resolved = '';
     if (media.type === 'album') {
-      resolved = currentTrack?.playbackUrl || media.playbackUrl || media.path || '';
+      resolved = currentTrack?.playbackUrl || media.playbackUrl || media.localBlobUrl || media.path || '';
     } else if (media.type === 'series') {
-      resolved = currentEpisode?.playbackUrl || currentEpisode?.filePath || media.playbackUrl || media.path || '';
+      resolved = currentEpisode?.playbackUrl || currentEpisode?.filePath || media.playbackUrl || media.localBlobUrl || media.path || '';
     } else {
-      resolved = media.playbackUrl || media.path || '';
+      resolved = media.playbackUrl || media.localBlobUrl || media.path || '';
+    }
+
+    if (/^(blob|data|https?):/i.test(resolved.trim())) {
+      return resolved.trim();
     }
 
     if (!resolved) {
@@ -330,32 +328,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     setFallbackPlaybackUrl(null);
   }, [activeFilePath]);
 
-  // Native libvlc playback (Tauri/macOS only) for formats the webview's <video> cannot decode
-  const [vlcAvailable, setVlcAvailable] = useState(false);
-  const [vlcFailedPath, setVlcFailedPath] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !(window as any).__TAURI__) return;
-    import('@tauri-apps/api/tauri')
-      .then(({ invoke }) => invoke<boolean>('vlc_available'))
-      .then(setVlcAvailable)
-      .catch(() => setVlcAvailable(false));
-  }, []);
-
-  const needsVlc = useMemo(() => {
-    if (media.type === 'album') return false;
-    const p = (activeFilePath || '').toLowerCase().split('?')[0];
-    const webFriendlyContainer = /\.(mp4|m4v|mov|webm)$/.test(p);
-    if (!webFriendlyContainer) return true;
-    const video = mediaInfo?.streams?.find((s) => s.codec_type === 'video');
-    const audio = mediaInfo?.streams?.find((s) => s.codec_type === 'audio');
-    const webVideo = !video || ['h264', 'vp8', 'vp9', 'av1'].includes(video.codec_name?.toLowerCase());
-    const webAudio = !audio || ['aac', 'mp3', 'opus', 'vorbis', 'flac'].includes(audio.codec_name?.toLowerCase());
-    return !(webVideo && webAudio);
-  }, [activeFilePath, media.type, mediaInfo]);
-
-  const useVlcEngine = vlcAvailable && needsVlc && vlcFailedPath !== activeFilePath && !isProbing;
-
   const isMkv = useMemo(() => {
     const p = (activeFilePath || media.matchedFilename || '').toLowerCase();
     return p.endsWith('.mkv') || p.includes('.mkv?');
@@ -363,7 +335,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   // Probe media and subscribe to transcode service updates
   useEffect(() => {
-    if (!activeFilePath) return;
+    if (!activeFilePath || /^(blob|data|https?):/i.test(activeFilePath)) {
+      setIsProbing(false);
+      return;
+    }
     let isMounted = true;
     setIsProbing(true);
     
@@ -413,6 +388,11 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Build the playback URL (direct or transcoded output)
   const streamUrl = useMemo(() => {
     if (!activeFilePath) return '';
+
+    // Browser-imported File Blob URLs, Data URIs, and direct external HTTP(S) URLs play directly
+    if (/^(blob|data|https?):/i.test(activeFilePath)) {
+      return activeFilePath;
+    }
 
     // Extract normalized filesystem path stripped of any mangled asset/tauri/volume duplicates
     const cleanLocalPath = extractCleanLocalPath(activeFilePath, sambaConfig?.share || 'media');
@@ -716,7 +696,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   // Specifically logs if the browser is attempting to use a blob: scheme incorrectly or if MEDIA_ERR_SRC_NOT_SUPPORTED occurs.
   const inspectVideoSrc = useCallback(() => {
     const el = getActiveVideoElement();
-    const domSrc = el?.getAttribute('src') || el?.src || '';
+    const domSrc = el?.getAttribute('src') || el?.src || fallbackPlaybackUrl || streamUrl || '';
     const currentSrc = el?.currentSrc || domSrc;
     const videoError = el?.error;
     const videoErrorCode = videoError ? videoError.code : null;
@@ -724,10 +704,17 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     const isSrcNotSupported = videoErrorCode === 4;
 
     const isBlob = domSrc.startsWith('blob:') || currentSrc.startsWith('blob:');
-    const incorrectBlobUsage = isBlob && Boolean(videoError);
+    const incorrectBlobUsage = isBlob && (!fallbackPlaybackUrl || fallbackPlaybackUrl.length < 10 || Boolean(videoError));
     const isAsset = domSrc.includes('asset:/') || domSrc.includes('tauri:/') || domSrc.includes('asset://') || domSrc.includes('tauri://');
     const isHttp = domSrc.startsWith('http://') || domSrc.startsWith('https://');
-    const isMalformedAsset = isMalformedMediaSource(domSrc);
+    const isMalformedAsset = (
+      isAsset ||
+      domSrc.includes('%2FVolumes%2F') ||
+      /^\/Volumes\/.*asset:\//i.test(domSrc) ||
+      domSrc.includes('/Volumes/Media/asset:') ||
+      domSrc.includes('/Volumes/media/asset:') ||
+      domSrc.includes('localhost/%2F')
+    );
     const isDoublePrefixed = isMalformedAsset;
     const isExpressStream = domSrc.includes('/api/samba/stream') || domSrc.includes('/api/media/stream');
     const isHlsPlaylist = domSrc.includes('.m3u8') || currentSrc.includes('.m3u8');
@@ -752,16 +739,16 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       status = 'error';
       notes.push('CRITICAL: Malformed asset URI or duplicated /Volumes/ prefix detected in video src.');
       notes.push('Tauri asset protocol cannot parse repeated root path segments or nested schemes.');
-    } else if (isBlob && playerEngine !== 'hls') {
+    } else if (isBlob) {
       status = 'warning';
       notes.push('WARNING: Video element is playing from an in-memory blob: URL fallback.');
       notes.push('HTTP 206 range seeking may be limited and consumes high browser RAM.');
-    } else if (isBlob || isHlsPlaylist) {
-      status = 'healthy';
-      notes.push('OPTIMAL: Active HLS media source.');
     } else if (isExpressStream || isHttp) {
       status = 'healthy';
       notes.push('OPTIMAL: Streaming directly via Express HTTP 206 partial content proxy or HTTP network route.');
+    } else if (isHlsPlaylist) {
+      status = 'healthy';
+      notes.push('OPTIMAL: Active FFmpeg HLS segmented playlist stream (.m3u8).');
     } else if (domSrc) {
       notes.push(`INFO: Video source resolved to: ${domSrc.substring(0, 35)}...`);
     } else {
@@ -785,54 +772,73 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       isSrcNotSupported,
       incorrectBlobUsage,
     });
-  }, [getActiveVideoElement, playerEngine]);
+  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl]);
 
-  useEffect(() => {
-    reloadAttemptsRef.current = 0;
-    playbackStableSinceRef.current = null;
-    isAutoReloadingRef.current = false;
-    setAutoReloadNotice(null);
-    return () => {
-      cancelReloadRef.current?.();
-      cancelReloadRef.current = null;
-    };
-  }, [activeFilePath, streamUrl, fallbackPlaybackUrl, playerEngine, useMatroskaEngine, isOpen]);
+  // Auto-Reload mechanism:
+  // If player stalls for >5 seconds, reset video.src to null/empty and re-assign original URL while preserving video.currentTime
+  const triggerAutoReload = useCallback((reason = 'Stall > 5 seconds') => {
+    const el = getActiveVideoElement();
+    if (!el || isAutoReloadingRef.current) return;
 
-  const triggerAutoReload = useCallback((reason = 'Stall > 5 seconds', manual = false) => {
-    const el = videoRef.current;
-    if (!isOpen || playerEngine !== 'direct' || useMatroskaEngine || !el || isAutoReloadingRef.current) return;
-    if (manual) reloadAttemptsRef.current = 0;
-    if (reloadAttemptsRef.current >= 2) {
-      setPlaybackError('Direct playback repeatedly stalled. Switch to FFmpeg HLS transcoding or check the network connection.');
-      return;
-    }
-
-    reloadAttemptsRef.current += 1;
-    playbackStableSinceRef.current = null;
     isAutoReloadingRef.current = true;
+    el.dataset.autoReloading = 'true';
     const savedTime = el.currentTime || 0;
-    console.warn(`[Auto-Reload] Stream stalled (${reason}); reloading at ${savedTime.toFixed(2)}s.`);
+    const targetSrc = el.getAttribute('src') || el.src || fallbackPlaybackUrl || streamUrl;
+
+    console.warn(`[Auto-Reload] 🔄 Stream stalled (${reason}). Auto-reloading video.src at ${savedTime.toFixed(2)}s... Target: "${targetSrc}"`);
+
     setAutoReloadCount((prev) => prev + 1);
-    setAutoReloadNotice(`Reloading stream at ${formatPlaybackTime(savedTime)} (${reason})...`);
-    cancelReloadRef.current = reloadDirectMedia(el, {
-      onSuccess: () => {
+    const notice = `Auto-reloading stream at ${formatPlaybackTime(savedTime)} (${reason})...`;
+    setAutoReloadNotice(notice);
+
+    // Step 1: Set video.src to empty string to reset media engine decoder pipeline
+    el.src = '';
+    try {
+      el.load();
+    } catch {}
+
+    // Step 2: Re-assign original URL and preserve currentTime
+    setTimeout(() => {
+      if (!el) return;
+      el.src = targetSrc;
+
+      const restoreTime = () => {
+        try {
+          if (savedTime > 0 && Math.abs(el.currentTime - savedTime) > 0.5) {
+            el.currentTime = savedTime;
+          }
+        } catch (e) {
+          console.warn('[Auto-Reload] Restore currentTime warning:', e);
+        }
+      };
+
+      restoreTime();
+
+      const handleLoaded = () => {
+        restoreTime();
+        el.removeEventListener('loadedmetadata', handleLoaded);
+        el.removeEventListener('canplay', handleLoaded);
+      };
+      el.addEventListener('loadedmetadata', handleLoaded);
+      el.addEventListener('canplay', handleLoaded);
+
+      const playPromise = el.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn('[Auto-Reload] Play error after reload:', err);
+        });
+      }
+
+      setTimeout(() => {
         isAutoReloadingRef.current = false;
-        cancelReloadRef.current = null;
+        delete el.dataset.autoReloading;
         stallStartTimeRef.current = null;
         lastTimeAdvanceRef.current = Date.now();
-        setPlaybackError(null);
-        setAutoReloadNotice(null);
-      },
-      onFailure: (message) => {
-        console.error('[Auto-Reload]', message);
-        isAutoReloadingRef.current = false;
-        cancelReloadRef.current = null;
-        reloadAttemptsRef.current = 2;
-        setAutoReloadNotice(null);
-        setPlaybackError(`${message} Switch to FFmpeg HLS transcoding or check the network connection.`);
-      },
-    });
-  }, [isOpen, playerEngine, useMatroskaEngine]);
+        setAutoReloadNotice(`Stream re-established at ${formatPlaybackTime(savedTime)}`);
+        setTimeout(() => setAutoReloadNotice(null), 4000);
+      }, 500);
+    }, 150);
+  }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl]);
 
   // Buffer Health & Stall Monitor
   const inspectBufferHealth = useCallback(() => {
@@ -877,8 +883,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       lastPlaybackTimeRef.current = currentTime;
       lastTimeAdvanceRef.current = now;
       stallStartTimeRef.current = null;
-      if (playbackStableSinceRef.current === null) playbackStableSinceRef.current = now;
-      if (now - playbackStableSinceRef.current >= 30000) reloadAttemptsRef.current = 0;
     }
 
     const isPlayingIntent = !el.paused && !el.ended;
@@ -897,7 +901,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       } else {
         stallStartTimeRef.current = null;
       }
-      if (isStalled || !isPlayingIntent) playbackStableSinceRef.current = null;
     } else {
       stallStartTimeRef.current = null;
     }
@@ -931,12 +934,29 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       lastAutoReloadTime: lastTimeAdvanceRef.current,
     });
 
-    // Auto-Reload Trigger if stalled >= 5.0 seconds
-    if (playerEngine === 'direct' && !useMatroskaEngine && isPlayingIntent && isStalled && stallDurationSeconds >= 5.0 && !isAutoReloadingRef.current) {
-      console.warn(`[Buffer Monitor] ⚠️ Video stalled for ${stallDurationSeconds.toFixed(1)}s (>= 5.0s limit). Triggering Auto-Reload...`);
-      triggerAutoReload(`Stalled for ${stallDurationSeconds.toFixed(1)}s`);
+    // Auto-Reload Trigger if stalled >= 5.0 seconds; escalate to centralized Stream Recovery after 3 failed reloads
+    if (isPlayingIntent && isStalled && stallDurationSeconds >= 5.0 && !isAutoReloadingRef.current) {
+      if (autoReloadCount >= 3) {
+        console.error(`[Buffer Monitor] Persistent stall (${stallDurationSeconds.toFixed(1)}s) after ${autoReloadCount} Auto-Reloads. Escalating to Stream Recovery monitor.`);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('sambavault-player-error', {
+              detail: {
+                source: 'stall-watchdog',
+                code: 'PERSISTENT_STALL_BLACK_SCREEN',
+                message: `Stream stalled for ${stallDurationSeconds.toFixed(1)}s after ${autoReloadCount} Auto-Reload attempts (${stallDiagnosis}).`,
+                streamUrl: el.currentSrc || el.src || streamUrl,
+                fatal: true,
+              },
+            })
+          );
+        }
+      } else {
+        console.warn(`[Buffer Monitor] ⚠️ Video stalled for ${stallDurationSeconds.toFixed(1)}s (>= 5.0s limit). Triggering Auto-Reload...`);
+        triggerAutoReload(`Stalled for ${stallDurationSeconds.toFixed(1)}s`);
+      }
     }
-  }, [getActiveVideoElement, autoReloadCount, autoReloadNotice, triggerAutoReload, playerEngine, useMatroskaEngine]);
+  }, [getActiveVideoElement, autoReloadCount, autoReloadNotice, triggerAutoReload, streamUrl]);
 
   // Periodic 1-second interval to check buffer health & stall state
   useEffect(() => {
@@ -986,19 +1006,35 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
   // Video playback error and stall monitoring
   const handleVideoError = useCallback((e: Event) => {
-    if (isAutoReloadingRef.current) return;
     const videoEl = e.currentTarget as HTMLVideoElement;
+    if (isAutoReloadingRef.current || videoEl.dataset.autoReloading === 'true' || !videoEl.getAttribute('src')) {
+      return;
+    }
     const err = videoEl.error;
     const errCode = err ? err.code : null;
     const errMsg = err ? err.message : 'Unknown error';
     console.error(`[Video Source Monitor] ❌ MEDIA ENGINE ERROR EVENT: Code ${errCode} (${errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED' : errCode === 3 ? 'MEDIA_ERR_DECODE' : errCode === 2 ? 'MEDIA_ERR_NETWORK' : 'OTHER'}) - Message: "${errMsg}". Current src: "${videoEl.src}". Protocol may have misinterpreted file path or unsupported scheme!`, e);
-    if (errCode === 4) {
-      setPlaybackError(`MEDIA_ERR_SRC_NOT_SUPPORTED (Error 4): The media engine could not load "${videoEl.currentSrc || videoEl.getAttribute('src') || 'the media source'}". The format, codec, or source may not be supported. Try FFmpeg HLS transcoding.`);
-    } else {
-      setPlaybackError(`Video playback error (Code ${errCode}): ${errMsg}`);
-    }
+    const formattedMsg =
+      errCode === 4
+        ? `MEDIA_ERR_SRC_NOT_SUPPORTED (Error 4): The media engine could not load source ("${videoEl.src}"). Protocol or file path was misinterpreted.`
+        : `Video playback error (Code ${errCode}): ${errMsg}`;
+    setPlaybackError(formattedMsg);
     inspectVideoSrc();
-  }, [setPlaybackError, inspectVideoSrc]);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('sambavault-player-error', {
+          detail: {
+            source: 'media-player-direct',
+            code: errCode,
+            message: formattedMsg,
+            streamUrl: videoEl.currentSrc || videoEl.src || streamUrl,
+            fatal: true,
+          },
+        })
+      );
+    }
+  }, [setPlaybackError, inspectVideoSrc, streamUrl]);
 
   const handleVideoStalled = useCallback((e: Event) => {
     const videoEl = e.currentTarget as HTMLVideoElement;
@@ -1411,8 +1447,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                             </div>
                           )}
                           <button
-                            onClick={() => triggerAutoReload('Manual trigger from diagnostic overlay', true)}
-                            disabled={playerEngine !== 'direct' || useMatroskaEngine}
+                            onClick={() => triggerAutoReload('Manual trigger from diagnostic overlay')}
                             className="w-full mt-1 px-2 py-1 bg-indigo-700 hover:bg-indigo-600 text-white rounded font-medium text-[10px] transition-colors flex items-center justify-center gap-1"
                           >
                             <RefreshCw className="w-3 h-3" />
@@ -1694,7 +1729,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                               <span>MALFORMED ASSET URL DETECTED</span>
                             </div>
                             <p className="text-[10px] text-rose-300 mt-1">
-                              The DOM <code>&lt;video&gt;</code> element appears to have a nested URI or duplicated path prefix. This can prevent playback.
+                              The DOM <code>&lt;video&gt;</code> element received an invalid or double-prefixed URI (e.g., <code>/Volumes/Media/asset:...</code> or repeated <code>localhost</code>/<code>%2F</code>). This triggers Tauri main-thread tokio deadlocks and causes playback failure.
                             </p>
                             <button
                               onClick={() => {
@@ -1711,7 +1746,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                               Strip Prefixes & Switch to Express Stream
                             </button>
                           </div>
-                        ) : videoSrcReport.isBlob && playerEngine !== 'hls' ? (
+                        ) : videoSrcReport.isBlob ? (
                           <div className="p-2.5 bg-amber-950/70 border border-amber-700/80 rounded-lg text-amber-200">
                             <div className="flex items-center gap-1.5 font-bold text-amber-300 text-[11px]">
                               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
@@ -1802,7 +1837,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                           </div>
                           <div className="p-1.5 bg-slate-950 rounded border border-slate-800 flex justify-between">
                             <span className="text-slate-400">Engine:</span>
-                            <span className="text-indigo-300 font-semibold">{useVlcEngine && !useMatroskaEngine && playerEngine === 'hls' ? 'VLC' : playerEngine.toUpperCase()}</span>
+                            <span className="text-indigo-300 font-semibold">{playerEngine.toUpperCase()}</span>
                           </div>
                         </div>
 
@@ -1941,8 +1976,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     </button>
                     <button
                       onClick={() => {
-                        setSelectedCodec('h264');
-                        setHardwareAccel(false);
                         setUseTranscode(true);
                         setPlayerEngine('hls');
                         setPlaybackError(null);
@@ -1967,20 +2000,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               </div>
             )}
 
-            {useVlcEngine && !useMatroskaEngine && playerEngine === 'hls' ? (
-              <VlcPlayer
-                key={`${media.id}::${activeFilePath}`}
-                mediaId={media.id}
-                filePath={activeFilePath}
-                title={media.title}
-                episodeTitle={currentEpisode ? `S${String(currentEpisode.seasonNumber).padStart(2, '0')}E${String(currentEpisode.episodeNumber).padStart(2, '0')}: ${currentEpisode.title}` : undefined}
-                onClose={onClose}
-                onFallback={(reason) => {
-                  console.warn('[MediaPlayerModal] libvlc failed, using FFmpeg HLS:', reason);
-                  setVlcFailedPath(activeFilePath);
-                }}
-              />
-            ) : useMatroskaEngine || playerEngine === 'matroska' ? (
+            {useMatroskaEngine || playerEngine === 'matroska' ? (
               <div className="w-full h-full p-4 flex flex-col">
                 <MatroskaPlayer
                   streamUrl={streamUrl}
@@ -2039,7 +2059,6 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               </div>
             ) : (
               <HLSPlayer
-                key={`${media.id}::${activeFilePath}`}
                 mediaId={media.id}
                 filePath={activeFilePath}
                 title={media.title}

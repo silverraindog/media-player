@@ -39,36 +39,12 @@ export interface CastMember {
   thumb?: string;
 }
 
-export interface FranchiseOverview {
-  text: string;
-  source: 'TMDB' | 'Wikipedia';
-  url: string;
-  license?: string;
-  excerpt?: 'introduction';
-}
-
-export interface FranchiseCandidate {
-  title: string;
-  source: 'TMDB' | 'Wikipedia';
-  id: number;
-}
-
 export interface MediaMetadata {
   id: string;
   type: MediaType;
   title: string;
   originalTitle?: string;
   year: number;
-  yearSource?: 'filename' | 'folder' | 'user' | 'provider' | 'placeholder';
-  collectionFolder?: boolean;
-  collectionFilms?: Array<{
-    title: string;
-    year?: number;
-    overview?: string;
-    posterUrl?: string;
-  }>;
-  collectionOverview?: string;
-  franchiseOverview?: FranchiseOverview;
   premiered?: string;
   overview: string;
   tagline?: string;
@@ -109,7 +85,6 @@ export interface MediaMetadata {
   selectedVersionId?: string;
   isMultiVersion?: boolean;
   status?: 'categorized' | 'pending' | 'draft' | string;
-  metadataFetchStatus?: 'matched' | 'no-match';
   resolution?: string;
 }
 
@@ -413,7 +388,6 @@ export type AppTab =
   | 'history'
   | 'dedup'
   | 'stats'
-  | 'franchises'
   | 'cleaner'
   | 'samba-mount'
   | 'explorer'
@@ -661,3 +635,6 @@ export interface SyncProgressState {
   batchStats?: any[];
   failedFilePaths?: any[];
 }
+
+
+

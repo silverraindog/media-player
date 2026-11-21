@@ -12,10 +12,7 @@ const isLocalDevelopment = typeof window !== 'undefined' &&
 
 if (isLocalDevelopment) {
   try {
-    const vConsole = new VConsole({
-      theme: 'dark',
-      network: { ignoreUrlRegExp: /\/api\/settings\/api-keys(?:[?#]|$)/ },
-    });
+    const vConsole = new VConsole({ theme: 'dark' });
     console.log('[VConsole] Initialized successfully for full application debug logging.');
   } catch (e) {
     console.error('[VConsole] Failed to initialize:', e);
@@ -32,3 +29,4 @@ if (rootElement) {
     </StrictMode>
   );
 }
+

@@ -22,7 +22,6 @@ import {
 } from 'lucide-react';
 import { logger } from '../utils/loggerService';
 import { hlsPrefetchWorkerService } from '../services/hlsPrefetchWorkerService';
-import { isTauriEnvironment } from '../utils/tauriBridge';
 
 export interface StreamProbeData {
   format: {
@@ -128,7 +127,6 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const nativeFullscreenRef = useRef(false);
   const hlsInstanceRef = useRef<Hls | null>(null);
   const [isSlowInitializing, setIsSlowInitializing] = useState(false);
 
@@ -146,23 +144,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [loadedDuration, setDuration] = useState(0);
-  // The transcode can start at an offset into the file; video element times are relative to it
-  const [streamOffset, setStreamOffset] = useState(0);
-  const streamOffsetRef = useRef(0);
-  // HLS/video report only the transcoded-so-far length; ffprobe knows the full media length
-  const probedDuration = probeData?.format?.duration;
-  const probedDurationRef = useRef(probedDuration);
-  probedDurationRef.current = probedDuration;
-  const loadedEnd = streamOffset + loadedDuration;
-  const duration = probedDuration && probedDuration > loadedEnd ? probedDuration : loadedEnd;
+  const [duration, setDuration] = useState(0);
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
-  const [fullscreenError, setFullscreenError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [showProbeDetails, setShowProbeDetails] = useState(false);
 
@@ -232,36 +219,23 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (!video) return;
     if (isNaN(targetTime) || !isFinite(targetTime) || targetTime < 0) return;
 
-    // targetTime is an absolute position in the media file
-    const totalDuration = probedDurationRef.current;
-    const clamped = totalDuration ? Math.min(targetTime, Math.max(0, totalDuration - 0.5)) : targetTime;
-    const offset = streamOffsetRef.current;
-    const local = clamped - offset;
-    const seekableEnd = video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : 0;
+    const maxDuration = video.duration && isFinite(video.duration) && video.duration > 0
+      ? Math.max(0, video.duration - 0.5)
+      : (probeData?.format?.duration ? Math.max(0, probeData.format.duration - 0.5) : targetTime);
+
+    const clamped = Math.min(targetTime, maxDuration);
     try {
-      if (local < 0 || local > seekableEnd) {
-        // Target isn't transcoded yet (or is before the transcode start): restart the transcode there
-        initialSeekPendingRef.current = null;
-        streamOffsetRef.current = clamped;
-        setStreamOffset(clamped);
-        setDuration(0);
-        setBufferedEnd(0);
-        setCurrentTime(clamped);
-        return;
-      }
-      video.currentTime = local;
+      video.currentTime = clamped;
       setCurrentTime(clamped);
+      lastKnownTimeRef.current = clamped;
     } catch (e) {
       console.warn('[HLSPlayer] Safe seek warning:', e);
     }
-  }, []);
-
-  // Series episodes keep their own resume position and subtitle offset
-  const settingsId = currentEpisodeTitle ? `${mediaId}::${currentEpisodeTitle}` : mediaId;
+  }, [probeData]);
 
   // Fetch settings on mount (stores initial timestamp in pending ref without crashing video element)
   useEffect(() => {
-    fetch(`/api/media/settings/${encodeURIComponent(settingsId)}`)
+    fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`)
       .then(r => r.json())
       .then(d => {
         if (d.success && d.settings) {
@@ -272,12 +246,12 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         }
       })
       .catch(e => console.warn('Failed to fetch media settings', e));
-  }, [settingsId]);
+  }, [mediaId]);
 
   // Save settings (debounce)
   useEffect(() => {
     const timer = setTimeout(() => {
-      fetch(`/api/media/settings/${encodeURIComponent(settingsId)}`, {
+      fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -287,7 +261,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       }).catch(e => console.warn('Failed to save media settings', e));
     }, 1000);
     return () => clearTimeout(timer);
-  }, [subtitleOffset, currentTime, settingsId]);
+  }, [subtitleOffset, currentTime, mediaId]);
 
   // Playback stabilization monitor: resets retryCount after 4 seconds of uninterrupted playing
   useEffect(() => {
@@ -305,66 +279,6 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     return () => clearTimeout(timer);
   }, [isPlaying, isRecovering, hlsStatus]);
 
-  useEffect(() => {
-    if (!isTauriEnvironment()) return;
-
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    const syncFullscreenState = async (appWindow: typeof import('@tauri-apps/api/window').appWindow) => {
-      try {
-        const fullscreen = await appWindow.isFullscreen();
-        if (!disposed) {
-          nativeFullscreenRef.current = fullscreen;
-          setIsNativeFullscreen(fullscreen);
-        }
-      } catch (error) {
-        console.error('[HLSPlayer] Failed to read native fullscreen state:', error);
-      }
-    };
-
-    void import('@tauri-apps/api/window')
-      .then(async ({ appWindow }) => {
-        await syncFullscreenState(appWindow);
-        const stopListening = await appWindow.onResized(() => {
-          void syncFullscreenState(appWindow);
-        });
-        if (disposed) stopListening();
-        else unlisten = stopListening;
-      })
-      .catch((error) => {
-        console.error('[HLSPlayer] Failed to observe native fullscreen state:', error);
-      });
-
-    return () => {
-      disposed = true;
-      unlisten?.();
-      if (nativeFullscreenRef.current) {
-        void import('@tauri-apps/api/window')
-          .then(({ appWindow }) => appWindow.setFullscreen(false))
-          .catch((error) => {
-            console.error('[HLSPlayer] Failed to exit native fullscreen on unmount:', error);
-          });
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const syncFullscreenState = () => {
-      const fullscreenDocument = document as Document & { webkitFullscreenElement?: Element | null };
-      setIsFullscreen(
-        document.fullscreenElement === containerRef.current ||
-        fullscreenDocument.webkitFullscreenElement === containerRef.current
-      );
-    };
-
-    document.addEventListener('fullscreenchange', syncFullscreenState);
-    document.addEventListener('webkitfullscreenchange', syncFullscreenState);
-    return () => {
-      document.removeEventListener('fullscreenchange', syncFullscreenState);
-      document.removeEventListener('webkitfullscreenchange', syncFullscreenState);
-    };
-  }, []);
-
   // Stream failure auto-recovery state machine
   const handleStreamFailure = useCallback(async (reason: string = 'Stream stall') => {
     const now = Date.now();
@@ -375,7 +289,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     lastFailureTimestampRef.current = now;
 
     if (videoRef.current && videoRef.current.currentTime > 0) {
-      lastKnownTimeRef.current = videoRef.current.currentTime + streamOffsetRef.current;
+      lastKnownTimeRef.current = videoRef.current.currentTime;
     }
     console.warn(`[HLSPlayer] Stream failure: ${reason}. Retry attempt: ${retryCount + 1}/3`);
     logger.warn(`[FFmpeg HLS Transcode] Stream interruption: ${reason} (Attempt ${retryCount + 1}/3)`, 'Transcode');
@@ -386,10 +300,24 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       logger.error(`[FFmpeg HLS Transcode Error] Transcode session failed after 3 recovery attempts: ${reason}`, 'Transcode', { mediaId, title });
       setIsRecovering(false);
       setHlsStatus('error');
-      setStreamError('Playback interrupted: stream decoding or network error persisted after 3 recovery attempts. The source media or transcode settings may need adjustment.');
+      const errorMsg = 'Playback interrupted: stream decoding or network error persisted after 3 recovery attempts. The source media or transcode settings may need adjustment.';
+      setStreamError(errorMsg);
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('sambavault-player-error', {
+            detail: {
+              source: 'hls-player',
+              code: 'HLS_MAX_RETRIES_EXHAUSTED',
+              message: `${errorMsg} (${reason})`,
+              streamUrl: streamSrc,
+              fatal: true,
+            },
+          })
+        );
       }
       return;
     }
@@ -443,7 +371,6 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     if (activeCodec) params.set('codec', activeCodec);
     if (forceTranscode || retryCount > 0) params.set('forceTranscode', 'true');
     if (activeAudioTrack > 0) params.set('audioTrack', String(activeAudioTrack));
-    if (streamOffset > 0) params.set('start', streamOffset.toFixed(2));
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
     const relativeUrl = `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
@@ -462,7 +389,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
 
     return relativeUrl;
-  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, forceTranscode, retryCount, activeAudioTrack, restartNonce, streamOffset]);
+  }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, forceTranscode, retryCount, activeAudioTrack, restartNonce]);
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -484,7 +411,6 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       hlsInstanceRef.current = null;
     }
 
-    let cleanupNativeListeners: (() => void) | undefined;
     if (Hls.isSupported()) {
       const hls = new Hls({
         maxBufferLength: 30,
@@ -536,17 +462,17 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
         if (data.details && data.details.totalduration) {
           setDuration(data.details.totalduration);
         }
-        // Positions are absolute; the playlist only covers [offset, offset + totalAvail]
-        const offset = streamOffsetRef.current;
+        // Only seek if the target timestamp is already within the loaded/generated duration
         const totalAvail = data.details?.totalduration || 0;
         if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
           const seekTo = initialSeekPendingRef.current;
-          initialSeekPendingRef.current = null;
-          if (seekTo - offset <= totalAvail) safeSeek(seekTo);
-          else {
-            // Resume point is far ahead: start the transcode there instead of waiting for it
-            streamOffsetRef.current = seekTo;
-            setStreamOffset(seekTo);
+          if (totalAvail > 0 && seekTo <= totalAvail) {
+            initialSeekPendingRef.current = null;
+            safeSeek(seekTo);
+          }
+        } else if (lastKnownTimeRef.current > 0 && Math.abs(video.currentTime - lastKnownTimeRef.current) > 2) {
+          if (totalAvail > 0 && lastKnownTimeRef.current <= totalAvail) {
+            safeSeek(lastKnownTimeRef.current);
           }
         }
       });
@@ -554,7 +480,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       hls.on(Hls.Events.FRAG_BUFFERED, (_e, data) => {
         setHlsStatus('streaming');
         if (video.buffered.length > 0) {
-          setBufferedEnd(video.buffered.end(video.buffered.length - 1) + streamOffsetRef.current);
+          setBufferedEnd(video.buffered.end(video.buffered.length - 1));
         }
 
         // Web Worker based dynamic pre-fetch service for high-bitrate content (>3 Mbps):
@@ -629,11 +555,26 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
               }
               break;
             }
-            default:
+            default: {
+              const msg = `HLS stream playback error: ${data.details || 'Transcoder stream stalled'}`;
               setHlsStatus('error');
-              setStreamError(`HLS stream playback error: ${data.details || 'Transcoder stream stalled'}`);
+              setStreamError(msg);
               hls.destroy();
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(
+                  new CustomEvent('sambavault-player-error', {
+                    detail: {
+                      source: 'hls-player',
+                      code: data.details || 'HLS_FATAL_ERROR',
+                      message: msg,
+                      streamUrl: streamSrc,
+                      fatal: true,
+                    },
+                  })
+                );
+              }
               break;
+            }
           }
         }
       });
@@ -643,36 +584,62 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       // Native Apple Safari / iOS HLS
       video.src = streamSrc;
       video.load();
-      const onLoadedMetadata = () => {
+      video.addEventListener('loadedmetadata', () => {
         setHlsStatus('streaming');
+        if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
+          const seekTo = initialSeekPendingRef.current;
+          initialSeekPendingRef.current = null;
+          safeSeek(seekTo);
+        } else if (lastKnownTimeRef.current > 0) {
+          safeSeek(lastKnownTimeRef.current);
+        }
         video.play().catch(() => setIsPlaying(false));
-      };
-      const onCanPlay = () => setHlsStatus('streaming');
-      const onError = () => {
+      });
+      video.addEventListener('canplay', () => setHlsStatus('streaming'));
+      video.addEventListener('error', () => {
         const errCode = video.error?.code;
         if (errCode === 2 || errCode === 3) {
           handleStreamFailure(`Native HLS error code ${errCode}`);
         } else {
+          const msg = 'Native browser HLS pipeline could not play stream.';
           setHlsStatus('error');
-          setStreamError('Native browser HLS pipeline could not play stream.');
+          setStreamError(msg);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('sambavault-player-error', {
+                detail: {
+                  source: 'hls-native',
+                  code: errCode || 'NATIVE_HLS_ERROR',
+                  message: msg,
+                  streamUrl: streamSrc,
+                  fatal: true,
+                },
+              })
+            );
+          }
         }
-      };
-      video.addEventListener('loadedmetadata', onLoadedMetadata);
-      video.addEventListener('canplay', onCanPlay);
-      video.addEventListener('error', onError);
-      cleanupNativeListeners = () => {
-        video.removeEventListener('loadedmetadata', onLoadedMetadata);
-        video.removeEventListener('canplay', onCanPlay);
-        video.removeEventListener('error', onError);
-      };
+      });
     } else {
+      const msg = 'HLS streaming is not supported in this browser environment.';
       setHlsStatus('error');
-      setStreamError('HLS streaming is not supported in this browser environment.');
+      setStreamError(msg);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('sambavault-player-error', {
+            detail: {
+              source: 'hls-unsupported',
+              code: 'HLS_UNSUPPORTED',
+              message: msg,
+              streamUrl: streamSrc,
+              fatal: true,
+            },
+          })
+        );
+      }
     }
 
     return () => {
       clearTimeout(slowInitTimer);
-      cleanupNativeListeners?.();
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
@@ -721,9 +688,9 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   // Video event handlers
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
-    setCurrentTime(videoRef.current.currentTime + streamOffsetRef.current);
+    setCurrentTime(videoRef.current.currentTime);
     if (videoRef.current.buffered.length > 0) {
-      setBufferedEnd(videoRef.current.buffered.end(videoRef.current.buffered.length - 1) + streamOffsetRef.current);
+      setBufferedEnd(videoRef.current.buffered.end(videoRef.current.buffered.length - 1));
     }
   };
 
@@ -732,6 +699,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     const vidDuration = videoRef.current.duration;
     if (vidDuration && !isNaN(vidDuration) && isFinite(vidDuration)) {
       setDuration(vidDuration);
+    } else if (probeData?.format?.duration) {
+      setDuration(probeData.format.duration);
     }
 
     if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
@@ -739,9 +708,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       initialSeekPendingRef.current = null;
       safeSeek(seekTo);
     } else if (lastKnownTimeRef.current > 0) {
-      const seekTo = lastKnownTimeRef.current;
-      lastKnownTimeRef.current = 0;
-      safeSeek(seekTo);
+      safeSeek(lastKnownTimeRef.current);
     }
   };
 
@@ -811,50 +778,14 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
   };
 
-  const toggleFullscreen = async () => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    if (isTauriEnvironment()) {
-      try {
-        const { appWindow } = await import('@tauri-apps/api/window');
-        const fullscreen = await appWindow.isFullscreen();
-        await appWindow.setFullscreen(!fullscreen);
-        nativeFullscreenRef.current = !fullscreen;
-        setIsNativeFullscreen(!fullscreen);
-        setFullscreenError(null);
-      } catch (error) {
-        console.error('[HLSPlayer] Failed to toggle native fullscreen:', error);
-        setFullscreenError('Fullscreen could not be started in this player.');
-      }
-      return;
-    }
-
-    const fullscreenDocument = document as Document & {
-      webkitFullscreenElement?: Element | null;
-      webkitExitFullscreen?: () => Promise<void> | void;
-    };
-    const fullscreenElement = document.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement;
-
-    try {
-      if (fullscreenElement) {
-        await (document.exitFullscreen?.() ?? fullscreenDocument.webkitExitFullscreen?.());
-      } else {
-        const fullscreenContainer = container as HTMLDivElement & {
-          webkitRequestFullscreen?: () => Promise<void> | void;
-        };
-        const requestFullscreen =
-          container.requestFullscreen?.bind(container) ??
-          fullscreenContainer.webkitRequestFullscreen?.bind(container);
-        if (!requestFullscreen) {
-          throw new Error('Fullscreen is not supported by this webview.');
-        }
-        await requestFullscreen();
-      }
-      setFullscreenError(null);
-    } catch (error) {
-      console.error('[HLSPlayer] Failed to toggle fullscreen:', error);
-      setFullscreenError('Fullscreen could not be started in this player.');
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen().catch(() => {});
+      setIsFullscreen(false);
     }
   };
 
@@ -884,9 +815,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     <div
       ref={containerRef}
       onMouseMove={triggerUserActivity}
-      className={`${
-        isNativeFullscreen ? 'fixed inset-0 z-[100] h-screen w-screen' : 'relative h-full w-full'
-      } flex flex-col bg-slate-950 select-none overflow-hidden text-slate-100 group`}
+      className="relative w-full h-full flex flex-col bg-slate-950 select-none overflow-hidden text-slate-100 group"
     >
       {/* Top Floating Badge & Status */}
       <div
@@ -1457,21 +1386,13 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             </select>
 
             {!isAudio && (
-              <>
-                {fullscreenError && (
-                  <span role="alert" className="text-xs text-rose-300">
-                    {fullscreenError}
-                  </span>
-                )}
-                <button
-                  onClick={toggleFullscreen}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors"
-                  title={isFullscreen || isNativeFullscreen ? 'Exit Fullscreen' : 'Toggle Fullscreen'}
-                  aria-label={isFullscreen || isNativeFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-                >
-                  {isFullscreen || isNativeFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-                </button>
-              </>
+              <button
+                onClick={toggleFullscreen}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors"
+                title="Toggle Fullscreen"
+              >
+                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              </button>
             )}
           </div>
         </div>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>SambaVault needs local network access to discover, probe, and mount Samba (SMB/CIFS) network storage shares on your LAN.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>SambaVault needs access to your Desktop folder to discover and catalog media files.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>SambaVault needs access to your Documents folder to scan, catalog, and index media libraries.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>SambaVault needs access to your Downloads folder to scan and import downloaded media files.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>SambaVault needs access to removable volumes (external USB drives, external SSDs) to scan and sync media libraries.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>SambaVault needs access to network volumes (SMB, Samba, NFS shares) to scan and sync movies, series, and music.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_smb._tcp</string>
+        <string>_cifs._tcp</string>
+        <string>_netbios._tcp</string>
+    </array>
+</dict>
+</plist>

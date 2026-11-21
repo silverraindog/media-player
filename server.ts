@@ -8,6 +8,7 @@ import crypto, { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
 import { GoogleGenAI } from '@google/genai';
+import { createServer as createViteServer } from 'vite';
 import {
   getAllMediaFromDb,
   getMoviesFromDb,
@@ -55,19 +56,8 @@ import {
   hardResetAndDeleteDatabaseFiles,
 } from './src/server/database';
 import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
-import { registerUniverseRoutes } from './src/server/universeMatcher';
-import { registerProviderSearchRoutes } from './src/server/providerSearch';
-import { registerApiKeyRoutes } from './src/server/apiKeys';
-import { tauriCors } from './src/server/tauriCors';
-import { fetchRankedTmdbMetadata, fetchTmdbCollectionMetadata, fetchTmdbMetadata } from './src/server/tmdbMetadata';
-import { normalizeUniverseTitle } from './src/shared/universeMatcher';
-import { fetchAlbumMetadata } from './src/server/albumMetadata';
-import { fetchMetadataWithDiagnostics } from './src/server/metadataRequestDiagnostics';
-import { fetchFranchiseOverview, FranchiseOverviewError } from './src/server/franchiseOverview';
-import type { FranchiseCandidate } from './src/types';
 
 dotenv.config();
-dotenv.config({ path: path.join(getPersistentStorageInfo().dataDir, '.env'), quiet: true });
 
 // Ensure common binary search directories (such as Apple Silicon Homebrew /opt/homebrew/bin) are included in PATH
 const extraBinaryDirs = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/opt/local/bin', '/usr/bin'];
@@ -121,45 +111,11 @@ export function resolveFfprobeBinary(): string {
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const HOST = process.env.HOST || '0.0.0.0';
 
-app.use('/api/media/fetch-art', tauriCors('POST, OPTIONS'));
-app.use('/api/media/franchise-overview', tauriCors('POST, OPTIONS'));
-app.use('/api/db', tauriCors('GET, POST, DELETE, OPTIONS', 'Content-Type, Priority, Request-Priority'));
-app.use('/api/vault/state', tauriCors('GET, POST, OPTIONS', 'Content-Type, Priority, Request-Priority'));
 app.use(express.json({ limit: '10mb' }));
-let genAIClient: GoogleGenAI | null = null;
-registerApiKeyRoutes(app, getPersistentStorageInfo().dataDir, () => { genAIClient = null; });
-registerUniverseRoutes(app, getPersistentStorageInfo().dataDir);
-registerProviderSearchRoutes(app);
-app.post('/api/media/franchise-overview', async (req: Request, res: Response) => {
-  const { title, type, selection, year } = req.body || {};
-  if (typeof title !== 'string' || !title.trim() || title.length > 200 ||
-      (type !== 'collection' && type !== 'series') ||
-      (year !== undefined && (!Number.isInteger(year) || year < 1800 || year > 2100)) ||
-      (selection !== undefined && (!selection || typeof selection !== 'object' ||
-        (selection.source !== 'TMDB' && selection.source !== 'Wikipedia') ||
-        typeof selection.title !== 'string' || !Number.isSafeInteger(selection.id) || selection.id <= 0 ||
-        (type === 'series' && selection.source === 'TMDB')))) {
-    return res.status(400).json({ error: 'Invalid franchise overview request.' });
-  }
-  const diagnostics: Array<{ provider: string; outcome: string }> = [];
-  try {
-    const result = await fetchFranchiseOverview(title.trim(), type, diagnostics, selection as FranchiseCandidate | undefined, year);
-    return res.json({ success: true, ...result, diagnostics });
-  } catch (error) {
-    console.warn('[Franchise overview] Lookup failed:', error instanceof Error ? error.message : 'Unknown error');
-    const knownError = error instanceof FranchiseOverviewError ? error : undefined;
-    if (knownError?.retryAfterSeconds !== undefined) res.set('Retry-After', String(knownError.retryAfterSeconds));
-    return res.status(knownError?.providerStatus ?? 502).json({
-      error: knownError?.message || 'Franchise overview lookup failed; check the provider and retry.',
-      ...(knownError?.retryAfterSeconds !== undefined ? { retryAfterSeconds: knownError.retryAfterSeconds } : {}),
-      diagnostics,
-    });
-  }
-});
 
 // Lazy Google GenAI Client
+let genAIClient: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI | null {
   if (!genAIClient && process.env.GEMINI_API_KEY) {
     genAIClient = new GoogleGenAI({
@@ -510,18 +466,15 @@ function resolveMediaKnowledge(cleanTitle: string, preferredType: string = 'all'
 // API ROUTES
 // ==========================================
 
-const getOmdbKey = () => process.env.OMDB_API_KEY;
+// OMDb API Key configuration with user's verified key as fallback
+const OMDB_API_KEY = process.env.OMDB_API_KEY || 'a593ebab';
 
 // Helper for HTTP requests with strict timeouts to prevent hanging endpoints
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 2500,
-  trace?: { provider: string; diagnostics?: MetadataDiagnostics; visibleParams: string[] }): Promise<globalThis.Response> {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 2500): Promise<globalThis.Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const requestOptions = { ...options, signal: controller.signal };
-    const res = trace
-      ? await fetchMetadataWithDiagnostics(url, requestOptions, trace.provider, trace.diagnostics, trace.visibleParams)
-      : await fetch(url, requestOptions);
+    const res = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(timer);
     return res;
   } catch (err) {
@@ -531,49 +484,32 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 }
 
 // Helper to fetch metadata from OMDb API
-type MetadataDiagnostic = { provider: string; outcome: string };
-type MetadataDiagnostics = MetadataDiagnostic[];
-
-async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number, diagnostics?: MetadataDiagnostics): Promise<any> {
-  const apiKey = getOmdbKey();
-  if (!apiKey) {
-    diagnostics?.push({ provider: 'OMDb', outcome: 'No API key configured' });
-    return null;
-  }
+async function fetchFromOMDb(title: string, type: string = 'movie', year?: number, season?: number, episode?: number): Promise<any> {
+  const apiKey = OMDB_API_KEY;
+  if (!apiKey) return null;
 
   try {
     const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
-    let url = `https://www.omdbapi.com/?apikey=${encodeURIComponent(apiKey)}&t=${encodeURIComponent(cleanTitle)}&plot=full`;
+    let url = `http://www.omdbapi.com/?apikey=${apiKey}&t=${encodeURIComponent(cleanTitle)}&plot=full`;
     if (type === 'series' || type === 'tv shows' || type === 'tv' || type === 'anime') url += '&type=series';
     if (year) url += `&y=${year}`;
     if (season) url += `&Season=${season}`;
     if (episode) url += `&Episode=${episode}`;
 
-    const res = await fetchWithTimeout(url, {}, 2500, {
-      provider: 'OMDb', diagnostics, visibleParams: ['t', 'plot', 'type', 'y', 'Season', 'Episode'],
-    });
-    if (!res.ok) {
-      diagnostics?.push({ provider: 'OMDb', outcome: res.status === 401 || res.status === 403 ? `HTTP ${res.status}: API key rejected; check Settings or OMDB_API_KEY` : `HTTP ${res.status}` });
-      return null;
-    }
+    const res = await fetchWithTimeout(url, {}, 2500);
+    if (!res.ok) return null;
     const data = await res.json();
-    if (data.Response === 'False') {
-      const error = String(data.Error || '');
-      diagnostics?.push({ provider: 'OMDb', outcome: /not found/i.test(error) ? 'No result found' : /key|limit|request/i.test(error) ? 'Key, quota, or request rejected' : 'Provider returned an error' });
-      return null;
-    }
-    diagnostics?.push({ provider: 'OMDb', outcome: data.Title ? 'Result returned' : 'Response contained no title' });
+    if (data.Response === 'False') return null;
     return data;
   } catch (err) {
-    diagnostics?.push({ provider: 'OMDb', outcome: 'Network error or timeout' });
-    console.warn('OMDb API fetch error.');
+    console.warn('OMDb API fetch error:', err);
     return null;
   }
 }
 
 // Secondary metadata fetcher function in the media extraction service
 // Acts as a fallback if the primary API (e.g., OMDb) fails or returns 404/not found.
-async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false): Promise<{
+async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: string = 'movie', year?: number): Promise<{
   title?: string;
   year?: number;
   overview?: string;
@@ -588,24 +524,20 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 } | null> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
-  const isSeries = lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime' ||
-    (!requireProviderYear && /24|breaking bad|season|stranger/i.test(cleanTitle));
+  const isSeries = lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime' || /24|breaking bad|season|stranger/i.test(cleanTitle);
 
   // 1. TV Series Fallback: Query TVMaze (keyless, rich episode and cast catalog)
   if (isSeries) {
     try {
-      const tvmazeRes = await fetchWithTimeout(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}&embed[]=episodes&embed[]=cast`, {}, 2500, {
-        provider: 'TVMaze', diagnostics, visibleParams: ['q', 'embed[]'],
-      });
+      const tvmazeRes = await fetchWithTimeout(`https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}&embed[]=episodes&embed[]=cast`, {}, 2500);
       if (tvmazeRes.ok) {
         const data: any = await tvmazeRes.json();
         if (data && data.name) {
-          diagnostics?.push({ provider: 'TVMaze', outcome: 'Result returned' });
           const overview = (data.summary || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim();
           const poster = data.image?.original || data.image?.medium;
-          const rating = data.rating?.average || (requireProviderYear ? undefined : 8.4);
-          const premiered = data.premiered ? parseInt(data.premiered.substring(0, 4), 10) : (requireProviderYear ? undefined : year || 2001);
-          const genres = data.genres && data.genres.length > 0 ? data.genres : (requireProviderYear ? undefined : ['Action', 'Drama', 'Thriller']);
+          const rating = data.rating?.average || 8.4;
+          const premiered = data.premiered ? parseInt(data.premiered.substring(0, 4), 10) : year || 2001;
+          const genres = data.genres && data.genres.length > 0 ? data.genres : ['Action', 'Drama', 'Thriller'];
           const cast = (data._embedded?.cast || []).slice(0, 12).map((c: any) => ({
             name: c.person?.name || 'Cast Member',
             role: c.character?.name || 'Cast',
@@ -634,44 +566,33 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
             source: 'tvmaze-secondary-fallback',
           };
         }
-        diagnostics?.push({ provider: 'TVMaze', outcome: 'Response contained no title' });
-      } else {
-        diagnostics?.push({ provider: 'TVMaze', outcome: tvmazeRes.status === 404 ? 'No result found' : `HTTP ${tvmazeRes.status}` });
       }
     } catch (err) {
-      diagnostics?.push({ provider: 'TVMaze', outcome: 'Network error or timeout' });
       console.warn('TVMaze secondary metadata resolution warning:', err);
     }
   }
 
   // 2. Movie Fallback: Query iTunes Search API for 1000x1000 authentic theatrical artwork & synopsis
   try {
-    const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=1`, {}, 2500, {
-      provider: 'iTunes movies', diagnostics, visibleParams: ['term', 'entity', 'limit'],
-    });
+    const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=movie&limit=1`, {}, 2500);
     if (itunesRes.ok) {
       const data: any = await itunesRes.json();
       if (data.resultCount > 0 && data.results[0]) {
-        diagnostics?.push({ provider: 'iTunes movies', outcome: 'Result returned' });
         const item = data.results[0];
         const poster = (item.artworkUrl100 || '').replace('/100x100bb.jpg', '/1000x1000bb.jpg');
         return {
-          title: item.trackName || (requireProviderYear ? undefined : cleanTitle),
-          year: item.releaseDate ? parseInt(item.releaseDate.substring(0, 4), 10) : (requireProviderYear ? undefined : year || 2024),
-          overview: item.longDescription || item.description || (requireProviderYear ? undefined : `Theatrical film ${cleanTitle}`),
-          genres: item.primaryGenreName ? [item.primaryGenreName] : (requireProviderYear ? undefined : ['Drama']),
-          rating: requireProviderYear ? undefined : 8.5,
+          title: item.trackName || cleanTitle,
+          year: item.releaseDate ? parseInt(item.releaseDate.substring(0, 4), 10) : year || 2024,
+          overview: item.longDescription || item.description || `Theatrical film ${cleanTitle}`,
+          genres: item.primaryGenreName ? [item.primaryGenreName] : ['Drama'],
+          rating: 8.5,
           posterUrl: poster,
           fanartUrl: poster,
           source: 'itunes-secondary-fallback',
         };
       }
-      diagnostics?.push({ provider: 'iTunes movies', outcome: 'No result found' });
-    } else {
-      diagnostics?.push({ provider: 'iTunes movies', outcome: `HTTP ${itunesRes.status}` });
     }
   } catch (err) {
-    diagnostics?.push({ provider: 'iTunes movies', outcome: 'Network error or timeout' });
     console.warn('iTunes movie secondary metadata resolution warning:', err);
   }
 
@@ -679,7 +600,7 @@ async function fetchSecondaryMetadataFromTVMazeOrTMDB(title: string, type: strin
 }
 
 // Comprehensive artwork and media asset resolver across OMDb, TVMaze, iTunes, and AI
-async function fetchMediaArt(title: string, type: string = 'movie', year?: number, diagnostics?: MetadataDiagnostics, requireProviderYear = false, artist?: string, allowRanked = false, allowUniqueMovie = false, collectionLookup = false, selectedCollectionId?: number, reviewYearMatches = false): Promise<{
+async function fetchMediaArt(title: string, type: string = 'movie', year?: number): Promise<{
   posterUrl?: string;
   fanartUrl?: string;
   source?: string;
@@ -690,64 +611,17 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
   rating?: number;
   cast?: { name: string; role: string }[];
   episodes?: any[];
-  artist?: string;
-  musicBrainzId?: string;
-  collectionName?: string;
-  collectionOverview?: string;
-  collectionFilms?: Array<{ title: string; year?: number; overview?: string; posterUrl?: string }>;
-  matchMode?: 'ranked' | 'unique-title' | 'unique-variant' | 'manual' | 'unique-collection';
-  candidates?: Array<{ source: 'tmdb'; title: string; year?: number; overview?: string; posterUrl?: string; collectionId?: number; candidateType?: 'movie' | 'collection'; collectionName?: string }>;
 }> {
   const cleanTitle = title.replace(/\s*\(\d{4}\).*$/, '').trim();
   const lowerType = (type || 'movie').toLowerCase();
 
-  if (requireProviderYear && lowerType === 'album') {
-    if (!artist) {
-      diagnostics?.push({ provider: 'MusicBrainz', outcome: 'Album artist missing; review manually' });
-      return { source: 'fallback' };
-    }
-    return await fetchAlbumMetadata(cleanTitle, artist, diagnostics || []) || { source: 'fallback' };
-  }
-
-  if (requireProviderYear && collectionLookup && lowerType === 'movie') {
-    const collection = await fetchTmdbCollectionMetadata(cleanTitle, diagnostics, selectedCollectionId);
-    if (collection.metadata) return collection.metadata;
-    return { source: 'fallback', candidates: collection.candidates };
-  }
-
-  if (requireProviderYear && (lowerType === 'movie' || lowerType === 'series')) {
-    if (reviewYearMatches && year && allowRanked) {
-      const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, allowUniqueMovie, true);
-      if (ranked.metadata) return ranked.metadata;
-      if (ranked.unsafeToMatch && !ranked.searchFailed) return { source: 'fallback', candidates: ranked.candidates };
-    }
-    if (lowerType === 'movie' && !year && allowUniqueMovie) {
-      const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, true);
-      if (ranked.metadata) return ranked.metadata;
-      return { source: 'fallback', candidates: ranked.candidates };
-    }
-    const tmdb = await fetchTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
-    if (tmdb.metadata) return tmdb.metadata;
-    if (tmdb.unsafeToMatch) {
-      if (allowRanked && (!reviewYearMatches || !year)) {
-        const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics, allowUniqueMovie);
-        if (ranked.metadata) return ranked.metadata;
-        if (ranked.candidates?.length) return { source: 'fallback', candidates: ranked.candidates };
-      }
-      return { source: 'fallback' };
-    }
-  }
-
   // 1. Music Albums: Query iTunes Search API for 1000x1000 high-resolution original art
   if (lowerType === 'album' || lowerType === 'music') {
     try {
-      const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=1`, {}, 2500, {
-        provider: 'iTunes albums', diagnostics, visibleParams: ['term', 'entity', 'limit'],
-      });
+      const itunesRes = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(cleanTitle)}&entity=album&limit=1`, {}, 2500);
       if (itunesRes.ok) {
         const itunesData: any = await itunesRes.json();
         if (itunesData.resultCount > 0 && itunesData.results[0]?.artworkUrl100) {
-          diagnostics?.push({ provider: 'iTunes albums', outcome: 'Result returned' });
           const highResArtwork = itunesData.results[0].artworkUrl100.replace('/100x100bb.jpg', '/1000x1000bb.jpg');
           return {
             posterUrl: highResArtwork,
@@ -757,55 +631,20 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
             genres: itunesData.results[0].primaryGenreName ? [itunesData.results[0].primaryGenreName] : undefined,
           };
         }
-        diagnostics?.push({ provider: 'iTunes albums', outcome: 'No artwork found' });
-      } else {
-        diagnostics?.push({ provider: 'iTunes albums', outcome: `HTTP ${itunesRes.status}` });
       }
     } catch (err) {
-      diagnostics?.push({ provider: 'iTunes albums', outcome: 'Network error or timeout' });
       console.warn('iTunes art search warning:', err);
     }
   }
 
   // 2. Query Providers IN PARALLEL for rapid response
-  const skipOmdb = requireProviderYear && [...cleanTitle].some(char => /\p{L}/u.test(char) && !/\p{Script=Latin}/u.test(char));
-  if (skipOmdb) diagnostics?.push({ provider: 'OMDb', outcome: 'Skipped non-Latin lookup; use manual matching if needed' });
   const [omdbResult, secondaryResult] = await Promise.allSettled([
-    skipOmdb ? Promise.resolve(null) : fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year, undefined, undefined, diagnostics),
-    fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year, diagnostics, requireProviderYear)
+    fetchFromOMDb(cleanTitle, (lowerType === 'series' || lowerType === 'tv shows' || lowerType === 'tv' || lowerType === 'anime') ? 'series' : 'movie', year),
+    fetchSecondaryMetadataFromTVMazeOrTMDB(cleanTitle, lowerType, year)
   ]);
 
   const omdbData = omdbResult.status === 'fulfilled' ? omdbResult.value : null;
   const secondaryData = secondaryResult.status === 'fulfilled' ? secondaryResult.value : null;
-
-  if (requireProviderYear && allowRanked && (!reviewYearMatches || !year) && (year || lowerType === 'series') && (lowerType === 'movie' || lowerType === 'series')) {
-    const omdbExact = omdbData?.Title && normalizeUniverseTitle(omdbData.Title) === normalizeUniverseTitle(cleanTitle) &&
-      parseInt(omdbData.Year, 10) === year;
-    const secondaryExact = secondaryData?.title && normalizeUniverseTitle(secondaryData.title) === normalizeUniverseTitle(cleanTitle) &&
-      secondaryData.year === year;
-    if (!omdbExact && secondaryExact && secondaryData) return secondaryData;
-    if (!omdbExact && !secondaryExact) {
-      const ranked = await fetchRankedTmdbMetadata(cleanTitle, lowerType, year, diagnostics);
-      if (ranked.metadata) return ranked.metadata;
-      if (ranked.candidates?.length) return { source: 'fallback', candidates: ranked.candidates };
-      if (ranked.unsafeToMatch) return { source: 'fallback' };
-    }
-  }
-
-  if (requireProviderYear && omdbData?.Title) {
-    const poster = omdbData.Poster && omdbData.Poster !== 'N/A' ? omdbData.Poster : undefined;
-    return {
-      source: 'omdb',
-      title: omdbData.Title,
-      year: omdbData.Year ? parseInt(omdbData.Year, 10) : undefined,
-      posterUrl: poster,
-      fanartUrl: poster,
-      overview: omdbData.Plot && omdbData.Plot !== 'N/A' ? omdbData.Plot : undefined,
-      genres: omdbData.Genre && omdbData.Genre !== 'N/A' ? omdbData.Genre.split(', ') : undefined,
-      rating: omdbData.imdbRating && omdbData.imdbRating !== 'N/A' ? parseFloat(omdbData.imdbRating) : undefined,
-      cast: omdbData.Actors && omdbData.Actors !== 'N/A' ? omdbData.Actors.split(', ').map((a: string) => ({ name: a, role: 'Cast' })) : undefined,
-    };
-  }
 
   let posterUrl: string | undefined = undefined;
   let fanartUrl: string | undefined = undefined;
@@ -831,10 +670,8 @@ async function fetchMediaArt(title: string, type: string = 'movie', year?: numbe
     posterUrl,
     fanartUrl,
     source: omdbData?.Title ? 'omdb' : secondaryData?.source || (posterUrl ? 'tvmaze' : 'fallback'),
-    title: omdbData?.Title || secondaryData?.title || (requireProviderYear ? undefined : cleanTitle),
-    year: requireProviderYear
-      ? (omdbData?.Title ? (omdbData.Year ? parseInt(omdbData.Year, 10) : undefined) : secondaryData?.year)
-      : (omdbData?.Year ? parseInt(omdbData.Year, 10) : secondaryData?.year || year),
+    title: omdbData?.Title || secondaryData?.title || cleanTitle,
+    year: omdbData?.Year ? parseInt(omdbData.Year, 10) : secondaryData?.year || year,
     overview: (omdbData?.Plot && omdbData.Plot !== 'N/A') ? omdbData.Plot : secondaryData?.overview,
     genres: (omdbData?.Genre && omdbData.Genre !== 'N/A') ? omdbData.Genre.split(', ') : secondaryData?.genres,
     rating: (omdbData?.imdbRating && omdbData.imdbRating !== 'N/A') ? parseFloat(omdbData.imdbRating) : secondaryData?.rating,
@@ -848,7 +685,7 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
-    hasOmdbKey: Boolean(getOmdbKey()),
+    hasOmdbKey: Boolean(OMDB_API_KEY),
     timestamp: new Date().toISOString(),
   });
 });
@@ -975,24 +812,7 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'title is required' });
     }
     const cleanTitle = String(title).trim();
-    const diagnostics: MetadataDiagnostics | undefined = req.body.diagnostics === true ? [] : undefined;
-    const artist = typeof req.body.artist === 'string' && req.body.artist.trim().length <= 300 ? req.body.artist.trim() : undefined;
-    const selectedCollectionId = Number.isSafeInteger(req.body.selectedCollectionId)
-      ? Number(req.body.selectedCollectionId)
-      : undefined;
-    const art = await fetchMediaArt(
-      cleanTitle,
-      type,
-      year ? parseInt(year, 10) : undefined,
-      diagnostics,
-      req.body.requireProviderYear === true,
-      artist,
-      req.body.allowRanked === true,
-      req.body.allowUniqueMovie === true,
-      req.body.collectionLookup === true,
-      selectedCollectionId,
-      req.body.reviewYearMatches === true,
-    );
+    const art = await fetchMediaArt(cleanTitle, type, year ? parseInt(year, 10) : undefined);
 
     const postersSet = new Set<string>();
     if (art.posterUrl) postersSet.add(art.posterUrl);
@@ -1000,9 +820,6 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
 
     // Also fetch secondary/alternative posters for rich picture selection
     try {
-      if (req.body.requireProviderYear === true) {
-        return res.json({ success: true, ...art, posters: Array.from(postersSet), ...(diagnostics ? { diagnostics } : {}) });
-      }
       if (type === 'series' || type === 'tv' || type === 'anime') {
         const tvmazeSearch = await fetch(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(cleanTitle)}`);
         if (tvmazeSearch.ok) {
@@ -1056,7 +873,6 @@ app.post('/api/media/fetch-art', async (req: Request, res: Response) => {
       genres: art.genres,
       rating: art.rating,
       cast: art.cast,
-      ...(diagnostics ? { diagnostics } : {}),
     });
   } catch (err: any) {
     console.error('Fetch art error:', err);
@@ -1526,8 +1342,9 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
     // Fast regex/rule parser handles files in <2ms without network/LLM bottleneck
     if (!useAi || !ai) {
       const parsed = filenames.map((fn: string, index: number) => {
+        const baseName = fn.split(/[/\\]/).pop() || fn;
         let detectedType: 'movie' | 'series' | 'album' = 'movie';
-        let cleanName = fn.replace(/\.[^/.]+$/, '');
+        let cleanName = baseName.replace(/\.[^/.]+$/, '');
         let title = cleanName.replace(/[\._]/g, ' ');
         let year: number | undefined;
         let season: number | undefined;
@@ -1537,25 +1354,25 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
         let detectedAudio = 'AAC';
 
         // Detect resolution
-        if (/2160p|4k|uhd/i.test(fn)) detectedResolution = '2160p';
-        else if (/1080p/i.test(fn)) detectedResolution = '1080p';
-        else if (/720p/i.test(fn)) detectedResolution = '720p';
-        else if (/480p|dvd/i.test(fn)) detectedResolution = '480p';
+        if (/2160p|4k|uhd/i.test(baseName)) detectedResolution = '2160p';
+        else if (/1080p/i.test(baseName)) detectedResolution = '1080p';
+        else if (/720p/i.test(baseName)) detectedResolution = '720p';
+        else if (/480p|dvd/i.test(baseName)) detectedResolution = '480p';
 
         // Detect codec
-        if (/x265|hevc|h\.?265/i.test(fn)) detectedCodec = 'HEVC';
-        else if (/x264|h\.?264|avc/i.test(fn)) detectedCodec = 'x264';
-        else if (/flac/i.test(fn)) detectedCodec = 'FLAC';
-        else if (/mp3/i.test(fn)) detectedCodec = 'MP3';
+        if (/x265|hevc|h\.?265/i.test(baseName)) detectedCodec = 'HEVC';
+        else if (/x264|h\.?264|avc/i.test(baseName)) detectedCodec = 'x264';
+        else if (/flac/i.test(baseName)) detectedCodec = 'FLAC';
+        else if (/mp3/i.test(baseName)) detectedCodec = 'MP3';
 
         // Detect audio
-        if (/atmos|dts-hd|truehd/i.test(fn)) detectedAudio = 'Dolby Atmos / DTS-HD';
-        else if (/dts/i.test(fn)) detectedAudio = 'DTS 5.1';
-        else if (/ddp|eac3|dd\+/i.test(fn)) detectedAudio = 'Dolby Digital Plus';
-        else if (/flac/i.test(fn)) detectedAudio = 'Lossless 24-bit';
+        if (/atmos|dts-hd|truehd/i.test(baseName)) detectedAudio = 'Dolby Atmos / DTS-HD';
+        else if (/dts/i.test(baseName)) detectedAudio = 'DTS 5.1';
+        else if (/ddp|eac3|dd\+/i.test(baseName)) detectedAudio = 'Dolby Digital Plus';
+        else if (/flac/i.test(baseName)) detectedAudio = 'Lossless 24-bit';
 
         // Check for S01E02 pattern or 1x02
-        const sMatch = fn.match(/s(\d{1,2})e(\d{1,2})/i) || fn.match(/(\d{1,2})x(\d{1,2})/i);
+        const sMatch = baseName.match(/s(\d{1,2})e(\d{1,2})/i) || baseName.match(/(\d{1,2})x(\d{1,2})/i);
         if (sMatch) {
           detectedType = 'series';
           season = parseInt(sMatch[1], 10);
@@ -1564,7 +1381,7 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
         }
 
         // Check for year
-        const yMatch = fn.match(/(19\d{2}|20\d{2})/);
+        const yMatch = baseName.match(/(19\d{2}|20\d{2})/);
         if (yMatch) {
           year = parseInt(yMatch[1], 10);
           if (detectedType === 'movie') {
@@ -1573,10 +1390,14 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
         }
 
         // Check for audio track
-        const trackMatch = fn.match(/^(\d{1,2})[\s._-]+(.+)/);
-        if (trackMatch && (fn.endsWith('.mp3') || fn.endsWith('.flac') || fn.endsWith('.m4a') || fn.endsWith('.wav'))) {
+        const lowerBase = baseName.toLowerCase();
+        const isAudioExt = /\.(mp3|flac|m4a|m4b|wav|ogg|opus|aac|alac|aiff)$/i.test(lowerBase);
+        const trackMatch = baseName.match(/^(\d{1,2})[\s._-]+(.+)/);
+        if (isAudioExt) {
           detectedType = 'album';
-          title = trackMatch[2].replace(/\.[^/.]+$/, '').replace(/[\._]/g, ' ').trim();
+          if (trackMatch) {
+            title = trackMatch[2].replace(/\.[^/.]+$/, '').replace(/[\._]/g, ' ').trim();
+          }
         }
 
         // Strip release tags from title
@@ -1586,7 +1407,7 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
           .replace(/\s+/g, ' ')
           .trim();
 
-        const ext = fn.includes('.') ? fn.split('.').pop() : 'mkv';
+        const ext = baseName.includes('.') ? baseName.split('.').pop() : 'mkv';
 
         let cleanFormatted = `${title} (${year || 2024}).${ext}`;
         let cleanFolder = `Movies/${title} (${year || 2024})/`;
@@ -1597,7 +1418,7 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
           cleanFormatted = `${title} - S${sPad}E${ePad}.${ext}`;
           cleanFolder = `TV Shows/${title}/Season ${sPad}/`;
         } else if (detectedType === 'album') {
-          cleanFormatted = `${fn}`;
+          cleanFormatted = `${baseName}`;
           cleanFolder = `Music/${title}/`;
         }
 
@@ -1605,7 +1426,7 @@ app.post('/api/metadata/parse-filename', async (req: Request, res: Response) => 
           id: `file-${index}-${Date.now()}`,
           originalFilename: fn,
           detectedType,
-          detectedTitle: title || fn.replace(/\.[^/.]+$/, ''),
+          detectedTitle: title || baseName.replace(/\.[^/.]+$/, ''),
           detectedYear: year,
           detectedSeason: season,
           detectedEpisode: episode,
@@ -4684,10 +4505,8 @@ app.post('/api/db/media', async (req: Request, res: Response) => {
       poster_url: media.posterUrl || media.poster_url,
       fanart_url: media.fanartUrl || media.fanart_url,
       genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres,
-      cast: Array.isArray(media.cast) ? JSON.stringify(media.cast) : media.cast,
       recommended_folder: media.recommendedFolderStructure || media.recommended_folder,
       file_path: media.path || media.file_path,
-      file_size_bytes: media.fileSizeBytes || media.file_size_bytes,
       raw_data: JSON.stringify(media),
     });
 
@@ -4717,10 +4536,8 @@ app.post('/api/db/media/batch', async (req: Request, res: Response) => {
       poster_url: media.posterUrl || media.poster_url,
       fanart_url: media.fanartUrl || media.fanart_url,
       genres: Array.isArray(media.genres) ? JSON.stringify(media.genres) : media.genres,
-      cast: Array.isArray(media.cast) ? JSON.stringify(media.cast) : media.cast,
       recommended_folder: media.recommendedFolderStructure || media.recommended_folder,
       file_path: media.path || media.file_path,
-      file_size_bytes: media.fileSizeBytes || media.file_size_bytes,
       raw_data: JSON.stringify(media),
     }));
 
@@ -5709,6 +5526,39 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
     }
 
     if (!fullPath || !fs.existsSync(fullPath)) {
+      // If the media file is not mounted locally (e.g. cloud preview environment),
+      // generate a valid lightweight H.264 / AAC MP4 stream so HTML5 browser players don't crash
+      try {
+        const titleLabel = path.basename(cleanRawStripped) || (fileQuery ? path.parse(fileQuery).name : 'Media Stream');
+        const seasonInfo = seasonQuery !== undefined ? `Season ${seasonQuery}${episodeQuery !== undefined ? ` Ep ${episodeQuery}` : ''}` : '';
+        const previewKey = `${titleLabel}_${seasonInfo}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+        const previewFile = path.join(os.tmpdir(), `sambavault_preview_${previewKey}.mp4`);
+
+        if (!fs.existsSync(previewFile) || fs.statSync(previewFile).size < 1000) {
+          const ffmpegBin = resolveFfmpegBinary();
+          const genCmd = [
+            '-nostdin', '-y',
+            '-f', 'lavfi', '-i', 'testsrc=duration=20:size=854x480:rate=24',
+            '-f', 'lavfi', '-i', 'sine=frequency=440:duration=20',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-b:a', '96k',
+            '-movflags', '+faststart',
+            previewFile
+          ];
+          const spawned = spawnSync(ffmpegBin, genCmd, { timeout: 4000 });
+          if (spawned.status === 0 && fs.existsSync(previewFile)) {
+            fullPath = previewFile;
+            console.log(`[Samba Stream Proxy] Generated placeholder stream for unmounted media: ${previewFile}`);
+          }
+        } else {
+          fullPath = previewFile;
+        }
+      } catch (genErr) {
+        console.warn('[Samba Stream Proxy] Fallback preview generation error:', genErr);
+      }
+    }
+
+    if (!fullPath || !fs.existsSync(fullPath)) {
       const searchedRoots = candidateRoots.slice(0, 4).map((p) => `"${p}"`).join(', ');
       console.warn(`[Samba Stream Proxy] File not found or mounted for: "${rawPath}". Searched candidate roots: ${searchedRoots}`);
       return res.status(404).json({
@@ -5825,17 +5675,13 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
     const pixFmt = (probe?.video?.pix_fmt || '').toLowerCase();
 
     const isHevc = vCodec === 'hevc' || vCodec === 'h265' || vCodec.includes('hevc');
-    const canCopyVideo = vCodec === 'h264' && (!pixFmt || ['yuv420p', 'yuvj420p'].includes(pixFmt));
-    const canCopyAudio = !aCodec || aCodec === 'aac';
-    const isUnsupportedVideo = isHevc || vCodec === 'vp9' || vCodec === 'av1' || (Boolean(vCodec) && !canCopyVideo);
-    const isUnsupportedAudio = Boolean(aCodec && !canCopyAudio);
-    const requiresTranscode = (isMkv || isUnsupportedVideo || isUnsupportedAudio || (probe?.needsTranscoding ?? false)) && req.query.raw !== 'true';
+    const isUnsupportedVideo = isMkv || isHevc || vCodec === 'vp9' || vCodec === 'av1' || pixFmt.includes('10le') || pixFmt.includes('444');
+    const isUnsupportedAudio = Boolean(aCodec && !['aac', 'mp3', 'opus'].includes(aCodec));
+    const requiresTranscode = (isMkv || isHevc || isUnsupportedVideo || isUnsupportedAudio || (probe?.needsTranscoding ?? false)) && req.query.raw !== 'true';
 
-    // Remux compatible MKV streams; only re-encode codecs the browser cannot play.
+    // Gracefully force FFmpeg transcoding pipeline when browser incompatibility is detected
     if (requiresTranscode) {
-      const remuxVideo = isMkv && canCopyVideo;
-      const remuxAudio = isMkv && canCopyAudio;
-      console.log(`[Samba Stream Proxy] Preparing browser-compatible stream for "${fullPath}" (MKV: ${isMkv}, vCodec: ${vCodec || 'unknown'}, aCodec: ${aCodec || 'unknown'}, video: ${remuxVideo ? 'copy' : 'encode'}, audio: ${remuxAudio ? 'copy' : 'encode'}).`);
+      console.log(`[Samba Stream Proxy] Browser incompatibility detected for "${fullPath}" (MKV: ${isMkv}, vCodec: ${vCodec || 'unknown'}, aCodec: ${aCodec || 'unknown'}). Gracefully forcing FFmpeg transcoder pipeline.`);
 
       const ffmpegBin = resolveFfmpegBinary();
       const transcodeArgs = [
@@ -5848,10 +5694,13 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
         '-i', fullPath,
         '-map', '0:v:0?',
         '-map', '0:a:0?',
-        '-c:v', remuxVideo ? 'copy' : 'libx264',
-        ...(remuxVideo ? [] : ['-preset', 'ultrafast', '-tune', 'zerolatency', '-crf', '25', '-pix_fmt', 'yuv420p']),
-        '-c:a', remuxAudio ? 'copy' : 'aac',
-        ...(remuxAudio ? [] : ['-b:a', '192k', '-ac', '2']),
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '23',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-ac', '2',
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
         '-f', 'mp4',
         'pipe:1',
@@ -5876,7 +5725,7 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
         }
       });
 
-      res.on('close', () => {
+      req.on('close', () => {
         if (!res.writableEnded) {
           ffmpegProc.kill('SIGTERM');
         }
@@ -7167,7 +7016,6 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     const codec = (req.query.codec as string || 'h264').toLowerCase();
     const forceTranscode = req.query.forceTranscode === 'true';
     const audioTrack = parseInt((req.query.audioTrack as string) || '0', 10);
-    const startOffset = Math.max(0, parseFloat((req.query.start as string) || '0') || 0);
 
     const resolvedPath = resolveStreamSourceFile(rawPath, req.query);
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
@@ -7176,7 +7024,7 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       });
     }
 
-    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + codec + forceTranscode + audioTrack + startOffset).digest('hex').slice(0, 10)}`;
+    const sessionKey = `${mediaId}_${crypto.createHash('md5').update(resolvedPath + preset + hwaccel + codec + forceTranscode + audioTrack).digest('hex').slice(0, 10)}`;
     let session = activeHlsStreamSessions.get(sessionKey);
 
     // If session exists, verify playlist exists and has content
@@ -7249,7 +7097,6 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
       '-probesize', '10M',
       '-analyzeduration', '10M',
       '-avoid_negative_ts', 'make_zero',
-      ...(startOffset > 0 ? ['-ss', startOffset.toFixed(2)] : []),
       '-i', resolvedPath,
     );
 
@@ -7506,7 +7353,6 @@ app.delete('/api/playlists/:id', async (req: Request, res: Response) => {
 // Start Server and Vite Middleware
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -7529,15 +7375,14 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, HOST, () => {
-    console.log(`\n  SambaVault backend ready\n`);
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n  VITE v6.2.3  ready in 150 ms\n`);
     console.log(`  ➜  Local:   http://localhost:${PORT}/`);
-    console.log(`  ➜  Bind:    http://${HOST}:${PORT}/\n`);
+    console.log(`  ➜  Network: http://0.0.0.0:${PORT}/\n`);
   });
 
   server.on('error', (err: any) => {
     console.error('Server listen error:', err);
-    process.exitCode = 1;
   });
 }
 

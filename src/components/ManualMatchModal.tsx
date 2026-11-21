@@ -39,6 +39,7 @@ import {
 } from '../utils/mediaExtractor';
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { downloadMediaArtwork } from '../utils/zipDownloader';
+import { saveMediaToTauriDb } from '../utils/tauriBridge';
 
 export interface ManualMatchModalProps {
   isOpen: boolean;
@@ -67,7 +68,6 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
   const [mediaType, setMediaType] = useState<MediaType>(initialMediaType || 'series');
   const [customTitle, setCustomTitle] = useState('');
   const [customYear, setCustomYear] = useState<number>(new Date().getFullYear());
-  const [customYearSource, setCustomYearSource] = useState<MediaMetadata['yearSource']>('placeholder');
   const [customSeasonNumber, setCustomSeasonNumber] = useState<number>(1);
   
   // Custom Synopsis & Metadata fields
@@ -98,7 +98,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
   // Mark changes as unsaved when metadata fields change
   useEffect(() => {
     setSaveStatus('Unsaved Changes');
-  }, [customTitle, customYear, customYearSource, customOverview, customTagline, customGenres, customRating, customPosterUrl, customSeasonNumber]);
+  }, [customTitle, customOverview, customTagline, customGenres, customRating, customPosterUrl, customSeasonNumber]);
 
   // Parse path when modal opens or path changes
   useEffect(() => {
@@ -139,7 +139,6 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
       const initialCandidate = candidateTitle || '';
       setCustomTitle(initialCandidate);
       setCustomYear(parsedGeneral.year || new Date().getFullYear());
-      setCustomYearSource(parsedGeneral.hasYear ? 'filename' : 'placeholder');
 
       // Initialize default overview placeholder
       setCustomOverview(`${initialCandidate || 'Media Title'} synopsis and description.`);
@@ -197,7 +196,6 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
           title: titleQuery,
           type: type,
           year: customYear,
-          yearSource: customYearSource,
           seasonNumber: seasonNum,
           episodeNumber: episodeNum,
           episodeTitle: epTitleGuess,
@@ -581,13 +579,29 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
         localStorage.setItem('sambavault_media_library_v2', JSON.stringify(stored));
       } catch (e) {}
 
-      // 3. Persist to the SQLite vault via the backend.
-      const saveResponse = await fetch('/api/db/media', {
+      // 3. Persist to Tauri SQLite
+      saveMediaToTauriDb(finalized).catch(() => {});
+
+      // 4. Persist to local SQLite Vault via HTTP API
+      await fetch('/api/db/media', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalized),
-      });
-      if (!saveResponse.ok) throw new Error(`Failed to save metadata (HTTP ${saveResponse.status})`);
+        body: JSON.stringify({
+          id: finalized.id,
+          media_type: finalized.type,
+          title: finalized.title,
+          original_title: finalized.title,
+          synopsis: finalized.overview,
+          year: finalized.year,
+          rating: finalized.rating,
+          poster_url: finalized.posterUrl,
+          fanart_url: finalized.fanartUrl,
+          genres: JSON.stringify(finalized.genres),
+          cast: finalized.cast ? JSON.stringify(finalized.cast) : null,
+          recommended_folder: finalized.recommendedFolderStructure,
+          raw_data: finalized.source || 'manual-match'
+        })
+      }).catch(() => {});
 
       // 5. Trigger asynchronous write operation to Samba filesystem (.nfo and local images)
       const rootTag = finalized.type === 'series' ? 'tvshow' : 'movie';
@@ -785,10 +799,7 @@ export const ManualMatchModal: React.FC<ManualMatchModalProps> = ({
                 <input
                   type="number"
                   value={customYear}
-                  onChange={(e) => {
-                    setCustomYear(Number(e.target.value));
-                    setCustomYearSource('user');
-                  }}
+                  onChange={(e) => setCustomYear(Number(e.target.value))}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 text-sm font-medium"
                 />
               </div>

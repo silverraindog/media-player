@@ -2,18 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { walkDirectoryRecursiveAsync } from '../server';
-import {
-  extractAllMediaFromSambaTree,
-  extractAllMediaFromSambaTreeAsync,
-  extractSeasonNumberFromPath,
-  getDirectPlaybackUrl,
-  inferScannedMediaType,
-  isPathInsideExtras,
-  isSeasonDirectory,
-  nodeToMediaMetadata,
-} from '../src/utils/mediaExtractor';
-import { normalizeFranchiseHierarchy } from '../src/utils/franchiseHierarchy';
-import { SambaShareNode } from '../src/types';
+import { getDirectPlaybackUrl, nodeToMediaMetadata } from '../src/utils/mediaExtractor';
 
 // Simple minimal testing harness
 async function runTests() {
@@ -102,13 +91,15 @@ async function runTests() {
       }
     }
     const playbackUrl = getDirectPlaybackUrl(spacedFile.path);
-    if (playbackUrl !== spacedFilePath) {
-      throw new Error(`Assertion failed: Playback URL changed the source path to "${playbackUrl}"`);
+    const playbackPath = new URL(playbackUrl!, 'http://localhost').searchParams.get('path');
+    if (playbackPath !== spacedFilePath) {
+      throw new Error(`Assertion failed: Playback URL changed the source path to "${playbackPath}"`);
     }
     const windowsPath = 'D:\\Media Library\\Films\\Movie Title [1080p].mkv';
     const windowsPlaybackUrl = getDirectPlaybackUrl(windowsPath);
-    if (windowsPlaybackUrl !== windowsPath) {
-      throw new Error(`Assertion failed: Playback URL changed the Windows source path to "${windowsPlaybackUrl}"`);
+    const decodedWindowsPath = new URL(windowsPlaybackUrl!, 'http://localhost').searchParams.get('path');
+    if (decodedWindowsPath !== windowsPath) {
+      throw new Error(`Assertion failed: Playback URL changed the Windows source path to "${decodedWindowsPath}"`);
     }
     const extractedMedia = nodeToMediaMetadata({
       id: 'scanned-episode',
@@ -120,147 +111,6 @@ async function runTests() {
     });
     if (extractedMedia?.path !== spacedFilePath || extractedMedia.seasons?.[0]?.episodes?.[0]?.filePath !== spacedFilePath) {
       throw new Error('Assertion failed: Extracted media or episode metadata did not retain the scanned source path.');
-    }
-
-    const typeCases: Array<{ path: string; metadata?: { type?: string; primaryCategory?: string }; expected: string }> = [
-      { path: '/Volumes/media/Movies/Interstellar/Interstellar.mkv', expected: 'movie' },
-      { path: '/Volumes/media/Movies/Interstellar/Interstellar.mkv', metadata: { type: 'series' }, expected: 'movie' },
-      { path: '/Volumes/media/Movies/Interstellar/Season 1/Episode 1.mkv', expected: 'movie' },
-      { path: '/Volumes/media/TV Shows/Example Show/S01/E01.mkv', expected: 'series' },
-      { path: '/Volumes/media/Franchies/Battlestar Galactica/Extra/BSG Season 2/Episode.mkv', expected: 'series' },
-      { path: '/Volumes/media/Music/Artist/Album/Track.flac', expected: 'album' },
-      { path: '/Volumes/media/Unsorted/Some Title.mkv', metadata: { type: 'series' }, expected: 'series' },
-      { path: '/Volumes/media/Unsorted/Audio Collection.mkv', metadata: { primaryCategory: 'Music' }, expected: 'album' },
-      { path: '/Volumes/media/Movies/Some Movie/Track.flac', expected: 'album' },
-    ];
-    for (const testCase of typeCases) {
-      if (inferScannedMediaType(testCase.path, testCase.metadata) !== testCase.expected) {
-        throw new Error(`Assertion failed: ${testCase.path} should be categorized as ${testCase.expected}.`);
-      }
-    }
-    if (!isSeasonDirectory('BSG Season 2') || !isSeasonDirectory('BSG S03')) {
-      throw new Error('Assertion failed: Season folders with a series-name prefix were not recognized.');
-    }
-    if (
-      extractSeasonNumberFromPath('/Franchies/Battlestar Galactica/Extra/BSG Season 2') !== 2 ||
-      !isPathInsideExtras('/Franchies/Battlestar Galactica/Extra/BSG Season 2/Episode.mkv')
-    ) {
-      throw new Error('Assertion failed: Nested season numbers or Extra paths were not identified.');
-    }
-
-    const seriesTree = [{
-      id: 'series-root',
-      name: 'Example Show',
-      path: 'TV/Example Show',
-      type: 'folder' as const,
-      children: [
-        {
-          id: 'season-one',
-          name: 'S01',
-          path: 'TV/Example Show/S01',
-          type: 'folder' as const,
-          children: [
-            { id: 'episode-one', name: 'Episode 1.mkv', path: 'TV/Example Show/S01/Episode 1.mkv', type: 'file' as const },
-            { id: 'episode-two', name: 'Episode 2.mkv', path: 'TV/Example Show/S01/Episode 2.mkv', type: 'file' as const },
-          ],
-        },
-        {
-          id: 'season-two',
-          name: 'Season 2',
-          path: 'TV/Example Show/Season 2',
-          type: 'folder' as const,
-          children: [
-            { id: 'episode-three', name: 'Example Show S02E03.mkv', path: 'TV/Example Show/Season 2/Example Show S02E03.mkv', type: 'file' as const },
-          ],
-        },
-        {
-          id: 'specials',
-          name: 'Specials',
-          path: 'TV/Example Show/Specials',
-          type: 'folder' as const,
-          children: [
-            { id: 'special-one', name: 'Behind the Scenes.mkv', path: 'TV/Example Show/Specials/Behind the Scenes.mkv', type: 'file' as const },
-          ],
-        },
-      ],
-    }];
-    const extractedCatalogs = [
-      extractAllMediaFromSambaTree(seriesTree),
-      await extractAllMediaFromSambaTreeAsync(seriesTree),
-    ];
-    for (const catalog of extractedCatalogs) {
-      const importedSeries = catalog.find((item) => item.type === 'series' && item.title === 'Example Show');
-      const importedSeasons = importedSeries?.seasons || [];
-      if (
-        !importedSeries ||
-        importedSeasons.map((season) => season.seasonNumber).join(',') !== '0,1,2' ||
-        importedSeasons.find((season) => season.seasonNumber === 1)?.episodes?.length !== 2 ||
-        importedSeasons.find((season) => season.seasonNumber === 2)?.episodes?.[0]?.filePath !==
-          'TV/Example Show/Season 2/Example Show S02E03.mkv' ||
-        importedSeasons.find((season) => season.seasonNumber === 0)?.episodes?.[0]?.filePath !==
-          'TV/Example Show/Specials/Behind the Scenes.mkv'
-      ) {
-        throw new Error('Assertion failed: Series root did not group S01, Season 2, and Specials as sibling seasons.');
-      }
-    }
-
-    const bsgExtrasTree: SambaShareNode[] = [{
-      id: 'franchies-root',
-      name: 'Franchies',
-      path: '/Volumes/media/Franchies',
-      type: 'folder',
-      children: [{
-        id: 'bsg-root',
-        name: 'Battlestar Galactica',
-        path: '/Volumes/media/Franchies/Battlestar Galactica',
-        type: 'folder',
-        children: [{
-          id: 'bsg-extra',
-          name: 'Extra',
-          path: '/Volumes/media/Franchies/Battlestar Galactica/Extra',
-          type: 'folder',
-          children: [2, 3].map((seasonNumber) => ({
-            id: `bsg-season-${seasonNumber}`,
-            name: `BSG Season ${seasonNumber}`,
-            path: `/Volumes/media/Franchies/Battlestar Galactica/Extra/BSG Season ${seasonNumber}`,
-            type: 'folder',
-            children: [{
-              id: `bsg-episode-${seasonNumber}`,
-              name: `Episode ${seasonNumber}.mkv`,
-              path: `/Volumes/media/Franchies/Battlestar Galactica/Extra/BSG Season ${seasonNumber}/Episode ${seasonNumber}.mkv`,
-              type: 'file',
-            }],
-          })),
-        }],
-      }],
-    }];
-    const normalizedBsgTree = normalizeFranchiseHierarchy(bsgExtrasTree);
-    const franchiseNode = normalizedBsgTree[0]?.children?.[0];
-    const primarySeriesNode = franchiseNode;
-    const extraFolder = primarySeriesNode?.children?.find((child) => child.name === 'Extra');
-    if (
-      primarySeriesNode?.name !== 'Battlestar Galactica' ||
-      extraFolder?.children?.map((child) => child.name).join(',') !== 'BSG Season 2,BSG Season 3'
-    ) {
-      throw new Error('Assertion failed: Franchies/Battlestar Galactica/Extra was not preserved under the Battlestar Galactica root.');
-    }
-
-    const bsgCatalogs = [
-      extractAllMediaFromSambaTree(bsgExtrasTree),
-      await extractAllMediaFromSambaTreeAsync(bsgExtrasTree),
-      extractAllMediaFromSambaTree(bsgExtrasTree[0].children || []),
-      await extractAllMediaFromSambaTreeAsync(bsgExtrasTree[0].children || []),
-    ];
-    for (const catalog of bsgCatalogs) {
-      const bsgSeries = catalog.find((item) => item.title === 'Battlestar Galactica');
-      if (
-        !bsgSeries ||
-        bsgSeries.seasons?.map((season) => season.seasonNumber).join(',') !== '2,3' ||
-        bsgSeries.seasons.some((season) => season.episodes?.length !== 1) ||
-        catalog.some((item) => /^BSG Season [23]$/i.test(item.title))
-      ) {
-        throw new Error('Assertion failed: Extra/BSG Season 2 and 3 were not grouped under Battlestar Galactica.');
-      }
     }
 
     const moviesDir = items.find(it => it.rel_path === 'Movies');

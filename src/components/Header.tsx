@@ -21,6 +21,7 @@ import {
   RotateCw,
   Bug,
   Settings,
+  Layers,
 } from 'lucide-react';
 import { SambaConfig, AppTab, SyncProgressState } from '../types';
 import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag } from '../version';
@@ -314,6 +315,19 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Sparkles className="w-4 h-4 text-indigo-300" />
               <span>Search & Metadata</span>
+            </button>
+
+              <button
+                id="tab-collections"
+              onClick={() => setActiveTab('collections')}
+              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'collections'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <Layers className="w-4 h-4 text-cyan-300" />
+              <span>Collections</span>
             </button>
 
               <button

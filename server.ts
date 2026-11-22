@@ -45,6 +45,9 @@ import {
   getAllSmartPlaylists,
   saveSmartPlaylist,
   deleteSmartPlaylist,
+  getAllCollectionsFromDb,
+  saveCollectionToDb,
+  deleteCollectionFromDb,
   getMediaPlaybackSettings,
   saveMediaPlaybackSettings,
   renameVaultMediaFile,
@@ -7344,6 +7347,45 @@ app.delete('/api/playlists/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     await deleteSmartPlaylist(id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// MEDIA COLLECTIONS / UNIVERSES API
+app.get('/api/collections', async (req: Request, res: Response) => {
+  try {
+    const collections = await getAllCollectionsFromDb();
+    res.json({ success: true, collections });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/collections', async (req: Request, res: Response) => {
+  try {
+    const saved = await saveCollectionToDb(req.body || {});
+    res.json({ success: true, collection: saved });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/collections/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const saved = await saveCollectionToDb({ ...(req.body || {}), id });
+    res.json({ success: true, collection: saved });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/collections/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    await deleteCollectionFromDb(id);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });

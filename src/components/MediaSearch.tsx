@@ -52,7 +52,7 @@ import {
   Languages,
   Bug,
 } from 'lucide-react';
-import { MediaMetadata, MediaType, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore, SambaShareNode } from '../types';
+import { MediaMetadata, MediaType, MediaCollection, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore, SambaShareNode } from '../types';
 import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
 import { generateMetadataFile } from '../utils/nfoGenerator';
 import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
@@ -63,13 +63,13 @@ import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
-import { extractFranchiseRoot } from '../utils/duplicateDetector';
-import { KNOWN_FRANCHISES_MAP } from '../utils/franchiseHierarchy';
+import { buildUnifiedCollections, COLLECTION_FALLBACK_POSTER, UnifiedCollection } from '../utils/collections';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface MediaSearchProps {
   mediaLibrary: MediaMetadata[];
   sambaTree?: SambaShareNode[];
+  customCollections?: MediaCollection[];
   onPushToSamba: (media: MediaMetadata) => void;
   onOpenDetails: (media: MediaMetadata) => void;
   onOpenInNfoStudio: (media: MediaMetadata) => void;
@@ -82,10 +82,11 @@ interface MediaSearchProps {
   onSaveCategorizedMedia?: (media: MediaMetadata) => void;
   isSyncing?: boolean;
   scanRootPath?: string;
-  selectedMediaType?: 'all' | MediaType;
-  onSelectMediaType?: (type: 'all' | MediaType) => void;
+  selectedMediaType?: 'all' | MediaType | 'collections';
+  onSelectMediaType?: (type: 'all' | MediaType | 'collections') => void;
   onOpenApiDebugger?: () => void;
   onOpenClassifierModal?: () => void;
+  onOpenCollectionsTab?: () => void;
 }
 
 // Curated Category Taxonomy with Icons & Brand Colors
@@ -220,21 +221,12 @@ export function getSafeRating(rating: any): number {
   return !isNaN(num) ? num : 8.0;
 }
 
-export interface UniverseCollection {
-  id: string;
-  name: string;
-  overview: string;
-  posterUrl: string;
-  fanartUrl?: string;
-  movies: MediaMetadata[];
-  series: MediaMetadata[];
-  music: MediaMetadata[];
-  items: MediaMetadata[];
-}
+export type UniverseCollection = UnifiedCollection;
 
 export const MediaSearch: React.FC<MediaSearchProps> = ({
   mediaLibrary = [],
   sambaTree,
+  customCollections = [],
   onPushToSamba,
   onOpenDetails,
   onOpenInNfoStudio,
@@ -251,6 +243,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   onSelectMediaType,
   onOpenApiDebugger,
   onOpenClassifierModal,
+  onOpenCollectionsTab,
 }) => {
   const safeMediaLibrary = useMemo(() => {
     if (!Array.isArray(mediaLibrary)) return [];
@@ -325,9 +318,9 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const [genreSearchInput, setGenreSearchInput] = useState<string>('');
   const [showAllGenreChips, setShowAllGenreChips] = useState<boolean>(false);
   const [selectedFileType, setSelectedFileType] = useState<string>('all');
-  const [internalSelectedType, setInternalSelectedType] = useState<'all' | MediaType>('all');
+  const [internalSelectedType, setInternalSelectedType] = useState<'all' | MediaType | 'collections'>('all');
   const selectedType = selectedMediaType !== undefined ? selectedMediaType : internalSelectedType;
-  const setSelectedType = (type: 'all' | MediaType) => {
+  const setSelectedType = (type: 'all' | MediaType | 'collections') => {
     setInternalSelectedType(type);
     if (onSelectMediaType) {
       onSelectMediaType(type);
@@ -398,7 +391,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
     const timer = setTimeout(async () => {
       try {
-        const res = await globalSearchIndexer.performSmartSearch(q, selectedType);
+        const res = await globalSearchIndexer.performSmartSearch(
+          q,
+          selectedType === 'collections' ? 'all' : selectedType
+        );
         if (!isCancelled) {
           setSmartSuggestions(res.suggestions);
         }
@@ -451,57 +447,18 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const [activeCollectionTab, setActiveCollectionTab] = useState<'all' | 'collections' | 'movie' | 'series' | 'album'>('all');
   const [selectedUniverseModal, setSelectedUniverseModal] = useState<UniverseCollection | null>(null);
   const universeCollections = useMemo(() => {
-    const map = new Map<string, UniverseCollection>();
+    return buildUnifiedCollections(safeMediaLibrary, customCollections, sambaTree);
+  }, [safeMediaLibrary, customCollections, sambaTree]);
 
-    safeMediaLibrary.forEach((m) => {
-      const rootKey = extractFranchiseRoot(m.title);
-      const knownKey = Object.keys(KNOWN_FRANCHISES_MAP).find(
-        (k) => rootKey.includes(k) || m.title.toLowerCase().includes(k)
-      );
-      const known = knownKey ? KNOWN_FRANCHISES_MAP[knownKey] : null;
-
-      const genreGroup = m.genres?.[0] || 'General';
-      const universeName = known ? known.franchiseName : `${genreGroup} Universe`;
-      const universeId = knownKey || rootKey || universeName.toLowerCase().replace(/[^a-z0-9]/g, '-');
-
-      if (!map.has(universeId)) {
-        map.set(universeId, {
-          id: universeId,
-          name: universeName,
-          overview: known?.overview || m.overview || `Curated collection and universe for ${universeName} media and releases.`,
-          posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80',
-          fanartUrl: m.fanartUrl,
-          movies: [],
-          series: [],
-          music: [],
-          items: [],
-        });
-      }
-
-      const col = map.get(universeId)!;
-      col.items.push(m);
-      if (m.type === 'movie') col.movies.push(m);
-      else if (m.type === 'series') col.series.push(m);
-      else if (m.type === 'album') col.music.push(m);
-      else col.movies.push(m);
-    });
-
-    const collections = Array.from(map.values());
-    if (collections.length === 0 && safeMediaLibrary.length > 0) {
-      collections.push({
-        id: 'all-media-universe',
-        name: 'Main Media Universe',
-        overview: 'Unified collection of all media items in your library.',
-        posterUrl: safeMediaLibrary[0]?.posterUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800&auto=format&fit=crop&q=80',
-        movies: safeMediaLibrary.filter(m => m.type === 'movie'),
-        series: safeMediaLibrary.filter(m => m.type === 'series'),
-        music: safeMediaLibrary.filter(m => m.type === 'album'),
-        items: safeMediaLibrary,
-      });
+  useEffect(() => {
+    if (selectedType === 'collections') {
+      setActiveCollectionTab('collections');
+    } else if (selectedType === 'movie' || selectedType === 'series' || selectedType === 'album') {
+      setActiveCollectionTab(selectedType);
+    } else {
+      setActiveCollectionTab((prev) => (prev === 'collections' ? 'collections' : 'all'));
     }
-
-    return collections;
-  }, [safeMediaLibrary]);
+  }, [selectedType]);
 
   // Determine Min and Max Year across library
   const { minLibraryYear, maxLibraryYear } = useMemo(() => {
@@ -772,7 +729,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     MOVIE_SERIES_CATEGORIES.forEach((cat) => {
       if (cat.id === 'all') return;
       const matching = safeMediaLibrary.filter((m) => {
-        if (selectedType !== 'all' && m.type !== selectedType) return false;
+        if (selectedType !== 'all' && selectedType !== 'collections' && m.type !== selectedType) return false;
         const genresJoined = (m.genres || []).join(' ').toLowerCase();
         const overviewJoined = (m.overview || '').toLowerCase();
         return cat.keywords.some(
@@ -788,7 +745,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const availableGenres = useMemo(() => {
     const genreMap = new Map<string, number>();
     safeMediaLibrary.forEach((m) => {
-      if (selectedType !== 'all' && m.type !== selectedType) return;
+      if (selectedType !== 'all' && selectedType !== 'collections' && m.type !== selectedType) return;
       let genresList: string[] = [];
       if (Array.isArray(m.genres)) {
         genresList = m.genres;
@@ -994,7 +951,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const filteredMedia = useMemo(() => {
     return safeMediaLibrary.filter((media) => {
       // Type filter
-      if (selectedType !== 'all' && media.type !== selectedType) {
+      if (selectedType !== 'all' && selectedType !== 'collections' && media.type !== selectedType) {
         return false;
       }
 
@@ -1179,7 +1136,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     if (matched.length === 0) {
       // Open Web Search Categorizer Modal to fetch rich metadata directly from web
       setCategorizerInitialQuery(query);
-      setCategorizerInitialType(selectedType);
+      setCategorizerInitialType(selectedType === 'collections' ? 'all' : selectedType);
       setIsCategorizerModalOpen(true);
     }
   };
@@ -1207,7 +1164,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   const handleOpenCategorizerForTitle = (title: string, type?: MediaType) => {
     setCategorizerInitialQuery(title);
-    setCategorizerInitialType(type || (selectedType !== 'all' ? selectedType : 'all'));
+    setCategorizerInitialType(type || (selectedType !== 'all' && selectedType !== 'collections' ? selectedType : 'all'));
     setIsCategorizerModalOpen(true);
   };
 
@@ -1684,7 +1641,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               id="btn-open-web-categorizer"
               onClick={() => {
                 setCategorizerInitialQuery(searchQuery || '');
-                setCategorizerInitialType(selectedType);
+                setCategorizerInitialType(selectedType === 'collections' ? 'all' : selectedType);
                 setIsCategorizerModalOpen(true);
               }}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold shadow-lg shadow-indigo-500/25 transition cursor-pointer"
@@ -2084,6 +2041,31 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               {albumsCount}
             </span>
           </button>
+
+          <button
+            id="search-filter-collections"
+            onClick={() => {
+              setSelectedType('collections');
+              setActiveCollectionTab('collections');
+            }}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold transition cursor-pointer whitespace-nowrap ${
+              selectedType === 'collections' || activeCollectionTab === 'collections'
+                ? 'bg-amber-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>Collections</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-bold tabular-nums ${
+                selectedType === 'collections' || activeCollectionTab === 'collections'
+                  ? 'bg-amber-800 text-amber-100'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {universeCollections.length}
+            </span>
+          </button>
         </div>
 
         {/* Action Controls & Search Input Row */}
@@ -2100,6 +2082,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     ? 'bg-purple-950/70 border-purple-500/50 text-purple-200 ring-1 ring-purple-500/30'
                     : selectedType === 'movie'
                     ? 'bg-cyan-950/70 border-cyan-500/50 text-cyan-200 ring-1 ring-cyan-500/30'
+                    : selectedType === 'collections'
+                    ? 'bg-amber-950/70 border-amber-500/50 text-amber-200 ring-1 ring-amber-500/30'
                     : 'bg-emerald-950/70 border-emerald-500/50 text-emerald-200 ring-1 ring-emerald-500/30'
                   : 'bg-slate-900 border-slate-800 hover:border-slate-700 text-slate-200 hover:text-white'
               }`}
@@ -2111,6 +2095,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   <Film className="w-4 h-4 text-cyan-400" />
                 ) : selectedType === 'album' ? (
                   <Music className="w-4 h-4 text-emerald-400" />
+                ) : selectedType === 'collections' ? (
+                  <Layers className="w-4 h-4 text-amber-400" />
                 ) : (
                   <Filter className="w-4 h-4 text-indigo-400" />
                 )}
@@ -2121,6 +2107,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     ? 'Movies'
                     : selectedType === 'album'
                     ? 'Albums'
+                    : selectedType === 'collections'
+                    ? 'Collections'
                     : 'All Media Types'}
                 </span>
                 <span className="px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px] font-mono text-slate-300 font-bold border border-slate-700">
@@ -2130,6 +2118,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     ? moviesCount
                     : selectedType === 'album'
                     ? albumsCount
+                    : selectedType === 'collections'
+                    ? universeCollections.length
                     : allCount}
                 </span>
               </div>
@@ -2236,6 +2226,29 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       {albumsCount}
                     </span>
                   </button>
+
+                  <button
+                    id="dropdown-filter-collections"
+                    type="button"
+                    onClick={() => {
+                      setSelectedType('collections');
+                      setActiveCollectionTab('collections');
+                      setIsTypeDropdownOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                      selectedType === 'collections'
+                        ? 'bg-amber-600 text-white font-semibold'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Layers className="w-4 h-4 text-amber-300" />
+                      <span>Collections & Universes</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-amber-200 tabular-nums">
+                      {universeCollections.length}
+                    </span>
+                  </button>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -2327,13 +2340,14 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               <select
                 id="sidebar-mediatype-select"
                 value={selectedType}
-                onChange={(e) => setSelectedType(e.target.value as 'all' | MediaType)}
+                onChange={(e) => setSelectedType(e.target.value as 'all' | MediaType | 'collections')}
                 className="w-full appearance-none bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-3.5 py-2.5 pr-9 text-xs text-white font-medium cursor-pointer transition shadow-inner"
               >
                 <option value="all">🌟 All Media Types ({allCount})</option>
                 <option value="movie">🎬 Movies ({moviesCount})</option>
                 <option value="series">📺 TV Series ({seriesCount})</option>
                 <option value="album">🎵 Music Albums ({albumsCount})</option>
+                <option value="collections">🗂️ Collections & Universes ({universeCollections.length})</option>
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400">
                 <ChevronDown className="w-3.5 h-3.5" />
@@ -2531,7 +2545,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
             <button
               onClick={() => {
                 setCategorizerInitialQuery(searchQuery || '');
-                setCategorizerInitialType(selectedType);
+                setCategorizerInitialType(selectedType === 'collections' ? 'all' : selectedType);
                 setIsCategorizerModalOpen(true);
               }}
               className="w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition shadow cursor-pointer text-center"
@@ -2711,7 +2725,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     selectedGenres.length === 0 ? 'bg-purple-800 text-purple-100 font-bold' : 'bg-slate-800 text-slate-400'
                   }`}
                 >
-                  {mediaLibrary.filter((m) => selectedType === 'all' || m.type === selectedType).length}
+                  {mediaLibrary.filter((m) => selectedType === 'all' || selectedType === 'collections' || m.type === selectedType).length}
                 </span>
               </button>
 
@@ -2766,9 +2780,20 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                       ? 'bg-purple-950 border-purple-700/60 text-purple-300'
                       : selectedType === 'movie'
                       ? 'bg-cyan-950 border-cyan-700/60 text-cyan-300'
+                      : selectedType === 'collections'
+                      ? 'bg-amber-950 border-amber-700/60 text-amber-300'
                       : 'bg-emerald-950 border-emerald-700/60 text-emerald-300'
                   }`}>
-                    <span>Type: {selectedType === 'series' ? 'TV Series' : selectedType === 'movie' ? 'Movies' : 'Music Albums'}</span>
+                    <span>
+                      Type:{' '}
+                      {selectedType === 'series'
+                        ? 'TV Series'
+                        : selectedType === 'movie'
+                        ? 'Movies'
+                        : selectedType === 'collections'
+                        ? 'Collections'
+                        : 'Music Albums'}
+                    </span>
                     <button
                       onClick={() => setSelectedType('all')}
                       className="hover:text-white ml-0.5 cursor-pointer"
@@ -2978,6 +3003,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                     ? 'TV Series'
                     : selectedType === 'movie'
                     ? 'Movies'
+                    : selectedType === 'collections'
+                    ? 'Collections'
                     : 'Music Albums'}
                 </span>
               </div>
@@ -3202,7 +3229,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               </div>
               <div>
                 <h3 className="text-sm font-bold text-white">Media Collections & Universes</h3>
-                <p className="text-xs text-slate-400">Browse unified franchise collections or filter by media type</p>
+                <p className="text-xs text-slate-400">Browse unified franchise collections across movies, series, and music</p>
               </div>
             </div>
 
@@ -3210,10 +3237,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
               <button
                 onClick={() => {
                   setActiveCollectionTab('collections');
-                  setSelectedType('all');
+                  setSelectedType('collections');
                 }}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                  activeCollectionTab === 'collections'
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeCollectionTab === 'collections' || selectedType === 'collections'
                     ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
                     : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
                 }`}
@@ -3226,7 +3253,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   setActiveCollectionTab('all');
                   setSelectedType('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   activeCollectionTab === 'all' && selectedType === 'all'
                     ? 'bg-indigo-600 text-white shadow-md'
                     : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
@@ -3239,7 +3266,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   setActiveCollectionTab('movie');
                   setSelectedType('movie');
                 }}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   activeCollectionTab === 'movie' || selectedType === 'movie'
                     ? 'bg-emerald-600 text-white shadow-md'
                     : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
@@ -3253,7 +3280,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   setActiveCollectionTab('series');
                   setSelectedType('series');
                 }}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   activeCollectionTab === 'series' || selectedType === 'series'
                     ? 'bg-cyan-600 text-white shadow-md'
                     : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
@@ -3267,7 +3294,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   setActiveCollectionTab('album');
                   setSelectedType('album');
                 }}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   activeCollectionTab === 'album' || selectedType === 'album'
                     ? 'bg-purple-600 text-white shadow-md'
                     : 'bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700'
@@ -3276,59 +3303,88 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                 <Music className="w-3.5 h-3.5 text-purple-300" />
                 <span>Music ({albumsCount})</span>
               </button>
+              {onOpenCollectionsTab && (
+                <button
+                  onClick={onOpenCollectionsTab}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  Manage Collections
+                </button>
+              )}
             </div>
           </div>
 
           {/* Media Results Grid or Collections Grid */}
-          {activeCollectionTab === 'collections' ? (
+          {activeCollectionTab === 'collections' || selectedType === 'collections' ? (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {universeCollections.map((col) => (
+              {universeCollections
+                .filter((col) => {
+                  const q = debouncedSearchQuery.trim().toLowerCase();
+                  if (!q) return true;
+                  return (
+                    col.name.toLowerCase().includes(q) ||
+                    (col.folderPath || '').toLowerCase().includes(q) ||
+                    col.items.some((item) => item.title.toLowerCase().includes(q))
+                  );
+                })
+                .map((col) => (
                 <div
                   key={col.id}
                   onClick={() => setSelectedUniverseModal(col)}
-                  className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-2xl overflow-hidden shadow-xl flex flex-col group cursor-pointer transition-all hover:scale-[1.01]"
+                  className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden flex flex-col group cursor-pointer transition-colors"
                 >
-                  <div className="relative h-48 sm:h-52 bg-slate-950 overflow-hidden">
+                  <div className="relative h-48 sm:h-52 bg-slate-950 overflow-hidden border-b border-slate-800">
                     <img
-                      src={col.posterUrl}
+                      src={col.posterUrl || COLLECTION_FALLBACK_POSTER}
                       alt={col.name}
+                      onError={(e) => {
+                        e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
+                      }}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
-                    <div className="absolute top-3 left-3 flex flex-wrap gap-1.5">
-                      {col.movies.length > 0 && (
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/90 text-white text-[10px] font-bold shadow">
-                          🎬 {col.movies.length} Movie{col.movies.length > 1 ? 's' : ''}
-                        </span>
-                      )}
-                      {col.series.length > 0 && (
-                        <span className="px-2 py-0.5 rounded-md bg-cyan-500/90 text-white text-[10px] font-bold shadow">
-                          📺 {col.series.length} Series
-                        </span>
-                      )}
-                      {col.music.length > 0 && (
-                        <span className="px-2 py-0.5 rounded-md bg-purple-500/90 text-white text-[10px] font-bold shadow">
-                          🎵 {col.music.length} Album{col.music.length > 1 ? 's' : ''}
-                        </span>
-                      )}
+                    <div className="absolute bottom-3 left-4 right-4">
+                      <p className="text-[11px] font-mono text-indigo-300 truncate">
+                        {col.folderPath
+                          ? `Folder: ${col.folderPath}`
+                          : col.source === 'custom' || col.source === 'hybrid'
+                          ? 'Custom Universe'
+                          : 'Franchise Universe'}
+                      </p>
+                      <h4 className="text-base font-bold text-white group-hover:text-indigo-300 transition-colors truncate">
+                        {col.name}
+                      </h4>
                     </div>
                   </div>
 
-                  <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                    <div>
-                      <h4 className="text-base font-bold text-white group-hover:text-indigo-400 transition-colors">
-                        {col.name}
-                      </h4>
-                      <p className="mt-1 text-xs text-slate-300 line-clamp-2 leading-relaxed">
+                  <div className="p-4 flex-1 flex flex-col justify-between space-y-4">
+                    <div className="space-y-2.5">
+                      <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
                         {col.overview}
                       </p>
+                      <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-300 tabular-nums">
+                        <span className="inline-flex items-center gap-1">
+                          <Film className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>{col.movies.length} Movies</span>
+                        </span>
+                        <span className="text-slate-600">·</span>
+                        <span className="inline-flex items-center gap-1">
+                          <Tv className="w-3.5 h-3.5 text-purple-400" />
+                          <span>{col.series.length} Series</span>
+                        </span>
+                        <span className="text-slate-600">·</span>
+                        <span className="inline-flex items-center gap-1">
+                          <Music className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>{col.music.length} Albums</span>
+                        </span>
+                      </div>
                     </div>
 
                     <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                      <span className="text-slate-400 font-mono text-[11px]">
-                        {col.items.length} Total items joined in universe
+                      <span className="text-slate-400 font-mono text-[11px] tabular-nums">
+                        {col.items.length} Joined Titles
                       </span>
-                      <button className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-xs shadow transition-colors">
+                      <button className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-xs transition-colors whitespace-nowrap shrink-0">
                         Explore Universe
                       </button>
                     </div>

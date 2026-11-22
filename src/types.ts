@@ -86,6 +86,7 @@ export interface MediaMetadata {
   isMultiVersion?: boolean;
   status?: 'categorized' | 'pending' | 'draft' | string;
   resolution?: string;
+  collectionNames?: string[];
 }
 
 export interface MediaVersionBranch {
@@ -395,7 +396,8 @@ export type AppTab =
   | 'sqlite-vault'
   | 'youtube'
   | 'console'
-  | 'collections';
+  | 'collections'
+  | 'settings';
 
 export interface WatchHistoryItem {
   id: string;
@@ -520,6 +522,20 @@ export interface SmartPlaylist {
   description?: string;
   rules: SmartPlaylistRules;
   createdAt: string;
+}
+
+export interface MediaCollection {
+  id: string;
+  name: string;
+  description?: string;
+  posterUrl?: string;
+  fanartUrl?: string;
+  source: 'folder' | 'custom';
+  folderPath?: string;
+  itemIds: string[];
+  excludedItemIds?: string[];
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface LibraryDistributionStatsResponse {

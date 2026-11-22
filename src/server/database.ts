@@ -250,6 +250,20 @@ export async function getDatabase(): Promise<Database> {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS media_collections (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      poster_url TEXT,
+      fanart_url TEXT,
+      source TEXT NOT NULL DEFAULT 'custom',
+      folder_path TEXT,
+      item_ids_json TEXT NOT NULL DEFAULT '[]',
+      excluded_item_ids_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS user_watchlist (
       id TEXT PRIMARY KEY,
       media_id TEXT NOT NULL UNIQUE,
@@ -2068,6 +2082,84 @@ export async function deleteSmartPlaylist(id: string) {
   persistDbToDisk();
 }
 
+// MEDIA COLLECTIONS / UNIVERSES
+export async function getAllCollectionsFromDb() {
+  const db = await getDatabase();
+  const res = db.exec(
+    "SELECT id, name, description, poster_url, fanart_url, source, folder_path, item_ids_json, excluded_item_ids_json, created_at, updated_at FROM media_collections ORDER BY created_at DESC"
+  );
+  if (res.length === 0) return [];
+
+  return res[0].values.map((row: any) => {
+    let itemIds: string[] = [];
+    let excludedItemIds: string[] = [];
+    try {
+      itemIds = JSON.parse(row[7] || '[]');
+    } catch {}
+    try {
+      excludedItemIds = JSON.parse(row[8] || '[]');
+    } catch {}
+    return {
+      id: String(row[0]),
+      name: String(row[1]),
+      description: row[2] || '',
+      posterUrl: row[3] || undefined,
+      fanartUrl: row[4] || undefined,
+      source: row[5] === 'folder' ? 'folder' : 'custom',
+      folderPath: row[6] || undefined,
+      itemIds: Array.isArray(itemIds) ? itemIds : [],
+      excludedItemIds: Array.isArray(excludedItemIds) ? excludedItemIds : [],
+      createdAt: String(row[9] || new Date().toISOString()),
+      updatedAt: row[10] ? String(row[10]) : undefined,
+    };
+  });
+}
+
+export async function saveCollectionToDb(collection: any) {
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  const id = collection.id || `col-${Date.now()}`;
+  const normalized = {
+    id,
+    name: String(collection.name || 'Untitled Collection').trim(),
+    description: collection.description || '',
+    posterUrl: collection.posterUrl || null,
+    fanartUrl: collection.fanartUrl || null,
+    source: collection.source === 'folder' ? 'folder' : 'custom',
+    folderPath: collection.folderPath || null,
+    itemIds: Array.isArray(collection.itemIds) ? collection.itemIds : [],
+    excludedItemIds: Array.isArray(collection.excludedItemIds) ? collection.excludedItemIds : [],
+    createdAt: collection.createdAt || now,
+    updatedAt: now,
+  };
+  db.run(
+    `INSERT OR REPLACE INTO media_collections
+      (id, name, description, poster_url, fanart_url, source, folder_path, item_ids_json, excluded_item_ids_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      normalized.id,
+      normalized.name,
+      normalized.description,
+      normalized.posterUrl,
+      normalized.fanartUrl,
+      normalized.source,
+      normalized.folderPath,
+      JSON.stringify(normalized.itemIds),
+      JSON.stringify(normalized.excludedItemIds),
+      normalized.createdAt,
+      normalized.updatedAt,
+    ]
+  );
+  persistDbToDisk();
+  return normalized;
+}
+
+export async function deleteCollectionFromDb(id: string) {
+  const db = await getDatabase();
+  db.run("DELETE FROM media_collections WHERE id = ?", [id]);
+  persistDbToDisk();
+}
+
 export async function getMediaPlaybackSettings(mediaId: string) {
   const db = await getDatabase();
   const res = db.exec("SELECT subtitle_offset_ms, last_watched_seconds, last_watched_at FROM media_playback_settings WHERE media_id = ?", [mediaId]);
@@ -2422,6 +2514,7 @@ export async function hardResetAndDeleteDatabaseFiles(): Promise<{
         DROP TABLE IF EXISTS watch_history_log;
         DROP TABLE IF EXISTS thumbnail_metadata_cache;
         DROP TABLE IF EXISTS smart_playlists;
+        DROP TABLE IF EXISTS media_collections;
         DROP TABLE IF EXISTS user_watchlist;
         DROP TABLE IF EXISTS media_playback_settings;
       `);

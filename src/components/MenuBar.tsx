@@ -38,8 +38,8 @@ import { Bookmark, BarChart3, History } from 'lucide-react';
 interface MenuBarProps {
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
-  onSelectViewMediaType?: (type: 'all' | MediaType) => void;
-  selectedMediaType?: 'all' | MediaType;
+  onSelectViewMediaType?: (type: 'all' | MediaType | 'collections') => void;
+  selectedMediaType?: 'all' | MediaType | 'collections';
   sambaConfig: SambaConfig;
   isConnected: boolean;
   onScanSamba: () => void;
@@ -498,6 +498,25 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                     <span className="text-[10px] text-slate-400 font-mono">⌘4</span>
                   </button>
 
+                  {/* Collections & Universes view under VIEW menu */}
+                  <button
+                    id="view-menu-collections-btn"
+                    onClick={() =>
+                      executeAction(() => {
+                        setActiveTab('collections');
+                      })
+                    }
+                    className={`w-full px-3 py-1.5 text-left hover:bg-indigo-600 hover:text-white flex items-center justify-between text-xs transition-colors ${
+                      activeTab === 'collections' ? 'bg-indigo-950/80 text-indigo-200 font-semibold' : ''
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Collections & Universes</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">⌘U</span>
+                  </button>
+
                   {/* Watchlist view under VIEW menu */}
                   <button
                     id="view-menu-watchlist-btn"
@@ -843,9 +862,9 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           </div>
         </div>
 
-        {/* ROW 2: Responsive Grid for Content Categories (Movies, Series, Music, Watchlist, YouTube, Stats) */}
+        {/* ROW 2: Responsive Grid for Content Categories (Movies, Series, Music, Collections, Watchlist, YouTube, Stats) */}
         <div className="bg-slate-900/80 px-3 sm:px-6 lg:px-8 py-1 border-t border-slate-850">
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-1.5 sm:gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-1.5 sm:gap-2">
             {/* 1. Movies */}
             <button
               id="category-nav-movies-btn"
@@ -898,6 +917,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({
               <Music className={`w-3.5 h-3.5 ${activeTab === 'music' || (activeTab === 'search' && selectedMediaType === 'album') ? 'text-white' : 'text-emerald-400'}`} />
               <span>Music</span>
               <span className="text-[10px] font-mono text-slate-500 ml-auto hidden sm:inline">⌘4</span>
+            </button>
+
+            {/* 4. Collections */}
+            <button
+              id="category-nav-collections-btn"
+              onClick={() => setActiveTab('collections')}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                activeTab === 'collections' || (activeTab === 'search' && selectedMediaType === 'collections')
+                  ? 'bg-indigo-600 text-white shadow-xs ring-1 ring-indigo-400/50 font-bold'
+                  : 'bg-slate-950/70 text-slate-300 hover:text-white hover:bg-slate-850 border border-slate-800/80'
+              }`}
+            >
+              <Layers className={`w-3.5 h-3.5 ${activeTab === 'collections' || (activeTab === 'search' && selectedMediaType === 'collections') ? 'text-white' : 'text-indigo-400'}`} />
+              <span>Collections</span>
             </button>
 
             {/* 4. Watchlist */}

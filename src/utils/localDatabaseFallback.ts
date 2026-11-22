@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
   WATCHLIST: 'media_vault_watchlist_cache',
   MEDIA_ITEMS: 'media_vault_media_items_cache',
   PROGRESS: 'media_vault_progress_cache',
+  COLLECTIONS: 'media_vault_collections_cache',
 };
 
 // Seed default watch history if cache is completely empty
@@ -133,6 +134,7 @@ class LocalDatabaseFallbackService {
     this.setJson(STORAGE_KEYS.WATCHLIST, []);
     this.setJson(STORAGE_KEYS.MEDIA_ITEMS, []);
     this.setJson(STORAGE_KEYS.PROGRESS, []);
+    this.setJson(STORAGE_KEYS.COLLECTIONS, []);
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
         localStorage.removeItem('sambavault_media_library_v2');
@@ -201,6 +203,40 @@ class LocalDatabaseFallbackService {
     if (Array.isArray(items)) {
       this.setJson(STORAGE_KEYS.WATCHLIST, items);
     }
+  }
+
+  // --- Collections ---
+  public getCollections(): any[] {
+    return this.getJson<any[]>(STORAGE_KEYS.COLLECTIONS, []);
+  }
+
+  public saveCollection(col: any): any {
+    const list = this.getCollections();
+    const id = col?.id || `col-${Date.now()}`;
+    const record = {
+      id,
+      name: col?.name || 'Untitled Collection',
+      description: col?.description || '',
+      posterUrl: col?.posterUrl || undefined,
+      fanartUrl: col?.fanartUrl || undefined,
+      source: col?.source === 'folder' ? 'folder' : 'custom',
+      folderPath: col?.folderPath || undefined,
+      itemIds: Array.isArray(col?.itemIds) ? col.itemIds : [],
+      excludedItemIds: Array.isArray(col?.excludedItemIds) ? col.excludedItemIds : [],
+      createdAt: col?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const idx = list.findIndex((c) => c.id === id);
+    if (idx >= 0) list[idx] = { ...list[idx], ...record };
+    else list.unshift(record);
+    this.setJson(STORAGE_KEYS.COLLECTIONS, list);
+    return record;
+  }
+
+  public deleteCollection(id: string): boolean {
+    const list = this.getCollections().filter((c) => c.id !== id);
+    this.setJson(STORAGE_KEYS.COLLECTIONS, list);
+    return true;
   }
 
   /**
@@ -295,6 +331,41 @@ class LocalDatabaseFallbackService {
           JSON.stringify({ success: true, message: 'Removed from watchlist (local cache)' }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
+      }
+
+      if (path === '/api/collections') {
+        if (method === 'GET') {
+          const collections = this.getCollections();
+          return new Response(
+            JSON.stringify({ success: true, collections, source: 'local_storage_cache' }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (method === 'POST') {
+          const collection = this.saveCollection(bodyObj || {});
+          return new Response(
+            JSON.stringify({ success: true, collection, source: 'local_storage_cache' }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+
+      if (path.startsWith('/api/collections/')) {
+        const id = decodeURIComponent(path.replace('/api/collections/', ''));
+        if (method === 'PUT') {
+          const collection = this.saveCollection({ ...(bodyObj || {}), id });
+          return new Response(
+            JSON.stringify({ success: true, collection, source: 'local_storage_cache' }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (method === 'DELETE') {
+          this.deleteCollection(id);
+          return new Response(
+            JSON.stringify({ success: true, source: 'local_storage_cache' }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
       }
 
       if (path === '/api/db/reset' && (method === 'POST' || method === 'DELETE')) {

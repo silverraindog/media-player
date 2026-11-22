@@ -2750,15 +2750,16 @@ function sanitizeTauriPath(rawPath: string): string {
 
 function sanitizeSambaPath(rawPath: string): string {
   if (!rawPath) return '';
-  let normalized = rawPath.replace(/\\/g, '/');
+  let normalized = rawPath.replace(/\\/g, '/').trim();
 
-  // Strip raw UNC host & share prefixes e.g. "//192.168.1.25/media/Series/..." -> "Series/..."
-  const uncMatch = normalized.match(/^(?:smb:)?\/+([^\/]+)\/([^\/]+)(?:\/(.*))?$/i);
+  // Only strip true UNC / smb:// host & share prefixes (e.g. "//192.168.1.25/media/Series" or "smb://nas/media/Series")
+  // Do NOT strip single-slash POSIX absolute paths like "/Users/..." or "/home/..." here.
+  const uncMatch = normalized.match(/^(?:smb:\/\/|\/\/)([^\/]+)\/([^\/]+)(?:\/(.*))?$/i);
   if (uncMatch) {
     normalized = uncMatch[3] || '';
   }
 
-  // Also strip leading /Volumes/<share>/ or /mnt/<share>/ or /media/<share>/
+  // Strip leading /Volumes/<share>/ or /mnt/<share>/ or /media/<share>/
   normalized = normalized.replace(/^\/?(?:Volumes|mnt|media)\/[^\/]+\/?/i, '');
   normalized = normalized.replace(/^[a-zA-Z]:\/?/, '');
 
@@ -2767,47 +2768,83 @@ function sanitizeSambaPath(rawPath: string): string {
 }
 
 function resolveSambaFullPath(rawPath: string, customMountPath?: string): string {
-  let targetMount = customMountPath ? customMountPath.trim() : '';
+  let targetMount = customMountPath ? customMountPath.trim().replace(/\\/g, '/').replace(/\/+$/, '') : '';
+  const cleanRawInput = rawPath ? rawPath.trim().replace(/\\/g, '/').replace(/\/+$/, '') : '';
 
   // If customMountPath is a network URI like //192.168.1.25/media or smb://...
-  if (targetMount.startsWith('//') || targetMount.startsWith('smb://') || targetMount.startsWith('\\\\')) {
+  if (targetMount.startsWith('//') || targetMount.toLowerCase().startsWith('smb://')) {
     const parts = targetMount.replace(/^smb:\/\//i, '').replace(/^[\\\/]+/, '').split(/[\/\\]+/).filter(Boolean);
     const shareName = parts.length >= 2 ? parts[1] : (parts[0] || 'media');
+    const subFromMount = parts.length > 2 ? parts.slice(2).join('/') : '';
     const volCandidate = path.join('/Volumes', shareName);
     const mntCandidate = path.join('/mnt', shareName);
+    const mediaCandidate = path.join('/media', shareName);
 
     if (fs.existsSync(volCandidate)) {
-      targetMount = volCandidate;
+      targetMount = subFromMount ? path.join(volCandidate, subFromMount) : volCandidate;
     } else if (fs.existsSync(mntCandidate)) {
-      targetMount = mntCandidate;
+      targetMount = subFromMount ? path.join(mntCandidate, subFromMount) : mntCandidate;
+    } else if (fs.existsSync(mediaCandidate)) {
+      targetMount = subFromMount ? path.join(mediaCandidate, subFromMount) : mediaCandidate;
     } else {
-      targetMount = SAMBA_SHARE_ROOT;
+      targetMount = subFromMount ? path.join(SAMBA_SHARE_ROOT, subFromMount) : SAMBA_SHARE_ROOT;
     }
   }
 
   if (targetMount) {
-    const cleanSub = sanitizeSambaPath(rawPath || '');
+    if (!cleanRawInput) return targetMount;
+
+    // Prevent double-appending when callers (e.g. tauriBridge) pass the same path as both sharePath & mountPath
+    // or when rawPath is already an absolute path inside targetMount.
+    if (
+      cleanRawInput === targetMount ||
+      cleanRawInput.toLowerCase() === targetMount.toLowerCase()
+    ) {
+      return targetMount;
+    }
+    if (cleanRawInput.startsWith(`${targetMount}/`)) {
+      const remainder = cleanRawInput.slice(targetMount.length + 1);
+      const cleanRem = sanitizeSambaPath(remainder);
+      return cleanRem ? path.join(targetMount, cleanRem) : targetMount;
+    }
+    // Also guard if cleanRawInput is a local POSIX path starting with /Users, /home, /Volumes, /mnt, etc.
+    // whose basename or suffix matches targetMount
+    if (path.isAbsolute(cleanRawInput) && !cleanRawInput.startsWith('//')) {
+      const mountStripped = sanitizeSambaPath(targetMount);
+      const rawStripped = sanitizeSambaPath(cleanRawInput);
+      if (rawStripped === mountStripped) {
+        return targetMount;
+      }
+      if (mountStripped && rawStripped.startsWith(`${mountStripped}/`)) {
+        const subOnly = rawStripped.slice(mountStripped.length + 1);
+        return subOnly ? path.join(targetMount, subOnly) : targetMount;
+      }
+      if (fs.existsSync(cleanRawInput)) {
+        return cleanRawInput;
+      }
+    }
+
+    const cleanSub = sanitizeSambaPath(cleanRawInput);
     if (!cleanSub) return targetMount;
     return path.join(targetMount, cleanSub);
   }
 
   // If no customMountPath was provided, but rawPath is given:
-  if (rawPath) {
-    let cleanPath = rawPath.replace(/\\/g, '/');
+  if (cleanRawInput) {
     // If rawPath itself is a UNC network path, strip and resolve against SAMBA_SHARE_ROOT
-    if (cleanPath.startsWith('//') || cleanPath.startsWith('smb://')) {
-      const sanitized = sanitizeSambaPath(cleanPath);
+    if (cleanRawInput.startsWith('//') || cleanRawInput.toLowerCase().startsWith('smb://')) {
+      const sanitized = sanitizeSambaPath(cleanRawInput);
       return sanitized ? path.join(SAMBA_SHARE_ROOT, sanitized) : SAMBA_SHARE_ROOT;
     }
     // Only accept absolute paths that are actual local filesystem paths
-    if (path.isAbsolute(cleanPath) && !cleanPath.startsWith('//')) {
-      return cleanPath;
+    if (path.isAbsolute(cleanRawInput) && !cleanRawInput.startsWith('//')) {
+      return cleanRawInput;
     }
-    const absVolumesPath = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+    const absVolumesPath = cleanRawInput.startsWith('/') ? cleanRawInput : `/${cleanRawInput}`;
     if (absVolumesPath.startsWith('/Volumes/') && fs.existsSync(absVolumesPath)) {
       return absVolumesPath;
     }
-    return path.join(SAMBA_SHARE_ROOT, sanitizeSambaPath(cleanPath));
+    return path.join(SAMBA_SHARE_ROOT, sanitizeSambaPath(cleanRawInput));
   }
 
   return SAMBA_SHARE_ROOT;
@@ -3114,151 +3151,285 @@ app.post(['/api/samba/rename-item', '/api/samba/quick-rename'], async (req: Requ
   }
 });
 
-// Async Concurrent Directory Walker Helper (Folder-specific async runner akin to tokio async tasks)
+export interface WalkDirectoryOptions {
+  maxItems?: number;
+  concurrency?: number;
+  includeHidden?: boolean;
+  allowedExtensions?: string[];
+  followSymlinks?: boolean;
+}
+
+export interface WalkDirectoryStats {
+  dirsVisited: number;
+  filesFound: number;
+  dirsFound: number;
+  maxDepthReached: number;
+  skippedSystemEntries: number;
+  skippedCycles: number;
+  truncatedByLimit: boolean;
+  durationMs: number;
+}
+
+function isIgnoredSystemOrNasEntry(name: string, includeHidden: boolean): boolean {
+  if (!name) return true;
+  if (name.startsWith('._')) return true;
+  if (!includeHidden && name.startsWith('.')) return true;
+  const lower = name.toLowerCase();
+  return (
+    lower === '.ds_store' ||
+    lower === 'thumbs.db' ||
+    lower === 'desktop.ini' ||
+    lower === '.appledouble' ||
+    lower === '@eadir' ||
+    lower === '#recycle' ||
+    lower === '$recycle.bin' ||
+    lower === 'system volume information' ||
+    lower.startsWith('.spotlight-') ||
+    lower.startsWith('.trashes') ||
+    lower.startsWith('.fseventsd') ||
+    lower.startsWith('.documentrevisions-') ||
+    lower.startsWith('.temporaryitems')
+  );
+}
+
+// Bounded-Concurrency Iterative Async OSWalk (prevents EMFILE/SMB saturation, handles DT_UNKNOWN on CIFS/NFS/FUSE)
 export async function walkDirectoryRecursiveAsync(
   dir: string,
   baseDir: string,
   currentDepth: number = 0,
   maxDepth: number = 30,
-  visited: Set<string> = new Set()
-): Promise<{ items: any[]; errors: string[] }> {
+  visited: Set<string> = new Set(),
+  options: WalkDirectoryOptions = {}
+): Promise<{ items: any[]; errors: string[]; stats: WalkDirectoryStats }> {
+  const startedAt = Date.now();
+  const debugWalk = process.env.DEBUG_WALK === '1' || process.env.DEBUG_WALK === 'true';
+  const maxItems = Math.max(1, options.maxItems ?? 500_000);
+  const workerCount = Math.max(1, Math.min(32, options.concurrency ?? 12));
+  const includeHidden = Boolean(options.includeHidden);
+  const followSymlinks = options.followSymlinks !== false;
+  const allowedExtSet =
+    Array.isArray(options.allowedExtensions) && options.allowedExtensions.length > 0
+      ? new Set(options.allowedExtensions.map((e) => String(e).trim().toLowerCase().replace(/^\./, '')).filter(Boolean))
+      : null;
+
   const results: any[] = [];
   const errors: string[] = [];
+  const stats: WalkDirectoryStats = {
+    dirsVisited: 0,
+    filesFound: 0,
+    dirsFound: 0,
+    maxDepthReached: currentDepth,
+    skippedSystemEntries: 0,
+    skippedCycles: 0,
+    truncatedByLimit: false,
+    durationMs: 0,
+  };
 
-  // Depth Limit Guard
   if (currentDepth > maxDepth) {
     const errMsg = `Depth limit of ${maxDepth} exceeded at: "${dir}"`;
-    console.warn(`[SambaOSWalk][DepthBarrier] ${errMsg}`);
-    return { items: [], errors: [errMsg] };
+    return { items: [], errors: [errMsg], stats };
   }
 
-  try {
-    // Cyclic Directory / Symlink Reference Guard to prevent infinite recursion
-    let realDir: string;
-    try {
-      realDir = await fs.promises.realpath(dir);
-    } catch (err) {
-      realDir = path.resolve(dir);
-    }
+  const queue: Array<{ targetDir: string; depth: number }> = [{ targetDir: dir, depth: currentDepth }];
+  let queueIdx = 0;
+  let activeWorkers = 0;
+  let stopRequested = false;
 
-    if (visited.has(realDir)) {
-      const errMsg = `Circular directory reference detected and bypassed at: "${dir}" -> "${realDir}"`;
-      console.warn(`[SambaOSWalk][CycleDetected] ${errMsg}`);
-      return { items: [], errors: [errMsg] };
-    }
-    visited.add(realDir);
-
-    // 1. Explicit read access check to handle permission-denied folders gracefully
-    try {
-      await fs.promises.access(dir, fs.constants.R_OK);
-    } catch (permErr: any) {
-      const errMsg = `Permission Denied (Read Blocked): Cannot read directory "${dir}". OS User: ${process.getuid ? `${process.getuid()}:${process.getgid()}` : 'N/A'}. Error: ${permErr.message}`;
-      console.warn(`[SambaOSWalk][PermissionDenied] ${errMsg}`);
-      return { items: [], errors: [errMsg] };
-    }
-
-    // 2. Perform readdir safely
-    let entries: fs.Dirent[] = [];
-    try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch (readErr: any) {
-      const errMsg = `Failed to list directory contents of "${dir}": ${readErr.message}`;
-      console.error(`[SambaOSWalk][ReadError] ${errMsg}`);
-      return { items: [], errors: [errMsg] };
-    }
-
-    // 3. Resolve entry metadata and stats concurrently to bypass sequential blocking
-    const entryPromises = entries.map(async (entry) => {
-      if (entry.name.startsWith('.')) return null; // Skip hidden entries (.DS_Store, ._ files)
-      const fullPath = path.join(dir, entry.name);
-      const rawRelPath = path.relative(baseDir, fullPath).split(path.sep).join('/');
-      const relPath = rawRelPath;
-
-      let isDirectory = entry.isDirectory();
-      let isFile = entry.isFile();
-      let sizeStr = '0 MB';
-
-      // Bypass stat for directories entirely as we don't need size for them.
-      // Only query stat for files and symlinks to determine final types and sizes.
-      if (isFile || entry.isSymbolicLink()) {
-        try {
-          const stat = await fs.promises.stat(fullPath);
-          isDirectory = stat.isDirectory();
-          isFile = stat.isFile();
-          if (isFile) {
-            sizeStr = `${Math.round(stat.size / (1024 * 1024))} MB`;
-          }
-        } catch (statErr: any) {
-          console.warn(`[SambaOSWalk][StatWarning] Could not stat item "${fullPath}": ${statErr.message}`);
-          // Fallback to entry types from readdir if stat fails
-        }
+  const statBounded = async <T,>(
+    entries: T[],
+    mapper: (entry: T) => Promise<any>,
+    limit: number = 16
+  ): Promise<any[]> => {
+    const out: any[] = new Array(entries.length);
+    let next = 0;
+    const runners = Array.from({ length: Math.min(limit, entries.length) }, async () => {
+      while (next < entries.length && !stopRequested) {
+        const idx = next++;
+        out[idx] = await mapper(entries[idx]);
       }
+    });
+    await Promise.all(runners);
+    return out;
+  };
 
-      return {
-        entry,
-        fullPath,
-        relPath,
-        isDirectory,
-        isFile,
-        sizeStr,
-      };
+  const processDirectory = async (targetDir: string, depth: number) => {
+    if (stopRequested || results.length >= maxItems) {
+      stats.truncatedByLimit = true;
+      stopRequested = true;
+      return;
+    }
+
+    if (depth > stats.maxDepthReached) {
+      stats.maxDepthReached = depth;
+    }
+
+    // Cycle protection using realpath / device+inode without cloning Set per folder
+    let identityKey: string;
+    try {
+      const dirStat = await fs.promises.stat(targetDir);
+      if (typeof dirStat.dev === 'number' && typeof dirStat.ino === 'number' && dirStat.ino > 0) {
+        identityKey = `ino:${dirStat.dev}:${dirStat.ino}`;
+      } else {
+        identityKey = await fs.promises.realpath(targetDir);
+      }
+    } catch {
+      identityKey = path.resolve(targetDir);
+    }
+
+    if (visited.has(identityKey)) {
+      stats.skippedCycles++;
+      if (debugWalk) {
+        console.warn(`[SambaOSWalk][CycleDetected] Skipping circular/duplicate directory: "${targetDir}" (${identityKey})`);
+      }
+      return;
+    }
+    visited.add(identityKey);
+
+    // Call readdir directly rather than access(R_OK) to avoid false-positive EACCES on SMB/CIFS UID-mapped mounts
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(targetDir, { withFileTypes: true });
+    } catch (readErr: any) {
+      const code = readErr?.code || 'ERR';
+      const errMsg =
+        code === 'EACCES' || code === 'EPERM'
+          ? `Permission Denied (${code}): Cannot read directory "${targetDir}". ${readErr.message}`
+          : `Failed to list directory "${targetDir}" (${code}): ${readErr.message}`;
+      errors.push(errMsg);
+      if (debugWalk || code === 'EACCES' || code === 'EPERM') {
+        console.warn(`[SambaOSWalk][ReadError] ${errMsg}`);
+      }
+      return;
+    }
+
+    stats.dirsVisited++;
+
+    const filteredEntries = entries.filter((entry) => {
+      if (isIgnoredSystemOrNasEntry(entry.name, includeHidden)) {
+        stats.skippedSystemEntries++;
+        return false;
+      }
+      return true;
     });
 
-    const resolvedEntries = (await Promise.all(entryPromises)).filter(Boolean) as any[];
+    const resolvedEntries = await statBounded(
+      filteredEntries,
+      async (entry) => {
+        const fullPath = path.join(targetDir, entry.name);
+        const relPath = path.relative(baseDir, fullPath).split(path.sep).join('/');
 
-    // Spawn async tasks for subdirectories concurrently using Promise.allSettled (tokio-style task concurrency with resilience)
-    const subTasks: Promise<{ items: any[]; errors: string[] }>[] = [];
+        let isDirectory = entry.isDirectory();
+        let isFile = entry.isFile();
+        const isSymlink = entry.isSymbolicLink();
+        let sizeBytes = 0;
+
+        // CRITICAL for SMB/CIFS/NFS/FUSE: d_type may be DT_UNKNOWN where both isDirectory() and isFile() are false!
+        const needsStat = isFile || isSymlink || (!isDirectory && !isFile);
+        if (needsStat) {
+          if (isSymlink && !followSymlinks) {
+            return null;
+          }
+          try {
+            const st = await fs.promises.stat(fullPath);
+            isDirectory = st.isDirectory();
+            isFile = st.isFile();
+            if (isFile) sizeBytes = st.size;
+          } catch (statErr: any) {
+            if (debugWalk) {
+              console.warn(`[SambaOSWalk][StatWarning] "${fullPath}": ${statErr?.message}`);
+            }
+            if (!isDirectory && !isFile) {
+              return null;
+            }
+          }
+        }
+
+        if (!isDirectory && !isFile) return null;
+
+        if (isFile && allowedExtSet) {
+          const ext = path.extname(entry.name).toLowerCase().replace(/^\./, '');
+          if (!ext || !allowedExtSet.has(ext)) {
+            return null;
+          }
+        }
+
+        return {
+          name: entry.name,
+          fullPath,
+          relPath,
+          isDirectory,
+          isFile,
+          sizeStr: isFile ? `${Math.round(sizeBytes / (1024 * 1024))} MB` : '0 MB',
+        };
+      },
+      16
+    );
 
     for (const item of resolvedEntries) {
+      if (!item) continue;
+      if (results.length >= maxItems) {
+        stats.truncatedByLimit = true;
+        stopRequested = true;
+        break;
+      }
+
       if (item.isDirectory) {
+        stats.dirsFound++;
         results.push({
-          name: item.entry.name,
+          name: item.name,
           path: item.fullPath,
           rel_path: item.relPath,
           is_dir: true,
           size_str: '0 MB',
         });
-        console.log(`[SambaOSWalk][Directory] Found folder at path: "${item.fullPath}" (rel: "${item.relPath}")`);
-
-        if (currentDepth < maxDepth) {
-          subTasks.push(
-            walkDirectoryRecursiveAsync(item.fullPath, baseDir, currentDepth + 1, maxDepth, new Set(visited))
-          );
+        if (debugWalk) {
+          console.log(`[SambaOSWalk][Directory] "${item.relPath}"`);
+        }
+        if (depth < maxDepth) {
+          queue.push({ targetDir: item.fullPath, depth: depth + 1 });
         }
       } else if (item.isFile) {
+        stats.filesFound++;
         results.push({
-          name: item.entry.name,
+          name: item.name,
           path: item.fullPath,
           rel_path: item.relPath,
           is_dir: false,
           size_str: item.sizeStr,
         });
-
-        // Print the path that it finds each file in, on the console as requested
-        console.log(`[SambaOSWalk][FoundFile] File: "${item.entry.name}" | Absolute Path: "${item.fullPath}" | Relative Path: "${item.relPath}" | Size: ${item.sizeStr}`);
-      }
-    }
-
-    if (subTasks.length > 0) {
-      const taskResults = await Promise.allSettled(subTasks);
-      for (const tRes of taskResults) {
-        if (tRes.status === 'fulfilled') {
-          results.push(...tRes.value.items);
-          errors.push(...tRes.value.errors);
-        } else {
-          const errMsg = `Subdirectory walker task rejected: ${tRes.reason}`;
-          errors.push(errMsg);
-          console.error(`[SambaOSWalk][RejectedTask] ${errMsg}`);
+        if (debugWalk) {
+          console.log(`[SambaOSWalk][FoundFile] "${item.relPath}" (${item.sizeStr})`);
         }
       }
     }
-  } catch (err: any) {
-    const errMsg = `Unhandled error reading directory ${dir}: ${err.message}`;
-    errors.push(errMsg);
-    console.error(`[SambaOSWalk][Error] ${errMsg}`);
-  }
+  };
 
-  return { items: results, errors };
+  await new Promise<void>((resolve) => {
+    const pump = () => {
+      if (stopRequested || (queueIdx >= queue.length && activeWorkers === 0)) {
+        if (activeWorkers === 0) resolve();
+        return;
+      }
+      while (activeWorkers < workerCount && queueIdx < queue.length && !stopRequested) {
+        const nextTask = queue[queueIdx++];
+        // Release queue slot for GC on very large trees
+        (queue as any)[queueIdx - 1] = undefined;
+        activeWorkers++;
+        processDirectory(nextTask.targetDir, nextTask.depth)
+          .catch((err: any) => {
+            errors.push(`Unhandled worker error at "${nextTask.targetDir}": ${err?.message || err}`);
+          })
+          .finally(() => {
+            activeWorkers--;
+            pump();
+          });
+      }
+    };
+    pump();
+  });
+
+  stats.durationMs = Date.now() - startedAt;
+  return { items: results, errors, stats };
 }
 
 // WhoAmI Diagnostic Endpoint: Queries active SMB connection & local mount user identity
@@ -3591,21 +3762,55 @@ app.all('/api/samba/user-info', (req: Request, res: Response) => {
   }
 });
 
-// Recursive Scan Volume Endpoint (Async Concurrent)
+// Recursive Scan Volume Endpoint (Bounded-Concurrency Async OSWalk)
 app.all('/api/samba/scan-volume', async (req: Request, res: Response) => {
   const startTime = Date.now();
   try {
     const customMountPath = (req.body?.mountPath || req.body?.customMountPath || req.body?.targetPath || req.body?.path || req.query?.mountPath || req.query?.customMountPath || req.query?.targetPath) as string | undefined;
     const customSharePath = (req.body?.sharePath || req.query?.sharePath) as string | undefined;
-    const maxDepth = Number(req.body?.max_depth || req.body?.maxDepth || req.query?.max_depth || req.query?.maxDepth) || 30;
-    const targetRoot = resolveSambaFullPath(customSharePath || '', customMountPath);
+    const safeScan = Boolean(req.body?.safeScan ?? req.body?.safe_scan ?? false);
+    const maxDepth = Number(req.body?.max_depth || req.body?.maxDepth || req.query?.max_depth || req.query?.maxDepth) || (safeScan ? 12 : 30);
+    const extensions = Array.isArray(req.body?.extensions) ? req.body.extensions : undefined;
+    const maxItems = Number(req.body?.maxItems) || (safeScan ? 50_000 : 500_000);
+    const concurrency = Number(req.body?.concurrency) || 12;
+
+    let targetRoot = resolveSambaFullPath(customSharePath || '', customMountPath);
+    let fallbackUsed = false;
+    const requestedTarget = targetRoot;
+
+    // If unconfigured default "/Volumes/media(/subpath)" is not mounted on this host,
+    // check /mnt/<share>, /media/<share>, and finally local SAMBA_SHARE_ROOT so scans still work in web/Linux preview.
+    if (!fs.existsSync(targetRoot)) {
+      const normalizedTarget = targetRoot.replace(/\\/g, '/');
+      const volMediaMatch = normalizedTarget.match(/^\/Volumes\/([^\/]+)(?:\/(.*))?$/i);
+      if (volMediaMatch) {
+        const shareName = volMediaMatch[1];
+        const subPath = volMediaMatch[2] || '';
+        const candidates = [
+          subPath ? path.join('/mnt', shareName, subPath) : path.join('/mnt', shareName),
+          subPath ? path.join('/media', shareName, subPath) : path.join('/media', shareName),
+          subPath ? path.join(SAMBA_SHARE_ROOT, subPath) : SAMBA_SHARE_ROOT,
+        ];
+        const foundCandidate = candidates.find((cand) => fs.existsSync(cand));
+        if (foundCandidate) {
+          targetRoot = foundCandidate;
+          fallbackUsed = true;
+        }
+      } else if (!customMountPath && !customSharePath && fs.existsSync(SAMBA_SHARE_ROOT)) {
+        targetRoot = SAMBA_SHARE_ROOT;
+        fallbackUsed = true;
+      }
+    }
 
     // Return empty results if path does not exist on disk
     if (!fs.existsSync(targetRoot)) {
       return res.json({
         success: true,
-        scanMode: 'recursive_async_concurrent',
+        scanMode: 'recursive_bounded_oswalk',
         maxDepth,
+        resolvedPath: targetRoot,
+        requestedPath: requestedTarget,
+        fallbackUsed: false,
         items: [],
         errors: [`Target path does not exist or is not mounted on host: ${targetRoot}`],
         totalScanned: 0,
@@ -3614,18 +3819,28 @@ app.all('/api/samba/scan-volume', async (req: Request, res: Response) => {
       });
     }
 
-    let { items, errors } = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth);
+    const { items, errors, stats } = await walkDirectoryRecursiveAsync(targetRoot, targetRoot, 0, maxDepth, new Set(), {
+      maxItems,
+      concurrency,
+      allowedExtensions: extensions,
+    });
 
     const durationMs = Date.now() - startTime;
 
-    console.log(`[SambaOSWalk] Completed concurrent scan of ${targetRoot}: found ${items.length} items (${items.filter(i => !i.is_dir).length} files) in ${durationMs}ms`);
+    console.log(
+      `[SambaOSWalk] Scanned ${targetRoot}${fallbackUsed ? ` (fallback from ${requestedTarget})` : ''}: ${stats.filesFound} files, ${stats.dirsFound} dirs (depth ${stats.maxDepthReached}, skipped ${stats.skippedSystemEntries} system entries) in ${durationMs}ms`
+    );
 
     return res.json({
       success: true,
-      scanMode: 'recursive_async_concurrent',
+      scanMode: 'recursive_bounded_oswalk',
       maxDepth,
+      resolvedPath: targetRoot,
+      requestedPath: requestedTarget,
+      fallbackUsed,
       items,
       errors,
+      stats,
       totalScanned: items.length,
       durationMs,
       timestamp: Date.now(),

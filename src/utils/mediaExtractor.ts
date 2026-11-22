@@ -516,6 +516,7 @@ export function nodeToMediaMetadata(node: SambaShareNode, parentPath: string = '
     rating: 8.4,
     posterUrl: posterUrl,
     playbackUrl: defaultPlayback,
+    folderPath: fullPath,
     path: filePath,
     recommendedFolderStructure: fullPath,
     recommendedFilenames: [node.name, mediaType === 'series' ? 'tvshow.nfo' : mediaType === 'album' ? 'album.nfo' : 'movie.nfo', 'poster.jpg'],
@@ -603,7 +604,7 @@ export function extractAllMediaFromSambaTree(
           c.type === 'folder' && isSeasonDirectory(c.name)
         );
 
-        const isRootContainer = ['movies', 'series', 'franchises', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage', 'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'].includes(node.name.toLowerCase());
+        const isRootContainer = ['movies', 'series', 'franchises', 'collections', 'collection', 'universes', 'sagas', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage', 'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'].includes(node.name.toLowerCase());
         const isSeasonFolder = isSeasonDirectory(node.name);
 
         if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
@@ -715,6 +716,10 @@ export async function extractAllMediaFromSambaTreeAsync(
         'movies',
         'series',
         'franchises',
+        'collections',
+        'collection',
+        'universes',
+        'sagas',
         'audio books',
         'books',
         'music',

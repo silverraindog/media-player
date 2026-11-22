@@ -60,6 +60,7 @@ import {
   detectFFmpegPath,
   isTauriEnvironment,
   listMountedVolumes,
+  performFastScan,
   scanSambaVolume,
   VolumeMountInfo,
 } from './utils/tauriBridge';
@@ -627,9 +628,13 @@ export default function App() {
   );
 
   const handleScanSambaVolume = useCallback(
-    async (customPath?: string) => {
+    async (customPath?: string, customDepthLimit?: number) => {
       if (isSyncing) return;
       setIsSyncing(true);
+      const effectiveDepth =
+        typeof customDepthLimit === 'number' && customDepthLimit > 0
+          ? customDepthLimit
+          : scanDepthLimit || sambaConfig.depthLimit || 30;
       const rootTarget =
         customPath || sambaConfig.hostPath || sambaConfig.mountPath || sambaConfig.baseMountPath || '/Volumes/media';
 
@@ -641,21 +646,67 @@ export default function App() {
         currentPath: rootTarget,
         processedCount: 0,
         totalCount: 100,
-        phaseDescription: `Scanning ${rootTarget}...`,
+        phaseDescription: `Scanning ${rootTarget} (max depth ${effectiveDepth})...`,
       });
 
       try {
         const startedAt = Date.now();
-        const scanResult = await scanSambaVolume(
-          sambaConfig.share || 'media',
+        let scanResult = await performFastScan(
           rootTarget,
+          (scannedCount, currentFile) => {
+            setSyncProgress((prev) => ({
+              ...prev,
+              phase: 'scanning',
+              currentPath: currentFile || rootTarget,
+              processedCount: Math.min(55, Math.max(5, scannedCount)),
+              totalCount: Math.max(100, scannedCount),
+              phaseDescription: currentFile
+                ? `OSWalk scanning (${scannedCount} items): ${currentFile}`
+                : `OSWalk scanning (${scannedCount} items)...`,
+            }));
+          },
           180000,
           false,
-          scanDepthLimit
+          effectiveDepth
         );
+
+        // Fallback to direct scanSambaVolume if performFastScan did not return success
+        if (!scanResult?.success) {
+          scanResult = await scanSambaVolume(
+            sambaConfig.share || 'media',
+            rootTarget,
+            180000,
+            false,
+            effectiveDepth
+          );
+        }
+
         const rawItems = Array.isArray(scanResult?.items) ? scanResult.items : [];
+        const scanErrors = Array.isArray(scanResult?.errors)
+          ? scanResult.errors
+          : scanResult?.error
+          ? [scanResult.error]
+          : [];
+        try {
+          localStorage.setItem('samba_vault_last_scan_errors', JSON.stringify(scanErrors));
+        } catch {}
+
         const nodeMap = new Map<string, SambaShareNode>();
         const roots: SambaShareNode[] = [];
+        const baseMount = (
+          sambaConfig.hostPath ||
+          sambaConfig.mountPath ||
+          sambaConfig.baseMountPath ||
+          `/Volumes/${sambaConfig.share || 'media'}`
+        ).replace(/\/+$/, '');
+        let effectivePrefix = customPath ? baseMount : (scanResult.mountPath || rootTarget).replace(/\/+$/, '');
+        if (rawItems.length > 0) {
+          const sampleRel = (rawItems[0].rel_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+          const firstSeg = sampleRel.split('/')[0];
+          if (firstSeg && effectivePrefix.toLowerCase().endsWith(`/${firstSeg.toLowerCase()}`)) {
+            effectivePrefix = effectivePrefix.slice(0, effectivePrefix.length - firstSeg.length - 1);
+          }
+        }
 
         const ensureFolderPath = (segments: string[], fullPathPrefix: string) => {
           let parentList = roots;
@@ -685,14 +736,14 @@ export default function App() {
           if (!cleanRel) continue;
           const parts = cleanRel.split('/').filter(Boolean);
           if (item.is_dir) {
-            ensureFolderPath(parts, rootTarget.replace(/\/+$/, ''));
+            ensureFolderPath(parts, effectivePrefix);
           } else {
             const parentSegments = parts.slice(0, -1);
-            const targetList = parentSegments.length > 0 ? ensureFolderPath(parentSegments, rootTarget.replace(/\/+$/, '')) : roots;
+            const targetList = parentSegments.length > 0 ? ensureFolderPath(parentSegments, effectivePrefix) : roots;
             targetList.push({
               id: `file-${cleanRel.replace(/[^a-zA-Z0-9]/g, '-')}`,
               name: item.name || parts[parts.length - 1],
-              path: item.path || `${rootTarget.replace(/\/+$/, '')}/${cleanRel}`,
+              path: item.path || `${effectivePrefix}/${cleanRel}`,
               type: 'file',
               size: item.size_str,
             });
@@ -700,44 +751,61 @@ export default function App() {
         }
 
         const normalizedTree = normalizeFranchiseHierarchy(roots);
-        setSambaTree(normalizedTree);
+        if (!customPath || normalizedTree.length > 0) {
+          setSambaTree(normalizedTree);
+        }
 
         setSyncProgress((prev) => ({
           ...prev,
-          phase: 'extracting' as any,
+          phase: 'indexing',
           currentStep: 2,
-          processedCount: 60,
+          processedCount: 70,
+          totalCount: 100,
           phaseDescription: 'Indexing discovered media & collections...',
         }));
 
-        const extracted = await extractAllMediaFromSambaTreeAsync(normalizedTree);
+        const extracted = await extractAllMediaFromSambaTreeAsync(normalizedTree, mediaExtensionConfig);
         if (extracted.length > 0) {
           upsertMediaItems(extracted);
         }
 
-        const durationSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+        const fileCount = rawItems.filter((i) => !i.is_dir).length;
+        const folderCount = rawItems.filter((i) => i.is_dir).length;
+        const durationSec = Math.max(0.1, Number(((Date.now() - startedAt) / 1000).toFixed(2)));
+        const maxDepthReached = scanResult.diagnostics?.maxDepthReached ?? 0;
+
         setLastScanSummary({
           timestamp: new Date().toISOString(),
-          totalFilesScanned: normalizedTree.length,
+          totalFilesScanned: fileCount,
+          totalFoldersScanned: folderCount,
           processingTimeSeconds: durationSec,
-          scanPath: rootTarget,
-          scanMode: 'Full Deep Sync',
-          depthLimit: scanDepthLimit,
-          bottlenecks: [],
-          status: 'optimal',
+          scanPath: scanResult.mountPath || rootTarget,
+          scanMode: customPath ? 'Folder Sync' : 'Full Deep Sync',
+          depthLimit: effectiveDepth,
+          maxDepthReached,
+          itemsPerSecond: durationSec > 0 ? Math.round(rawItems.length / durationSec) : rawItems.length,
+          bottlenecks: scanErrors,
+          status: scanErrors.length > 0 && rawItems.length === 0 ? 'error' : scanErrors.length > 0 ? 'warning' : 'optimal',
           mediaExtractedCount: extracted.length,
         });
 
         appendSyncLog({
-          type: 'connected',
+          type: scanErrors.length > 0 && rawItems.length === 0 ? 'error' : 'connected',
           title: 'Samba Volume Scan Completed',
-          details: `Scanned ${rootTarget} and extracted ${extracted.length} media item(s).`,
-          status: 'success',
+          details:
+            rawItems.length > 0
+              ? `Scanned ${rootTarget} (${fileCount} files, ${folderCount} folders, max depth ${maxDepthReached}) and extracted ${extracted.length} media item(s).`
+              : scanErrors[0] || `No items found at ${rootTarget}.`,
+          status: scanErrors.length > 0 && rawItems.length === 0 ? 'warning' : 'success',
         });
-        showToast(`Scan complete: ${extracted.length} items indexed.`);
+        showToast(
+          rawItems.length > 0
+            ? `Scan complete: ${fileCount} files scanned, ${extracted.length} media indexed.`
+            : scanErrors[0] || 'Scan finished with 0 items found.'
+        );
       } catch (err: any) {
         logger.error(`Scan failed: ${err?.message || err}`, 'Scanner');
-        showToast('Samba volume scan encountered an issue.');
+        showToast(`Samba volume scan failed: ${err?.message || 'Unknown error'}`);
       } finally {
         setIsSyncing(false);
         setSyncProgress(INITIAL_SYNC_PROGRESS);
@@ -1065,7 +1133,7 @@ export default function App() {
                 setActiveTab('nfo-studio');
               }}
               onRefreshSamba={() => handleTestSambaConnection()}
-              onSyncSamba={() => handleScanSambaVolume()}
+              onSyncSamba={(customScanPath, depthOverride) => handleScanSambaVolume(customScanPath, depthOverride)}
               onQuickSync={handleQuickSync}
               isQuickSyncing={isQuickSyncing}
               onOpenClassifierModal={handleOpenClassifier}

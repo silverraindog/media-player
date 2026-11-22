@@ -1107,6 +1107,25 @@ async fn sanitize_samba_path_command(raw_path: String) -> Result<String, String>
     Ok(sanitize_samba_path(&raw_path))
 }
 
+fn should_skip_walk_entry(raw_name: &std::ffi::OsStr) -> bool {
+    let name = raw_name.to_string_lossy();
+    let lower = name.to_ascii_lowercase();
+    name.starts_with("._")
+        || lower == ".ds_store"
+        || lower == "thumbs.db"
+        || lower == "desktop.ini"
+        || lower == ".appledouble"
+        || lower == "@eadir"
+        || lower == "#recycle"
+        || lower == "$recycle.bin"
+        || lower == "system volume information"
+        || lower.starts_with(".spotlight-")
+        || lower.starts_with(".trashes")
+        || lower.starts_with(".fseventsd")
+        || lower.starts_with(".documentrevisions-")
+        || lower.starts_with(".temporaryitems")
+}
+
 #[tauri::command]
 async fn perform_fast_scan(
     window: tauri::Window,
@@ -1143,7 +1162,10 @@ async fn perform_fast_scan(
         } else {
             walker_builder = walker_builder.follow_links(false);
         }
-        let walker = walker_builder.max_depth(depth_limit).into_iter();
+        let walker = walker_builder
+            .max_depth(depth_limit)
+            .into_iter()
+            .filter_entry(|e| e.depth() == 0 || !should_skip_walk_entry(e.file_name()));
 
         for entry_res in walker {
             if scanned_count >= max_scan_items {
@@ -1172,17 +1194,7 @@ async fn perform_fast_scan(
             };
 
             let raw_file_name = entry.file_name().to_string_lossy();
-            if raw_file_name.starts_with("._")
-                || raw_file_name == ".DS_Store"
-                || raw_file_name == "Thumbs.db"
-                || raw_file_name.starts_with(".Spotlight-")
-                || raw_file_name.starts_with(".Trashes")
-                || raw_file_name.starts_with(".fseventsd")
-                || raw_file_name.starts_with(".DocumentRevisions-")
-                || raw_file_name.starts_with(".TemporaryItems")
-                || raw_file_name.starts_with("$RECYCLE.BIN")
-                || raw_file_name == "System Volume Information"
-            {
+            if should_skip_walk_entry(entry.file_name()) {
                 continue;
             }
 
@@ -1514,9 +1526,10 @@ async fn scan_samba_volume(
     let mut first_permission_denied_path = String::new();
 
     let walker = WalkDir::new(&resolved_path)
-        .follow_links(true)
+        .follow_links(!is_safe)
         .max_depth(depth_limit)
-        .into_iter();
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || !should_skip_walk_entry(e.file_name()));
     for entry_res in walker {
         if scanned_count >= max_scan_items {
             if debug_enabled {

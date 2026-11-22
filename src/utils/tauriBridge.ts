@@ -896,6 +896,7 @@ export const performFastScan = async (
       body: JSON.stringify({
         sharePath: resolvedTarget,
         mountPath: resolvedTarget,
+        safeScan,
         max_depth: effectiveMaxDepth,
         maxDepth: effectiveMaxDepth,
       }),
@@ -1079,6 +1080,7 @@ export const scanSambaVolume = async (
       body: JSON.stringify({
         sharePath: resolvedMount,
         mountPath: resolvedMount,
+        safeScan,
         max_depth: effectiveMaxDepth,
         maxDepth: effectiveMaxDepth,
       }),

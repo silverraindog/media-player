@@ -76,11 +76,12 @@ export class PermissionsManager {
     if (simulated === 'true') return true;
     if (simulated === 'false') return false;
 
-    // Check navigator properties
+    // Check navigator properties safely
     const nav = navigator as any;
+    if (!nav || typeof nav.userAgent === 'undefined') return false;
     const userAgent = (nav.userAgent || '').toLowerCase();
     const platform = (nav.platform || '').toLowerCase();
-    const uaPlatform = (nav.userAgentData?.platform || '').toLowerCase();
+    const uaPlatform = (nav.userAgentData && typeof nav.userAgentData.platform === 'undefined') ? '' : (nav.userAgentData?.platform || '').toLowerCase();
 
     return (
       userAgent.includes('macintosh') ||

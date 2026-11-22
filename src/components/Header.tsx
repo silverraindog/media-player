@@ -132,7 +132,6 @@ export const Header: React.FC<HeaderProps> = ({
                 macOS
               </button>
               <button
-            <button\n              id=\"tab-collections\"\n              onClick={() => setActiveTab('collections')}\n              className={`flex items-center space-x-2 px-3 py-1.5 rounded-md font-medium whitespace-nowrap transition-colors ${\n                activeTab === 'collections'\n                  ? 'bg-indigo-600 text-white shadow-sm'\n                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'\n              }`}\n            >\n              <Zap className=\"w-4 h-4 text-fuchsia-300\" />\n              <span>Collections</span>\n            </button>
                 id="header-platform-linux"
                 onClick={() => {
                   console.log('[Header] Platform button clicked: linux');

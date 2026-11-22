@@ -54,7 +54,7 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.4.6"
+    "vite": "^8.3.8"
   },
   "description": "**SambaVault** is a cross-platform media metadata manager, downloader, and Samba (SMB) network share synchronization hub for Movies, TV Series, and Music Albums. Built with React, TypeScript, Tailwind CSS, Express, and SQLite, it offers seamless network share exploration, automated metadata retrieval, synopses, and robust watch progress tracking.",
   "main": "generate-icon.js",

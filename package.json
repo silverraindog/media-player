@@ -26,7 +26,6 @@
     "@types/jszip": "^3.4.1",
     "@types/react-window": "^2.0.0",
     "@types/sql.js": "^1.4.11",
-    "@vitejs/plugin-react": "^5.0.4",
     "d3": "^7.9.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
@@ -40,8 +39,7 @@
     "react-window": "^2.3.1",
     "recharts": "^3.10.1",
     "sql.js": "^1.14.2",
-    "vconsole": "^3.15.1",
-    "vite": "^6.2.3"
+    "vconsole": "^3.15.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
@@ -50,11 +48,28 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
-  }
+    "vite": "^6.4.6"
+  },
+  "description": "**SambaVault** is a cross-platform media metadata manager, downloader, and Samba (SMB) network share synchronization hub for Movies, TV Series, and Music Albums. Built with React, TypeScript, Tailwind CSS, Express, and SQLite, it offers seamless network share exploration, automated metadata retrieval, synopses, and robust watch progress tracking.",
+  "main": "generate-icon.js",
+  "directories": {
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/silverraindog/media-player.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/silverraindog/media-player/issues"
+  },
+  "homepage": "https://github.com/silverraindog/media-player#readme"
 }

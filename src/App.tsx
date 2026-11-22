@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   checkMacVolume, MenuBar } from './components/MenuBar';
 import {
-  Header,
-} from './components/Header';
+  Header, from './components/Header';
 import { MediaSearch } from './components/MediaSearch';
 import { BatchFilenameCleaner } from './components/BatchFilenameCleaner';
 import { SambaMountHub } from './components/SambaMountHub';
@@ -94,6 +93,8 @@ if (typeof window !== 'undefined') {
   (window as any).hlsPrefetchWorker = hlsPrefetchWorkerService;
 }
 
+
+const isTauriProtocol
 const isTauriProtocol = typeof window !== 'undefined' && (
   (((window as any).location?.origin || '').includes('tauri://')) ||
   (((window as any).location?.origin || '').includes('tauri.localhost'))
@@ -119,6 +120,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     urlStr = (input as any).url;
   }
 
+
   // THREADING & IPC BYPASS FIX (macOS Stackshots diagnostic resolution):
   // Any request containing /api/media/stream or /api/samba/stream must immediately skip
   // native Tauri IPC handlers to prevent Tokio synchronous block_on main-thread deadlocks.
@@ -141,8 +143,11 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
         if (streamingUrl.includes('%')) {
           streamingUrl = decodeURIComponent(streamingUrl);
         }
+
       } catch {}
+
     }
+
 
     // In Tauri desktop environment where window.location.origin is tauri:// or tauri.localhost,
     // relative paths like /api/media/stream... must target the Express backend HTTP port
@@ -157,11 +162,14 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
         const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
         streamingUrl = `http://localhost:${backendPort}${streamingUrl}`;
       }
+
     }
+
 
     // Immediately return standard fetch, skipping all native Tauri IPC handlers
     return originalWindowFetch(streamingUrl, init);
   }
+
 
   // In Tauri desktop environment, route internal API calls directly via native IPC
   if (isTauri && urlStr.startsWith('/api/')) {
@@ -176,7 +184,9 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
       let bodyObj: any = null;
       if (init?.body && typeof init.body === 'string') {
         try { bodyObj = JSON.parse(init.body); } catch {}
+
       }
+
       const fallback = localDbFallback.handleDbRequestFallback(
         urlStr,
         (init?.method || 'GET').toUpperCase(),
@@ -184,13 +194,16 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
       );
       if (fallback) return fallback;
     }
+
   }
+
 
   let modifiedInput = input;
   if (isTauri && typeof modifiedInput === 'string' && modifiedInput.startsWith('/api/')) {
     const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
     modifiedInput = `http://localhost:${backendPort}${modifiedInput}`;
   }
+
   return originalWindowFetch(modifiedInput, init);
 };
 
@@ -198,6 +211,7 @@ if (typeof window !== 'undefined') {
   (window as any).customFetch = customFetch;
   (window as any).fetch = customFetch;
 }
+
 
 // Robust global fetch wrapper with retry logic, 5s timeout for metadata/vault calls, request prioritization, and detailed stage logging
 const fetchWithRetry = async (
@@ -224,8 +238,11 @@ const fetchWithRetry = async (
           if (effectiveUrl.includes('%')) {
             effectiveUrl = decodeURIComponent(effectiveUrl);
           }
+
         } catch {}
+
       }
+
       if (typeof window !== 'undefined' && (
         window.location.protocol === 'tauri:' ||
         window.location.origin.includes('tauri.localhost') ||
@@ -235,8 +252,11 @@ const fetchWithRetry = async (
           const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
           effectiveUrl = `http://localhost:${backendPort}${effectiveUrl}`;
         }
+
       }
+
     }
+
 
     const isTranscodeStream = isMedia || effectiveUrl.includes('/api/media/stream') || effectiveUrl.includes('/api/transcode') || effectiveUrl.includes('/index.m3u8') || effectiveUrl.includes('.ts');
 
@@ -253,10 +273,12 @@ const fetchWithRetry = async (
         headers.set('X-Preload-Buffer', 'true');
         headers.set('X-Buffer-Threshold-Sec', '5');
       }
+
     } else {
       headers.set('Priority', 'u=6');
       headers.set('Request-Priority', 'low');
     }
+
 
     // Modern Fetch Request priority: 'high' vs 'low'
     const priorityOptions: RequestInit = {
@@ -288,6 +310,7 @@ const fetchWithRetry = async (
           else priorityOptions.signal.addEventListener('abort', () => controller.abort());
         }
 
+
         const response = await customFetch(effectiveUrl, { ...priorityOptions, signal });
         clearTimeout(timer);
         const elapsed = Math.round(performance.now() - startTime);
@@ -296,6 +319,7 @@ const fetchWithRetry = async (
           console.log(`[FetchStage][${reqId}] ✅ RESPONSE RECEIVED (OK): ${effectiveUrl} in ${elapsed}ms (Status: ${response.status})`);
           return response;
         }
+
 
         console.warn(`[FetchStage][${reqId}] ⚠️ RESPONSE RECEIVED (HTTP ERROR): ${effectiveUrl} in ${elapsed}ms (Status: ${response.status})`);
         throw new Error(`HTTP ${response.status}`);
@@ -308,16 +332,21 @@ const fetchWithRetry = async (
           window.dispatchEvent(new CustomEvent('sambavault-api-timeout', { detail: { url: effectiveUrl, message: `Request exceeded ${timeoutMs}ms timeout or failed after ${elapsed}ms.` } }));
         }
 
+
         await new Promise((r) => setTimeout(r, 500 * Math.pow(2, i))); // Exponential backoff
       }
+
     }
+
 
     // Fallback for API routes if all retries fail
     if (effectiveUrl.includes('/api/')) {
       let bodyObj: any = null;
       if (priorityOptions.body && typeof priorityOptions.body === 'string') {
         try { bodyObj = JSON.parse(priorityOptions.body as string); } catch {}
+
       }
+
       const fallback = localDbFallback.handleDbRequestFallback(
         url,
         (priorityOptions.method || 'GET').toUpperCase(),
@@ -325,6 +354,7 @@ const fetchWithRetry = async (
       );
       if (fallback) return fallback;
     }
+
     throw lastError;
   };
 
@@ -349,6 +379,7 @@ async function handleCategorizeMediaRequest(
     return null;
   }
 
+
   // 2. Validation Check: Ensure 'type' is correctly populated
   const validTypes: Array<MediaType | 'all'> = ['movie', 'series', 'album', 'all'];
   let sanitizedType: MediaType | 'all' = 'all';
@@ -363,9 +394,11 @@ async function handleCategorizeMediaRequest(
     sanitizedType = 'all';
   }
 
+
   if (type && type !== 'all' && !validTypes.includes(type as any)) {
     console.warn(`[App:Categorizer] ⚠️ Pre-flight validation notice: 'type' "${type}" mapped to "${sanitizedType}".`);
   }
+
 
   const payload = {
     name: cleanName,
@@ -399,6 +432,7 @@ async function handleCategorizeMediaRequest(
         errorBody = await response.text();
       }
 
+
       console.error(
         `[App:Categorizer] ❌ Server returned HTTP ${response.status} on /api/metadata/categorize for "${cleanName}". Diagnostic logs:`,
         {
@@ -409,11 +443,13 @@ async function handleCategorizeMediaRequest(
           errorBody,
           endpoint: '/api/metadata/categorize',
         }
+
       );
 
       // Fallback to client retry mechanism
       return await categorizeMediaWithRetry(cleanName, sanitizedType, payload.year, { maxRetries: 2 });
     }
+
 
     const data = await response.json();
     if (data && data.success && data.data) {
@@ -423,6 +459,7 @@ async function handleCategorizeMediaRequest(
       console.warn(`[App:Categorizer] ⚠️ Unexpected response structure from /api/metadata/categorize:`, data);
       return data?.data || null;
     }
+
   } catch (networkError: any) {
     const durationMs = Date.now() - startTime;
     console.error(`[App:Categorizer] 💥 Exception caught during /api/metadata/categorize for "${cleanName}" (${durationMs}ms):`, {
@@ -432,7 +469,9 @@ async function handleCategorizeMediaRequest(
     });
     return await categorizeMediaWithRetry(cleanName, sanitizedType, payload.year, { maxRetries: 2 });
   }
+
 }
+
 
 const INITIAL_SAMBA_CONFIG: SambaConfig = {
   enabled: true,
@@ -520,10 +559,13 @@ function App() {
             presets: Array.isArray(parsed.presets) ? parsed.presets : [],
           };
         }
+
       }
+
     } catch (e) {
       console.warn('Failed to parse samba_vault_transcode_config from localStorage:', e);
     }
+
     return INITIAL_TRANSCODE_CONFIG;
   });
 
@@ -531,6 +573,7 @@ function App() {
     try {
       localStorage.setItem('samba_vault_transcode_config', JSON.stringify(transcodeConfig));
     } catch {}
+
   }, [transcodeConfig]);
 
   useEffect(() => {
@@ -540,6 +583,7 @@ function App() {
         .then(({ purgeTranscodeCache }) => purgeTranscodeCache(transcodeConfig?.maxCacheSizeGb || 50))
         .catch((err) => console.warn('Background cache purge skipped:', err));
     }
+
   }, []);
 
   // Sync watchlist count from SQLite
@@ -551,9 +595,11 @@ function App() {
         if (data.success && Array.isArray(data.watchlist)) {
           setWatchlistCount(data.watchlist.length);
         }
+
       } catch {
         // ignore
       }
+
     };
     checkCount();
   }, [activeTab]);
@@ -569,7 +615,9 @@ function App() {
           setSambaConfig(config);
           setScanDepthLimit(config.depthLimit || 30);
         }
+
       } catch {}
+
     };
     loadConfig();
   }, []);
@@ -580,6 +628,7 @@ function App() {
     try {
       localStorage.setItem('samba_vault_config', JSON.stringify({ ...sambaConfig, depthLimit: scanDepthLimit }));
     } catch {}
+
   }, [sambaConfig, scanDepthLimit]);
 
   const [isConnected, setIsConnected] = useState(false);
@@ -594,6 +643,7 @@ function App() {
         const saved = localStorage.getItem('samba_vault_last_scan_summary');
         if (saved) setLastScanSummary(JSON.parse(saved));
       } catch {}
+
     };
     loadSummary();
   }, []);
@@ -605,6 +655,7 @@ function App() {
       syncAbortControllerRef.current.abort();
       syncAbortControllerRef.current = null;
     }
+
   };
 
   const forceSkipRequestedRef = useRef<boolean>(false);
@@ -638,7 +689,9 @@ function App() {
       } catch (err) {
         console.warn('[Sync] skipCurrentPhaseCallback error:', err);
       }
+
     }
+
   };
 
   const [isSafeScan, setIsSafeScan] = useState<boolean>(() => {
@@ -646,6 +699,7 @@ function App() {
       const saved = localStorage.getItem('samba_vault_safe_scan');
       if (saved !== null) return saved === 'true';
     } catch {}
+
     return true; // Default to Safe Scan: shallow scan without heavy recursive API calls
   });
 
@@ -655,6 +709,7 @@ function App() {
       try {
         localStorage.setItem('samba_vault_safe_scan', String(nextVal));
       } catch {}
+
       showToast(
         nextVal
           ? 'Safe Scan enabled: Shallow directory traversal, zero external API stalls'
@@ -683,7 +738,9 @@ function App() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
+
     } catch {}
+
     return INITIAL_SAMBA_TREE;
   });
 
@@ -691,6 +748,7 @@ function App() {
     try {
       localStorage.setItem('samba_vault_tree', JSON.stringify(sambaTree));
     } catch {}
+
   }, [sambaTree]);
 
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>(INITIAL_SYNC_LOGS);
@@ -755,9 +813,13 @@ function App() {
           if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
             resolvedUrl = convert(rawP);
           }
+
         }
+
       } catch {}
+
     }
+
 
     return {
       ...m,
@@ -789,9 +851,13 @@ function App() {
           if (typeof convert === 'function' && rawP && (rawP.startsWith('/') || rawP.match(/^[a-zA-Z]:/))) {
             resolvedUrl = convert(rawP);
           }
+
         }
+
       } catch {}
+
     }
+
 
     return {
       ...ep,
@@ -817,6 +883,7 @@ function App() {
         setIsFdaOverlayOpen(false);
         setIsFdaNoticeOpen(false);
       }
+
     });
 
     // 2. Perform pre-flight system check immediately on startup
@@ -827,6 +894,7 @@ function App() {
         // Show persistent warning banner on startup, keeping overlay closed so app remains fully interactive
         setIsFdaNoticeOpen(true);
       }
+
     }).catch((err) => {
       console.warn('[Permissions] Pre-flight system check error:', err);
     });
@@ -844,12 +912,14 @@ function App() {
           if (!report.available || !report.version || report.error) {
             setShowFfmpegSidecarWarning(true);
           }
+
         })
         .catch((err) => {
           console.warn('[App] validateFfmpegSidecar check failed:', err);
           setShowFfmpegSidecarWarning(true);
         });
     }
+
   }, []);
 
 
@@ -885,12 +955,15 @@ function App() {
              wasBlocked = true;
              blockingElements.push(`${tagName}${id} (z: ${zIndex})`);
           }
+
         }
+
       });
       
       if (wasBlocked) {
         console.warn('⚠️ Click may have been blocked by layers:', blockingElements);
       }
+
       
       console.groupEnd();
     };
@@ -908,7 +981,9 @@ function App() {
           } else {
             el.style.outline = '';
           }
+
         }
+
       });
     };
     
@@ -922,6 +997,7 @@ function App() {
           el.style.pointerEvents = 'none';
           el.style.zIndex = '-9999';
         }
+
       });
     };
 
@@ -944,7 +1020,9 @@ function App() {
           if (buildInfo.version !== APP_RELEASE_TAG) {
             showToast(`🚀 New Version Available: v${buildInfo.version} (Current: v${APP_RELEASE_TAG})`);
           }
+
         }
+
 
         // 2. Fetch server-side version for UI display
         const serverRes = await fetch('/api/system/version');
@@ -953,10 +1031,13 @@ function App() {
           if (data.success) {
             setServerVersionInfo(data.data);
           }
+
         }
+
       } catch (err) {
         console.warn('[VersionCheck] Failed to verify build version:', err);
       }
+
     };
     checkVersion();
   }, []);
@@ -968,6 +1049,7 @@ function App() {
       const saved = localStorage.getItem('samba_vault_classifier');
       if (saved) return JSON.parse(saved);
     } catch {}
+
     return DEFAULT_CLASSIFIER_SETTINGS;
   });
 
@@ -975,6 +1057,7 @@ function App() {
     try {
       localStorage.setItem('samba_vault_classifier', JSON.stringify(classifierSettings));
     } catch {}
+
   }, [classifierSettings]);
 
   // Register syncScheduler handler to execute background cron syncs
@@ -1001,6 +1084,7 @@ function App() {
       const saved = localStorage.getItem('samba_vault_extensions');
       if (saved) return JSON.parse(saved);
     } catch {}
+
     return DEFAULT_MEDIA_SCAN_CONFIG;
   });
 
@@ -1008,6 +1092,7 @@ function App() {
     try {
       localStorage.setItem('samba_vault_extensions', JSON.stringify(mediaExtensionConfig));
     } catch {}
+
   }, [mediaExtensionConfig]);
 
   // Global Keyboard Shortcuts
@@ -1019,6 +1104,7 @@ function App() {
         setActiveTab('samba-mount');
         showToast('Navigating to Samba Mount Hub');
       }
+
       // ⌘F or Ctrl+F -> Focus Search
       else if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault();
@@ -1029,17 +1115,20 @@ function App() {
           if (searchInput) searchInput.focus();
         }, 100);
       }
+
       // ⌘S or Ctrl+S -> Sync
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         handleSyncSamba();
         showToast('Manual sync triggered');
       }
+
       // ⌘O or Ctrl+O -> Import Local Media Files
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
         e.preventDefault();
         triggerLocalImportRef.current();
       }
+
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -1062,6 +1151,7 @@ function App() {
             setActiveTab('search');
             importFilesDirectlyRef.current(droppedPaths);
           }
+
         })
       )
       .then((fn) => {
@@ -1070,6 +1160,7 @@ function App() {
         } else {
           unlisten = fn;
         }
+
       })
       .catch((err) => {
         console.warn('[Tauri FileDrop] Listener unavailable:', err);
@@ -1135,11 +1226,15 @@ function App() {
             updatedMedia.posterUrl = fanartData.posterUrl || generatedArt;
             showToast(`Generated and saved AI artwork for "${matched.title}"!`);
           }
+
         }
+
       } catch (err) {
         console.warn('Auto-art retrieval failed on save:', err);
       }
+
     }
+
 
     // Path and directory sanitization for cross-platform Samba compatibility (strips colons, symbols, etc.)
     const category = updatedMedia.type === 'movie' ? 'Movies' : updatedMedia.type === 'series' ? 'TV Shows' : 'Music';
@@ -1203,6 +1298,7 @@ function App() {
                     size: '420 KB',
                   });
                 }
+
                 if (!hasFanart) {
                   newChildren.push({
                     id: `file-fanart-${node.id}`,
@@ -1213,6 +1309,7 @@ function App() {
                   });
                 }
 
+
                 return {
                   ...node,
                   hasPoster: true,
@@ -1220,12 +1317,14 @@ function App() {
                   children: newChildren,
                 };
               }
+
               if (node.children && node.children.length > 0) {
                 return {
                   ...node,
                   children: updateToSynced(node.children),
                 };
               }
+
               return node;
             });
           };
@@ -1257,6 +1356,7 @@ function App() {
           });
         }
 
+
         // Add verified sync log
         setSyncLogs((prev) => [
           {
@@ -1274,10 +1374,12 @@ function App() {
       } else {
         showToast(`Saved "${updatedMedia.title}". Background writing to share in progress...`);
       }
+
     } catch (writeErr) {
       console.warn('Samba write-artwork operation failed:', writeErr);
       showToast(`Saved "${updatedMedia.title}" locally; writing artwork in background.`);
     }
+
   };
 
   // Export full JSON backup
@@ -1294,6 +1396,7 @@ function App() {
     } catch (e) {
       showToast('Failed exporting JSON backup');
     }
+
   };
 
   // Clear thumbnail and memory cache
@@ -1315,14 +1418,18 @@ function App() {
         const parsed = JSON.parse(v2);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
+
       const st = localStorage.getItem('sambavault_persistent_vault_state');
       if (st) {
         const parsed = JSON.parse(st);
         if (parsed?.mediaLibrary && Array.isArray(parsed.mediaLibrary) && parsed.mediaLibrary.length > 0) {
           return parsed.mediaLibrary;
         }
+
       }
+
     } catch {}
+
     return CURATED_MEDIA_DATABASE;
   });
 
@@ -1338,6 +1445,7 @@ function App() {
         isLoaded: true,
       });
     }
+
   }, [isVaultLoaded, mediaLibrary, sambaTree, sambaConfig]);
 
   // Database delete and reset logic properly clearing sambavault_media_library_v2 and sambavault_persistent_vault_state
@@ -1352,6 +1460,7 @@ function App() {
         localStorage.setItem('sambavault_db_reset', 'true');
       }
 
+
       sqliteBatchWriter.clear();
       localDbFallback.clearAll();
 
@@ -1364,6 +1473,7 @@ function App() {
         await fetch('/api/db/reset', { method: 'POST' }).catch(() => {});
       }
 
+
       showToast('Database reset successfully. Cleared database and persistent state.');
       setTimeout(() => {
         window.location.reload();
@@ -1372,6 +1482,7 @@ function App() {
       console.error('[App] Database reset error:', err);
       showToast('Failed to reset database.');
     }
+
   };
 
   useEffect(() => {
@@ -1394,12 +1505,15 @@ function App() {
             } else {
               setMediaLibrary(prev => (prev && prev.length > 0 ? prev : (wasReset ? [] : CURATED_MEDIA_DATABASE)));
             }
+
           } else {
             setMediaLibrary(prev => (prev && prev.length > 0 ? prev : (wasReset ? [] : CURATED_MEDIA_DATABASE)));
           }
+
         } else if (wasReset) {
           setMediaLibrary([]);
         }
+
         setIsVaultLoaded(true);
       })
       .catch(() => {
@@ -1454,7 +1568,9 @@ function App() {
       if (mediaLibrary.length > 0) {
         localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
       }
+
     } catch {}
+
   }, [sambaTree, syncLogs, sambaConfig, classifierSettings, mediaLibrary, isVaultLoaded]);
 
 
@@ -1481,7 +1597,9 @@ function App() {
                     ? JSON.parse(sqliteItem.raw_data)
                     : sqliteItem.raw_data;
                 } catch {}
+
               }
+
 
               const resolvedFolder = parsedMedia?.folderPath ||
                 parsedMedia?.recommendedFolderStructure ||
@@ -1499,11 +1617,13 @@ function App() {
                   if ((!existing.tracks || existing.tracks.length === 0) && parsedMedia.tracks) existing.tracks = parsedMedia.tracks;
                   if (!existing.folderPath && parsedMedia.folderPath) existing.folderPath = parsedMedia.folderPath;
                 }
+
                 if (resolvedFolder && resolvedFolder !== existing.recommendedFolderStructure && !resolvedFolder.startsWith('LocalFilesystem/')) {
                   existing.recommendedFolderStructure = resolvedFolder;
                   existing.folderPath = resolvedFolder;
                   newItemsAdded = true;
                 }
+
               } else {
                 const converted: MediaMetadata = parsedMedia || {
                   id: sqliteItem.id || `sqlite-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1523,6 +1643,7 @@ function App() {
                 map.set(key, converted);
                 newItemsAdded = true;
               }
+
             });
 
             if (newItemsAdded) {
@@ -1531,9 +1652,11 @@ function App() {
               sqliteBatchWriter.updateCache(enrichedItems);
               return enrichedItems;
             }
+
             return prev;
           });
         }
+
       })
       .catch((err) => console.warn('SQLite hydration:', err));
   }, []);
@@ -1573,6 +1696,7 @@ function App() {
         `[Stream Recovery] Player reset to blank state after ${payload.source || 'player'} error: ${payload.message}`,
         'Transcode',
         { code: payload.code, streamUrl: payload.streamUrl, title: activeSession.media?.title }
+
       );
 
       setSyncLogs((prev) => [
@@ -1616,6 +1740,7 @@ function App() {
         if (target.dataset?.autoReloading === 'true' || !target.getAttribute('src')) {
           return;
         }
+
         const err = target.error;
         triggerStreamRecoveryReset({
           message: err?.message || `Media element error (Code ${err?.code ?? 'unknown'})`,
@@ -1625,6 +1750,7 @@ function App() {
         });
         return;
       }
+
 
       if (e instanceof ErrorEvent) {
         const msg = e.message || '';
@@ -1638,7 +1764,9 @@ function App() {
             source: 'global-error',
           });
         }
+
       }
+
     };
 
     const handleUnhandledRejection = (e: PromiseRejectionEvent) => {
@@ -1652,6 +1780,7 @@ function App() {
         return;
       }
 
+
       const isPlayerRejection =
         name === 'NotSupportedError' ||
         /hls|matroska|MediaSource|transcode|video.*stream|MEDIA_ERR/i.test(msg);
@@ -1662,6 +1791,7 @@ function App() {
           source: 'global-promise-rejection',
         });
       }
+
     };
 
     window.addEventListener('sambavault-player-error', handleCustomPlayerError);
@@ -1749,6 +1879,7 @@ function App() {
       if (volInfo.isMounted) {
         setIsConnected(true);
       }
+
     };
 
     checkDesktopStatus();
@@ -1795,6 +1926,7 @@ function App() {
           ]);
           return;
         }
+
 
       // 1. Check if the volume is mounted directly in Finder /Volumes
       const volInfo = await checkMacVolume(sambaConfig.share);
@@ -1856,6 +1988,7 @@ function App() {
           isMountedInFinder: false,
         });
       }
+
     } catch (err: any) {
       console.error(err);
       setIsConnected(false);
@@ -1863,6 +1996,7 @@ function App() {
     } finally {
       setIsTestingConn(false);
     }
+
   };
 
   const batchPushToSambaTree = (mediaItems: MediaMetadata[], defaultArtworkStatus: 'pending' | 'synced' = 'synced') => {
@@ -1970,6 +2104,7 @@ function App() {
         if (!map.has(m.title.toLowerCase())) {
           map.set(m.title.toLowerCase(), m);
         }
+
       });
       return Array.from(map.values());
     });
@@ -1999,6 +2134,7 @@ function App() {
         if (!map.has(m.title.toLowerCase())) {
           map.set(m.title.toLowerCase(), m);
         }
+
       });
       return Array.from(map.values());
     });
@@ -2023,6 +2159,7 @@ function App() {
           if (!map.has(m.title.toLowerCase())) {
             map.set(m.title.toLowerCase(), m);
           }
+
         });
         return Array.from(map.values());
       });
@@ -2035,6 +2172,7 @@ function App() {
       setIsImportingShare(false);
       setSyncCurrentPath('');
     }
+
   };
 
   const handleImportFilesDirectly = async (filesOrNames: (File | string)[]) => {
@@ -2044,6 +2182,7 @@ function App() {
     try {
       localStorage.removeItem('sambavault_db_reset');
     } catch {}
+
 
     const entries = filesOrNames.map((f) => {
       if (typeof f === 'string') {
@@ -2056,11 +2195,13 @@ function App() {
           localBlobUrl: undefined as string | undefined,
         };
       }
+
       const nativePath = typeof (f as any).path === 'string' ? (f as any).path.trim() : '';
       let blobUrl: string | undefined;
       try {
         blobUrl = URL.createObjectURL(f);
       } catch {}
+
       return {
         raw: f,
         sourcePath: nativePath,
@@ -2085,10 +2226,13 @@ function App() {
           if (data?.success && Array.isArray(data.results)) {
             parsedItems = data.results;
           }
+
         }
+
       } catch (parseErr) {
         console.warn('[ImportFiles] Server parser unavailable, falling back to local parser:', parseErr);
       }
+
 
       // 2. Fallback local parser
       if (parsedItems.length === 0) {
@@ -2122,6 +2266,7 @@ function App() {
           };
         });
       }
+
 
       // 3. Convert to MediaMetadata and attach real local paths / browser blob URLs
       const batchTs = Date.now();
@@ -2181,6 +2326,7 @@ function App() {
             return;
           }
 
+
           const merged: MediaMetadata = {
             ...existing,
             path: existing.path || m.path,
@@ -2208,6 +2354,7 @@ function App() {
                   if (!epList.some((e) => e.episodeNumber === ep.episodeNumber && e.seasonNumber === ep.seasonNumber)) {
                     epList.push(ep);
                   }
+
                 });
                 epList.sort((a, b) => a.episodeNumber - b.episodeNumber);
                 seasonMap.set(s.seasonNumber, {
@@ -2216,9 +2363,11 @@ function App() {
                   episodeCount: epList.length,
                 });
               }
+
             });
             merged.seasons = Array.from(seasonMap.values()).sort((a, b) => a.seasonNumber - b.seasonNumber);
           }
+
 
           if (m.tracks && m.tracks.length > 0) {
             const trackList = [...(existing.tracks || [])];
@@ -2226,9 +2375,11 @@ function App() {
               if (!trackList.some((e) => e.trackNumber === tr.trackNumber && e.title === tr.title)) {
                 trackList.push(tr);
               }
+
             });
             merged.tracks = trackList;
           }
+
 
           map.set(key, merged);
           touchedItems.push(merged);
@@ -2259,6 +2410,7 @@ function App() {
       console.error('Failed to import files directly:', err);
       showToast('Failed to import selected files.');
     }
+
   };
 
   importFilesDirectlyRef.current = handleImportFilesDirectly;
@@ -2286,19 +2438,24 @@ function App() {
           // User cancelled native dialog
           return;
         }
+
         const paths = Array.isArray(selected) ? selected : [selected];
         if (paths.length > 0) {
           await handleImportFilesDirectly(paths);
         }
+
         return;
       } catch (err) {
         console.warn('[ImportFiles] Tauri native dialog failed, falling back to browser file picker:', err);
       }
+
     }
+
 
     if (localImportInputRef.current) {
       localImportInputRef.current.click();
     }
+
   };
 
   triggerLocalImportRef.current = triggerLocalFileImport;
@@ -2316,8 +2473,10 @@ function App() {
       } else {
         discoveredPaths = [];
       }
+
       setLastDiscoveredPaths(discoveredPaths);
     }
+
 
     const classifications = classifyAllDiscoveredPaths(
       discoveredPaths,
@@ -2339,6 +2498,7 @@ function App() {
       if (c.selectedForImport && c.targetType !== 'ignore') {
         selectedFoldersMap.set(c.folderName.toLowerCase(), c);
       }
+
     });
 
     const filteredPaths = (lastDiscoveredPaths.length > 0 ? lastDiscoveredPaths : [
@@ -2380,8 +2540,10 @@ function App() {
             size: isVideo ? '2.8 GB' : isAudio ? '45 MB' : '1.2 GB',
           });
         }
+
         return;
       }
+
 
       let folderNode = currentNodes.find((n) => n.name === segment && n.type === 'folder');
       if (!folderNode) {
@@ -2395,6 +2557,7 @@ function App() {
         currentNodes.push(folderNode);
       }
 
+
       const topFolder = (pathSegments[0] || '').toLowerCase();
       const classifiedFolder = selectedFoldersMap.get(topFolder);
       const targetType = classifiedFolder ? classifiedFolder.targetType : 'movie';
@@ -2404,6 +2567,7 @@ function App() {
         folderNode.hasPoster = true;
         folderNode.mediaType = targetType !== 'ignore' ? targetType : 'movie';
       }
+
 
       getOrCreateNode(
         folderNode.children!,
@@ -2429,6 +2593,7 @@ function App() {
         if (!map.has(m.title.toLowerCase())) {
           map.set(m.title.toLowerCase(), m);
         }
+
       });
       const combined = Array.from(map.values());
       const { enrichedItems } = detectDuplicatesAndVersionBranches(combined, filteredPaths);
@@ -2496,7 +2661,9 @@ function App() {
       // Explicitly release control back to the JS event loop so the UI, animations, and progress bar render smoothly
       await new Promise((resolve) => setTimeout(resolve, delayBetweenChunksMs));
     }
+
   }
+
 
   // Recursive Share Scanner & Automatic Metadata Matching with Batch Processing & Progress Bar
   const handleSyncSamba = async (
@@ -2541,6 +2708,7 @@ function App() {
         backoffFactor?: number;
         onRetry?: (attempt: number, maxRetries: number, delayMs: number, error: any) => void;
       } = {}
+
     ): Promise<T> {
       const maxRetries = options.maxRetries ?? 3;
       const initialDelayMs = options.initialDelayMs ?? 400;
@@ -2557,20 +2725,26 @@ function App() {
           if (err.name === 'AbortError') {
             throw err; // Don't retry if aborted
           }
+
           attempt++;
           if (attempt > maxRetries) {
             throw err;
           }
+
           const jitter = Math.floor(Math.random() * 120);
           const waitMs = Math.min(maxDelayMs, delay + jitter);
           if (options.onRetry) {
             options.onRetry(attempt, maxRetries, waitMs, err);
           }
+
           await new Promise((resolve) => setTimeout(resolve, waitMs));
           delay = delay * backoffFactor;
         }
+
       }
+
     }
+
 
     setSyncProgress({
       isActive: true,
@@ -2605,6 +2779,7 @@ function App() {
     try {
       window.dispatchEvent(new CustomEvent('samba-scan-start', { detail: { rootPath } }));
     } catch (_) {}
+
 
     try {
       console.log(`[SambaSync] Attempting native performFastScan for: ${rootPath} (safeScan: ${effectiveSafeScan}, maxDepth: ${effectiveDepthLimit})`);
@@ -2643,15 +2818,20 @@ function App() {
                 console.log(`[SambaSync] Auto-resolved mount path from /Volumes/${matchVol}`);
                 resolvedScanPath = `/Volumes/${matchVol}`;
               }
+
             }
+
           } catch (_) {}
+
         }
+
 
         const rootDiagnostic = diagnoseSambaPath(resolvedScanPath);
         console.log(`[PathDiagnostics:handleSyncSamba] Root scan path diagnosis for "${rootPath}" (resolved: "${resolvedScanPath}"). Is suspicious: ${rootDiagnostic.isSuspicious}`, rootDiagnostic);
         if (rootDiagnostic.hasDoubleSlash || rootDiagnostic.isSuspicious) {
           console.warn(`[PathDiagnostics:handleSyncSamba] ⚠️ Suspicious path prefix or anomaly detected before performFastScan:`, rootDiagnostic.issues);
         }
+
 
         const scanResult = await performFastScan(
           resolvedScanPath,
@@ -2667,12 +2847,15 @@ function App() {
               logger.info(`[Scanner] Traversing: ${resolvedScanPath}/${clean} (Item #${count})`, 'Scanner');
             }
 
+
             // Dispatch file discovery event in real-time for D3 layout visualization
             try {
               window.dispatchEvent(new CustomEvent('samba-file-discovered', {
                 detail: { path: currentFile, count }
+
               }));
             } catch (_) {}
+
 
             setSyncProgress((prev) => {
               const currentMax = Math.max(prev.totalCount || 0, count);
@@ -2709,6 +2892,7 @@ function App() {
             if (!item.is_dir && item.path) {
               nativePathByRelative.set(normalizeScannedRelativePath(item.rel_path), item.path);
             }
+
           });
           recordScanBatchDiscovered(
             scanResult.items.map((it: any) => ({
@@ -2725,17 +2909,22 @@ function App() {
             try {
               localStorage.setItem('samba_vault_last_scan_errors', JSON.stringify(scanResult.errors));
             } catch (_) {}
+
           } else {
             try {
               localStorage.removeItem('samba_vault_last_scan_errors');
             } catch (_) {}
+
           }
+
           // Dispatch completion event with final items/errors list for complete visual tree mapping
           try {
             window.dispatchEvent(new CustomEvent('samba-scan-complete', {
               detail: { items: scanResult.items, errors: scanResult.errors }
+
             }));
           } catch (_) {}
+
 
           return scanResult.items.filter((it: any) => !it.is_dir).map((it: any) => normalizeScannedRelativePath(it.rel_path));
         } else {
@@ -2744,7 +2933,9 @@ function App() {
           try {
             localStorage.setItem('samba_vault_last_scan_errors', JSON.stringify([`Scan Failed: ${failErr}`]));
           } catch (_) {}
+
         }
+
 
         console.log('[SambaSync] FastScan returned no items, falling back to volume scan...');
         setSyncProgress((p) => ({
@@ -2759,17 +2950,20 @@ function App() {
           fallbackResult = await retryWithExponentialBackoff(
             async () => scanSambaVolume(shareName, resolvedScanPath, scanTimeout, effectiveSafeScan, effectiveDepthLimit),
             { maxRetries: 1, initialDelayMs: 250 }
+
           ).catch((e) => {
             console.warn('[SambaSync] scanSambaVolume failed:', e);
             return { success: false, items: [] };
           });
         }
 
+
         if (fallbackResult.success && fallbackResult.items.length > 0) {
           fallbackResult.items.forEach((item: any) => {
             if (!item.is_dir && item.path) {
               nativePathByRelative.set(normalizeScannedRelativePath(item.rel_path), item.path);
             }
+
           });
           recordScanBatchDiscovered(
             fallbackResult.items.map((it: any) => ({
@@ -2783,6 +2977,7 @@ function App() {
           );
           return fallbackResult.items.filter((it: any) => !it.is_dir).map((it: any) => normalizeScannedRelativePath(it.rel_path));
         }
+
 
         // Secondary fallback: query server Samba backend API
         if (sambaConfig.enabled) {
@@ -2805,6 +3000,7 @@ function App() {
                   if (!item.is_dir && item.path) {
                     nativePathByRelative.set(normalizeScannedRelativePath(item.rel_path), item.path);
                   }
+
                 });
                 recordScanBatchDiscovered(
                   apiData.items.map((it: any) => ({
@@ -2818,11 +3014,15 @@ function App() {
                 );
                 return apiData.items.filter((it: any) => !it.is_dir).map((it: any) => normalizeScannedRelativePath(it.rel_path));
               }
+
             }
+
           } catch (apiErr) {
             console.warn('[SambaSync] Server API fallback check error:', apiErr);
           }
+
         }
+
 
         return [];
       })();
@@ -2848,6 +3048,7 @@ function App() {
           console.log('[SambaSync] Local physical scan returned 0 files. No fallback mock data will be injected.');
           showToast('Scan completed: 0 files discovered. Check that the share is mounted.');
         }
+
         setSyncProgress(p => ({
           ...p,
           isActive: false,
@@ -2858,6 +3059,7 @@ function App() {
         setIsSyncingShare(false);
         return;
       }
+
 
       // =========================================================================
       // ITERATIVE DIRECTORY AUDIT LOOP (Entries Beyond the 25th Item)
@@ -2891,11 +3093,13 @@ function App() {
             auditIssues.push(`Item #${itemNumber} contains malformed or truncated path: "${itemPath}"`);
           }
 
+
           // Check 2: Missing extension or invalid format
           const filename = segments[segments.length - 1] || '';
           if (!filename.includes('.')) {
             auditIssues.push(`Item #${itemNumber} (${cleanPath}) has no file extension`);
           }
+
 
           // Update real-time audit progress state for UI
           if (itemNumber === 26 || itemNumber % 10 === 0 || itemNumber === totalRawCount) {
@@ -2913,14 +3117,18 @@ function App() {
             }));
           }
 
+
           // Log milestone entries beyond the 25th boundary
           if (itemNumber === 26 || itemNumber === 50 || itemNumber === 100 || itemNumber % 250 === 0 || itemNumber === totalRawCount) {
             console.log(
               `[SambaSync Audit: Entry #${itemNumber}] Depth ${depth} | Path: "${cleanPath}" | Segments: [${segments.join(' > ')}]`
             );
           }
+
         }
+
       }
+
 
       if (totalRawCount === 25) {
         encounteredBottlenecks.push('25-item boundary barrier: Scan retrieved exactly 25 items, indicating native event throttle or buffer cap');
@@ -2958,6 +3166,7 @@ function App() {
         if (maxDepthAudited <= 2 && totalRawCount > 0) {
           encounteredBottlenecks.push(`Shallow depth barrier: Traversed only up to level ${maxDepthAudited}; nested season/album folders may require higher depth limit`);
         }
+
         console.log(
           `[SambaSync Audit: Success] Successfully audited ${auditedBeyond25Count} entries beyond the 25th item (Total: ${totalRawCount} items across depths ${Object.keys(depthHistogram).join(', ')}). No buffer overflow or silent termination detected.`
         );
@@ -2984,6 +3193,7 @@ function App() {
           ...prev,
         ]);
       }
+
       console.groupEnd();
 
       // Stream & ingest discovered paths using the async-iterator pattern in chunks of 50
@@ -2996,6 +3206,7 @@ function App() {
           `[Scanner] Batch ${batchIndex}/${totalBatches}: Traversed ${chunk.length} items (Total: ${processedCount}/${totalCount}). Sample: "${chunk[0] || ''}"`,
           'Scanner',
           { samplePaths: chunk.slice(0, 5) }
+
         );
         setSyncProgress((prev) => ({
           ...prev,
@@ -3010,6 +3221,7 @@ function App() {
           phaseDescription: `Scanning Samba directory: processed ${processedCount}/${totalCount} files (chunk ${batchIndex}/${totalBatches})...`,
         }));
       }
+
 
       setLastDiscoveredPaths(discoveredRelativePaths);
 
@@ -3041,6 +3253,7 @@ function App() {
         return;
       }
 
+
       // 2. Batch Processing for Metadata Resolution (Sync-Scan) using Async-Iterator Pattern
       // Process files in non-blocking chunks of 50 and calculate dynamic ETA based on average duration of previous batches
       const BATCH_SIZE = 50;
@@ -3067,6 +3280,7 @@ function App() {
           syncedResults.push(...currentBatch.map((p) => ({ path: p })));
           continue;
         }
+
 
         if (effectiveSafeScan) {
           // Safe Scan: perform instant local heuristic classification without recursive external API calls or network stalls
@@ -3109,6 +3323,7 @@ function App() {
           continue;
         }
 
+
         // Calculate ETA based on the average processing time of previous batches
         let avgBatchMs = 0;
         let dynamicEtaSeconds: number | null = null;
@@ -3119,6 +3334,7 @@ function App() {
           const remainingBatches = Math.max(0, totalBatches - batchIndex + 1);
           dynamicEtaSeconds = Math.max(1, Math.round((remainingBatches * avgBatchMs) / 1000));
         }
+
 
         setSyncProgress((prev) => ({
           ...prev,
@@ -3154,14 +3370,17 @@ function App() {
               if (!response.ok) {
                 throw new Error(`Sync-scan endpoint returned HTTP ${response.status}`);
               }
+
               const data = await response.json();
               if (data.success && Array.isArray(data.results)) {
                 return data.results;
               }
+
               return currentBatch.map((p) => ({ path: p }));
             } finally {
               clearTimeout(timeoutTimer);
             }
+
           },
           {
             maxRetries: 2,
@@ -3179,6 +3398,7 @@ function App() {
               }));
             },
           }
+
         ).catch((err) => {
           console.warn(`Sync-scan batch ${batchIndex} fallback after retries exhausted:`, err);
           return currentBatch.map((p) => ({ path: p }));
@@ -3191,8 +3411,10 @@ function App() {
           batchProcessingTimes.shift();
         }
 
+
         syncedResults.push(...batchResults);
       }
+
 
       skipCurrentPhaseCallbackRef.current = null;
 
@@ -3237,8 +3459,10 @@ function App() {
               size: isVideo ? '2.8 GB' : isAudio ? '45 MB' : isBook ? '8.5 MB' : '2.4 KB',
             });
           }
+
           return;
         }
+
 
         // It's a folder
         let folderNode = currentNodes.find((n) => n.name === segment && n.type === 'folder');
@@ -3252,6 +3476,7 @@ function App() {
           };
           currentNodes.push(folderNode);
         }
+
 
         // Check if this folder corresponds to a media title
         const lowerName = segment.toLowerCase();
@@ -3271,6 +3496,7 @@ function App() {
           folderNode.hasPoster = true;
           folderNode.mediaType = isShow ? 'series' : isMusic ? 'album' : 'movie';
         }
+
 
         getOrCreateNodeInTree(
           folderNode.children!,
@@ -3297,6 +3523,7 @@ function App() {
           phaseDescription: `Constructing Samba directory tree (chunk ${batchIndex}/${totalBatches})...`,
         }));
       }
+
 
       setSambaTree(newTree);
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -3368,8 +3595,10 @@ function App() {
               if (node.type === 'folder' && (node.matchedMedia || node.hasPoster)) {
                 mediaFolders.push(node);
               }
+
               if (node.children) findMediaFolders(node.children);
             }
+
           };
           findMediaFolders(newTree);
 
@@ -3417,6 +3646,7 @@ function App() {
                     }));
                   },
                 }
+
               ).catch((e) => {
                 console.warn('Batch verify fallback note:', e);
                 return { success: false, results: {} };
@@ -3425,7 +3655,9 @@ function App() {
               if (chunkData.success && chunkData.results) {
                 Object.assign(batchResults, chunkData.results);
               }
+
             }
+
 
             // Handle folders that need artwork written
             for (const folder of mediaFolders) {
@@ -3453,6 +3685,7 @@ function App() {
                       return await wRes.json();
                     },
                     { maxRetries: 2, initialDelayMs: 300 }
+
                   ).catch(() => ({ verified: false }));
 
                   if (wData && wData.verified) {
@@ -3460,16 +3693,23 @@ function App() {
                     folder.artworkStatus = 'synced';
                     folder.hasPoster = true;
                   }
+
                 } catch (writeErr) {
                   console.warn('Artwork write fallback note:', writeErr);
                 }
+
               }
+
             }
+
           }
+
         }
+
       } catch (verifyErr) {
         console.warn('Share sync artwork verification check note:', verifyErr);
       }
+
 
       // 6. Update sync logs and connection status
       if (discoveredRelativePaths.length === 0) {
@@ -3496,6 +3736,7 @@ function App() {
           localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(zeroSummary));
         } catch {}
 
+
         logger.warn(
           `Samba Sync completed with 0 items: target path "${rootPath}" is empty or not mounted. ` +
           (sambaConfig.enabled === false
@@ -3508,6 +3749,7 @@ function App() {
             share: sambaConfig.share,
             hint: 'Open Samba Mount Hub to mount or verify the network share path.',
           }
+
         );
         setSyncLogs((prev) => [
           {
@@ -3560,6 +3802,7 @@ function App() {
         try {
           localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(successSummary));
         } catch {}
+
 
         // Record Scan Performance Benchmark Run for Recharts Dashboard
         const totalDurationMs = Math.round(performance.now() - syncStartTime);
@@ -3648,6 +3891,7 @@ function App() {
             durationSec,
             bottlenecks: uniqueBottlenecks,
           }
+
         );
         setSyncLogs((prev) => [
           {
@@ -3696,6 +3940,7 @@ function App() {
         }, 4500);
         showToast(`Samba Sync complete in ${durationSec}s! ${discoveredRelativePaths.length} files scanned (${uniqueBottlenecks.length === 0 ? 'optimal' : `${uniqueBottlenecks.length} bottleneck(s)`}).`);
       }
+
     } catch (err: any) {
       console.error('Error during Samba sync scan:', err);
       const errMsg = err?.message || String(err);
@@ -3720,6 +3965,7 @@ function App() {
         localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(errSummary));
       } catch {}
 
+
       logger.error(`Samba sync failed: ${errMsg}`, 'Sync', {
         error: errMsg,
         failedPaths: rawDiscoveredPaths.length > 0 ? rawDiscoveredPaths.slice(-15) : [rootPath],
@@ -3734,6 +3980,7 @@ function App() {
     } finally {
       setIsSyncingShare(false);
     }
+
   };
 
 
@@ -3785,14 +4032,17 @@ function App() {
             topDirs = data.topLevelDirectories;
             console.log(`[QuickSync] API returned ${topDirs.length} directories.`);
           }
+
         } else {
           console.warn(`[QuickSync] API error: ${res.status} ${res.statusText}`);
         }
+
       } catch (e) {
         console.warn('[QuickSync] API fetch failed or timed out:', e);
       } finally {
         skipCurrentPhaseCallbackRef.current = null;
       }
+
 
       setSyncProgress(p => ({ ...p, currentStep: 45, phaseDescription: 'Processing discovered directories...' }));
 
@@ -3810,6 +4060,7 @@ function App() {
           { name: 'Downloads', path: 'Downloads', isDirectory: true, subFolders: [] },
         ];
       }
+
 
       // Efficiently update existing samba tree
       const newTree: SambaShareNode[] = [...sambaTree];
@@ -3862,14 +4113,20 @@ function App() {
                 discoveredNewFolders.push(`${existingNode.name}/${subName}`);
                 changed = true;
               }
+
             }
+
             if (changed) {
               existingNode.children = updatedChildren;
               newTree[existingNodeIndex] = existingNode;
             }
+
           }
+
         }
+
       }
+
 
       const duration = Math.round(performance.now() - startTime);
       const durationSec = Math.max(0.05, Number((duration / 1000).toFixed(2)));
@@ -3895,6 +4152,7 @@ function App() {
         localStorage.setItem('samba_vault_last_scan_summary', JSON.stringify(quickSummary));
       } catch {}
 
+
       if (discoveredNewFolders.length > 0) {
         setSambaTree(newTree);
         showToast(
@@ -3905,6 +4163,7 @@ function App() {
           `QuickSync Complete: Verified ${topDirs.length} top-level Samba directories in ${duration}ms. 0 new folders found (all up to date).`
         );
       }
+
 
       setIsConnected(true);
       setSyncLogs((prev) => [
@@ -3945,6 +4204,7 @@ function App() {
       setIsQuickSyncing(false);
       setSyncCurrentPath('');
     }
+
   };
 
   const handlePushNfoToSamba = (media: MediaMetadata, customXml: string) => {
@@ -3978,9 +4238,11 @@ function App() {
     );
   }
 
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white relative z-[10]">
       {/* Toast Notification */}
+
       {toastMessage && (
         <div
           id="app-toast-notification"
@@ -3991,11 +4253,16 @@ function App() {
         </div>
       )}
 
+
       {/* macOS Full Disk Access Persistent but Dismissible Pre-Flight Overlay */}
+
       <FullDiskAccessOverlay
         isOpen={isFdaOverlayOpen}
+
         onClose={() => setIsFdaOverlayOpen(false)}
+
         status={fdaStatus}
+
         onRecheck={async () => {
           const freshStatus = await permissionsManager.checkFullDiskAccess(true);
           setFdaStatus(freshStatus);
@@ -4005,8 +4272,10 @@ function App() {
             showToast('✓ Full Disk Access successfully verified!');
             return true;
           }
+
           return false;
         }}
+
         onOpenSettings={async () => {
           const res = await permissionsManager.requestAndRegisterFullDiskAccess();
           showToast(res.message);
@@ -4018,11 +4287,14 @@ function App() {
               setIsFdaNoticeOpen(false);
               showToast('✓ Full Disk Access successfully verified!');
             }
+
           }, 2500);
         }}
+
       />
 
       {/* macOS Full Disk Access Notice Banner: Persistent top banner when overlay is dismissed */}
+
       {isFdaNoticeOpen && !isFdaOverlayOpen && (
         <div
           id="fda-permission-warning-banner"
@@ -4048,8 +4320,10 @@ function App() {
                     setIsFdaNoticeOpen(false);
                     showToast('✓ Full Disk Access successfully verified!');
                   }
+
                 }, 2000);
               }}
+
               className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1 shadow"
             >
               <ExternalLink className="w-3 h-3" />
@@ -4059,6 +4333,7 @@ function App() {
               type="button"
               id="btn-reopen-fda-overlay"
               onClick={() => setIsFdaOverlayOpen(true)}
+
               className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-lg text-[11px] transition cursor-pointer"
             >
               Review Pre-Flight Check
@@ -4067,6 +4342,7 @@ function App() {
               type="button"
               id="btn-fda-help-guide"
               onClick={() => setIsFdaHelpModalOpen(true)}
+
               className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-lg text-[11px] transition cursor-pointer"
             >
               Step-by-Step Guide
@@ -4075,6 +4351,7 @@ function App() {
               type="button"
               id="btn-dismiss-fda-banner"
               onClick={() => setIsFdaNoticeOpen(false)}
+
               className="p-1 text-slate-400 hover:text-white transition cursor-pointer"
               title="Dismiss banner"
             >
@@ -4084,10 +4361,14 @@ function App() {
         </div>
       )}
 
+
       {/* Permission Help Modal for Full Disk Access */}
+
       <PermissionHelpModal
         isOpen={isFdaHelpModalOpen}
+
         onClose={() => setIsFdaHelpModalOpen(false)}
+
         onOpenSettings={async () => {
           const res = await permissionsManager.requestAndRegisterFullDiskAccess();
           showToast(res.message);
@@ -4098,59 +4379,97 @@ function App() {
               setIsFdaNoticeOpen(false);
               showToast('✓ Full Disk Access successfully verified!');
             }
+
           }, 2000);
         }}
+
       />
 
       {/* Desktop App Menu Bar (File, Edit, View, Help) */}
+
       <MenuBar
         activeTab={activeTab}
+
         setActiveTab={setActiveTab}
+
         onSelectViewMediaType={(type) => {
           setSelectedMediaType(type);
           if (activeTab !== 'search') {
             setActiveTab('search');
           }
+
         }}
+
         selectedMediaType={selectedMediaType}
+
         sambaConfig={sambaConfig}
+
         isConnected={isConnected}
+
         onScanSamba={() => handleSyncSamba()}
+
         onQuickSync={handleQuickSyncSamba}
+
         isQuickSyncing={isQuickSyncing}
+
         onOpenClassifierModal={() => handleOpenClassifierModal()}
+
         onOpenQuickMount={() => setActiveTab('samba-mount')}
+
         onOpenManualMatch={() => handleOpenManualMatch()}
+
         onClearThumbnailCache={handleClearThumbnailCache}
+
         onTriggerLocalImport={() => {
           triggerLocalFileImport();
         }}
+
         onExportLibraryBackup={handleExportJsonBackup}
+
         onRefreshStatus={handleTestConnection}
+
         onToggleExpandAll={() => setIsAllTreeExpanded((prev) => !prev)}
+
         isAllExpanded={isAllTreeExpanded}
+
         onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+
       />
 
       {/* Main Header */}
+
       <Header
         activeTab={activeTab}
+
         setActiveTab={setActiveTab}
+
         sambaConfig={sambaConfig}
+
         setSambaConfig={setSambaConfig}
+
         isConnected={isConnected}
+
         watchlistCount={watchlistCount}
+
         onOpenQuickMount={() => setActiveTab('samba-mount')}
+
         onQuickSync={handleQuickSyncSamba}
+
         isQuickSyncing={isQuickSyncing}
+
         syncProgress={syncProgress}
+
         onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+
         serverVersionInfo={serverVersionInfo}
+
       />
 
       {/* Container wrapping main content and progress bar with defined z-index: 1 */}
+
       <div className="relative z-[1] flex-1 flex flex-col">
         {/* Real-time Samba Sync & Batch Processing Progress Bar */}
+
         <SyncProgressBar
           progress={
             syncProgress.isActive
@@ -4170,8 +4489,10 @@ function App() {
                     ? 'Importing classified folders...'
                     : 'Deep scanning Samba share with Rust walkdir...',
                 }
+
               : syncProgress
           }
+
           onCancel={() => {
             abortCurrentSync();
             setIsSyncingShare(false);
@@ -4179,32 +4500,45 @@ function App() {
             setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
             showToast('Samba synchronization paused/cancelled by user.');
           }}
+
           onDismiss={() => {
             setSyncProgress((prev) => ({ ...prev, isActive: false, phase: 'idle' }));
           }}
+
           onRetry={() => {
             console.log('[SambaSync] User requested manual retry...');
             handleSyncSamba(activeScanPath);
           }}
+
           onForceSkip={handleForceSkip}
+
           isSafeScan={isSafeScan}
+
           onToggleSafeScan={handleToggleSafeScan}
+
         />
 
         {/* Main Content Area */}
+
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeTab === 'music' && (
           <ErrorBoundary tabName="Music Hub">
             <MusicTab
               mediaLibrary={mediaLibrary}
+
               onPlayMedia={(media, track) => handlePlayMedia(media, undefined, track)}
+
               onOpenDetails={(media) => setDetailModalMedia(media)}
+
               sambaConfig={sambaConfig}
+
         {activeTab === 'collections' && <CollectionsTab />}
+
         </ErrorBoundary>
         {activeTab === 'youtube' && (
           </ErrorBoundary>
         )}
+
 
         {activeTab === 'youtube' && (
           <ErrorBoundary tabName="YouTube Hub">
@@ -4212,14 +4546,20 @@ function App() {
           </ErrorBoundary>
         )}
 
+
         {activeTab === 'watchlist' && (
           <WatchlistTab
             onPlayMedia={handlePlayMedia}
+
             onOpenDetails={(media) => setDetailModalMedia(media)}
+
             onOpenInNfoStudio={handleOpenInNfoStudio}
+
             onWatchlistCountChange={setWatchlistCount}
+
           />
         )}
+
 
         {activeTab === 'history' && (
           <WatchHistoryTab
@@ -4227,27 +4567,41 @@ function App() {
               const found = mediaLibrary.find((m) => m.id === mediaId);
               if (found) setDetailModalMedia(found);
             }}
+
           />
         )}
+
 
         {activeTab === 'search' && (
           <ErrorBoundary tabName="Library Search">
             <MediaSearch
               mediaLibrary={mediaLibrary}
+
               sambaTree={sambaTree}
+
               onPushToSamba={handlePushToSamba}
+
               onOpenDetails={(media) => setDetailModalMedia(media)}
+
               onOpenInNfoStudio={handleOpenInNfoStudio}
+
               onPlayMedia={handlePlayMedia}
+
               sambaConfig={sambaConfig}
+
               scanRootPath={resolveLocalMountPath(
                 activeScanPath || getPrioritizedScanPaths(sambaConfig).primaryPath,
                 sambaConfig.share || 'media'
               )}
+
               onImportFiles={handleImportFilesDirectly}
+
               onTriggerLocalImport={triggerLocalFileImport}
+
               onSyncFromSamba={() => handleSyncSamba()}
+
               onOpenManualMatch={handleOpenManualMatch}
+
               onSaveCategorizedMedia={(media) => {
                 setMediaLibrary((prev) => {
                   const idx = prev.findIndex(
@@ -4258,6 +4612,7 @@ function App() {
                     copy[idx] = { ...copy[idx], ...media };
                     return copy;
                   }
+
                   return [media, ...prev];
                 });
                 // Persist to SQLite
@@ -4268,172 +4623,281 @@ function App() {
                 }).catch(() => {});
                 showToast(`Categorized "${media.title}" (${(media.genres || []).join(', ')})`);
               }}
+
               isSyncing={isSyncingShare}
+
               selectedMediaType={selectedMediaType}
+
               onSelectMediaType={setSelectedMediaType}
+
               onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+
               onOpenClassifierModal={() => setIsClassifierModalOpen(true)}
+
             />
           </ErrorBoundary>
         )}
 
+
         {activeTab === 'sqlite-vault' && (
           <SqliteVault
             onOpenDetails={(media) => setDetailModalMedia(media)}
+
             onNavigateToStats={() => setActiveTab('stats')}
+
           />
         )}
+
 
         {activeTab === 'stats' && (
           <LibraryStatsTab
             onNavigateToVault={() => setActiveTab('sqlite-vault')}
+
             onOpenDetails={(media) => setDetailModalMedia(media)}
+
             mediaLibrary={mediaLibrary}
+
             onUpdateMedia={(updated) => setMediaLibrary(updated)}
+
             showToast={showToast}
+
             sambaTree={sambaTree}
+
           />
         )}
+
 
         {activeTab === 'dedup' && (
           <DeduplicationManagerTab
             mediaLibrary={mediaLibrary}
+
             onRemoveItem={(id) => {
               setMediaLibrary(prev => prev.filter(m => m.id !== id));
             }}
+
           />
         )}
+
         {activeTab === 'cleaner' && (
           <BatchFilenameCleaner
             sambaConfig={sambaConfig}
+
             onBatchPushToSamba={handleBatchPushToSamba}
+
             onAddToLibrary={handleBatchAddToLibrary}
+
           />
         )}
+
 
         {activeTab === 'explorer' && (
           <SambaExplorer
             sambaConfig={sambaConfig}
+
             sambaTree={sambaTree}
+
             setSambaTree={setSambaTree}
+
             syncLogs={syncLogs}
+
             setSyncLogs={setSyncLogs}
+
             onOpenDetails={(media) => setDetailModalMedia(media)}
+
             onOpenInNfoStudio={handleOpenInNfoStudio}
+
             onRefreshSamba={handleTestConnection}
+
             onSyncSamba={handleSyncSamba}
+
             onQuickSync={handleQuickSyncSamba}
+
             isQuickSyncing={isQuickSyncing}
+
             onOpenClassifierModal={() => handleOpenClassifierModal()}
+
             onPopulateMediaLibrary={handlePopulateMediaLibraryFromSamba}
+
             isSyncing={isSyncingShare}
+
             isImporting={isImportingShare}
+
             isMountedInFinder={isMountedInFinder}
+
             mountedVolumeInfo={mountedVolumeInfo}
+
             extensionConfig={mediaExtensionConfig}
+
             onUpdateExtensionConfig={setMediaExtensionConfig}
+
             isSafeScan={isSafeScan}
+
             onToggleSafeScan={handleToggleSafeScan}
+
             depthLimit={scanDepthLimit}
+
             onUpdateDepthLimit={setScanDepthLimit}
+
             setSambaConfig={setSambaConfig}
+
             lastScanSummary={lastScanSummary}
+
             onDismissLastScanSummary={() => setLastScanSummary(null)}
+
           />
         )}
+
 
         {activeTab === 'samba-mount' && (
           <SambaMountHub
             sambaConfig={sambaConfig}
+
             setSambaConfig={setSambaConfig}
+
             isConnected={isConnected}
+
             onTestConnection={handleTestConnection}
+
             isTesting={isTestingConn}
+
             connectionDetails={connectionDetails}
+
             isMountedInFinder={isMountedInFinder}
+
             mountedVolumeInfo={mountedVolumeInfo}
+
             systemVolumes={systemVolumes}
+
             isDesktopApp={isDesktopApp}
+
           />
         )}
+
 
         {activeTab === 'nfo-studio' && (
           <NfoStudio
             initialMedia={nfoStudioMedia}
+
             sambaConfig={sambaConfig}
+
             onPushNfoToSamba={handlePushNfoToSamba}
+
           />
         )}
+
 
         {activeTab === 'console' && (
           <ConsoleTab
             sambaConfig={sambaConfig}
+
             onRetryFailedFiles={async (failedPaths) => {
               if (failedPaths && failedPaths.length === 1 && failedPaths[0].startsWith('/Volumes')) {
                 await handleSyncSamba(failedPaths[0]);
               } else {
                 await handleSyncSamba();
               }
+
             }}
+
             onTriggerSync={() => handleSyncSamba()}
+
           />
         )}
+
 
         {activeTab === 'settings' && (
           <SettingsTab
             classifierSettings={classifierSettings}
+
             onUpdateClassifierSettings={(newSettings) => setClassifierSettings(newSettings)}
+
             sambaConfig={sambaConfig}
+
             onUpdateSambaConfig={setSambaConfig}
+
             onClearThumbnailCache={handleClearThumbnailCache}
+
             onExportLibraryBackup={handleExportJsonBackup}
+
             onManualTriggerSync={() => handleSyncSamba()}
+
             scanDepthLimit={scanDepthLimit}
+
             onUpdateScanDepthLimit={(val) => setScanDepthLimit(val)}
+
             transcodeConfig={transcodeConfig}
+
             onUpdateTranscodeConfig={setTranscodeConfig}
+
             serverVersionInfo={serverVersionInfo}
+
           />
         )}
+
         </main>
       </div>
 
       {/* Detail Modal */}
+
       {detailModalMedia && (
         <MediaDetailModal
           media={detailModalMedia}
+
           onClose={() => setDetailModalMedia(null)}
+
           onPushToSamba={handlePushToSamba}
+
           onOpenInNfoStudio={handleOpenInNfoStudio}
+
           onPlayMedia={handlePlayMedia}
+
           sambaConfig={sambaConfig}
+
           mediaLibrary={mediaLibrary}
+
           onSelectMedia={(m) => setDetailModalMedia(m)}
+
         />
       )}
 
+
       {/* Media Player Modal (keyed by playerSessionKey so Stream Recovery forces a fresh mount) */}
+
       {playerMediaState && playerMediaState.media && sanitizedMedia && (
         <MediaPlayerModal
           key={playerSessionKey}
+
           isOpen={Boolean(playerMediaState)}
+
           media={sanitizedMedia}
+
           initialEpisode={sanitizedEpisode}
+
           initialTrack={playerMediaState.track}
+
           onClose={() => setPlayerMediaState(null)}
+
           sambaConfig={sambaConfig}
+
           mediaLibrary={mediaLibrary}
+
           onSelectMedia={(m) => {
             setPlayerSessionKey((k) => k + 1);
             setPlayerMediaState({ media: m });
           }}
+
           onTestConnection={handleTestConnection}
+
           onNavigateToMountHub={() => setActiveTab('samba-mount')}
+
           transcodeConfig={transcodeConfig}
+
         />
       )}
 
+
       {/* Centralized Stream Recovery Monitor Overlay (shown after player resets to blank state) */}
+
       {streamRecoveryState.status === 'suspended' && !playerMediaState && streamRecoveryState.suspendedSession && (
         <div
           id="stream-recovery-monitor"
@@ -4461,6 +4925,7 @@ function App() {
                 id="btn-close-stream-recovery-x"
                 type="button"
                 onClick={handleDismissStreamRecovery}
+
                 className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                 title="Close Stream Recovery"
               >
@@ -4473,17 +4938,23 @@ function App() {
                 <div className="text-xs text-slate-400">Interrupted Media</div>
                 <div className="text-sm font-semibold text-white">
                   {streamRecoveryState.suspendedSession.media.title}
+
                   {streamRecoveryState.suspendedSession.episode && (
                     <span className="ml-2 text-xs text-indigo-300 font-normal">
                       S{String(streamRecoveryState.suspendedSession.episode.seasonNumber).padStart(2, '0')}
+
                       E{String(streamRecoveryState.suspendedSession.episode.episodeNumber).padStart(2, '0')}
+
                     </span>
                   )}
+
                   {streamRecoveryState.suspendedSession.track && (
                     <span className="ml-2 text-xs text-emerald-300 font-normal">
                       Track {streamRecoveryState.suspendedSession.track.trackNumber}: {streamRecoveryState.suspendedSession.track.title}
+
                     </span>
                   )}
+
                 </div>
               </div>
 
@@ -4493,22 +4964,29 @@ function App() {
                   {streamRecoveryState.errorCode !== null && streamRecoveryState.errorCode !== undefined && (
                     <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-200">
                       Code: {String(streamRecoveryState.errorCode)}
+
                     </span>
                   )}
+
                 </div>
                 <p className="text-rose-200/90 break-words leading-relaxed">
                   {streamRecoveryState.errorMessage}
+
                 </p>
                 {streamRecoveryState.streamUrl && (
                   <p className="text-[11px] text-slate-400 truncate" title={streamRecoveryState.streamUrl}>
                     Stream: {streamRecoveryState.streamUrl}
+
                   </p>
                 )}
+
                 {streamRecoveryState.recoveryCount > 0 && (
                   <p className="text-[11px] text-amber-300">
                     Previous recovery attempts this session: {streamRecoveryState.recoveryCount}
+
                   </p>
                 )}
+
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-1">
@@ -4516,6 +4994,7 @@ function App() {
                   id="btn-dismiss-stream-recovery"
                   type="button"
                   onClick={handleDismissStreamRecovery}
+
                   className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
                 >
                   Close Player
@@ -4524,6 +5003,7 @@ function App() {
                   id="btn-retry-stream"
                   type="button"
                   onClick={handleRetryStream}
+
                   className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-500/25 transition-all cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
@@ -4535,39 +5015,61 @@ function App() {
         </div>
       )}
 
+
       {/* Smart Share Scanner & Regex Classifier Modal */}
+
       <FolderClassifierModal
         isOpen={isClassifierModalOpen}
+
         onClose={() => setIsClassifierModalOpen(false)}
+
         folderClassifications={folderClassifications}
+
         onConfirmImport={handleConfirmClassifiedImport}
+
         settings={classifierSettings}
+
         onUpdateSettings={(newSettings) => setClassifierSettings(newSettings)}
+
         sambaConfig={sambaConfig}
+
         customScanPath={activeScanPath}
+
       />
 
       {/* Manual Match & Gemini Synopsis Resolver Modal */}
+
       {manualMatchModalState?.isOpen && (
         <ManualMatchModal
           isOpen={manualMatchModalState.isOpen}
+
           rawPathOrName={manualMatchModalState.rawPathOrName}
+
           initialMediaType={manualMatchModalState.mediaType}
+
           onClose={() => setManualMatchModalState(null)}
+
           onSaveMatchedMedia={handleSaveMatchedMedia}
+
         />
       )}
 
+
       {/* API Debugger & Network Request Inspector Overlay */}
+
       <ApiDebuggerOverlay
         isOpen={isApiDebuggerOpen}
+
         onClose={() => setIsApiDebuggerOpen(false)}
+
       />
 
       {/* Quick API Debugger Floating Action Button */}
+
       <button
         id="floating-api-debugger-trigger"
         onClick={() => setIsApiDebuggerOpen(true)}
+
         className="fixed bottom-4 right-4 z-40 flex items-center gap-2 px-3.5 py-2 rounded-full bg-slate-900/95 hover:bg-slate-800 text-amber-300 border border-amber-500/40 shadow-xl shadow-black/60 text-xs font-semibold backdrop-blur-sm transition-all hover:scale-105 active:scale-95 cursor-pointer group"
         title="Open API Debugger & Network Request Inspector (⌘D)"
       >
@@ -4579,6 +5081,7 @@ function App() {
       </button>
 
       {/* FFmpeg Sidecar Missing or Incompatible Warning Overlay */}
+
       {showFfmpegSidecarWarning && isTauriEnvironment() && (
         <div className="fixed bottom-16 right-4 z-50 max-w-md bg-amber-950/95 border border-amber-500/50 rounded-xl p-4 text-amber-200 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="flex items-start gap-3">
@@ -4589,15 +5092,19 @@ function App() {
               </h4>
               <p className="text-amber-200/90 leading-relaxed mb-2">
                 {ffmpegSidecarStatus?.error || 'Bundled FFmpeg sidecar binary was not found or failed version validation. Video transcoding and playback streaming may be unavailable or degraded.'}
+
               </p>
               {ffmpegSidecarStatus?.ffmpegPath && (
                 <p className="font-mono text-[10px] text-amber-400/80 truncate mb-2" title={ffmpegSidecarStatus.ffmpegPath}>
                   Binary Path: {ffmpegSidecarStatus.ffmpegPath}
+
                 </p>
               )}
+
               <div className="flex items-center gap-2 mt-2">
                 <button
                   onClick={() => setShowFfmpegSidecarWarning(false)}
+
                   className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-xs font-medium transition-colors cursor-pointer"
                 >
                   Dismiss Warning
@@ -4606,6 +5113,7 @@ function App() {
             </div>
             <button
               onClick={() => setShowFfmpegSidecarWarning(false)}
+
               className="text-amber-400/60 hover:text-amber-300 transition-colors cursor-pointer p-1"
             >
               <X className="w-4 h-4" />
@@ -4614,10 +5122,13 @@ function App() {
         </div>
       )}
 
+
       {/* Persistent always-mounted hidden file input for MenuBar, ⌘O shortcut, and MediaSearch imports */}
+
       <input
         id="media-import-file-input"
         ref={localImportInputRef}
+
         type="file"
         multiple
         accept="video/*,audio/*,.mkv,.mp4,.m4v,.avi,.mov,.wmv,.webm,.flv,.ts,.m2ts,.mts,.vob,.ogv,.3gp,.flac,.mp3,.m4a,.m4b,.wav,.ogg,.opus,.aac,.alac,.aiff,.iso,.img,.epub,.pdf,.cbz,.cbr"
@@ -4628,10 +5139,13 @@ function App() {
           if (files.length > 0) {
             await handleImportFilesDirectly(files);
           }
+
         }}
+
       />
 
       {/* Clean Minimalist Footer */}
+
       <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex flex-col items-center sm:items-start gap-1">
@@ -4651,12 +5165,16 @@ function App() {
                       ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                       : 'bg-slate-900 text-slate-400 border-slate-800'
                   }`}
+
                   title={serverVersionInfo ? `Server Version: ${serverVersionInfo.releaseTag}\nCommit: ${serverVersionInfo.commit?.substring(0, 7)}\nBuild Date: ${new Date(serverVersionInfo.buildDate).toLocaleString()}` : 'Loading server info...'}
+
                 >
                   v{APP_RELEASE_TAG}
+
                   {serverVersionInfo?.releaseTag && serverVersionInfo.releaseTag !== APP_RELEASE_TAG && (
                     <span className="ml-1 text-[9px] opacity-75">→ v{serverVersionInfo.releaseTag}</span>
                   )}
+
                 </span>
               </div>
             </div>
@@ -4666,5 +5184,6 @@ function App() {
     </div>
   );
 }
+
 
 export default App;

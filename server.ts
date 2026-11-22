@@ -54,6 +54,8 @@ import {
   getPersistentStorageInfo,
   getVaultStateFromDisk,
   saveVaultStateToDisk,
+  saveVaultStateToDiskSync,
+  flushPendingVaultWritesSync,
   globalSanitizeVaultPaths,
   resetDatabaseInDb,
   hardResetAndDeleteDatabaseFiles,
@@ -4549,7 +4551,7 @@ app.post('/api/vault/state', (req: Request, res: Response) => {
     if (!payload || typeof payload !== 'object') {
       return res.status(400).json({ error: 'Invalid vault state payload' });
     }
-    const saved = saveVaultStateToDisk(payload);
+    const saved = saveVaultStateToDiskSync(payload);
     res.json({ success: true, savedAt: saved.lastSavedAt, version: saved.version });
   } catch (err: any) {
     console.error('Error saving vault state:', err);
@@ -7640,6 +7642,21 @@ async function startServer() {
 
   server.on('error', (err: any) => {
     console.error('Server listen error:', err);
+  });
+
+  const handleGracefulShutdown = () => {
+    try {
+      flushPendingVaultWritesSync();
+    } catch {}
+    process.exit(0);
+  };
+
+  process.once('SIGINT', handleGracefulShutdown);
+  process.once('SIGTERM', handleGracefulShutdown);
+  process.once('beforeExit', () => {
+    try {
+      flushPendingVaultWritesSync();
+    } catch {}
   });
 }
 

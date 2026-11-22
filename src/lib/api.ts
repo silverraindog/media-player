@@ -68,6 +68,8 @@ export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T
         file_path: m.path || m.file_path || null,
         raw_data: JSON.stringify(m),
         file_size_bytes: m.fileSizeBytes || null,
+        created_at: m.createdAt || null,
+        updated_at: m.updatedAt || null,
       }));
       await invoke('save_media_batch', { items: rustItems });
       return { success: true, count: rustItems.length } as any;

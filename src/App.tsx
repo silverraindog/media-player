@@ -58,9 +58,11 @@ import {
 import {
   checkMacVolume,
   detectFFmpegPath,
+  getState,
   isTauriEnvironment,
   listMountedVolumes,
   performFastScan,
+  saveState,
   scanSambaVolume,
   VolumeMountInfo,
 } from './utils/tauriBridge';
@@ -69,6 +71,9 @@ import { extractCollectionFromPath } from './utils/collections';
 import { generateMetadataFile } from './utils/nfoGenerator';
 import { logger } from './utils/loggerService';
 import { localDbFallback } from './utils/localDatabaseFallback';
+import { apiCall } from './lib/api';
+import { sqliteBatchWriter } from './services/sqliteBatchWriter';
+import { loadAppPersistenceState, saveAppPersistenceState } from './utils/persistence';
 import { checkFullDiskAccess, FullDiskAccessStatus, openMacOSSecurityPrivacy } from './utils/permissionsManager';
 import { APP_VERSION, APP_RELEASE_TAG } from './version';
 import { AlertTriangle, RotateCw } from 'lucide-react';
@@ -140,6 +145,80 @@ function readStorageJson<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+const CURATED_MEDIA_IDS = new Set(CURATED_MEDIA_DATABASE.map((m) => m.id));
+
+function stripDeadBlobUrls(item: MediaMetadata): MediaMetadata {
+  const cleaned: MediaMetadata = { ...item };
+  if (cleaned.localBlobUrl && cleaned.localBlobUrl.startsWith('blob:')) {
+    delete cleaned.localBlobUrl;
+  }
+  if (cleaned.playbackUrl && cleaned.playbackUrl.startsWith('blob:')) {
+    cleaned.playbackUrl = cleaned.path || undefined;
+  }
+  return cleaned;
+}
+
+function hydrateMediaRecord(row: any): MediaMetadata | null {
+  if (!row) return null;
+  let parsedRaw: any = null;
+  if (row.raw_data) {
+    try {
+      parsedRaw = typeof row.raw_data === 'string' ? JSON.parse(row.raw_data) : row.raw_data;
+    } catch {}
+  }
+
+  if (parsedRaw && typeof parsedRaw === 'object' && parsedRaw.title) {
+    return stripDeadBlobUrls({
+      ...parsedRaw,
+      id: parsedRaw.id || row.id,
+      type: parsedRaw.type || row.media_type || 'movie',
+      title: parsedRaw.title || row.title,
+      posterUrl: parsedRaw.posterUrl || row.poster_url || '',
+      fanartUrl: parsedRaw.fanartUrl || row.fanart_url || parsedRaw.posterUrl || row.poster_url || '',
+      path: parsedRaw.path || row.file_path || undefined,
+      folderPath: parsedRaw.folderPath || parsedRaw.recommendedFolderStructure || row.recommended_folder || undefined,
+      recommendedFolderStructure: parsedRaw.recommendedFolderStructure || row.recommended_folder || '',
+    } as MediaMetadata);
+  }
+
+  if (!row.title && !row.id) return null;
+
+  let genres: string[] = ['Media'];
+  try {
+    if (Array.isArray(row.genres)) {
+      genres = row.genres;
+    } else if (typeof row.genres === 'string' && row.genres.trim()) {
+      const parsedGenres = JSON.parse(row.genres);
+      if (Array.isArray(parsedGenres)) genres = parsedGenres;
+    }
+  } catch {
+    if (typeof row.genres === 'string' && row.genres.trim()) genres = [row.genres];
+  }
+
+  const normalizedType: MediaType =
+    row.media_type === 'series' || row.media_type === 'album' || row.media_type === 'movie'
+      ? row.media_type
+      : 'movie';
+
+  return stripDeadBlobUrls({
+    id: row.id,
+    type: normalizedType,
+    title: row.title || 'Untitled',
+    originalTitle: row.original_title || row.title || 'Untitled',
+    overview: row.synopsis || '',
+    year: row.year || new Date().getFullYear(),
+    rating: typeof row.rating === 'number' ? row.rating : 0,
+    posterUrl: row.poster_url || '',
+    fanartUrl: row.fanart_url || row.poster_url || '',
+    genres,
+    recommendedFolderStructure: row.recommended_folder || '',
+    recommendedFilenames: [],
+    folderPath: row.recommended_folder || undefined,
+    path: row.file_path || undefined,
+    source: 'sqlite-vault',
+  } as MediaMetadata);
 }
 
 export default function App() {
@@ -227,6 +306,10 @@ export default function App() {
 
   const localImportInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const hasHydratedRef = useRef<boolean>(false);
+  const removedMediaIdsRef = useRef<string[]>(readStorageJson<string[]>('sambavault_removed_media_ids', []));
+  const latestVaultPayloadRef = useRef<any>(null);
+  const vaultPersistTimerRef = useRef<number | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -247,68 +330,137 @@ export default function App() {
     setSyncLogs((prev) => [logItem, ...prev].slice(0, 200));
   }, []);
 
-  // Hydrate persistent state from backend APIs on mount
+  // Hydrate persistent state from disk (~/.media-player/vault_state.json + SQLite media_items) on mount
   useEffect(() => {
     let cancelled = false;
 
     const hydrate = async () => {
+      const wasReset = localStorage.getItem('sambavault_db_reset') === 'true';
+
       try {
-        const [vaultRes, colRes, watchlistRes, storageRes, versionRes] = await Promise.all([
-          fetch('/api/vault/state').catch(() => null),
-          fetch('/api/collections').catch(() => null),
-          fetch('/api/db/watchlist').catch(() => null),
-          fetch('/api/vault/storage-info').catch(() => null),
-          fetch('/api/version').catch(() => null),
+        const [vaultData, dbMediaData, colData, wlData, storageRes, versionRes] = await Promise.all([
+          apiCall<any>('/api/vault/state').catch(() => null),
+          apiCall<any>('/api/db/media').catch(() => null),
+          apiCall<any>('/api/collections').catch(() => null),
+          apiCall<any>('/api/db/watchlist').catch(() => null),
+          fetch('/api/vault/storage-info').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+          fetch('/api/version').then((r) => (r.ok ? r.json() : null)).catch(() => null),
         ]);
 
         if (cancelled) return;
 
-        if (vaultRes && vaultRes.ok) {
-          const vaultData = await vaultRes.json().catch(() => null);
-          if (vaultData?.hasSavedState && vaultData.state) {
-            const st = vaultData.state;
-            if (Array.isArray(st.mediaLibrary) && st.mediaLibrary.length > 0) {
-              setMediaLibrary(st.mediaLibrary);
-            }
-            if (Array.isArray(st.sambaTree)) setSambaTree(st.sambaTree);
-            if (Array.isArray(st.syncLogs)) setSyncLogs(st.syncLogs);
-            if (st.sambaConfig) setSambaConfig((prev) => ({ ...prev, ...st.sambaConfig }));
-            if (st.classifierSettings) setClassifierSettings(st.classifierSettings);
-            if (st.mediaExtensionConfig) setMediaExtensionConfig(st.mediaExtensionConfig);
-            if (st.transcodeConfig) setTranscodeConfig(st.transcodeConfig);
-          }
-        }
+        let st = vaultData?.hasSavedState && vaultData.state ? vaultData.state : null;
 
-        if (colRes && colRes.ok) {
-          const colData = await colRes.json().catch(() => null);
-          if (colData?.success && Array.isArray(colData.collections)) {
-            setCustomCollections(colData.collections);
+        // Secondary recovery for Tauri desktop upgrades (legacy state.json or AppData media_state.json)
+        if (!st && isTauriEnvironment()) {
+          try {
+            const legacyState = await getState().catch(() => null);
+            if (legacyState && (Array.isArray(legacyState.mediaLibrary) || Array.isArray(legacyState.sambaTree))) {
+              st = legacyState;
+            }
+          } catch {}
+          if (!st) {
             try {
-              localStorage.setItem('media_vault_collections_cache', JSON.stringify(colData.collections));
+              const appDataState = await loadAppPersistenceState().catch(() => null);
+              if (appDataState && (Array.isArray(appDataState.mediaLibrary) || Array.isArray(appDataState.sambaTree))) {
+                st = appDataState;
+              }
             } catch {}
           }
         }
 
-        if (watchlistRes && watchlistRes.ok) {
-          const wlData = await watchlistRes.json().catch(() => null);
-          if (wlData?.success && Array.isArray(wlData.watchlist)) {
-            setWatchlistCount(wlData.watchlist.length);
+        if (Array.isArray(st?.removedMediaIds)) {
+          removedMediaIdsRef.current = Array.from(new Set([...removedMediaIdsRef.current, ...st.removedMediaIds]));
+          try {
+            localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(removedMediaIdsRef.current));
+          } catch {}
+        }
+        const removedSet = new Set(removedMediaIdsRef.current);
+
+        // Merge saved vault_state mediaLibrary + SQLite media_items + un-flushed cache + non-curated localStorage items
+        const diskLibraryRaw: MediaMetadata[] = Array.isArray(st?.mediaLibrary) ? st.mediaLibrary : [];
+        const dbItemsRaw: any[] = Array.isArray(dbMediaData?.items) ? dbMediaData.items : [];
+        const dbHydratedItems = dbItemsRaw
+          .map(hydrateMediaRecord)
+          .filter((item): item is MediaMetadata => Boolean(item && item.id));
+        const cachedWriterItems = sqliteBatchWriter.getCachedMedia();
+        const localStored = readStorageJson<MediaMetadata[]>('sambavault_media_library_v2', []);
+
+        const mergedMap = new Map<string, MediaMetadata>();
+        const addMerged = (item: MediaMetadata) => {
+          if (!item || !item.id || removedSet.has(item.id)) return;
+          if (!mergedMap.has(item.id)) {
+            mergedMap.set(item.id, stripDeadBlobUrls(item));
           }
+        };
+
+        diskLibraryRaw.forEach(addMerged);
+        dbHydratedItems.forEach(addMerged);
+        cachedWriterItems.forEach(addMerged);
+        localStored.forEach((item) => {
+          if (!item || !item.id || removedSet.has(item.id)) return;
+          const isImportedOrCustom =
+            !CURATED_MEDIA_IDS.has(item.id) ||
+            item.id.startsWith('imported-') ||
+            item.id.startsWith('batch-imported-') ||
+            item.id.startsWith('folder-');
+          if (isImportedOrCustom || mergedMap.size === 0) {
+            addMerged(item);
+          }
+        });
+
+        if (mergedMap.size > 0) {
+          const mergedList = Array.from(mergedMap.values());
+          setMediaLibrary(mergedList);
+          if (wasReset) {
+            try {
+              localStorage.removeItem('sambavault_db_reset');
+            } catch {}
+          }
+        } else if (wasReset) {
+          setMediaLibrary([]);
         }
 
-        if (storageRes && storageRes.ok) {
-          const stInfo = await storageRes.json().catch(() => null);
-          if (stInfo?.success) setStorageInfo(stInfo);
+        if (st) {
+          if (Array.isArray(st.sambaTree) && st.sambaTree.length > 0) setSambaTree(st.sambaTree);
+          if (Array.isArray(st.syncLogs) && st.syncLogs.length > 0) setSyncLogs(st.syncLogs);
+          if (st.sambaConfig) setSambaConfig((prev) => ({ ...prev, ...st.sambaConfig }));
+          if (st.classifierSettings) setClassifierSettings(st.classifierSettings);
+          if (st.mediaExtensionConfig) setMediaExtensionConfig(st.mediaExtensionConfig);
+          if (st.transcodeConfig) setTranscodeConfig(st.transcodeConfig);
         }
 
-        if (versionRes && versionRes.ok) {
-          const vData = await versionRes.json().catch(() => null);
-          if (vData && (vData.version || vData.releaseTag)) {
-            setServerVersionInfo(vData);
-          }
+        const apiCols: MediaCollection[] =
+          colData?.success && Array.isArray(colData.collections) ? colData.collections : [];
+        const diskCols: MediaCollection[] = Array.isArray(st?.customCollections) ? st.customCollections : [];
+        if (apiCols.length > 0 || diskCols.length > 0) {
+          const colMap = new Map<string, MediaCollection>();
+          apiCols.forEach((c) => c?.id && colMap.set(c.id, c));
+          diskCols.forEach((c) => c?.id && !colMap.has(c.id) && colMap.set(c.id, c));
+          const mergedCols = Array.from(colMap.values());
+          setCustomCollections(mergedCols);
+          try {
+            localStorage.setItem('media_vault_collections_cache', JSON.stringify(mergedCols));
+          } catch {}
+        }
+
+        if (wlData?.success && Array.isArray(wlData.watchlist)) {
+          setWatchlistCount(wlData.watchlist.length);
+        }
+
+        if (storageRes?.success) {
+          setStorageInfo(storageRes);
+        }
+
+        if (versionRes && (versionRes.version || versionRes.releaseTag)) {
+          setServerVersionInfo(versionRes);
         }
       } catch (err) {
         console.warn('[App] Hydration warning:', err);
+      } finally {
+        if (!cancelled) {
+          hasHydratedRef.current = true;
+        }
       }
 
       // Check local volume mount & FFmpeg presence non-blockingly
@@ -372,6 +524,87 @@ export default function App() {
     } catch {}
   }, [transcodeConfig]);
 
+  const flushVaultPayloadToDisk = useCallback(async (payload: any) => {
+    if (!payload) return;
+    await apiCall('/api/vault/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => null);
+
+    if (isTauriEnvironment()) {
+      saveState(payload).catch(() => null);
+      saveAppPersistenceState(payload).catch(() => null);
+    }
+  }, []);
+
+  // Auto-persist full vault state (imported media, trees, collections, settings) to permanent disk storage
+  useEffect(() => {
+    const payload = {
+      mediaLibrary,
+      sambaTree,
+      syncLogs,
+      sambaConfig,
+      classifierSettings,
+      mediaExtensionConfig,
+      transcodeConfig,
+      customCollections,
+      removedMediaIds: removedMediaIdsRef.current,
+    };
+    latestVaultPayloadRef.current = payload;
+
+    if (!hasHydratedRef.current) return;
+
+    if (vaultPersistTimerRef.current) {
+      window.clearTimeout(vaultPersistTimerRef.current);
+    }
+    vaultPersistTimerRef.current = window.setTimeout(() => {
+      flushVaultPayloadToDisk(latestVaultPayloadRef.current).catch(() => null);
+    }, 350);
+
+    return () => {
+      if (vaultPersistTimerRef.current) {
+        window.clearTimeout(vaultPersistTimerRef.current);
+      }
+    };
+  }, [
+    mediaLibrary,
+    sambaTree,
+    syncLogs,
+    sambaConfig,
+    classifierSettings,
+    mediaExtensionConfig,
+    transcodeConfig,
+    customCollections,
+    flushVaultPayloadToDisk,
+  ]);
+
+  // Flush pending vault snapshot when closing or replacing the app
+  useEffect(() => {
+    const handleBeforeExitFlush = () => {
+      if (!hasHydratedRef.current || !latestVaultPayloadRef.current) return;
+      const payload = latestVaultPayloadRef.current;
+      try {
+        localStorage.setItem('sambavault_media_library_v2', JSON.stringify(payload.mediaLibrary || []));
+      } catch {}
+      if (isTauriEnvironment()) {
+        flushVaultPayloadToDisk(payload).catch(() => null);
+      } else if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        try {
+          const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+          navigator.sendBeacon('/api/vault/state', blob);
+        } catch {}
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeExitFlush);
+    window.addEventListener('pagehide', handleBeforeExitFlush);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeExitFlush);
+      window.removeEventListener('pagehide', handleBeforeExitFlush);
+    };
+  }, [flushVaultPayloadToDisk]);
+
   // Global Stream Recovery monitor: catches unhandled playback/stream errors while player is open
   useEffect(() => {
     if (!playerState.isOpen) return;
@@ -396,24 +629,34 @@ export default function App() {
 
   const persistVaultSnapshot = useCallback(async () => {
     try {
-      await fetch('/api/vault/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mediaLibrary,
-          sambaTree,
-          syncLogs,
-          sambaConfig,
-          classifierSettings,
-          mediaExtensionConfig,
-          transcodeConfig,
-        }),
-      });
+      const payload = {
+        mediaLibrary,
+        sambaTree,
+        syncLogs,
+        sambaConfig,
+        classifierSettings,
+        mediaExtensionConfig,
+        transcodeConfig,
+        customCollections,
+        removedMediaIds: removedMediaIdsRef.current,
+      };
+      await flushVaultPayloadToDisk(payload);
       showToast('Vault state saved to disk.');
     } catch (err) {
       console.warn('[App] Failed persisting vault snapshot:', err);
     }
-  }, [mediaLibrary, sambaTree, syncLogs, sambaConfig, classifierSettings, mediaExtensionConfig, transcodeConfig, showToast]);
+  }, [
+    mediaLibrary,
+    sambaTree,
+    syncLogs,
+    sambaConfig,
+    classifierSettings,
+    mediaExtensionConfig,
+    transcodeConfig,
+    customCollections,
+    flushVaultPayloadToDisk,
+    showToast,
+  ]);
 
   // Collections CRUD (SQLite + local fallback)
   const handleCreateCollection = useCallback(
@@ -428,14 +671,11 @@ export default function App() {
       });
 
       try {
-        const res = await fetch('/api/collections', {
+        await apiCall('/api/collections', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(collection),
         });
-        if (!res.ok) {
-          localDbFallback.saveCollection(collection);
-        }
       } catch {
         localDbFallback.saveCollection(collection);
       }
@@ -458,14 +698,11 @@ export default function App() {
       });
 
       try {
-        const res = await fetch(`/api/collections/${encodeURIComponent(collection.id)}`, {
+        await apiCall(`/api/collections/${encodeURIComponent(collection.id)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(collection),
         });
-        if (!res.ok) {
-          localDbFallback.saveCollection(collection);
-        }
       } catch {
         localDbFallback.saveCollection(collection);
       }
@@ -485,12 +722,9 @@ export default function App() {
       });
 
       try {
-        const res = await fetch(`/api/collections/${encodeURIComponent(id)}`, {
+        await apiCall(`/api/collections/${encodeURIComponent(id)}`, {
           method: 'DELETE',
         });
-        if (!res.ok) {
-          localDbFallback.deleteCollection(id);
-        }
       } catch {
         localDbFallback.deleteCollection(id);
       }
@@ -499,31 +733,57 @@ export default function App() {
     [showToast]
   );
 
-  // Save/merge media into library and SQLite
-  const upsertMediaItems = useCallback((incoming: MediaMetadata[]) => {
-    if (!Array.isArray(incoming) || incoming.length === 0) return;
+  // Save/merge media into library, SQLite vault, and persistent disk snapshot
+  const upsertMediaItems = useCallback(
+    (incoming: MediaMetadata[]) => {
+      if (!Array.isArray(incoming) || incoming.length === 0) return;
 
-    setMediaLibrary((prev) => {
-      const next = [...prev];
-      for (const item of incoming) {
-        const idx = next.findIndex(
-          (m) => m.id === item.id || (m.title.toLowerCase() === item.title.toLowerCase() && m.type === item.type)
-        );
-        if (idx >= 0) {
-          next[idx] = { ...next[idx], ...item };
-        } else {
-          next.unshift(item);
-        }
+      // Clear DB reset flag once user imports or adds new media
+      try {
+        localStorage.removeItem('sambavault_db_reset');
+      } catch {}
+
+      const incomingIds = new Set(incoming.map((i) => i.id));
+      if (removedMediaIdsRef.current.length > 0) {
+        removedMediaIdsRef.current = removedMediaIdsRef.current.filter((id) => !incomingIds.has(id));
+        try {
+          localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(removedMediaIdsRef.current));
+        } catch {}
       }
-      return next;
-    });
 
-    fetch('/api/db/media/batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: incoming }),
-    }).catch(() => null);
-  }, []);
+      setMediaLibrary((prev) => {
+        const next = [...prev];
+        for (const item of incoming) {
+          const idx = next.findIndex(
+            (m) => m.id === item.id || (m.title.toLowerCase() === item.title.toLowerCase() && m.type === item.type)
+          );
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], ...item };
+          } else {
+            next.unshift(item);
+          }
+        }
+        if (hasHydratedRef.current) {
+          const immediatePayload = {
+            ...(latestVaultPayloadRef.current || {}),
+            mediaLibrary: next,
+            removedMediaIds: removedMediaIdsRef.current,
+          };
+          latestVaultPayloadRef.current = immediatePayload;
+          flushVaultPayloadToDisk(immediatePayload).catch(() => null);
+        }
+        return next;
+      });
+
+      sqliteBatchWriter.updateCache(incoming);
+      apiCall('/api/db/media/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: incoming }),
+      }).catch(() => null);
+    },
+    [flushVaultPayloadToDisk]
+  );
 
   // Import local files / folder drops preserving webkitRelativePath for collection auto-grouping
   const handleImportFiles = useCallback(
@@ -559,7 +819,7 @@ export default function App() {
             collectionNames: colMatch ? [colMatch.name] : undefined,
           });
         } else {
-          const relPath = (entry as any).webkitRelativePath || entry.name;
+          const relPath = (entry as any).webkitRelativePath || (entry as any).path || entry.name;
           const parsed = parseTitleAndYear(entry.name);
           const detectedType = detectMediaType(relPath);
           const colMatch = extractCollectionFromPath(relPath);
@@ -1079,8 +1339,14 @@ export default function App() {
             <DeduplicationManagerTab
               mediaLibrary={mediaLibrary}
               onRemoveItem={(id) => {
+                if (!removedMediaIdsRef.current.includes(id)) {
+                  removedMediaIdsRef.current = [...removedMediaIdsRef.current, id];
+                  try {
+                    localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(removedMediaIdsRef.current));
+                  } catch {}
+                }
                 setMediaLibrary((prev) => prev.filter((m) => m.id !== id));
-                fetch(`/api/db/media/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => null);
+                apiCall(`/api/db/media/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => null);
                 showToast('Duplicate item removed from library.');
               }}
             />

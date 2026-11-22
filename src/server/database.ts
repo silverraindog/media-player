@@ -2187,10 +2187,13 @@ export interface PersistentVaultState {
   lastSavedAt: string;
   sambaTree?: any[];
   mediaLibrary?: any[];
+  customCollections?: any[];
+  removedMediaIds?: string[];
   syncLogs?: any[];
   sambaConfig?: any;
   classifierSettings?: any;
   mediaExtensionConfig?: any;
+  transcodeConfig?: any;
   mediaLibrarySummary?: {
     totalItems: number;
     syncedSeriesCount: number;
@@ -2309,6 +2312,26 @@ export function saveVaultStateToDisk(state: Partial<PersistentVaultState>): Pers
   }, 150);
 
   return updated;
+}
+
+export function flushPendingVaultWritesSync(): void {
+  persistDbToDiskSync();
+  if (vaultStatePersistTimer) {
+    clearTimeout(vaultStatePersistTimer);
+    vaultStatePersistTimer = null;
+  }
+  if (pendingVaultState) {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const tempPath = `${VAULT_STATE_FILE}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
+      fs.renameSync(tempPath, VAULT_STATE_FILE);
+    } catch (e) {
+      console.error('[SambaVault Storage] Failed flushing pending vault_state.json on exit:', e);
+    }
+  }
 }
 
 export async function globalSanitizeVaultPaths(): Promise<{

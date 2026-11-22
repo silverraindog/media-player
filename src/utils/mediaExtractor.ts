@@ -1060,3 +1060,97 @@ export function extractResolution(filename: string): string | undefined {
   }
   return undefined;
 }
+
+const GENERIC_GENRE_TOKENS = new Set([
+  'imported',
+  'imported media',
+  'uncategorized',
+  'unclassified',
+  'file',
+  'series',
+  'feature film',
+  'audio album',
+  'lossless audio',
+  'music',
+  'pending',
+  'draft',
+]);
+
+const GENERIC_FALLBACK_POSTER_IDS = [
+  'photo-1489599849927-2ee91cede3ba',
+  'photo-1522869635100-9f4c5e86aa37',
+  'photo-1536440136628-849c177e76a1',
+];
+
+export function isMediaImportedOrUnverified(m: MediaMetadata): boolean {
+  const id = String(m.id || '').toLowerCase();
+  const st = String(m.status || '').toLowerCase();
+  return (
+    st === 'pending' ||
+    st === 'draft' ||
+    st === 'uncategorized' ||
+    st === 'unmatched' ||
+    id.startsWith('imported-') ||
+    id.startsWith('batch-imported-') ||
+    id.startsWith('samba-')
+  );
+}
+
+export function isMediaMissingSynopsis(m: MediaMetadata): boolean {
+  const text = (m.overview || (m as any).synopsis || '').trim();
+  if (!text) return true;
+  const lower = text.toLowerCase();
+  if (
+    lower.includes('placeholder') ||
+    lower.includes('no synopsis') ||
+    lower.includes('no overview')
+  ) {
+    return true;
+  }
+  if (
+    m.status !== 'categorized' &&
+    (lower.includes('cataloged from samba network storage') ||
+      lower.includes('imported via batch renamer') ||
+      lower.includes('catalog record'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function isMediaMissingArtwork(m: MediaMetadata): boolean {
+  const url = (m.posterUrl || '').trim();
+  if (!url || url.startsWith('data:image/svg+xml')) return true;
+  if (m.status !== 'categorized' && isMediaImportedOrUnverified(m)) {
+    if (
+      GENERIC_FALLBACK_POSTER_IDS.some((pid) => url.includes(pid)) ||
+      url.includes('photo-1514525253161-7a46d19cd819')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isMediaMissingGenres(m: MediaMetadata): boolean {
+  if (m.status === 'categorized' && Array.isArray(m.genres) && m.genres.length > 0) {
+    return false;
+  }
+  const st = String(m.status || '').toLowerCase();
+  if (st === 'pending' || st === 'draft' || st === 'uncategorized' || st === 'unmatched') {
+    return true;
+  }
+  if (!Array.isArray(m.genres) || m.genres.length === 0) return true;
+  const hasSpecificGenre = m.genres.some((g) => !GENERIC_GENRE_TOKENS.has(String(g || '').trim().toLowerCase()));
+  return !hasSpecificGenre;
+}
+
+export function isMediaUncategorized(m: MediaMetadata): boolean {
+  return (
+    isMediaMissingSynopsis(m) ||
+    isMediaMissingArtwork(m) ||
+    isMediaMissingGenres(m) ||
+    (isMediaImportedOrUnverified(m) && m.status !== 'categorized')
+  );
+}
+

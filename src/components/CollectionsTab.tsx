@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
   Check,
-  ChevronRight,
   Edit3,
   Film,
   FolderOpen,
@@ -49,6 +48,113 @@ type OriginFilter = 'all' | 'folder' | 'custom';
 type SortMode = 'count-desc' | 'name-asc' | 'movies-desc';
 
 const QUICK_UNIVERSE_PRESETS = ['MCU', 'Star Wars', 'Dune', 'Star Trek', 'Alien', 'Middle-earth'];
+
+interface CollageTile {
+  id: string;
+  src: string;
+  alt: string;
+}
+
+function getCollectionCollageTiles(col: UnifiedCollection): CollageTile[] {
+  const firstFour = col.items.slice(0, 4);
+  if (firstFour.length === 0) return [];
+  return firstFour.map((item) => ({
+    id: item.id,
+    src: item.posterUrl || item.fanartUrl || col.posterUrl || COLLECTION_FALLBACK_POSTER,
+    alt: item.title || col.name,
+  }));
+}
+
+interface CollectionCollageThumbnailProps {
+  collection: UnifiedCollection;
+  className?: string;
+}
+
+const CollectionCollageThumbnail: React.FC<CollectionCollageThumbnailProps> = ({
+  collection,
+  className = '',
+}) => {
+  const tiles = useMemo(() => getCollectionCollageTiles(collection), [collection]);
+
+  const handleImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    if (e.currentTarget.src !== COLLECTION_FALLBACK_POSTER) {
+      e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
+    }
+  };
+
+  if (tiles.length >= 4) {
+    return (
+      <div className={`grid grid-cols-2 grid-rows-2 gap-0.5 bg-slate-950 ${className}`}>
+        {tiles.map((tile) => (
+          <div key={tile.id} className="relative w-full h-full overflow-hidden bg-slate-900">
+            <img
+              src={tile.src}
+              alt={tile.alt}
+              loading="lazy"
+              onError={handleImgError}
+              className="w-full h-full object-cover"
+            />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (tiles.length === 3) {
+    return (
+      <div className={`grid grid-cols-2 grid-rows-2 gap-0.5 bg-slate-950 ${className}`}>
+        <div className="relative row-span-2 w-full h-full overflow-hidden bg-slate-900">
+          <img
+            src={tiles[0].src}
+            alt={tiles[0].alt}
+            loading="lazy"
+            onError={handleImgError}
+            className="w-full h-full object-cover"
+          />
+        </div>
+        {tiles.slice(1).map((tile) => (
+          <div key={tile.id} className="relative w-full h-full overflow-hidden bg-slate-900">
+            <img
+              src={tile.src}
+              alt={tile.alt}
+              loading="lazy"
+              onError={handleImgError}
+              className="w-full h-full object-cover"
+            />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (tiles.length === 2) {
+    return (
+      <div className={`grid grid-cols-2 gap-0.5 bg-slate-950 ${className}`}>
+        {tiles.map((tile) => (
+          <div key={tile.id} className="relative w-full h-full overflow-hidden bg-slate-900">
+            <img
+              src={tile.src}
+              alt={tile.alt}
+              loading="lazy"
+              onError={handleImgError}
+              className="w-full h-full object-cover"
+            />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={tiles[0]?.src || collection.posterUrl || COLLECTION_FALLBACK_POSTER}
+      alt={collection.name}
+      loading="lazy"
+      onError={handleImgError}
+      className={`w-full h-full object-cover ${className}`}
+    />
+  );
+};
 
 export const CollectionsTab: React.FC<CollectionsTabProps> = ({
   mediaLibrary,
@@ -425,16 +531,12 @@ export const CollectionsTab: React.FC<CollectionsTabProps> = ({
           {/* Collection Hero Header */}
           <div className="relative rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
             <div className="grid grid-cols-1 md:grid-cols-12">
-              <div className="md:col-span-4 relative h-52 md:h-auto bg-slate-950 overflow-hidden">
-                <img
-                  src={selectedCollection.posterUrl || COLLECTION_FALLBACK_POSTER}
-                  alt={selectedCollection.name}
-                  onError={(e) => {
-                    e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
-                  }}
-                  className="w-full h-full object-cover opacity-90"
+              <div className="md:col-span-4 relative h-52 md:h-auto min-h-[14rem] bg-slate-950 overflow-hidden">
+                <CollectionCollageThumbnail
+                  collection={selectedCollection}
+                  className="w-full h-full opacity-90"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t md:bg-gradient-to-r from-slate-900/90 via-slate-900/30 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-t md:bg-gradient-to-r from-slate-900/90 via-slate-900/25 to-transparent pointer-events-none" />
               </div>
 
               <div className="md:col-span-8 p-6 flex flex-col justify-between space-y-4">
@@ -730,107 +832,93 @@ export const CollectionsTab: React.FC<CollectionsTabProps> = ({
             </div>
           </div>
 
-          {/* Collections Grid */}
+          {/* Collections Gallery Grid */}
           {filteredCollections.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-5">
               {filteredCollections.map((col) => {
-                const previewPosters = col.items
-                  .map((i) => i.posterUrl)
-                  .filter((p): p is string => Boolean(p))
-                  .slice(0, 3);
+                const originBadge =
+                  col.source === 'folder'
+                    ? 'Folder'
+                    : col.source === 'hybrid'
+                    ? 'Hybrid'
+                    : col.source === 'auto-franchise'
+                    ? 'Auto'
+                    : 'Custom';
 
                 return (
                   <div
                     key={col.id}
                     onClick={() => setSelectedCollectionId(col.id)}
-                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden flex flex-col justify-between transition-colors cursor-pointer group"
+                    className="group flex flex-col cursor-pointer focus:outline-none"
                   >
-                    <div>
-                      {/* Collage or Hero Artwork */}
-                      <div className="relative h-44 bg-slate-950 overflow-hidden border-b border-slate-800">
-                        {previewPosters.length >= 2 ? (
-                          <div className="grid grid-cols-3 h-full gap-0.5 bg-slate-950">
-                            {[0, 1, 2].map((slot) => {
-                              const src = previewPosters[slot] || col.posterUrl || COLLECTION_FALLBACK_POSTER;
-                              return (
-                                <img
-                                  key={slot}
-                                  src={src}
-                                  alt={col.name}
-                                  onError={(e) => {
-                                    e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
-                                  }}
-                                  className="w-full h-full object-cover opacity-85 group-hover:opacity-100 transition-opacity"
-                                />
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <img
-                            src={col.posterUrl || COLLECTION_FALLBACK_POSTER}
-                            alt={col.name}
-                            onError={(e) => {
-                              e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
-                            }}
-                            className="w-full h-full object-cover opacity-85 group-hover:opacity-100 transition-opacity"
-                          />
-                        )}
-                        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/35 to-transparent" />
-                        <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-mono text-indigo-300 truncate">
-                              {formatSourceLabel(col)}
-                            </p>
-                            <h3 className="text-lg font-bold text-white truncate group-hover:text-indigo-300 transition-colors">
-                              {col.name}
-                            </h3>
-                          </div>
-                        </div>
+                    {/* Thumbnail Collage Frame */}
+                    <div className="relative aspect-[3/4] rounded-xl overflow-hidden bg-slate-950 border border-slate-800 group-hover:border-indigo-500/70 shadow-lg transition-all duration-300 group-hover:-translate-y-0.5">
+                      <CollectionCollageThumbnail
+                        collection={col}
+                        className="w-full h-full opacity-90 group-hover:opacity-100 group-hover:scale-[1.03] transition-all duration-500"
+                      />
+
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/75 via-transparent to-slate-950/50 pointer-events-none" />
+
+                      {/* Top Overlays: Source & Item Count */}
+                      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2 pointer-events-none">
+                        <span className="px-2 py-0.5 rounded-md bg-slate-950/80 backdrop-blur-sm border border-slate-800/90 text-[10px] font-medium text-slate-200 truncate">
+                          {originBadge}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-slate-950/80 backdrop-blur-sm border border-slate-800/90 text-[11px] font-mono font-semibold text-indigo-300 tabular-nums shrink-0">
+                          {col.items.length}
+                        </span>
                       </div>
 
-                      {/* Body & Unboxed Counts */}
-                      <div className="p-4 space-y-3">
-                        <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed min-h-[2.25rem]">
-                          {col.description || col.overview}
-                        </p>
-
-                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300 tabular-nums">
-                          <span className="inline-flex items-center gap-1">
-                            <Film className="w-3.5 h-3.5 text-cyan-400" />
-                            <span>{col.movies.length} Movies</span>
-                          </span>
-                          <span className="text-slate-600">·</span>
-                          <span className="inline-flex items-center gap-1">
-                            <Tv className="w-3.5 h-3.5 text-purple-400" />
-                            <span>{col.series.length} Series</span>
-                          </span>
-                          <span className="text-slate-600">·</span>
-                          <span className="inline-flex items-center gap-1">
-                            <Music className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>{col.music.length} Albums</span>
-                          </span>
-                        </div>
+                      {/* Bottom Hover Edit Control */}
+                      <div className="absolute bottom-2.5 right-2.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+                        <button
+                          type="button"
+                          onClick={(e) => openEditModal(col, e)}
+                          title={`Edit ${col.name}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-950/90 hover:bg-indigo-600 text-slate-200 hover:text-white border border-slate-700/80 hover:border-indigo-500 text-[11px] font-medium shadow-md transition-colors cursor-pointer"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
                       </div>
                     </div>
 
-                    {/* Footer Actions */}
-                    <div className="px-4 py-3 bg-slate-950/60 border-t border-slate-800/80 flex items-center justify-between gap-2">
-                      <span className="text-xs text-slate-400 font-mono tabular-nums">
-                        {col.items.length} Total {col.items.length === 1 ? 'Item' : 'Items'}
-                      </span>
+                    {/* Gallery Thumbnail Caption */}
+                    <div className="pt-2.5 px-0.5 space-y-1">
+                      <h3 className="text-sm font-bold text-white truncate group-hover:text-indigo-300 transition-colors">
+                        {col.name}
+                      </h3>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={(e) => openEditModal(col, e)}
-                          className="px-2.5 py-1 rounded-md text-xs text-slate-300 hover:text-white hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                        >
-                          Edit
-                        </button>
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-indigo-600/20 text-indigo-300 group-hover:bg-indigo-600 group-hover:text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0">
-                          <span>Open</span>
-                          <ChevronRight className="w-3.5 h-3.5" />
-                        </span>
+                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-slate-400 tabular-nums">
+                        {col.movies.length > 0 && (
+                          <span className="inline-flex items-center gap-1">
+                            <Film className="w-3 h-3 text-cyan-400" />
+                            <span>{col.movies.length}</span>
+                          </span>
+                        )}
+                        {col.series.length > 0 && (
+                          <span className="inline-flex items-center gap-1">
+                            <Tv className="w-3 h-3 text-purple-400" />
+                            <span>{col.series.length}</span>
+                          </span>
+                        )}
+                        {col.music.length > 0 && (
+                          <span className="inline-flex items-center gap-1">
+                            <Music className="w-3 h-3 text-emerald-400" />
+                            <span>{col.music.length}</span>
+                          </span>
+                        )}
+                        {col.items.length === 0 && (
+                          <span className="text-slate-500">Empty collection</span>
+                        )}
                       </div>
+
+                      {col.folderPath && (
+                        <p className="text-[10px] font-mono text-slate-500 truncate">
+                          {col.folderPath}
+                        </p>
+                      )}
                     </div>
                   </div>
                 );

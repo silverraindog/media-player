@@ -63,6 +63,7 @@ import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
+import { isMediaUncategorized } from '../utils/mediaExtractor';
 import { buildUnifiedCollections, COLLECTION_FALLBACK_POSTER, UnifiedCollection } from '../utils/collections';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -1271,9 +1272,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
   const handleCategorizeUncategorized = async () => {
     if (isCategorizingUncategorized) return;
-    const uncategorizedItems = mediaLibrary.filter(
-      (m) => m.status !== 'categorized' || !m.genres || m.genres.length === 0
-    );
+    const uncategorizedItems = mediaLibrary.filter(isMediaUncategorized);
 
     if (uncategorizedItems.length === 0) {
       setBatchCategorizeSuccess('All library items are already categorized!');
@@ -2593,7 +2592,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
                   <span>
                     {isCategorizingUncategorized
                       ? 'Categorizing...'
-                      : `Categorize Uncategorized (${mediaLibrary.filter((m) => m.status !== 'categorized' || !m.genres || m.genres.length === 0).length})`}
+                      : `Categorize Uncategorized (${mediaLibrary.filter(isMediaUncategorized).length})`}
                   </span>
                 </button>
               </div>

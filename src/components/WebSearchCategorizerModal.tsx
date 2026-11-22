@@ -29,7 +29,13 @@ import {
 } from 'lucide-react';
 import { MediaMetadata, MediaType } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
-import { fetchSecondaryMetadata } from '../utils/mediaExtractor';
+import {
+  fetchSecondaryMetadata,
+  isMediaMissingArtwork,
+  isMediaMissingGenres,
+  isMediaMissingSynopsis,
+  isMediaUncategorized,
+} from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 
 interface WebSearchCategorizerModalProps {
@@ -73,11 +79,13 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   mediaLibrary = [],
 }) => {
   const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
-  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'synopsis' | 'artwork' | 'series' | 'movie'>('all');
+  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'synopsis' | 'artwork' | 'genres' | 'series' | 'movie' | 'album'>('all');
   const [uncatSearchQuery, setUncatSearchQuery] = useState('');
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [activeSourceItem, setActiveSourceItem] = useState<MediaMetadata | null>(null);
+  const [showAllLibraryInUncat, setShowAllLibraryInUncat] = useState(false);
 
   const [query, setQuery] = useState(initialQuery);
   const [mediaType, setMediaType] = useState<MediaType | 'all'>(initialType);
@@ -197,44 +205,46 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   }, [initialQuery, initialType]);
 
-  const isMissingSynopsis = (m: MediaMetadata): boolean => {
-    const text = (m.overview || (m as any).synopsis || '').trim();
-    return !text || text.toLowerCase().includes('placeholder') || text.toLowerCase().includes('no synopsis');
-  };
+  const incompleteItems = mediaLibrary.filter(isMediaUncategorized);
+  const sourceUncatList = showAllLibraryInUncat ? mediaLibrary : incompleteItems;
 
-  const isMissingArtwork = (m: MediaMetadata): boolean => {
-    return !m.posterUrl || m.posterUrl.trim() === '';
-  };
+  const missingSynopsisCount = incompleteItems.filter(isMediaMissingSynopsis).length;
+  const missingArtworkCount = incompleteItems.filter(isMediaMissingArtwork).length;
+  const missingGenresCount = incompleteItems.filter(isMediaMissingGenres).length;
 
-  const incompleteItems = mediaLibrary.filter(
-    (m) => isMissingSynopsis(m) || isMissingArtwork(m)
-  );
+  const seriesIncompleteCount = sourceUncatList.filter((m) => m.type === 'series').length;
+  const movieIncompleteCount = sourceUncatList.filter((m) => m.type === 'movie').length;
+  const albumIncompleteCount = sourceUncatList.filter((m) => m.type === 'album').length;
 
-  const missingSynopsisCount = incompleteItems.filter(isMissingSynopsis).length;
-  const missingArtworkCount = incompleteItems.filter(isMissingArtwork).length;
-
-  const seriesIncompleteCount = incompleteItems.filter((m) => m.type === 'series').length;
-  const movieIncompleteCount = incompleteItems.filter((m) => m.type === 'movie').length;
-
-  const filteredUncategorized = incompleteItems.filter((item) => {
+  const filteredUncategorized = sourceUncatList.filter((item) => {
     // Text search filter
     if (uncatSearchQuery.trim()) {
-      const matchText = item.title.toLowerCase().includes(uncatSearchQuery.toLowerCase());
+      const qLower = uncatSearchQuery.toLowerCase();
+      const matchText =
+        item.title.toLowerCase().includes(qLower) ||
+        (item.folderPath || '').toLowerCase().includes(qLower) ||
+        (item.recommendedFolderStructure || '').toLowerCase().includes(qLower);
       if (!matchText) return false;
     }
 
     // Sub-category filter
     if (uncatSubFilter === 'synopsis') {
-      return isMissingSynopsis(item);
+      return isMediaMissingSynopsis(item);
     }
     if (uncatSubFilter === 'artwork') {
-      return isMissingArtwork(item);
+      return isMediaMissingArtwork(item);
+    }
+    if (uncatSubFilter === 'genres') {
+      return isMediaMissingGenres(item);
     }
     if (uncatSubFilter === 'series') {
       return item.type === 'series';
     }
     if (uncatSubFilter === 'movie') {
       return item.type === 'movie';
+    }
+    if (uncatSubFilter === 'album') {
+      return item.type === 'album';
     }
     return true;
   });
@@ -258,7 +268,17 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         ) || await resolveMediaWithFallback(item.title, item.type, item.year);
 
         if (itemData) {
-          onSaveCategorizedMedia(itemData);
+          onSaveCategorizedMedia({
+            ...item,
+            ...itemData,
+            id: item.id,
+            title: item.title,
+            folderPath: item.folderPath || itemData.recommendedFolderStructure,
+            path: item.path || itemData.path,
+            playbackUrl: item.playbackUrl || itemData.playbackUrl,
+            collectionNames: item.collectionNames || itemData.collectionNames,
+            status: 'categorized',
+          });
           successCount++;
         }
       } catch (e) {
@@ -398,14 +418,34 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   };
 
+  const buildUpdatedMediaRecord = (baseResult: MediaMetadata): MediaMetadata => {
+    const mergedGenres = Array.from(new Set([selectedPrimaryCategory, ...(baseResult.genres || [])].filter(Boolean)));
+    if (activeSourceItem) {
+      return {
+        ...activeSourceItem,
+        ...baseResult,
+        id: activeSourceItem.id,
+        folderPath: activeSourceItem.folderPath || baseResult.recommendedFolderStructure,
+        path: activeSourceItem.path || baseResult.path,
+        playbackUrl: activeSourceItem.playbackUrl || baseResult.playbackUrl,
+        localBlobUrl: activeSourceItem.localBlobUrl,
+        collectionNames: activeSourceItem.collectionNames || baseResult.collectionNames,
+        genres: mergedGenres,
+        status: 'categorized',
+      };
+    }
+    return {
+      ...baseResult,
+      genres: mergedGenres,
+      status: 'categorized',
+    };
+  };
+
   const handleSave = async () => {
     if (!resultData) return;
 
     // Build finalized media metadata with assigned categories
-    const updatedMedia: MediaMetadata = {
-      ...resultData,
-      genres: Array.from(new Set([selectedPrimaryCategory, ...(resultData.genres || [])])),
-    };
+    const updatedMedia = buildUpdatedMediaRecord(resultData);
 
     try {
       await fetch('/api/db/media', {
@@ -432,6 +472,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
 
     onSaveCategorizedMedia(updatedMedia);
+    setActiveSourceItem(null);
     setIsSaved(true);
     setTimeout(() => {
       setIsSaved(false);
@@ -440,11 +481,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
   const handleCategorizeAndPlay = () => {
     if (!resultData) return;
-    const updatedMedia: MediaMetadata = {
-      ...resultData,
-      genres: Array.from(new Set([selectedPrimaryCategory, ...(resultData.genres || [])])),
-    };
+    const updatedMedia = buildUpdatedMediaRecord(resultData);
     onSaveCategorizedMedia(updatedMedia);
+    setActiveSourceItem(null);
     if (onPlayMedia) {
       onPlayMedia(updatedMedia);
     }
@@ -546,7 +585,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     <span>Dedicated View Filter: Uncategorized Media</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    These {incompleteItems.length} files currently lack an official synopsis or artwork. Use one-click triggers to re-categorize or manually match.
+                    These {incompleteItems.length} library items lack official genres, synopsis, or artwork. Use one-click triggers to re-categorize or manually match.
                   </p>
                 </div>
 
@@ -597,6 +636,17 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   </button>
                   <button
                     type="button"
+                    onClick={() => setUncatSubFilter('genres')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'genres'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    Needs Genres ({missingGenresCount})
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setUncatSubFilter('synopsis')}
                     className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
                       uncatSubFilter === 'synopsis'
@@ -639,6 +689,19 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   >
                     Movies ({movieIncompleteCount})
                   </button>
+                  {albumIncompleteCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setUncatSubFilter('album')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                        uncatSubFilter === 'album'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                      }`}
+                    >
+                      Music ({albumIncompleteCount})
+                    </button>
+                  )}
                 </div>
 
                 {/* Search in uncategorized */}
@@ -648,7 +711,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     type="text"
                     value={uncatSearchQuery}
                     onChange={(e) => setUncatSearchQuery(e.target.value)}
-                    placeholder="Filter by title..."
+                    placeholder="Filter by title or path..."
                     className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-amber-500"
                   />
                 </div>
@@ -656,22 +719,45 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
               {/* Items List */}
               {filteredUncategorized.length === 0 ? (
-                <div className="p-8 text-center bg-slate-900/50 border border-slate-800 rounded-xl space-y-2">
+                <div className="p-8 text-center bg-slate-900/50 border border-slate-800 rounded-xl space-y-3">
                   <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-                  <div className="text-xs font-bold text-white">No items found matching this filter!</div>
+                  <div className="text-xs font-bold text-white">No uncategorized items found matching this filter!</div>
                   <p className="text-[11px] text-slate-400">
-                    All scanned library media have complete synopsis and artwork metadata.
+                    All {mediaLibrary.length} items in your active library currently have genres, synopses, and artwork. Scan a Samba share or import new files to inspect newly added uncategorized items here.
                   </p>
+                  {mediaLibrary.length > 0 && !showAllLibraryInUncat && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUncatSubFilter('all');
+                        setUncatSearchQuery('');
+                        setShowAllLibraryInUncat(true);
+                      }}
+                      className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                    >
+                      Show All Library Items for Re-Categorization ({mediaLibrary.length})
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+                  {showAllLibraryInUncat && (
+                    <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-indigo-950/40 border border-indigo-800/50 text-[11px] text-indigo-200">
+                      <span>Showing all {mediaLibrary.length} library items for optional re-categorization.</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowAllLibraryInUncat(false)}
+                        className="text-indigo-300 hover:text-white font-semibold underline cursor-pointer"
+                      >
+                        Uncategorized only ({incompleteItems.length})
+                      </button>
+                    </div>
+                  )}
                   {filteredUncategorized.map((item) => {
-                    const isMissingSynopsis =
-                      !item.synopsis ||
-                      item.synopsis.trim() === '' ||
-                      item.synopsis.toLowerCase().includes('placeholder') ||
-                      item.synopsis.toLowerCase().includes('no synopsis');
-                    const isMissingArtwork = !item.posterUrl || item.posterUrl.trim() === '';
+                    const missingSyn = isMediaMissingSynopsis(item);
+                    const missingArt = isMediaMissingArtwork(item);
+                    const missingGen = isMediaMissingGenres(item);
+                    const displayPath = item.folderPath || item.recommendedFolderStructure || item.path;
 
                     return (
                       <div
@@ -682,7 +768,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                         <div className="flex items-center gap-3 min-w-0">
                           {/* Thumbnail / Artwork Placeholder */}
                           <div className="w-11 h-14 rounded-lg bg-slate-950 border border-slate-800 shrink-0 overflow-hidden flex items-center justify-center relative">
-                            {item.posterUrl && !isMissingArtwork ? (
+                            {item.posterUrl && !missingArt ? (
                               <img
                                 src={item.posterUrl}
                                 alt={item.title}
@@ -710,6 +796,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                               <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase ${
                                 item.type === 'series'
                                   ? 'bg-purple-950 text-purple-300 border border-purple-800/60'
+                                  : item.type === 'album'
+                                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/60'
                                   : 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
                               }`}>
                                 {item.type}
@@ -718,21 +806,27 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
                             {/* Defect Badges */}
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              {isMissingSynopsis && (
+                              {missingGen && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-950/80 border border-indigo-800/70 text-indigo-300 flex items-center gap-1 font-medium">
+                                  <Tag className="w-3 h-3" />
+                                  <span>Needs Genres</span>
+                                </span>
+                              )}
+                              {missingSyn && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950/80 border border-red-800/70 text-red-300 flex items-center gap-1 font-medium">
                                   <FileQuestion className="w-3 h-3" />
                                   <span>Missing Synopsis</span>
                                 </span>
                               )}
-                              {isMissingArtwork && (
+                              {missingArt && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950/80 border border-amber-800/70 text-amber-300 flex items-center gap-1 font-medium">
                                   <ImageOff className="w-3 h-3" />
                                   <span>Missing Artwork</span>
                                 </span>
                               )}
-                              {item.recommendedFolderStructure && (
-                                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[200px] hidden md:inline">
-                                  {item.recommendedFolderStructure}
+                              {displayPath && (
+                                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[220px] hidden md:inline" title={displayPath}>
+                                  {displayPath}
                                 </span>
                               )}
                             </div>
@@ -745,6 +839,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                           <button
                             type="button"
                             onClick={() => {
+                              setActiveSourceItem(item);
                               setActiveTabFilter('search');
                               setQuery(item.title);
                               setMediaType(item.type);
@@ -803,6 +898,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              setActiveSourceItem(null);
               handleSearch();
             }}
             className="space-y-3"

@@ -281,6 +281,9 @@ export async function getDatabase(): Promise<Database> {
     CREATE INDEX IF NOT EXISTS idx_watchlist_media_id ON user_watchlist(media_id);
     CREATE INDEX IF NOT EXISTS idx_media_items_title ON media_items(title);
     CREATE INDEX IF NOT EXISTS idx_media_items_type ON media_items(media_type);
+    CREATE INDEX IF NOT EXISTS idx_media_items_title_nocase ON media_items(title COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_media_items_type_title ON media_items(media_type, title COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_media_items_updated_at ON media_items(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_watch_history_watched ON watch_history_log(watched_at);
     CREATE INDEX IF NOT EXISTS idx_watch_progress_series ON series_watch_progress(series_id);
   `);
@@ -818,6 +821,89 @@ export async function getMediaByTypeFromDb(type: string): Promise<MediaItemDb[]>
   if (lower === 'series' || lower === 'tv' || lower === 'shows') return getSeriesFromDb();
   if (lower === 'album' || lower === 'albums' || lower === 'music' || lower === 'audio') return getAlbumsFromDb();
   return getAllMediaFromDb();
+}
+
+export async function ensureMediaLibraryIndexes(): Promise<{
+  success: boolean;
+  indexes: string[];
+}> {
+  const db = await getDatabase();
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_media_items_title ON media_items(title);
+    CREATE INDEX IF NOT EXISTS idx_media_items_type ON media_items(media_type);
+    CREATE INDEX IF NOT EXISTS idx_media_items_title_nocase ON media_items(title COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_media_items_type_title ON media_items(media_type, title COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_media_items_updated_at ON media_items(updated_at DESC);
+  `);
+  const idxRes = db.exec(
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'media_items' ORDER BY name`
+  );
+  const indexes =
+    idxRes.length > 0 ? idxRes[0].values.map((row) => String(row[0] ?? '')).filter(Boolean) : [];
+  persistDbToDisk();
+  return { success: true, indexes };
+}
+
+export async function searchMediaInDb(options: {
+  mediaType?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<MediaItemDb[]> {
+  const db = await getDatabase();
+  const whereClauses: string[] = [];
+  const params: any[] = [];
+
+  const lowerType = (options.mediaType || '').trim().toLowerCase();
+  if (lowerType && lowerType !== 'all' && lowerType !== 'collections') {
+    if (lowerType === 'movie' || lowerType === 'movies') {
+      whereClauses.push(`media_type = ?`);
+      params.push('movie');
+    } else if (lowerType === 'series' || lowerType === 'tv' || lowerType === 'shows') {
+      whereClauses.push(`media_type = ?`);
+      params.push('series');
+    } else if (lowerType === 'album' || lowerType === 'albums' || lowerType === 'music' || lowerType === 'audio') {
+      whereClauses.push(`media_type IN ('album', 'music', 'audio')`);
+    } else {
+      whereClauses.push(`media_type = ?`);
+      params.push(lowerType);
+    }
+  }
+
+  const trimmedSearch = (options.search || '').trim();
+  if (trimmedSearch) {
+    const likePattern = `%${trimmedSearch}%`;
+    whereClauses.push(`(title LIKE ? COLLATE NOCASE OR original_title LIKE ? COLLATE NOCASE)`);
+    params.push(likePattern, likePattern);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const limitVal = options.limit !== undefined ? Math.max(1, Math.min(Number(options.limit) || 100, 5000)) : null;
+  const offsetVal = options.offset !== undefined ? Math.max(0, Number(options.offset) || 0) : null;
+
+  let sql = `SELECT * FROM media_items ${whereSql} ORDER BY updated_at DESC, title COLLATE NOCASE ASC`;
+  if (limitVal !== null) {
+    sql += ` LIMIT ?`;
+    params.push(limitVal);
+    if (offsetVal !== null) {
+      sql += ` OFFSET ?`;
+      params.push(offsetVal);
+    }
+  }
+
+  const stmt = db.prepare(sql);
+  try {
+    if (params.length > 0) {
+      stmt.bind(params);
+    }
+    const items: MediaItemDb[] = [];
+    while (stmt.step()) {
+      items.push(stmt.getAsObject() as unknown as MediaItemDb);
+    }
+    return items;
+  } finally {
+    stmt.free();
+  }
 }
 
 export async function getRecentlyAddedMediaFromDb(limit: number = 10): Promise<MediaItemDb[]> {

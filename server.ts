@@ -15,6 +15,8 @@ import {
   getSeriesFromDb,
   getAlbumsFromDb,
   getMediaByTypeFromDb,
+  ensureMediaLibraryIndexes,
+  searchMediaInDb,
   getRecentlyAddedMediaFromDb,
   getAllWatchlistFromDb,
   toggleWatchlistInDb,
@@ -117,7 +119,26 @@ export function resolveFfprobeBinary(): string {
 }
 
 const app = express();
-const PORT = parseInt(process.env.PORT || '3000', 10);
+
+function resolveServerPort(): number {
+  const portFlagIdx = process.argv.findIndex((arg) => arg === '--port');
+  if (portFlagIdx !== -1 && process.argv[portFlagIdx + 1]) {
+    const parsed = parseInt(process.argv[portFlagIdx + 1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const eqFlag = process.argv.find((arg) => arg.startsWith('--port='));
+  if (eqFlag) {
+    const parsed = parseInt(eqFlag.split('=')[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  if (process.env.PORT && process.env.PORT !== process.env.NGINX_PORT) {
+    const parsed = parseInt(process.env.PORT, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return parseInt(process.env.DEFAULT_APP_PORT || '3000', 10);
+}
+
+const PORT = resolveServerPort();
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -4608,12 +4629,44 @@ app.post('/api/vault/backup/restore', (req: Request, res: Response) => {
 // Get all media items (titles & synopses) stored in SQLite DB
 app.get(['/api/db/media', '/api/media', '/api/media/all', '/api/db/media/all'], async (req: Request, res: Response) => {
   try {
-    const typeParam = req.query.type as string;
-    const items = typeParam ? await getMediaByTypeFromDb(typeParam) : await getAllMediaFromDb();
-    res.json({ success: true, count: items.length, items });
+    const typeParam = typeof req.query.type === 'string' ? req.query.type : undefined;
+    const searchParam = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const limitParam = req.query.limit !== undefined ? parseInt(String(req.query.limit), 10) : undefined;
+    const offsetParam = req.query.offset !== undefined ? parseInt(String(req.query.offset), 10) : undefined;
+    const ensureIndexes = req.query.ensureIndexes === '1' || req.query.ensureIndexes === 'true';
+
+    let indexes: string[] | undefined;
+    if (ensureIndexes) {
+      const idxResult = await ensureMediaLibraryIndexes();
+      indexes = idxResult.indexes;
+    }
+
+    const items =
+      searchParam || limitParam !== undefined || offsetParam !== undefined
+        ? await searchMediaInDb({
+            mediaType: typeParam,
+            search: searchParam,
+            limit: Number.isFinite(limitParam) ? limitParam : undefined,
+            offset: Number.isFinite(offsetParam) ? offsetParam : undefined,
+          })
+        : typeParam
+        ? await getMediaByTypeFromDb(typeParam)
+        : await getAllMediaFromDb();
+
+    res.json({ success: true, count: items.length, items, ...(indexes ? { indexes } : {}) });
   } catch (error: any) {
     console.error('Error fetching media from SQLite:', error);
     res.status(500).json({ error: 'Failed to fetch media from SQLite', message: error?.message });
+  }
+});
+
+app.post('/api/db/schema/ensure-indexes', async (_req: Request, res: Response) => {
+  try {
+    const result = await ensureMediaLibraryIndexes();
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error ensuring SQLite media_items indexes:', error);
+    res.status(500).json({ success: false, error: 'Failed to ensure indexes', message: error?.message });
   }
 });
 
@@ -7842,15 +7895,34 @@ app.delete('/api/collections/:id', async (req: Request, res: Response) => {
 
 // Start Server and Vite Middleware
 async function startServer() {
+  let viteServer: Awaited<ReturnType<typeof createViteServer>> | null = null;
+
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
+    const disableHmr = process.env.DISABLE_HMR === 'true';
+    const vitePromise = createViteServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+        hmr: disableHmr ? false : undefined,
+        ws: disableHmr ? false : undefined,
       },
       appType: 'spa',
+    }).then((vite) => {
+      viteServer = vite;
+      return vite;
     });
-    app.use(vite.middlewares);
+
+    vitePromise.catch((err) => {
+      console.error('Vite middleware initialization failed:', err);
+    });
+
+    app.use(async (req, res, next) => {
+      try {
+        const vite = viteServer || (await vitePromise);
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
+    });
   } else {
     const candidateDirs = [
       path.join(process.cwd(), 'dist-frontend'),
@@ -7866,16 +7938,17 @@ async function startServer() {
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  VITE v6.2.3  ready in 150 ms\n`);
+    console.log(`\n  Server ready on port ${PORT}\n`);
     console.log(`  ➜  Local:   http://localhost:${PORT}/`);
     console.log(`  ➜  Network: http://0.0.0.0:${PORT}/\n`);
   });
 
   server.on('error', (err: any) => {
     console.error('Server listen error:', err);
+    process.exit(1);
   });
 
-  const handleGracefulShutdown = () => {
+  const handleGracefulShutdown = async () => {
     for (const [key, session] of activeHlsStreamSessions.entries()) {
       try {
         if (session.process && !session.process.killed) {
@@ -7889,6 +7962,12 @@ async function startServer() {
     }
     try {
       flushPendingVaultWritesSync();
+    } catch {}
+    try {
+      if (viteServer) await viteServer.close();
+    } catch {}
+    try {
+      server.close();
     } catch {}
     process.exit(0);
   };

@@ -368,6 +368,25 @@ class LocalDatabaseFallbackService {
         }
       }
 
+      if (path === '/api/db/schema/ensure-indexes') {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            indexes: ['idx_media_items_title', 'idx_media_items_type', 'idx_media_items_type_title'],
+            source: 'local_storage_cache',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (path === '/api/db/media') {
+        const cached = this.getJson<any[]>(STORAGE_KEYS.MEDIA_ITEMS, []);
+        return new Response(
+          JSON.stringify({ success: true, count: cached.length, items: cached, source: 'local_storage_cache' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
       if (path === '/api/db/reset' && (method === 'POST' || method === 'DELETE')) {
         this.clearAll();
         return new Response(

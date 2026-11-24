@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef, Suspense, lazy } from 'react';
 import {
   AppTab,
   ClassifierSettings,
@@ -21,29 +21,37 @@ import { CURATED_MEDIA_DATABASE } from './data/curatedMedia';
 import { Header } from './components/Header';
 import { MenuBar } from './components/MenuBar';
 import { MediaSearch } from './components/MediaSearch';
-import { CollectionsTab } from './components/CollectionsTab';
-import { MusicTab } from './components/MusicTab';
-import { WatchlistTab } from './components/WatchlistTab';
-import { WatchHistoryTab } from './components/WatchHistoryTab';
-import { SqliteVault } from './components/SqliteVault';
-import { DeduplicationManagerTab } from './components/DeduplicationManagerTab';
-import { LibraryStatsTab } from './components/LibraryStatsTab';
-import { BatchFilenameCleaner } from './components/BatchFilenameCleaner';
-import { SambaExplorer } from './components/SambaExplorer';
-import { SambaMountHub } from './components/SambaMountHub';
-import { NfoStudio } from './components/NfoStudio';
-import { ConsoleTab } from './components/ConsoleTab';
-import { SettingsTab } from './components/SettingsTab';
-import { YouTubeTab } from './components/YouTubeTab';
-import { MediaDetailModal } from './components/MediaDetailModal';
-import { MediaPlayerModal } from './components/MediaPlayerModal';
-import { ManualMatchModal } from './components/ManualMatchModal';
-import { FolderClassifierModal } from './components/FolderClassifierModal';
-import { ApiDebuggerOverlay } from './components/ApiDebuggerOverlay';
-import { FullDiskAccessOverlay } from './components/FullDiskAccessOverlay';
-import { VaultStorageBackupModal } from './components/VaultStorageBackupModal';
-import { SyncProgressBar } from './components/SyncProgressBar';
 import { ErrorBoundary } from './components/ErrorBoundary';
+
+// Lazy-load non-default tabs and heavy modals/overlays so initial boot only parses Header, MenuBar, and MediaSearch
+const CollectionsTab = lazy(() => import('./components/CollectionsTab').then((m) => ({ default: m.CollectionsTab })));
+const MusicTab = lazy(() => import('./components/MusicTab').then((m) => ({ default: m.MusicTab })));
+const WatchlistTab = lazy(() => import('./components/WatchlistTab').then((m) => ({ default: m.WatchlistTab })));
+const WatchHistoryTab = lazy(() => import('./components/WatchHistoryTab').then((m) => ({ default: m.WatchHistoryTab })));
+const SqliteVault = lazy(() => import('./components/SqliteVault').then((m) => ({ default: m.SqliteVault })));
+const DeduplicationManagerTab = lazy(() => import('./components/DeduplicationManagerTab').then((m) => ({ default: m.DeduplicationManagerTab })));
+const LibraryStatsTab = lazy(() => import('./components/LibraryStatsTab').then((m) => ({ default: m.LibraryStatsTab })));
+const BatchFilenameCleaner = lazy(() => import('./components/BatchFilenameCleaner').then((m) => ({ default: m.BatchFilenameCleaner })));
+const SambaExplorer = lazy(() => import('./components/SambaExplorer').then((m) => ({ default: m.SambaExplorer })));
+const SambaMountHub = lazy(() => import('./components/SambaMountHub').then((m) => ({ default: m.SambaMountHub })));
+const NfoStudio = lazy(() => import('./components/NfoStudio').then((m) => ({ default: m.NfoStudio })));
+const ConsoleTab = lazy(() => import('./components/ConsoleTab').then((m) => ({ default: m.ConsoleTab })));
+const SettingsTab = lazy(() => import('./components/SettingsTab').then((m) => ({ default: m.SettingsTab })));
+const YouTubeTab = lazy(() => import('./components/YouTubeTab').then((m) => ({ default: m.YouTubeTab })));
+const MediaDetailModal = lazy(() => import('./components/MediaDetailModal').then((m) => ({ default: m.MediaDetailModal })));
+const MediaPlayerModal = lazy(() => import('./components/MediaPlayerModal').then((m) => ({ default: m.MediaPlayerModal })));
+const ManualMatchModal = lazy(() => import('./components/ManualMatchModal').then((m) => ({ default: m.ManualMatchModal })));
+const FolderClassifierModal = lazy(() => import('./components/FolderClassifierModal').then((m) => ({ default: m.FolderClassifierModal })));
+const ApiDebuggerOverlay = lazy(() => import('./components/ApiDebuggerOverlay').then((m) => ({ default: m.ApiDebuggerOverlay })));
+const FullDiskAccessOverlay = lazy(() => import('./components/FullDiskAccessOverlay').then((m) => ({ default: m.FullDiskAccessOverlay })));
+const VaultStorageBackupModal = lazy(() => import('./components/VaultStorageBackupModal').then((m) => ({ default: m.VaultStorageBackupModal })));
+const SyncProgressBar = lazy(() => import('./components/SyncProgressBar').then((m) => ({ default: m.SyncProgressBar })));
+
+const TabLoadingFallback = (
+  <div className="py-16 flex items-center justify-center text-xs text-slate-400 font-medium">
+    Loading view...
+  </div>
+);
 import {
   DEFAULT_CLASSIFIER_SETTINGS,
   classifyAllDiscoveredPaths,
@@ -315,6 +323,8 @@ export default function App() {
   const localImportInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasHydratedRef = useRef<boolean>(false);
+  const skipNextVaultPersistRef = useRef<boolean>(false);
+  const didMountSettingsPersistRef = useRef<boolean>(false);
   const removedMediaIdsRef = useRef<string[]>(readStorageJson<string[]>('sambavault_removed_media_ids', []));
   const latestVaultPayloadRef = useRef<any>(null);
   const vaultPersistTimerRef = useRef<number | null>(null);
@@ -339,6 +349,58 @@ export default function App() {
     setSyncLogs((prev) => [logItem, ...prev].slice(0, 200));
   }, []);
 
+  const ensureSqliteMediaIndexes = useCallback(async () => {
+    try {
+      const res = await apiCall<any>('/api/db/schema/ensure-indexes', {
+        method: 'POST',
+      });
+      if (res?.success) return res;
+    } catch {}
+
+    // Fallback direct SQL schema index interaction via /api/db/query
+    try {
+      await apiCall('/api/db/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sql: [
+            'CREATE INDEX IF NOT EXISTS idx_media_items_title ON media_items(title);',
+            'CREATE INDEX IF NOT EXISTS idx_media_items_type ON media_items(media_type);',
+            'CREATE INDEX IF NOT EXISTS idx_media_items_title_nocase ON media_items(title COLLATE NOCASE);',
+            'CREATE INDEX IF NOT EXISTS idx_media_items_type_title ON media_items(media_type, title COLLATE NOCASE);',
+          ].join(' '),
+        }),
+      });
+    } catch {}
+    return null;
+  }, []);
+
+  const queryIndexedSqliteMedia = useCallback(async (mediaType?: string, query?: string): Promise<MediaMetadata[]> => {
+    const params = new URLSearchParams();
+    if (mediaType && mediaType !== 'all' && mediaType !== 'collections') {
+      params.set('type', mediaType);
+    }
+    if (query && query.trim()) {
+      params.set('search', query.trim());
+    }
+    params.set('limit', '200');
+    params.set('ensureIndexes', '1');
+    try {
+      const data = await apiCall<any>(`/api/db/media?${params.toString()}`);
+      const rows = Array.isArray(data?.items) ? data.items : [];
+      const removedSet = new Set(removedMediaIdsRef.current);
+      const hydrated = rows
+        .map(hydrateMediaRecord)
+        .filter((item): item is MediaMetadata => Boolean(item && item.id && !removedSet.has(item.id)));
+      if (hydrated.length > 0) {
+        dispatchMediaLibrary({ type: 'UPSERT_ITEMS', items: hydrated });
+      }
+      return hydrated;
+    } catch {
+      return [];
+    }
+  }, []);
+
   // Hydrate persistent state from disk (~/.media-player/vault_state.json + SQLite media_items) on mount
   useEffect(() => {
     let cancelled = false;
@@ -349,12 +411,16 @@ export default function App() {
       try {
         const [vaultData, dbMediaData, colData, wlData, storageRes, versionRes] = await Promise.all([
           apiCall<any>('/api/vault/state').catch(() => null),
-          apiCall<any>('/api/db/media').catch(() => null),
+          apiCall<any>('/api/db/media?ensureIndexes=1').catch(() => null),
           apiCall<any>('/api/collections').catch(() => null),
           apiCall<any>('/api/db/watchlist').catch(() => null),
           fetch('/api/vault/storage-info').then((r) => (r.ok ? r.json() : null)).catch(() => null),
           fetch('/api/version').then((r) => (r.ok ? r.json() : null)).catch(() => null),
         ]);
+
+        if (dbMediaData && !Array.isArray(dbMediaData.indexes)) {
+          ensureSqliteMediaIndexes().catch(() => null);
+        }
 
         if (cancelled) return;
 
@@ -468,26 +534,44 @@ export default function App() {
         console.warn('[App] Hydration warning:', err);
       } finally {
         if (!cancelled) {
+          skipNextVaultPersistRef.current = true;
           hasHydratedRef.current = true;
         }
       }
 
-      // Check local volume mount & FFmpeg presence non-blockingly
-      try {
-        const [vols, volInfo] = await Promise.all([
-          listMountedVolumes().catch(() => []),
-          checkMacVolume(sambaConfig.share || 'media').catch(() => null),
-        ]);
-        if (!cancelled) {
-          setSystemVolumes(vols);
-          if (volInfo) {
-            setMountedVolumeInfo(volInfo);
-            setIsMountedInFinder(Boolean(volInfo.isMounted));
-            if (volInfo.isMounted) setIsConnected(true);
+      // Defer local volume mount & FFmpeg diagnostics until after first paint / idle time
+      const runDeferredDiagnostics = async () => {
+        if (cancelled) return;
+        try {
+          if (isTauriEnvironment()) {
+            const [vols, volInfo] = await Promise.all([
+              listMountedVolumes().catch(() => []),
+              checkMacVolume(sambaConfig.share || 'media').catch(() => null),
+            ]);
+            if (!cancelled) {
+              setSystemVolumes(vols);
+              if (volInfo) {
+                setMountedVolumeInfo(volInfo);
+                setIsMountedInFinder(Boolean(volInfo.isMounted));
+                if (volInfo.isMounted) setIsConnected(true);
+              }
+            }
           }
+          detectFFmpegPath().catch(() => null);
+        } catch {}
+      };
+
+      if (typeof window !== 'undefined') {
+        if ('requestIdleCallback' in window) {
+          window.setTimeout(() => {
+            if (!cancelled) {
+              (window as any).requestIdleCallback(runDeferredDiagnostics, { timeout: 3000 });
+            }
+          }, 1200);
+        } else {
+          globalThis.setTimeout(runDeferredDiagnostics, 1800);
         }
-        detectFFmpegPath().catch(() => null);
-      } catch {}
+      }
     };
 
     hydrate();
@@ -496,18 +580,32 @@ export default function App() {
     };
   }, []);
 
-  // Persist key settings and library snapshots to localStorage (debounced for large arrays)
+  // Persist key settings and library snapshots to localStorage asynchronously in idle time
   useEffect(() => {
     if (!hasHydratedRef.current) return;
+    let idleHandle: number | null = null;
     const timer = window.setTimeout(() => {
-      try {
-        localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
-      } catch {}
-    }, 800);
-    return () => window.clearTimeout(timer);
+      const writeLib = () => {
+        try {
+          localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
+        } catch {}
+      };
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        idleHandle = (window as any).requestIdleCallback(writeLib, { timeout: 2000 });
+      } else {
+        writeLib();
+      }
+    }, 1000);
+    return () => {
+      window.clearTimeout(timer);
+      if (idleHandle !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        (window as any).cancelIdleCallback(idleHandle);
+      }
+    };
   }, [mediaLibrary]);
 
   useEffect(() => {
+    if (!didMountSettingsPersistRef.current) return;
     try {
       localStorage.setItem('sambavault_samba_config', JSON.stringify(sambaConfig));
     } catch {}
@@ -515,27 +613,46 @@ export default function App() {
 
   useEffect(() => {
     if (!hasHydratedRef.current) return;
+    let idleHandle: number | null = null;
     const timer = window.setTimeout(() => {
-      try {
-        localStorage.setItem('samba_vault_tree', JSON.stringify(sambaTree));
-      } catch {}
-    }, 800);
-    return () => window.clearTimeout(timer);
+      const writeTree = () => {
+        try {
+          localStorage.setItem('samba_vault_tree', JSON.stringify(sambaTree));
+        } catch {}
+      };
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        idleHandle = (window as any).requestIdleCallback(writeTree, { timeout: 2000 });
+      } else {
+        writeTree();
+      }
+    }, 1000);
+    return () => {
+      window.clearTimeout(timer);
+      if (idleHandle !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        (window as any).cancelIdleCallback(idleHandle);
+      }
+    };
   }, [sambaTree]);
 
   useEffect(() => {
+    if (!didMountSettingsPersistRef.current) return;
     try {
       localStorage.setItem('sambavault_classifier_settings', JSON.stringify(classifierSettings));
     } catch {}
   }, [classifierSettings]);
 
   useEffect(() => {
+    if (!didMountSettingsPersistRef.current) return;
     try {
       localStorage.setItem('sambavault_extension_config', JSON.stringify(mediaExtensionConfig));
     } catch {}
   }, [mediaExtensionConfig]);
 
   useEffect(() => {
+    if (!didMountSettingsPersistRef.current) {
+      didMountSettingsPersistRef.current = true;
+      return;
+    }
     try {
       localStorage.setItem('sambavault_transcode_config', JSON.stringify(transcodeConfig));
     } catch {}
@@ -584,13 +701,17 @@ export default function App() {
     latestVaultPayloadRef.current = vaultPayload;
 
     if (!hasHydratedRef.current) return;
+    if (skipNextVaultPersistRef.current) {
+      skipNextVaultPersistRef.current = false;
+      return;
+    }
 
     if (vaultPersistTimerRef.current) {
       window.clearTimeout(vaultPersistTimerRef.current);
     }
     vaultPersistTimerRef.current = window.setTimeout(() => {
       flushVaultPayloadToDisk(latestVaultPayloadRef.current).catch(() => null);
-    }, 800);
+    }, 1000);
 
     return () => {
       if (vaultPersistTimerRef.current) {
@@ -816,9 +937,15 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items: incoming }),
-      }).catch(() => null);
+      })
+        .then(() => {
+          if (incoming.length >= 10) {
+            ensureSqliteMediaIndexes().catch(() => null);
+          }
+        })
+        .catch(() => null);
     },
-    []
+    [ensureSqliteMediaIndexes]
   );
 
   const removeMediaItemsByIds = useCallback((ids: string[]) => {
@@ -1409,7 +1536,9 @@ export default function App() {
 
       {syncProgress.isActive && (
         <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-4">
-          <SyncProgressBar progress={syncProgress} />
+          <Suspense fallback={null}>
+            <SyncProgressBar progress={syncProgress} />
+          </Suspense>
         </div>
       )}
 
@@ -1438,235 +1567,267 @@ export default function App() {
               onOpenApiDebugger={handleOpenApiDebugger}
               onOpenClassifierModal={handleOpenClassifier}
               onOpenCollectionsTab={handleOpenCollectionsTab}
+              enableVirtualization={true}
+              onIndexedDbSearch={queryIndexedSqliteMedia}
             />
           </ErrorBoundary>
         )}
 
         {activeTab === 'collections' && (
           <ErrorBoundary tabName="Collections">
-            <CollectionsTab
-              mediaLibrary={mediaLibrary}
-              sambaTree={sambaTree}
-              customCollections={customCollections}
-              onCreateCollection={handleCreateCollection}
-              onUpdateCollection={handleUpdateCollection}
-              onDeleteCollection={handleDeleteCollection}
-              onPlayMedia={handlePlayMedia}
-              onOpenDetails={handleOpenDetails}
-              onPushToSamba={handlePushSingleMedia}
-              onNavigateToSearch={handleNavigateToSearchAll}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <CollectionsTab
+                mediaLibrary={mediaLibrary}
+                sambaTree={sambaTree}
+                customCollections={customCollections}
+                onCreateCollection={handleCreateCollection}
+                onUpdateCollection={handleUpdateCollection}
+                onDeleteCollection={handleDeleteCollection}
+                onPlayMedia={handlePlayMedia}
+                onOpenDetails={handleOpenDetails}
+                onPushToSamba={handlePushSingleMedia}
+                onNavigateToSearch={handleNavigateToSearchAll}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'music' && (
           <ErrorBoundary tabName="Music & Audio Vault">
-            <MusicTab
-              mediaLibrary={mediaLibrary}
-              onPlayMedia={handlePlayMusicTrack}
-              onOpenDetails={handleOpenDetails}
-              sambaConfig={sambaConfig}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <MusicTab
+                mediaLibrary={mediaLibrary}
+                onPlayMedia={handlePlayMusicTrack}
+                onOpenDetails={handleOpenDetails}
+                sambaConfig={sambaConfig}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'watchlist' && (
           <ErrorBoundary tabName="Watchlist">
-            <WatchlistTab
-              onPlayMedia={handlePlayMediaDefault}
-              onOpenDetails={handleOpenDetails}
-              onPushToSamba={handlePushSingleMedia}
-              onNavigateToSearch={handleNavigateToSearchTab}
-              sambaConfig={sambaConfig}
-              allMediaLibrary={mediaLibrary}
-              onOpenInNfoStudio={handleOpenInNfoStudio}
-              onWatchlistCountChange={setWatchlistCount}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <WatchlistTab
+                onPlayMedia={handlePlayMediaDefault}
+                onOpenDetails={handleOpenDetails}
+                onPushToSamba={handlePushSingleMedia}
+                onNavigateToSearch={handleNavigateToSearchTab}
+                sambaConfig={sambaConfig}
+                allMediaLibrary={mediaLibrary}
+                onOpenInNfoStudio={handleOpenInNfoStudio}
+                onWatchlistCountChange={setWatchlistCount}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'history' && (
           <ErrorBoundary tabName="Watch History">
-            <WatchHistoryTab
-              onOpenDetails={handleOpenHistoryDetails}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <WatchHistoryTab
+                onOpenDetails={handleOpenHistoryDetails}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'sqlite-vault' && (
           <ErrorBoundary tabName="SQLite Vault">
-            <SqliteVault
-              onOpenDetails={handleOpenDetails}
-              onNavigateToStats={handleNavigateToStatsTab}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <SqliteVault
+                onOpenDetails={handleOpenDetails}
+                onNavigateToStats={handleNavigateToStatsTab}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'dedup' && (
           <ErrorBoundary tabName="Deduplication Manager">
-            <DeduplicationManagerTab
-              mediaLibrary={mediaLibrary}
-              onRemoveItem={handleRemoveSingleMediaItem}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <DeduplicationManagerTab
+                mediaLibrary={mediaLibrary}
+                onRemoveItem={handleRemoveSingleMediaItem}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'stats' && (
           <ErrorBoundary tabName="Library Stats">
-            <LibraryStatsTab
-              onNavigateToVault={handleNavigateToVaultTab}
-              onOpenDetails={handleOpenDetails}
-              mediaLibrary={mediaLibrary}
-              onUpdateMedia={handleImportMediaBatch}
-              showToast={showToast}
-              sambaTree={sambaTree}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <LibraryStatsTab
+                onNavigateToVault={handleNavigateToVaultTab}
+                onOpenDetails={handleOpenDetails}
+                mediaLibrary={mediaLibrary}
+                onUpdateMedia={handleImportMediaBatch}
+                showToast={showToast}
+                sambaTree={sambaTree}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'cleaner' && (
           <ErrorBoundary tabName="Batch File Cleaner">
-            <BatchFilenameCleaner
-              sambaConfig={sambaConfig}
-              onBatchPushToSamba={(items: ParsedFileInfo[]) => {
-                const metas = items.map(parsedFileToMediaMetadata);
-                upsertMediaItems(metas);
-                showToast(`Queued ${items.length} cleaned file(s) for Samba push.`);
-              }}
-              onAddToLibrary={(items: ParsedFileInfo[]) => {
-                const metas = items.map(parsedFileToMediaMetadata);
-                upsertMediaItems(metas);
-                showToast(`Added ${metas.length} item(s) to Media Library.`);
-              }}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <BatchFilenameCleaner
+                sambaConfig={sambaConfig}
+                onBatchPushToSamba={(items: ParsedFileInfo[]) => {
+                  const metas = items.map(parsedFileToMediaMetadata);
+                  upsertMediaItems(metas);
+                  showToast(`Queued ${items.length} cleaned file(s) for Samba push.`);
+                }}
+                onAddToLibrary={(items: ParsedFileInfo[]) => {
+                  const metas = items.map(parsedFileToMediaMetadata);
+                  upsertMediaItems(metas);
+                  showToast(`Added ${metas.length} item(s) to Media Library.`);
+                }}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'explorer' && (
           <ErrorBoundary tabName="Samba Share Browser">
-            <SambaExplorer
-              sambaConfig={sambaConfig}
-              setSambaConfig={setSambaConfig}
-              sambaTree={sambaTree}
-              setSambaTree={setSambaTree}
-              syncLogs={syncLogs}
-              setSyncLogs={setSyncLogs}
-              onOpenDetails={handleOpenDetails}
-              onOpenInNfoStudio={handleOpenInNfoStudio}
-              onRefreshSamba={() => handleTestSambaConnection()}
-              onSyncSamba={handleScanSambaVolume}
-              onQuickSync={handleQuickSync}
-              isQuickSyncing={isQuickSyncing}
-              onOpenClassifierModal={handleOpenClassifier}
-              onPopulateMediaLibrary={handlePopulateFromSambaTree}
-              isSyncing={isSyncing}
-              isMountedInFinder={isMountedInFinder}
-              mountedVolumeInfo={mountedVolumeInfo}
-              extensionConfig={mediaExtensionConfig}
-              onUpdateExtensionConfig={setMediaExtensionConfig}
-              depthLimit={scanDepthLimit}
-              onUpdateDepthLimit={setScanDepthLimit}
-              lastScanSummary={lastScanSummary}
-              onDismissLastScanSummary={handleDismissLastScanSummary}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <SambaExplorer
+                sambaConfig={sambaConfig}
+                setSambaConfig={setSambaConfig}
+                sambaTree={sambaTree}
+                setSambaTree={setSambaTree}
+                syncLogs={syncLogs}
+                setSyncLogs={setSyncLogs}
+                onOpenDetails={handleOpenDetails}
+                onOpenInNfoStudio={handleOpenInNfoStudio}
+                onRefreshSamba={() => handleTestSambaConnection()}
+                onSyncSamba={handleScanSambaVolume}
+                onQuickSync={handleQuickSync}
+                isQuickSyncing={isQuickSyncing}
+                onOpenClassifierModal={handleOpenClassifier}
+                onPopulateMediaLibrary={handlePopulateFromSambaTree}
+                isSyncing={isSyncing}
+                isMountedInFinder={isMountedInFinder}
+                mountedVolumeInfo={mountedVolumeInfo}
+                extensionConfig={mediaExtensionConfig}
+                onUpdateExtensionConfig={setMediaExtensionConfig}
+                depthLimit={scanDepthLimit}
+                onUpdateDepthLimit={setScanDepthLimit}
+                lastScanSummary={lastScanSummary}
+                onDismissLastScanSummary={handleDismissLastScanSummary}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'samba-mount' && (
           <ErrorBoundary tabName="Cross-Platform Mount">
-            <SambaMountHub
-              sambaConfig={sambaConfig}
-              setSambaConfig={setSambaConfig}
-              isConnected={isConnected}
-              onTestConnection={() => handleTestSambaConnection()}
-              isTesting={isTestingConnection}
-              connectionDetails={connectionDetails}
-              isMountedInFinder={isMountedInFinder}
-              mountedVolumeInfo={mountedVolumeInfo}
-              systemVolumes={systemVolumes}
-              isDesktopApp={isTauriEnvironment()}
-              onSyncPath={handleScanSambaVolume}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <SambaMountHub
+                sambaConfig={sambaConfig}
+                setSambaConfig={setSambaConfig}
+                isConnected={isConnected}
+                onTestConnection={() => handleTestSambaConnection()}
+                isTesting={isTestingConnection}
+                connectionDetails={connectionDetails}
+                isMountedInFinder={isMountedInFinder}
+                mountedVolumeInfo={mountedVolumeInfo}
+                systemVolumes={systemVolumes}
+                isDesktopApp={isTauriEnvironment()}
+                onSyncPath={handleScanSambaVolume}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'nfo-studio' && (
           <ErrorBoundary tabName="NFO / XML Studio">
-            <NfoStudio
-              initialMedia={nfoTargetMedia}
-              sambaConfig={sambaConfig}
-              onPushNfoToSamba={(media, xml) => handlePushToSamba(media, xml)}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <NfoStudio
+                initialMedia={nfoTargetMedia}
+                sambaConfig={sambaConfig}
+                onPushNfoToSamba={(media, xml) => handlePushToSamba(media, xml)}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'console' && (
           <ErrorBoundary tabName="Console Logs">
-            <ConsoleTab
-              onRetryFailedFiles={async () => handleScanSambaVolume()}
-              onTriggerSync={async () => handleScanSambaVolume()}
-              sambaConfig={sambaConfig}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <ConsoleTab
+                onRetryFailedFiles={async () => handleScanSambaVolume()}
+                onTriggerSync={async () => handleScanSambaVolume()}
+                sambaConfig={sambaConfig}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'youtube' && (
           <ErrorBoundary tabName="YouTube Feed">
-            <YouTubeTab />
+            <Suspense fallback={TabLoadingFallback}>
+              <YouTubeTab />
+            </Suspense>
           </ErrorBoundary>
         )}
 
         {activeTab === 'settings' && (
           <ErrorBoundary tabName="Settings">
-            <SettingsTab
-              classifierSettings={classifierSettings}
-              onUpdateClassifierSettings={setClassifierSettings}
-              sambaConfig={sambaConfig}
-              onUpdateSambaConfig={setSambaConfig}
-              onClearThumbnailCache={handleClearThumbnailCache}
-              onExportLibraryBackup={handleExportLibraryBackup}
-              onManualTriggerSync={handleScanRootSamba}
-              scanDepthLimit={scanDepthLimit}
-              onUpdateScanDepthLimit={setScanDepthLimit}
-              transcodeConfig={transcodeConfig}
-              onUpdateTranscodeConfig={setTranscodeConfig}
-              serverVersionInfo={serverVersionInfo}
-              mediaLibrary={mediaLibrary}
-              sambaTree={sambaTree}
-              customCollections={customCollections}
-              onRemoveMediaItemsByIds={removeMediaItemsByIds}
-            />
+            <Suspense fallback={TabLoadingFallback}>
+              <SettingsTab
+                classifierSettings={classifierSettings}
+                onUpdateClassifierSettings={setClassifierSettings}
+                sambaConfig={sambaConfig}
+                onUpdateSambaConfig={setSambaConfig}
+                onClearThumbnailCache={handleClearThumbnailCache}
+                onExportLibraryBackup={handleExportLibraryBackup}
+                onManualTriggerSync={handleScanRootSamba}
+                scanDepthLimit={scanDepthLimit}
+                onUpdateScanDepthLimit={setScanDepthLimit}
+                transcodeConfig={transcodeConfig}
+                onUpdateTranscodeConfig={setTranscodeConfig}
+                serverVersionInfo={serverVersionInfo}
+                mediaLibrary={mediaLibrary}
+                sambaTree={sambaTree}
+                customCollections={customCollections}
+                onRemoveMediaItemsByIds={removeMediaItemsByIds}
+              />
+            </Suspense>
           </ErrorBoundary>
         )}
       </main>
 
       {/* Media Detail Modal */}
       {detailModalMedia && (
-        <MediaDetailModal
-          media={detailModalMedia}
-          onClose={() => setDetailModalMedia(null)}
-          onPushToSamba={(m) => handlePushToSamba(m)}
-          onOpenInNfoStudio={(m) => {
-            setDetailModalMedia(null);
-            setNfoTargetMedia(m);
-            setActiveTab('nfo-studio');
-          }}
-          onPlayMedia={(m, ep, track) => {
-            setDetailModalMedia(null);
-            handlePlayMedia(m, ep, track);
-          }}
-          onUpdateMedia={(updated) => {
-            upsertMediaItems([updated]);
-            setDetailModalMedia(updated);
-          }}
-          onOpenManualMatcher={(m) => {
-            setDetailModalMedia(null);
-            setManualMatchState({ isOpen: true, rawPathOrName: m.title, mediaType: m.type });
-          }}
-          sambaConfig={sambaConfig}
-          mediaLibrary={mediaLibrary}
-          onSelectMedia={(m) => setDetailModalMedia(m)}
-        />
+        <Suspense fallback={null}>
+          <MediaDetailModal
+            media={detailModalMedia}
+            onClose={() => setDetailModalMedia(null)}
+            onPushToSamba={(m) => handlePushToSamba(m)}
+            onOpenInNfoStudio={(m) => {
+              setDetailModalMedia(null);
+              setNfoTargetMedia(m);
+              setActiveTab('nfo-studio');
+            }}
+            onPlayMedia={(m, ep, track) => {
+              setDetailModalMedia(null);
+              handlePlayMedia(m, ep, track);
+            }}
+            onUpdateMedia={(updated) => {
+              upsertMediaItems([updated]);
+              setDetailModalMedia(updated);
+            }}
+            onOpenManualMatcher={(m) => {
+              setDetailModalMedia(null);
+              setManualMatchState({ isOpen: true, rawPathOrName: m.title, mediaType: m.type });
+            }}
+            sambaConfig={sambaConfig}
+            mediaLibrary={mediaLibrary}
+            onSelectMedia={(m) => setDetailModalMedia(m)}
+          />
+        </Suspense>
       )}
 
       {/* Media Player Modal wrapped in Centralized Stream Recovery Monitor */}
@@ -1738,116 +1899,138 @@ export default function App() {
               </div>
             }
           >
-            <MediaPlayerModal
-              key={`player-${playerState.media.id}-${playerMountKey}`}
-              isOpen={playerState.isOpen}
-              media={playerState.media}
-              initialEpisode={playerState.episode}
-              initialTrack={playerState.track}
-              onClose={() => {
-                setPlayerRecoveryError(null);
-                setPlayerState({ isOpen: false, media: null });
-              }}
-              sambaConfig={sambaConfig}
-              mediaLibrary={mediaLibrary}
-              onSelectMedia={(m) => setPlayerState((prev) => ({ ...prev, media: m }))}
-              onNavigateToMountHub={() => {
-                setPlayerState({ isOpen: false, media: null });
-                setActiveTab('samba-mount');
-              }}
-              onTestConnection={(cfg) => handleTestSambaConnection(cfg)}
-              transcodeConfig={transcodeConfig}
-            />
+            <Suspense fallback={null}>
+              <MediaPlayerModal
+                key={`player-${playerState.media.id}-${playerMountKey}`}
+                isOpen={playerState.isOpen}
+                media={playerState.media}
+                initialEpisode={playerState.episode}
+                initialTrack={playerState.track}
+                onClose={() => {
+                  setPlayerRecoveryError(null);
+                  setPlayerState({ isOpen: false, media: null });
+                }}
+                sambaConfig={sambaConfig}
+                mediaLibrary={mediaLibrary}
+                onSelectMedia={(m) => setPlayerState((prev) => ({ ...prev, media: m }))}
+                onNavigateToMountHub={() => {
+                  setPlayerState({ isOpen: false, media: null });
+                  setActiveTab('samba-mount');
+                }}
+                onTestConnection={(cfg) => handleTestSambaConnection(cfg)}
+                transcodeConfig={transcodeConfig}
+              />
+            </Suspense>
           </ErrorBoundary>
         )
       )}
 
-      {/* Manual Match Modal */}
-      <ManualMatchModal
-        isOpen={manualMatchState.isOpen}
-        onClose={() => setManualMatchState({ isOpen: false, rawPathOrName: '' })}
-        rawPathOrName={manualMatchState.rawPathOrName}
-        initialMediaType={manualMatchState.mediaType}
-        onSaveMatchedMedia={(matched) => {
-          upsertMediaItems([matched]);
-          showToast(`Saved matched metadata for "${matched.title}".`);
-        }}
-      />
+      {/* Manual Match Modal (lazy-mounted when open) */}
+      {manualMatchState.isOpen && (
+        <Suspense fallback={null}>
+          <ManualMatchModal
+            isOpen={manualMatchState.isOpen}
+            onClose={() => setManualMatchState({ isOpen: false, rawPathOrName: '' })}
+            rawPathOrName={manualMatchState.rawPathOrName}
+            initialMediaType={manualMatchState.mediaType}
+            onSaveMatchedMedia={(matched) => {
+              upsertMediaItems([matched]);
+              showToast(`Saved matched metadata for "${matched.title}".`);
+            }}
+          />
+        </Suspense>
+      )}
 
-      {/* Folder Classifier Modal */}
-      <FolderClassifierModal
-        isOpen={isClassifierModalOpen}
-        onClose={() => setIsClassifierModalOpen(false)}
-        folderClassifications={folderClassifications}
-        onConfirmImport={(updated, nextSettings) => {
-          setClassifierSettings(nextSettings);
-          const chosen = updated.filter((c) => c.selectedForImport && c.targetType !== 'ignore');
-          if (chosen.length > 0) {
-            const items = chosen.map((c) => {
-              const parsed = parseTitleAndYear(c.folderName);
-              return parsedFileToMediaMetadata({
-                id: `folder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                originalFilename: c.sampleFiles[0] || c.folderName,
-                detectedType: c.targetType as MediaType,
-                detectedTitle: parsed.title,
-                detectedYear: parsed.year,
-                cleanFormattedFilename: c.folderName,
-                cleanFolderPath: c.relativePath,
-                status: 'matched',
-              });
-            });
-            upsertMediaItems(items);
-            showToast(`Imported ${items.length} classified folder(s).`);
-          }
-          setIsClassifierModalOpen(false);
-        }}
-        settings={classifierSettings}
-        onUpdateSettings={setClassifierSettings}
-        sambaConfig={sambaConfig}
-      />
+      {/* Folder Classifier Modal (lazy-mounted when open) */}
+      {isClassifierModalOpen && (
+        <Suspense fallback={null}>
+          <FolderClassifierModal
+            isOpen={isClassifierModalOpen}
+            onClose={() => setIsClassifierModalOpen(false)}
+            folderClassifications={folderClassifications}
+            onConfirmImport={(updated, nextSettings) => {
+              setClassifierSettings(nextSettings);
+              const chosen = updated.filter((c) => c.selectedForImport && c.targetType !== 'ignore');
+              if (chosen.length > 0) {
+                const items = chosen.map((c) => {
+                  const parsed = parseTitleAndYear(c.folderName);
+                  return parsedFileToMediaMetadata({
+                    id: `folder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    originalFilename: c.sampleFiles[0] || c.folderName,
+                    detectedType: c.targetType as MediaType,
+                    detectedTitle: parsed.title,
+                    detectedYear: parsed.year,
+                    cleanFormattedFilename: c.folderName,
+                    cleanFolderPath: c.relativePath,
+                    status: 'matched',
+                  });
+                });
+                upsertMediaItems(items);
+                showToast(`Imported ${items.length} classified folder(s).`);
+              }
+              setIsClassifierModalOpen(false);
+            }}
+            settings={classifierSettings}
+            onUpdateSettings={setClassifierSettings}
+            sambaConfig={sambaConfig}
+          />
+        </Suspense>
+      )}
 
-      {/* API Debugger & Disk Access & Vault Backup Overlays */}
-      <ApiDebuggerOverlay
-        isOpen={isApiDebuggerOpen}
-        onClose={() => setIsApiDebuggerOpen(false)}
-      />
+      {/* API Debugger & Disk Access & Vault Backup Overlays (lazy-mounted when open) */}
+      {isApiDebuggerOpen && (
+        <Suspense fallback={null}>
+          <ApiDebuggerOverlay
+            isOpen={isApiDebuggerOpen}
+            onClose={() => setIsApiDebuggerOpen(false)}
+          />
+        </Suspense>
+      )}
 
-      <FullDiskAccessOverlay
-        isOpen={isFullDiskOverlayOpen}
-        onClose={() => setIsFullDiskOverlayOpen(false)}
-        status={fullDiskStatus}
-        onRecheck={async () => {
-          const st = await checkFullDiskAccess(true);
-          setFullDiskStatus(st);
-          return Boolean(st?.hasFullDiskAccess);
-        }}
-        onOpenSettings={async () => {
-          await openMacOSSecurityPrivacy();
-        }}
-      />
+      {isFullDiskOverlayOpen && (
+        <Suspense fallback={null}>
+          <FullDiskAccessOverlay
+            isOpen={isFullDiskOverlayOpen}
+            onClose={() => setIsFullDiskOverlayOpen(false)}
+            status={fullDiskStatus}
+            onRecheck={async () => {
+              const st = await checkFullDiskAccess(true);
+              setFullDiskStatus(st);
+              return Boolean(st?.hasFullDiskAccess);
+            }}
+            onOpenSettings={async () => {
+              await openMacOSSecurityPrivacy();
+            }}
+          />
+        </Suspense>
+      )}
 
-      <VaultStorageBackupModal
-        isOpen={isBackupModalOpen}
-        onClose={() => setIsBackupModalOpen(false)}
-        sambaTree={sambaTree}
-        syncLogs={syncLogs}
-        sambaConfig={sambaConfig}
-        classifierSettings={classifierSettings}
-        mediaExtensionConfig={mediaExtensionConfig}
-        mediaLibrary={mediaLibrary}
-        storageInfo={storageInfo}
-        onRestoreState={(restored) => {
-          if (Array.isArray(restored?.mediaLibrary)) {
-            dispatchMediaLibrary({ type: 'SET_ALL', items: restored.mediaLibrary });
-          }
-          if (Array.isArray(restored?.sambaTree)) setSambaTree(restored.sambaTree);
-          if (Array.isArray(restored?.customCollections)) setCustomCollections(restored.customCollections);
-          if (restored?.sambaConfig) setSambaConfig(restored.sambaConfig);
-          showToast('Vault backup restored.');
-        }}
-        onForceSaveToDisk={persistVaultSnapshot}
-        showToast={showToast}
-      />
+      {isBackupModalOpen && (
+        <Suspense fallback={null}>
+          <VaultStorageBackupModal
+            isOpen={isBackupModalOpen}
+            onClose={() => setIsBackupModalOpen(false)}
+            sambaTree={sambaTree}
+            syncLogs={syncLogs}
+            sambaConfig={sambaConfig}
+            classifierSettings={classifierSettings}
+            mediaExtensionConfig={mediaExtensionConfig}
+            mediaLibrary={mediaLibrary}
+            storageInfo={storageInfo}
+            onRestoreState={(restored) => {
+              if (Array.isArray(restored?.mediaLibrary)) {
+                dispatchMediaLibrary({ type: 'SET_ALL', items: restored.mediaLibrary });
+              }
+              if (Array.isArray(restored?.sambaTree)) setSambaTree(restored.sambaTree);
+              if (Array.isArray(restored?.customCollections)) setCustomCollections(restored.customCollections);
+              if (restored?.sambaConfig) setSambaConfig(restored.sambaConfig);
+              showToast('Vault backup restored.');
+            }}
+            onForceSaveToDisk={persistVaultSnapshot}
+            showToast={showToast}
+          />
+        </Suspense>
+      )}
 
       {/* Subtle Toast Banner */}
       {toastMessage && (

@@ -1,11 +1,10 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback, Suspense, lazy } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
 import {
   Search,
   Film,
   Tv,
   Music,
-  Download,
-  FolderPlus,
   Eye,
   Star,
   Calendar,
@@ -14,17 +13,12 @@ import {
   Layers,
   Check,
   HardDrive,
-  Copy,
-  Database,
   Upload,
   FolderSync,
   Play,
-  FileVideo,
   FileAudio,
   CheckCircle2,
-  ShieldCheck,
   Loader2,
-  AlertCircle,
   Filter,
   Globe,
   Tag,
@@ -43,7 +37,6 @@ import {
   ChevronUp,
   SlidersHorizontal,
   X,
-  Image as ImageIcon,
   Target,
   ArrowUpDown,
   TrendingUp,
@@ -53,19 +46,21 @@ import {
   Bug,
 } from 'lucide-react';
 import { MediaMetadata, MediaType, MediaCollection, SambaConfig, EpisodeMetadata, TrackMetadata, MediaSortOption, GenreAffinityScore, SambaShareNode } from '../types';
-import { downloadMediaBundleZip, downloadMediaArtwork } from '../utils/zipDownloader';
-import { generateMetadataFile } from '../utils/nfoGenerator';
-import { WebSearchCategorizerModal } from './WebSearchCategorizerModal';
-import { BulkSubtitlesModal } from './BulkSubtitlesModal';
 import { logger } from '../utils/loggerService';
 import { listMountedVolumes } from '../utils/tauriBridge';
-import { getMountedDisplayPath } from '../utils/pathSanitizer';
 import { globalSearchIndexer, SmartSearchSuggestion, IndexerTelemetry } from '../utils/globalSearchIndexer';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 import { isMediaUncategorized } from '../utils/mediaExtractor';
 import { buildUnifiedCollections, COLLECTION_FALLBACK_POSTER, UnifiedCollection } from '../utils/collections';
-import { motion, AnimatePresence } from 'motion/react';
+import { VirtualizedMediaGrid } from './VirtualizedMediaGrid';
+
+const WebSearchCategorizerModal = lazy(() =>
+  import('./WebSearchCategorizerModal').then((m) => ({ default: m.WebSearchCategorizerModal }))
+);
+const BulkSubtitlesModal = lazy(() =>
+  import('./BulkSubtitlesModal').then((m) => ({ default: m.BulkSubtitlesModal }))
+);
 
 interface MediaSearchProps {
   mediaLibrary: MediaMetadata[];
@@ -89,6 +84,8 @@ interface MediaSearchProps {
   onOpenApiDebugger?: () => void;
   onOpenClassifierModal?: () => void;
   onOpenCollectionsTab?: () => void;
+  enableVirtualization?: boolean;
+  onIndexedDbSearch?: (mediaType?: string, query?: string) => Promise<MediaMetadata[]>;
 }
 
 // Curated Category Taxonomy with Icons & Brand Colors
@@ -247,7 +244,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   onOpenApiDebugger,
   onOpenClassifierModal,
   onOpenCollectionsTab,
+  enableVirtualization = true,
+  onIndexedDbSearch,
 }) => {
+  const shouldReduceMotion = Boolean(useReducedMotion());
   const safeMediaLibrary = useMemo(() => {
     if (!Array.isArray(mediaLibrary)) return [];
     return mediaLibrary.map((m) => ({
@@ -285,36 +285,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const [displayedCount, setDisplayedCount] = useState(20);
-  const observerTarget = useRef<HTMLDivElement>(null);
-  const [sortedAndFilteredMedia, setSortedAndFilteredMedia] = useState<MediaMetadata[]>([]);
-  const sortedLengthRef = useRef(0);
-  sortedLengthRef.current = sortedAndFilteredMedia.length;
 
-  useEffect(() => {
-    const target = observerTarget.current;
-    if (!target) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setDisplayedCount((prev) => Math.min(prev + 20, sortedLengthRef.current));
-        }
-      },
-      { threshold: 1.0 }
-    );
-
-    observer.observe(target);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
-
-  // Reset displayedCount when search filter changes
-  useEffect(() => {
-    setDisplayedCount(20);
-  }, [sortedAndFilteredMedia.length]);
 
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
@@ -333,16 +304,17 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   const [isLoading, setIsLoading] = useState(false);
   const [pushedIds, setPushedIds] = useState<Record<string, boolean>>({});
   const [savedDbIds, setSavedDbIds] = useState<Record<string, boolean>>({});
-  const [copiedNfoId, setCopiedNfoId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [expandedCardIds, setExpandedCardIds] = useState<Record<string, boolean>>({});
-  const toggleExpandCard = (id: string, e?: React.MouseEvent) => {
+  const toggleExpandCard = useCallback((id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setExpandedCardIds((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
+  }, []);
 
   // Watchlist state (persisted via SQLite)
   const [watchlistIds, setWatchlistIds] = useState<Set<string>>(new Set());
+  const watchlistIdsRef = useRef<Set<string>>(watchlistIds);
+  watchlistIdsRef.current = watchlistIds;
 
   // Recently Added state (loaded from SQLite)
   const [recentlyAdded, setRecentlyAdded] = useState<MediaMetadata[]>([]);
@@ -359,6 +331,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
 
   // Watched / Unwatched persistent history check & Genre Affinity
   const [watchedItemsMap, setWatchedItemsMap] = useState<Record<string, { isCompleted: boolean; progress: number }>>({});
+  const watchedItemsMapRef = useRef(watchedItemsMap);
+  watchedItemsMapRef.current = watchedItemsMap;
+  const selectedTypeRef = useRef(selectedType);
+  selectedTypeRef.current = selectedType;
   const [rawHistory, setRawHistory] = useState<any[]>([]);
   const [sortBy, setSortBy] = useState<MediaSortOption>('affinity');
   const [showAffinityBreakdownModal, setShowAffinityBreakdownModal] = useState(false);
@@ -394,10 +370,15 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
 
     const timer = setTimeout(async () => {
       try {
-        const res = await globalSearchIndexer.performSmartSearch(
-          q,
-          selectedType === 'collections' ? 'all' : selectedType
-        );
+        const [res] = await Promise.all([
+          globalSearchIndexer.performSmartSearch(
+            q,
+            selectedType === 'collections' ? 'all' : selectedType
+          ),
+          q.length >= 2 && onIndexedDbSearch
+            ? onIndexedDbSearch(selectedType === 'collections' ? 'all' : selectedType, q).catch(() => [])
+            : Promise.resolve([]),
+        ]);
         if (!isCancelled) {
           setSmartSuggestions(res.suggestions);
         }
@@ -416,7 +397,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [debouncedSearchQuery, selectedType]);
+  }, [debouncedSearchQuery, selectedType, onIndexedDbSearch]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -453,12 +434,11 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   const [isDiagnosticImportArmed, setIsDiagnosticImportArmed] = useState(false);
   const [activeCollectionTab, setActiveCollectionTab] = useState<'all' | 'collections' | 'movie' | 'series' | 'album'>('all');
   const [selectedUniverseModal, setSelectedUniverseModal] = useState<UniverseCollection | null>(null);
-  const universeCollections = useMemo(() => {
-    return buildUnifiedCollections(safeMediaLibrary, customCollections, sambaTree);
-  }, [safeMediaLibrary, customCollections, sambaTree]);
+  const [collectionsComputeReady, setCollectionsComputeReady] = useState(() => selectedType === 'collections');
 
   useEffect(() => {
     if (selectedType === 'collections') {
+      setCollectionsComputeReady(true);
       setActiveCollectionTab('collections');
     } else if (selectedType === 'movie' || selectedType === 'series' || selectedType === 'album') {
       setActiveCollectionTab(selectedType);
@@ -466,6 +446,31 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       setActiveCollectionTab((prev) => (prev === 'collections' ? 'collections' : 'all'));
     }
   }, [selectedType]);
+
+  // Defer heavy collection/franchise scanning on mount when user is viewing default All Media grid
+  useEffect(() => {
+    if (collectionsComputeReady) return;
+    let idleId: number | null = null;
+    const timerId = window.setTimeout(() => {
+      const enable = () => setCollectionsComputeReady(true);
+      if ('requestIdleCallback' in window) {
+        idleId = (window as any).requestIdleCallback(enable, { timeout: 1500 });
+      } else {
+        enable();
+      }
+    }, 250);
+    return () => {
+      window.clearTimeout(timerId);
+      if (idleId !== null && 'cancelIdleCallback' in window) {
+        (window as any).cancelIdleCallback(idleId);
+      }
+    };
+  }, [collectionsComputeReady]);
+
+  const universeCollections = useMemo(() => {
+    if (!collectionsComputeReady) return [];
+    return buildUnifiedCollections(safeMediaLibrary, customCollections, sambaTree);
+  }, [collectionsComputeReady, safeMediaLibrary, customCollections, sambaTree]);
 
   // Determine Min and Max Year across library
   const { minLibraryYear, maxLibraryYear } = useMemo(() => {
@@ -500,17 +505,26 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     fetchWatchlist();
   }, []);
 
-  // Fetch Top 10 Recently Added from SQLite
+  // Fetch Top Recently Added from SQLite
   const fetchRecentMedia = async () => {
     setIsRecentLoading(true);
     try {
-      const res = await fetch('/api/db/media/recent?limit=50');
+      const res = await fetch('/api/db/media/recent?limit=20');
       const data = await res.json();
       if (data.success && Array.isArray(data.items)) {
+        const byId = new Map<string, MediaMetadata>();
+        const byTitle = new Map<string, MediaMetadata>();
+        for (const m of mediaLibrary) {
+          byId.set(m.id, m);
+          if (m.title) byTitle.set(m.title.toLowerCase(), m);
+        }
+
         // Map SQLite db rows to MediaMetadata
         const mapped: MediaMetadata[] = data.items.map((row: any) => {
-          // Check if already present in mediaLibrary for full metadata
-          const existing = mediaLibrary.find((m) => m.id === row.id || m.title.toLowerCase() === row.title.toLowerCase());
+          // Check if already present in mediaLibrary for full metadata in O(1)
+          const existing =
+            byId.get(row.id) ||
+            (row.title ? byTitle.get(String(row.title).toLowerCase()) : undefined);
           if (existing) return existing;
 
           let parsedGenres: string[] = [];
@@ -545,20 +559,25 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   };
 
   useEffect(() => {
-    fetchRecentMedia();
+    const timer = window.setTimeout(() => {
+      fetchRecentMedia();
+    }, 150);
+    return () => window.clearTimeout(timer);
   }, [mediaLibrary.length]);
 
   // Toggle item in Watchlist (stored in SQLite)
-  const toggleWatchlist = async (media: MediaMetadata, e?: React.MouseEvent) => {
+  const toggleWatchlist = useCallback(async (media: MediaMetadata, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    const isCurrentlySaved = watchlistIds.has(media.id);
-    const nextSet = new Set(watchlistIds);
-    if (isCurrentlySaved) {
-      nextSet.delete(media.id);
-    } else {
-      nextSet.add(media.id);
-    }
-    setWatchlistIds(nextSet);
+    const isCurrentlySaved = watchlistIdsRef.current.has(media.id);
+    setWatchlistIds((prev) => {
+      const nextSet = new Set(prev);
+      if (isCurrentlySaved) {
+        nextSet.delete(media.id);
+      } else {
+        nextSet.add(media.id);
+      }
+      return nextSet;
+    });
 
     try {
       await fetch('/api/db/watchlist/toggle', {
@@ -578,12 +597,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     } catch (err) {
       console.error('Failed to toggle watchlist in DB:', err);
     }
-  };
+  }, []);
 
   // File Integrity verification state
   const [fileIntegrityMap, setFileIntegrityMap] = useState<Record<string, 'verifying' | 'reachable' | 'corrupted'>>({});
 
-  const verifyFileIntegrity = async (media: MediaMetadata, e?: React.MouseEvent) => {
+  const verifyFileIntegrity = useCallback(async (media: MediaMetadata, e?: React.MouseEvent) => {
     e?.stopPropagation();
     setFileIntegrityMap((prev) => ({ ...prev, [media.id]: 'verifying' }));
 
@@ -687,10 +706,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       logger.error(`[File Integrity] Check error for "${media.title}": ${err?.message || err}`, 'Database');
       setFileIntegrityMap((prev) => ({ ...prev, [media.id]: 'corrupted' }));
     }
-  };
-  const toggleWatchedStatus = async (media: MediaMetadata, e?: React.MouseEvent) => {
+  }, []);
+  const toggleWatchedStatus = useCallback(async (media: MediaMetadata, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    const watchInfo = watchedItemsMap[media.id] || watchedItemsMap[media.title.toLowerCase()];
+    const watchInfo = watchedItemsMapRef.current[media.id] || watchedItemsMapRef.current[media.title.toLowerCase()];
     const isCurrentlyWatched = watchInfo?.isCompleted;
     const nextWatched = !isCurrentlyWatched;
 
@@ -718,21 +737,25 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     } catch (err) {
       console.error('Failed to update watched status in DB:', err);
     }
-  };
+  }, []);
 
 
   // Compute live counts across the library
-  const { allCount, seriesCount, moviesCount, albumsCount, importedCount } = useMemo(() => {
+  const { allCount, seriesCount, moviesCount, albumsCount, importedCount, uncategorizedCount } = useMemo(() => {
     let series = 0;
     let movies = 0;
     let albums = 0;
     let imported = 0;
+    let uncategorized = 0;
     for (const m of safeMediaLibrary) {
       if (m.type === 'series') series++;
       else if (m.type === 'movie') movies++;
       else if (m.type === 'album') albums++;
       if (m.id.startsWith('imported-') || m.id.startsWith('batch-') || m.matchedFilename) {
         imported++;
+      }
+      if (isMediaUncategorized(m)) {
+        uncategorized++;
       }
     }
     return {
@@ -741,6 +764,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       moviesCount: movies,
       albumsCount: albums,
       importedCount: imported,
+      uncategorizedCount: uncategorized,
     };
   }, [safeMediaLibrary]);
 
@@ -935,42 +959,47 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     };
   }, [rawHistory, safeMediaLibrary]);
 
-  // Helper to compute media affinity for a specific item
-  const getMediaAffinity = (media: MediaMetadata) => {
-    const safeGenres = getSafeGenres(media.genres);
-    if (safeGenres.length === 0 || topAffinityGenres.length === 0) {
-      return { score: 0, percentage: 0, topMatchingGenre: null, matchingGenres: [] };
-    }
+  // Precompute affinity map once per library/history change instead of per card render
+  const mediaAffinityById = useMemo(() => {
+    const result = new Map<string, { score: number; percentage: number; topMatchingGenre: string | null; matchingGenres: string[] }>();
+    if (topAffinityGenres.length === 0) return result;
 
-    let totalScore = 0;
-    let bestGenre: string | null = null;
-    let bestScore = -1;
-    const matching: string[] = [];
+    for (const media of safeMediaLibrary) {
+      const safeGenres = Array.isArray(media.genres) ? media.genres : getSafeGenres(media.genres);
+      if (safeGenres.length === 0) continue;
 
-    safeGenres.forEach((g) => {
-      const entry = genreAffinityMap[g.trim().toLowerCase()];
-      if (entry && entry.score > 0) {
-        totalScore += entry.score;
-        matching.push(entry.genre);
-        if (entry.score > bestScore) {
-          bestScore = entry.score;
-          bestGenre = entry.genre;
+      let totalScore = 0;
+      let bestGenre: string | null = null;
+      let bestScore = -1;
+      const matching: string[] = [];
+
+      for (const g of safeGenres) {
+        const entry = genreAffinityMap[g.trim().toLowerCase()];
+        if (entry && entry.score > 0) {
+          totalScore += entry.score;
+          matching.push(entry.genre);
+          if (entry.score > bestScore) {
+            bestScore = entry.score;
+            bestGenre = entry.genre;
+          }
         }
       }
-    });
 
-    const percentage =
-      maxPossibleAffinityScore > 0
-        ? Math.min(100, Math.round((totalScore / maxPossibleAffinityScore) * 100))
-        : 0;
-
-    return {
-      score: totalScore,
-      percentage,
-      topMatchingGenre: bestGenre,
-      matchingGenres: matching,
-    };
-  };
+      if (totalScore > 0) {
+        const percentage =
+          maxPossibleAffinityScore > 0
+            ? Math.min(100, Math.round((totalScore / maxPossibleAffinityScore) * 100))
+            : 0;
+        result.set(media.id, {
+          score: totalScore,
+          percentage,
+          topMatchingGenre: bestGenre,
+          matchingGenres: matching,
+        });
+      }
+    }
+    return result;
+  }, [safeMediaLibrary, genreAffinityMap, maxPossibleAffinityScore, topAffinityGenres]);
 
   // Filter items based on type, origin, category, multi-genres, date-range, and search query
   const filteredMedia = useMemo(() => {
@@ -1072,28 +1101,19 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     });
   }, [safeMediaLibrary, selectedType, originFilter, activeCategory, selectedGenres, yearRange, debouncedSearchQuery]);
 
-  // Apply Sort to Filtered Media (prioritizing Genre Affinity when active)
-  useEffect(() => {
+  // Apply Sort to Filtered Media directly in useMemo to avoid extra render passes
+  const sortedAndFilteredMedia = useMemo(() => {
     const list = [...filteredMedia];
-    const affinityScores = new Map<string, number>();
-    if (sortBy === 'affinity') {
-      for (const item of list) {
-        affinityScores.set(item.id, getMediaAffinity(item).score);
-      }
-    }
-
     list.sort((a, b) => {
       if (sortBy === 'affinity') {
-        const affA = affinityScores.get(a.id) ?? 0;
-        const affB = affinityScores.get(b.id) ?? 0;
+        const affA = mediaAffinityById.get(a.id)?.score ?? 0;
+        const affB = mediaAffinityById.get(b.id)?.score ?? 0;
         if (affB !== affA) {
-          return affB - affA; // Highest affinity first!
+          return affB - affA;
         }
-        // Secondary tiebreaker: Rating descending
         const rA = a.rating || 0;
         const rB = b.rating || 0;
         if (rB !== rA) return rB - rA;
-        // Tertiary: Year descending
         const yA = a.year || 0;
         const yB = b.year || 0;
         if (yB !== yA) return yB - yA;
@@ -1132,10 +1152,21 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       return 0;
     });
 
-    setSortedAndFilteredMedia(list);
-  }, [filteredMedia, sortBy, genreAffinityMap, maxPossibleAffinityScore, topAffinityGenres]);
+    return list;
+  }, [filteredMedia, sortBy, mediaAffinityById]);
 
-  const handleSaveToSqlite = async (media: MediaMetadata) => {
+  const handleSelectGenreOrCategory = useCallback((g: string) => {
+    const matchedCat = MOVIE_SERIES_CATEGORIES.find((c) =>
+      c.keywords.some((k) => g.toLowerCase().includes(k))
+    );
+    if (matchedCat) {
+      setActiveCategory(matchedCat.id);
+    } else {
+      handleToggleGenre(g);
+    }
+  }, []);
+
+  const handleSaveToSqlite = useCallback(async (media: MediaMetadata) => {
     try {
       const res = await fetch('/api/db/media', {
         method: 'POST',
@@ -1152,7 +1183,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     } catch (err) {
       console.error('Failed to save to SQLite:', err);
     }
-  };
+  }, [mediaLibrary]);
 
   const handleSearchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1193,11 +1224,12 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     }
   };
 
-  const handleOpenCategorizerForTitle = (title: string, type?: MediaType) => {
+  const handleOpenCategorizerForTitle = useCallback((title: string, type?: MediaType) => {
+    const curType = selectedTypeRef.current;
     setCategorizerInitialQuery(title);
-    setCategorizerInitialType(type || (selectedType !== 'all' && selectedType !== 'collections' ? selectedType : 'all'));
+    setCategorizerInitialType(type || (curType !== 'all' && curType !== 'collections' ? curType : 'all'));
     setIsCategorizerModalOpen(true);
-  };
+  }, []);
 
   const handleBatchCategorizeAll = async () => {
     if (isBatchCategorizing) return;
@@ -1353,20 +1385,13 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     setSelectedType(type);
   };
 
-  const handlePush = (media: MediaMetadata) => {
+  const handlePush = useCallback((media: MediaMetadata) => {
     onPushToSamba(media);
     setPushedIds((prev) => ({ ...prev, [media.id]: true }));
     setTimeout(() => {
       setPushedIds((prev) => ({ ...prev, [media.id]: false }));
     }, 3000);
-  };
-
-  const handleCopyNfo = (media: MediaMetadata) => {
-    const xml = generateMetadataFile(media);
-    navigator.clipboard.writeText(xml);
-    setCopiedNfoId(media.id);
-    setTimeout(() => setCopiedNfoId(null), 2000);
-  };
+  }, [onPushToSamba]);
 
   // Horizontal scroll controls for Recently Added section
   const scrollRecent = (direction: 'left' | 'right') => {
@@ -1554,31 +1579,35 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
         onChange={handleDiagnosticFileInputChange}
       />
 
-      {/* Web Search & Categorizer Modal */}
-      <WebSearchCategorizerModal
-        isOpen={isCategorizerModalOpen}
-        onClose={() => setIsCategorizerModalOpen(false)}
-        initialQuery={categorizerInitialQuery}
-        initialType={categorizerInitialType}
-        mediaLibrary={mediaLibrary}
-        sambaTree={sambaTree}
-        onOpenApiDebugger={onOpenApiDebugger}
-        onOpenClassifierModal={onOpenClassifierModal}
-        onImportMediaBatch={onImportMediaBatch}
-        onSaveCategorizedMedia={(media) => {
-          if (onSaveCategorizedMedia) {
-            onSaveCategorizedMedia(media);
-          }
-        }}
-        onPlayMedia={onPlayMedia}
-        onOpenInNfoStudio={onOpenInNfoStudio}
-        onOpenManualMatch={(media) => {
-          setIsCategorizerModalOpen(false);
-          if (onOpenManualMatch) {
-            onOpenManualMatch(media.title, media.type);
-          }
-        }}
-      />
+      {/* Web Search & Categorizer Modal (lazy-mounted when opened) */}
+      {isCategorizerModalOpen && (
+        <Suspense fallback={null}>
+          <WebSearchCategorizerModal
+            isOpen={isCategorizerModalOpen}
+            onClose={() => setIsCategorizerModalOpen(false)}
+            initialQuery={categorizerInitialQuery}
+            initialType={categorizerInitialType}
+            mediaLibrary={mediaLibrary}
+            sambaTree={sambaTree}
+            onOpenApiDebugger={onOpenApiDebugger}
+            onOpenClassifierModal={onOpenClassifierModal}
+            onImportMediaBatch={onImportMediaBatch}
+            onSaveCategorizedMedia={(media) => {
+              if (onSaveCategorizedMedia) {
+                onSaveCategorizedMedia(media);
+              }
+            }}
+            onPlayMedia={onPlayMedia}
+            onOpenInNfoStudio={onOpenInNfoStudio}
+            onOpenManualMatch={(media) => {
+              setIsCategorizerModalOpen(false);
+              if (onOpenManualMatch) {
+                onOpenManualMatch(media.title, media.type);
+              }
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* Top Banner & Quick Ingestion */}
       <div
@@ -1854,19 +1883,34 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
             recentlyAdded.map((item) => {
               const isSavedWatchlist = watchlistIds.has(item.id);
               return (
-                <div
+                <motion.article
                   key={`recent-${item.id}`}
                   id={`recent-card-${item.id}`}
+                  initial="rest"
+                  animate="rest"
+                  whileHover="hover"
+                  variants={{
+                    rest: { y: 0 },
+                    hover: { y: shouldReduceMotion ? 0 : -3 },
+                  }}
+                  transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
                   onClick={() => onOpenDetails(item)}
-                  className="group relative w-48 sm:w-56 shrink-0 bg-slate-950 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden transition-all duration-300 hover:shadow-xl hover:shadow-indigo-500/10 cursor-pointer flex flex-col"
+                  className="group relative w-48 sm:w-56 shrink-0 bg-slate-950 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden transition-colors duration-200 hover:shadow-xl hover:shadow-indigo-500/10 cursor-pointer flex flex-col"
                 >
-                  {/* Poster image */}
+                  {/* Poster image (consistent 16:10 aspect ratio + Framer Motion hover zoom) */}
                   <div className="relative aspect-[16/10] w-full bg-slate-900 overflow-hidden">
-                    <img
+                    <motion.img
                       src={item.fanartUrl || item.posterUrl}
                       alt={item.title}
+                      loading="lazy"
+                      decoding="async"
                       referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      variants={{
+                        rest: { scale: 1 },
+                        hover: { scale: shouldReduceMotion ? 1 : 1.05 },
+                      }}
+                      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                      className="w-full h-full object-cover will-change-transform"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
 
@@ -1975,7 +2019,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                       </button>
                     </div>
                   </div>
-                </div>
+                </motion.article>
               );
             })
           ) : (
@@ -2159,131 +2203,123 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
             </button>
 
             {/* Dropdown Menu Popover */}
-            <AnimatePresence>
-              {isTypeDropdownOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 6, scale: 0.96 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 4, scale: 0.96 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute right-0 mt-2 w-64 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 rounded-xl p-1.5 shadow-2xl z-50 space-y-1"
+            {isTypeDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-700/80 rounded-xl p-1.5 shadow-2xl z-50 space-y-1">
+                <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                  Filter Library by Type
+                </div>
+                <button
+                  id="dropdown-filter-all"
+                  type="button"
+                  onClick={() => {
+                    setSelectedType('all');
+                    setIsTypeDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                    selectedType === 'all'
+                      ? 'bg-indigo-600 text-white font-semibold'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
                 >
-                  <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800">
-                    Filter Library by Type
+                  <div className="flex items-center gap-2.5">
+                    <Layers className="w-4 h-4 text-indigo-300" />
+                    <span>All Media Types</span>
                   </div>
-                  <button
-                    id="dropdown-filter-all"
-                    type="button"
-                    onClick={() => {
-                      setSelectedType('all');
-                      setIsTypeDropdownOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                      selectedType === 'all'
-                        ? 'bg-indigo-600 text-white font-semibold'
-                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Layers className="w-4 h-4 text-indigo-300" />
-                      <span>All Media Types</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-slate-200">
-                      {allCount}
-                    </span>
-                  </button>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-slate-200">
+                    {allCount}
+                  </span>
+                </button>
 
-                  <button
-                    id="dropdown-filter-series"
-                    type="button"
-                    onClick={() => {
-                      setSelectedType('series');
-                      setIsTypeDropdownOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                      selectedType === 'series'
-                        ? 'bg-purple-600 text-white font-semibold'
-                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Tv className="w-4 h-4 text-purple-300" />
-                      <span>TV Series</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-purple-200">
-                      {seriesCount}
-                    </span>
-                  </button>
+                <button
+                  id="dropdown-filter-series"
+                  type="button"
+                  onClick={() => {
+                    setSelectedType('series');
+                    setIsTypeDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                    selectedType === 'series'
+                      ? 'bg-purple-600 text-white font-semibold'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Tv className="w-4 h-4 text-purple-300" />
+                    <span>TV Series</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-purple-200">
+                    {seriesCount}
+                  </span>
+                </button>
 
-                  <button
-                    id="dropdown-filter-movie"
-                    type="button"
-                    onClick={() => {
-                      setSelectedType('movie');
-                      setIsTypeDropdownOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                      selectedType === 'movie'
-                        ? 'bg-cyan-600 text-white font-semibold'
-                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Film className="w-4 h-4 text-cyan-300" />
-                      <span>Movies</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-cyan-200">
-                      {moviesCount}
-                    </span>
-                  </button>
+                <button
+                  id="dropdown-filter-movie"
+                  type="button"
+                  onClick={() => {
+                    setSelectedType('movie');
+                    setIsTypeDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                    selectedType === 'movie'
+                      ? 'bg-cyan-600 text-white font-semibold'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Film className="w-4 h-4 text-cyan-300" />
+                    <span>Movies</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-cyan-200">
+                    {moviesCount}
+                  </span>
+                </button>
 
-                  <button
-                    id="dropdown-filter-album"
-                    type="button"
-                    onClick={() => {
-                      setSelectedType('album');
-                      setIsTypeDropdownOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                      selectedType === 'album'
-                        ? 'bg-emerald-600 text-white font-semibold'
-                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Music className="w-4 h-4 text-emerald-300" />
-                      <span>Music Albums</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-emerald-200">
-                      {albumsCount}
-                    </span>
-                  </button>
+                <button
+                  id="dropdown-filter-album"
+                  type="button"
+                  onClick={() => {
+                    setSelectedType('album');
+                    setIsTypeDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                    selectedType === 'album'
+                      ? 'bg-emerald-600 text-white font-semibold'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Music className="w-4 h-4 text-emerald-300" />
+                    <span>Music Albums</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-emerald-200">
+                    {albumsCount}
+                  </span>
+                </button>
 
-                  <button
-                    id="dropdown-filter-collections"
-                    type="button"
-                    onClick={() => {
-                      setSelectedType('collections');
-                      setActiveCollectionTab('collections');
-                      setIsTypeDropdownOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                      selectedType === 'collections'
-                        ? 'bg-amber-600 text-white font-semibold'
-                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Layers className="w-4 h-4 text-amber-300" />
-                      <span>Collections & Universes</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-amber-200 tabular-nums">
-                      {universeCollections.length}
-                    </span>
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                <button
+                  id="dropdown-filter-collections"
+                  type="button"
+                  onClick={() => {
+                    setSelectedType('collections');
+                    setActiveCollectionTab('collections');
+                    setIsTypeDropdownOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                    selectedType === 'collections'
+                      ? 'bg-amber-600 text-white font-semibold'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Layers className="w-4 h-4 text-amber-300" />
+                    <span>Collections & Universes</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-black/30 text-amber-200 tabular-nums">
+                    {universeCollections.length}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Search Bar with Debounce indicator & Clear Action */}
@@ -2625,7 +2661,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                   <span>
                     {isCategorizingUncategorized
                       ? 'Categorizing...'
-                      : `Categorize Uncategorized (${mediaLibrary.filter(isMediaUncategorized).length})`}
+                      : `Categorize Uncategorized (${uncategorizedCount})`}
                   </span>
                 </button>
               </div>
@@ -2757,7 +2793,13 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                     selectedGenres.length === 0 ? 'bg-purple-800 text-purple-100 font-bold' : 'bg-slate-800 text-slate-400'
                   }`}
                 >
-                  {mediaLibrary.filter((m) => selectedType === 'all' || selectedType === 'collections' || m.type === selectedType).length}
+                  {selectedType === 'series'
+                    ? seriesCount
+                    : selectedType === 'movie'
+                    ? moviesCount
+                    : selectedType === 'album'
+                    ? albumsCount
+                    : allCount}
                 </span>
               </button>
 
@@ -3346,611 +3388,134 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
             </div>
           </div>
 
-          {/* Media Results Grid or Collections Grid */}
-          {activeCollectionTab === 'collections' || selectedType === 'collections' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {universeCollections
-                .filter((col) => {
-                  const q = debouncedSearchQuery.trim().toLowerCase();
-                  if (!q) return true;
-                  return (
-                    col.name.toLowerCase().includes(q) ||
-                    (col.folderPath || '').toLowerCase().includes(q) ||
-                    col.items.some((item) => item.title.toLowerCase().includes(q))
-                  );
-                })
-                .map((col) => (
-                <div
-                  key={col.id}
-                  onClick={() => setSelectedUniverseModal(col)}
-                  className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden flex flex-col group cursor-pointer transition-colors"
-                >
-                  <div className="relative h-48 sm:h-52 bg-slate-950 overflow-hidden border-b border-slate-800">
-                    <img
-                      src={col.posterUrl || COLLECTION_FALLBACK_POSTER}
-                      alt={col.name}
-                      onError={(e) => {
-                        e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
-                      }}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-90"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
-                    <div className="absolute bottom-3 left-4 right-4">
-                      <p className="text-[11px] font-mono text-indigo-300 truncate">
-                        {col.folderPath
-                          ? `Folder: ${col.folderPath}`
-                          : col.source === 'custom' || col.source === 'hybrid'
-                          ? 'Custom Universe'
-                          : 'Franchise Universe'}
-                      </p>
-                      <h4 className="text-base font-bold text-white group-hover:text-indigo-300 transition-colors truncate">
-                        {col.name}
-                      </h4>
-                    </div>
-                  </div>
-
-                  <div className="p-4 flex-1 flex flex-col justify-between space-y-4">
-                    <div className="space-y-2.5">
-                      <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
-                        {col.overview}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-300 tabular-nums">
-                        <span className="inline-flex items-center gap-1">
-                          <Film className="w-3.5 h-3.5 text-cyan-400" />
-                          <span>{col.movies.length} Movies</span>
-                        </span>
-                        <span className="text-slate-600">·</span>
-                        <span className="inline-flex items-center gap-1">
-                          <Tv className="w-3.5 h-3.5 text-purple-400" />
-                          <span>{col.series.length} Series</span>
-                        </span>
-                        <span className="text-slate-600">·</span>
-                        <span className="inline-flex items-center gap-1">
-                          <Music className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>{col.music.length} Albums</span>
-                        </span>
+          {/* Media Results Area (CSS Grid layout with consistent 16:10 thumbnails & Framer Motion hover zoom) */}
+          <section id="media-results-area" aria-label="Media results" className="w-full">
+            {activeCollectionTab === 'collections' || selectedType === 'collections' ? (
+              <div
+                id="media-collections-grid"
+                className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 items-stretch"
+              >
+                {universeCollections
+                  .filter((col) => {
+                    const q = debouncedSearchQuery.trim().toLowerCase();
+                    if (!q) return true;
+                    return (
+                      col.name.toLowerCase().includes(q) ||
+                      (col.folderPath || '').toLowerCase().includes(q) ||
+                      col.items.some((item) => item.title.toLowerCase().includes(q))
+                    );
+                  })
+                  .map((col) => (
+                  <motion.article
+                    key={col.id}
+                    initial="rest"
+                    animate="rest"
+                    whileHover="hover"
+                    variants={{
+                      rest: { y: 0 },
+                      hover: { y: shouldReduceMotion ? 0 : -4 },
+                    }}
+                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                    onClick={() => setSelectedUniverseModal(col)}
+                    className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden flex flex-col group cursor-pointer transition-colors"
+                  >
+                    <div className="relative w-full aspect-[16/10] bg-slate-950 overflow-hidden border-b border-slate-800 shrink-0">
+                      <motion.img
+                        src={col.posterUrl || COLLECTION_FALLBACK_POSTER}
+                        alt={col.name}
+                        loading="lazy"
+                        decoding="async"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
+                        }}
+                        variants={{
+                          rest: { scale: 1 },
+                          hover: { scale: shouldReduceMotion ? 1 : 1.05 },
+                        }}
+                        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                        className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity duration-200 will-change-transform"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
+                      <div className="absolute bottom-3 left-4 right-4">
+                        <p className="text-[11px] font-mono text-indigo-300 truncate">
+                          {col.folderPath
+                            ? `Folder: ${col.folderPath}`
+                            : col.source === 'custom' || col.source === 'hybrid'
+                            ? 'Custom Universe'
+                            : 'Franchise Universe'}
+                        </p>
+                        <h4 className="text-base font-bold text-white group-hover:text-indigo-300 transition-colors truncate">
+                          {col.name}
+                        </h4>
                       </div>
                     </div>
 
-                    <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                      <span className="text-slate-400 font-mono text-[11px] tabular-nums">
-                        {col.items.length} Joined Titles
-                      </span>
-                      <button className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-xs transition-colors whitespace-nowrap shrink-0">
-                        Explore Universe
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-              {sortedAndFilteredMedia.slice(0, displayedCount).map((media) => {
-              const isPushed = pushedIds[media.id];
-              const isCopied = copiedNfoId === media.id;
-              const isSavedWatchlist = watchlistIds.has(media.id);
-              const isImported =
-                media.id.startsWith('imported-') ||
-                media.id.startsWith('batch-') ||
-                Boolean(media.matchedFilename);
-              const affinity = getMediaAffinity(media);
-
-              const isExpanded = Boolean(expandedCardIds[media.id]);
-              const watchInfo = watchedItemsMap[media.id] || watchedItemsMap[media.title.toLowerCase()];
-              const isWatched = Boolean(watchInfo?.isCompleted);
-
-              return (
-                <motion.div
-                  key={media.id}
-                  id={`media-card-${media.id}`}
-                  whileHover={{ scale: 1.015, y: -4, boxShadow: '0 20px 40px -15px rgba(99, 102, 241, 0.3)' }}
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
-                  className={`bg-slate-900 border rounded-2xl overflow-hidden shadow-lg flex flex-col group cursor-pointer ${
-                    sortBy === 'affinity' && affinity.percentage >= 60
-                      ? 'border-emerald-500/50 hover:border-emerald-400/80 shadow-emerald-950/20'
-                      : 'border-slate-800 hover:border-indigo-500/50'
-                  }`}
-                  onClick={(e) => toggleExpandCard(media.id, e)}
-                >
-                  {/* Media Poster & Header Image */}
-                  <div className="relative h-48 sm:h-52 bg-slate-950 overflow-hidden group/poster">
-                    <img
-                      src={media.fanartUrl || media.posterUrl}
-                      alt={media.title}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 opacity-70 group-hover:opacity-85"
-                    />
-
-                    {/* Hover Tooltip - delayed by 10s as requested to prevent obstructing action buttons */}
-                    <div className="absolute inset-0 z-10 p-4 bg-slate-950/90 backdrop-blur-sm opacity-0 group-hover/poster:opacity-100 transition-opacity duration-500 delay-0 group-hover/poster:delay-[10000ms] flex flex-col justify-start pointer-events-none">
-                      <div className="text-white text-xs font-semibold mb-1 flex items-center justify-between">
-                        <span>{getSafeRating(media.rating).toFixed(1)} / 10</span>
-                        <span className="text-slate-400 font-normal">{getSafeGenres(media.genres).slice(0, 2).join(', ')}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-300 leading-tight line-clamp-4">
-                        {media.overview}
-                      </p>
-                    </div>
-
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent"></div>
-
-                    {/* Type Badge & Origin Badge & Affinity Badge */}
-                    <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2 z-20">
-                      <span
-                        className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider flex items-center gap-1 shadow-md ${
-                          media.type === 'series'
-                            ? 'bg-purple-600 text-white'
-                            : media.type === 'movie'
-                            ? 'bg-cyan-600 text-white'
-                            : 'bg-emerald-600 text-white'
-                        }`}
-                      >
-                        {media.type === 'series' && <Tv className="w-3 h-3" />}
-                        {media.type === 'movie' && <Film className="w-3 h-3" />}
-                        {media.type === 'album' && <Music className="w-3 h-3" />}
-                        {media.type}
-                      </span>
-
-                      {/* Genre Affinity Match Score Badge */}
-                      {sortBy === 'affinity' && affinity.percentage > 0 && (
-                        <span
-                          className="px-2 py-0.5 rounded bg-emerald-950/90 border border-emerald-500/60 text-emerald-300 text-[10px] font-bold flex items-center gap-1 shadow-md backdrop-blur-sm"
-                          title={`Affinity Score: ${affinity.score.toFixed(1)} based on ${affinity.topMatchingGenre} watch history`}
-                        >
-                          <Target className="w-2.5 h-2.5 text-emerald-400" />
-                          <span>{affinity.percentage}% Match</span>
-                          {affinity.topMatchingGenre && (
-                            <span className="text-emerald-200/70 font-normal">({affinity.topMatchingGenre})</span>
-                          )}
-                        </span>
-                      )}
-
-                      {isImported && (
-                        <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1 shadow">
-                          <CheckCircle2 className="w-2.5 h-2.5" />
-                          Imported
-                        </span>
-                      )}
-
-                      {media.certification && (
-                        <span className="px-2 py-0.5 rounded bg-slate-900/80 border border-slate-700 text-slate-300 text-[10px] font-semibold">
-                          {media.certification}
-                        </span>
-                      )}
-
-                      {/* Persistent Watched / Unwatched Badge */}
-                      {isWatched ? (
-                        <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1 shadow">
-                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-                          Watched
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded bg-slate-900/80 border border-slate-700/60 text-slate-400 text-[10px] font-medium flex items-center gap-1 shadow">
-                          <Clock className="w-2.5 h-2.5 text-slate-400" />
-                          Unwatched
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Rating badge & Watchlist/Watched toggle buttons */}
-                    <div className="absolute top-3 right-3 flex items-center gap-1.5 z-20">
-                      {/* Watched Toggle Button */}
-                      <button
-                        id={`watched-toggle-${media.id}`}
-                        onClick={(e) => toggleWatchedStatus(media, e)}
-                        className={`p-1.5 rounded-lg transition cursor-pointer shadow-md backdrop-blur-md border ${
-                          isWatched
-                            ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500/50'
-                            : 'bg-slate-900/90 hover:bg-slate-800 text-slate-400 hover:text-white border-slate-700'
-                        }`}
-                        title={isWatched ? 'Mark as Unwatched' : 'Mark as Watched'}
-                      >
-                        <CheckCircle2 className={`w-3.5 h-3.5 ${isWatched ? 'text-emerald-400 fill-emerald-500/20' : ''}`} />
-                      </button>
-
-                      {/* Watchlist Toggle Button */}
-                      <button
-                        id={`watchlist-toggle-${media.id}`}
-                        onClick={(e) => toggleWatchlist(media, e)}
-                        className={`p-1.5 rounded-lg transition cursor-pointer shadow-md backdrop-blur-md border ${
-                          isSavedWatchlist
-                            ? 'bg-amber-500/30 text-amber-300 border-amber-500/50'
-                            : 'bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-700'
-                        }`}
-                        title={isSavedWatchlist ? 'Remove from My Watchlist' : 'Add to My Watchlist'}
-                      >
-                        <Bookmark className={`w-3.5 h-3.5 ${isSavedWatchlist ? 'fill-amber-400 text-amber-400' : ''}`} />
-                      </button>
-
-                      <button
-                        onClick={() => handleOpenCategorizerForTitle(media.title, media.type)}
-                        className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-indigo-600 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer shadow-md"
-                        title="Search web for updated categories and metadata"
-                      >
-                        <Globe className="w-3.5 h-3.5" />
-                      </button>
-
-                      {media.posterUrl && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const filename = `${media.title.replace(/[/\\?%*:|"<>]/g, '_')}-${media.type === 'album' ? 'folder' : 'poster'}.jpg`;
-                            downloadMediaArtwork(media.posterUrl, filename);
-                          }}
-                          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-slate-700 transition cursor-pointer shadow-md"
-                          title="Download high-resolution poster/cover image (.jpg)"
-                        >
-                          <ImageIcon className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-
-                      <div className="flex items-center gap-1 bg-slate-900/90 border border-amber-500/30 px-2 py-1 rounded-lg text-amber-400 text-xs font-bold shadow-md">
-                        <Star className="w-3.5 h-3.5 fill-amber-400" />
-                        <span>{getSafeRating(media.rating).toFixed(1)}</span>
-                      </div>
-                    </div>
-
-                    {/* Quick Play/Preview Overlay on Hover */}
-                    <button
-                      onClick={() => onPlayMedia ? onPlayMedia(media) : onOpenDetails(media)}
-                      className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-indigo-600/90 hover:bg-indigo-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-xl cursor-pointer"
-                      title="Play & Stream Media"
-                    >
-                      <Play className="w-5 h-5 fill-white ml-0.5" />
-                    </button>
-
-                    {/* Floating Title and Meta */}
-                    <div className="absolute bottom-3 left-4 right-4">
-                      <h3 className="text-lg font-bold text-white leading-snug drop-shadow-md truncate">
-                        {media.title}
-                      </h3>
-                      <div className="flex items-center gap-3 text-xs text-slate-300 mt-0.5">
-                        <span className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3 text-indigo-400" />
-                          {media.year}
-                        </span>
-                        {media.runtime && (
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-cyan-400" />
-                            {media.runtime}
+                    <div className="p-4 flex-1 flex flex-col justify-between space-y-4">
+                      <div className="space-y-2.5">
+                        <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
+                          {col.overview}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-300 tabular-nums">
+                          <span className="inline-flex items-center gap-1">
+                            <Film className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>{col.movies.length} Movies</span>
                           </span>
-                        )}
-                        {media.artists && (
-                          <span className="text-slate-200 font-medium truncate max-w-[140px]">
-                            {media.artists.join(', ')}
+                          <span className="text-slate-600">·</span>
+                          <span className="inline-flex items-center gap-1">
+                            <Tv className="w-3.5 h-3.5 text-purple-400" />
+                            <span>{col.series.length} Series</span>
                           </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Card Body */}
-                  <div className="p-4 flex-1 flex flex-col justify-between space-y-4">
-                    {/* Categories & Genres Pills (with Affinity highlights) */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {getSafeGenres(media.genres).slice(0, 4).map((g, idx) => {
-                        const isAffinityMatched = (genreAffinityMap[g.trim().toLowerCase()]?.score || 0) > 0;
-                        return (
-                          <button
-                            key={idx}
-                            onClick={() => {
-                              const matchedCat = MOVIE_SERIES_CATEGORIES.find((c) =>
-                                c.keywords.some((k) => g.toLowerCase().includes(k))
-                              );
-                              if (matchedCat) {
-                                setActiveCategory(matchedCat.id);
-                              } else {
-                                handleToggleGenre(g);
-                              }
-                            }}
-                            className={`px-2 py-0.5 rounded-full text-[11px] border transition cursor-pointer flex items-center gap-1 ${
-                              sortBy === 'affinity' && isAffinityMatched
-                                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50 hover:bg-emerald-900/90 font-medium'
-                                : 'bg-slate-800 hover:bg-indigo-900/60 text-slate-300 hover:text-indigo-200 border-slate-700/60'
-                            }`}
-                            title={isAffinityMatched ? `Matched in your top watch genres (${genreAffinityMap[g.trim().toLowerCase()].watchCount} watches)` : undefined}
-                          >
-                            {sortBy === 'affinity' && isAffinityMatched && <Sparkles className="w-2.5 h-2.5 text-emerald-400" />}
-                            <span>{g}</span>
-                          </button>
-                        );
-                      })}
-                      {media.seasons && (
-                        <span className="px-2 py-0.5 rounded-full bg-purple-900/30 text-purple-300 text-[11px] border border-purple-800/40">
-                          {media.seasons.length} {media.seasons.length === 1 ? 'Season' : 'Seasons'}
-                        </span>
-                      )}
-                      {media.tracks && (
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-300 text-[11px] border border-emerald-800/40">
-                          {media.tracks.length} Tracks
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Plot / Overview */}
-                    <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed">
-                      {media.overview}
-                    </p>
-
-                    {/* Target Samba Folder Path info & Verify Integrity */}
-                    <div className="space-y-1.5">
-                      <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-400 flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <HardDrive className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                          <span className="truncate">
-                            {media.matchedFilename
-                              ? `File: ${media.matchedFilename}`
-                              : getMountedDisplayPath(
-                                  media.recommendedFolderStructure,
-                                  scanRootPath || `/Volumes/${sambaConfig.share || 'media'}`,
-                                  sambaConfig.share
-                                )}
+                          <span className="text-slate-600">·</span>
+                          <span className="inline-flex items-center gap-1">
+                            <Music className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>{col.music.length} Albums</span>
                           </span>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between">
-                        <button
-                          id={`btn-verify-integrity-${media.id}`}
-                          onClick={(e) => verifyFileIntegrity(media, e)}
-                          disabled={fileIntegrityMap[media.id] === 'verifying'}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white text-[11px] font-semibold border border-slate-700 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                          title="Check Samba path accessibility and file checksum integrity"
-                        >
-                          {fileIntegrityMap[media.id] === 'verifying' ? (
-                            <>
-                              <Loader2 className="w-3 h-3 text-indigo-400 animate-spin" />
-                              <span>Verifying Path...</span>
-                            </>
-                          ) : (
-                            <>
-                              <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                              <span>Verify File Integrity</span>
-                            </>
-                          )}
-                        </button>
-
-                        {fileIntegrityMap[media.id] === 'reachable' && (
-                          <span className="px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 text-[10px] font-bold flex items-center gap-1 shadow-sm">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                            File Verified & Accessible
-                          </span>
-                        )}
-
-                        {fileIntegrityMap[media.id] === 'corrupted' && (
-                          <span className="px-2 py-0.5 rounded bg-rose-950/80 border border-rose-500/50 text-rose-300 text-[10px] font-bold flex items-center gap-1 shadow-sm">
-                            <AlertCircle className="w-3 h-3 text-rose-400" />
-                            File Unreachable / Corrupted
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Expandable Technical Metadata Toggle Bar */}
-                    <button
-                      id={`btn-expand-meta-${media.id}`}
-                      onClick={(e) => toggleExpandCard(media.id, e)}
-                      className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700/60 transition cursor-pointer"
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400" />
-                        <span>{isExpanded ? 'Hide Technical Metadata' : 'View Bitrate, Audio & Subtitles'}</span>
-                      </div>
-                      <span className="text-[11px] text-indigo-400 font-mono">
-                        {isExpanded ? '▲ Less' : '▼ More'}
-                      </span>
-                    </button>
-
-                    {/* Expanded Technical Metadata Section */}
-                    <AnimatePresence>
-                      {isExpanded && (
-                        <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          transition={{ duration: 0.25, ease: 'easeInOut' }}
-                          className="overflow-hidden space-y-3 pt-1 pb-1 text-xs text-slate-300"
-                        >
-                          <div className="p-3 rounded-xl bg-slate-950/90 border border-indigo-900/40 space-y-2.5 shadow-inner">
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-400 font-medium flex items-center gap-1">
-                                <HardDrive className="w-3 h-3 text-indigo-400" /> File Bitrate:
-                              </span>
-                              <span className="font-mono text-indigo-300 font-bold bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-800/40">
-                                {media.type === 'album' ? '320 kbps (FLAC Lossless)' : media.type === 'series' ? '14.2 Mbps (HEVC 10-bit / 5.1ch)' : '18.8 Mbps (UHD Remux / Atmos)'}
-                              </span>
-                            </div>
-
-                            <div>
-                              <div className="text-slate-400 font-medium mb-1 flex items-center gap-1">
-                                <Music className="w-3 h-3 text-emerald-400" /> Audio Track Languages:
-                              </div>
-                              <div className="flex flex-wrap gap-1">
-                                <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-200 border border-slate-700 text-[11px] font-mono flex items-center gap-1">
-                                  <span>🇺🇸</span> English (DTS-HD MA 5.1)
-                                </span>
-                                {media.type === 'series' && (
-                                  <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-200 border border-slate-700 text-[11px] font-mono flex items-center gap-1">
-                                    <span>🇯🇵</span> Japanese (TrueHD Atmos 7.1)
-                                  </span>
-                                )}
-                                <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-200 border border-slate-700 text-[11px] font-mono flex items-center gap-1">
-                                  <span>🇫🇷</span> French (Stereo 2.0)
-                                </span>
-                              </div>
-                            </div>
-
-                            <div>
-                              <div className="text-slate-400 font-medium mb-1 flex items-center gap-1">
-                                <FileVideo className="w-3 h-3 text-teal-400" /> Full Subtitle List:
-                              </div>
-                              <div className="flex flex-wrap gap-1">
-                                <span className="px-2 py-0.5 rounded bg-teal-950/70 text-teal-300 border border-teal-800/50 text-[11px] font-mono flex items-center gap-1">
-                                  <span>🇺🇸</span> English (.srt - Default)
-                                </span>
-                                <span className="px-2 py-0.5 rounded bg-teal-950/70 text-teal-300 border border-teal-800/50 text-[11px] font-mono flex items-center gap-1">
-                                  <span>🇯🇵</span> Japanese (.ass - Signs & Songs)
-                                </span>
-                                <span className="px-2 py-0.5 rounded bg-teal-950/70 text-teal-300 border border-teal-800/50 text-[11px] font-mono flex items-center gap-1">
-                                  <span>🇪🇸</span> Spanish (.vtt)
-                                </span>
-                                <span className="px-2 py-0.5 rounded bg-teal-950/70 text-teal-300 border border-teal-800/50 text-[11px] font-mono flex items-center gap-1">
-                                  <span>🇩🇪</span> German (.srt)
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    {/* Actions Button Grid */}
-                    <div className="space-y-2 pt-2 border-t border-slate-800">
-                      {/* Primary Download & Push row */}
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          id={`btn-download-bundle-${media.id}`}
-                          onClick={() => downloadMediaBundleZip(media)}
-                          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition shadow-sm cursor-pointer"
-                          title="Download complete ZIP package containing .nfo, posters, XML, subtitle templates"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Download ZIP</span>
-                        </button>
-
-                        <button
-                          id={`btn-push-samba-${media.id}`}
-                          onClick={() => handlePush(media)}
-                          className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                            isPushed
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700'
-                          }`}
-                          title="Sync metadata & folder structure directly into Samba network share"
-                        >
-                          {isPushed ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Pushed to SMB!</span>
-                            </>
-                          ) : (
-                            <>
-                              <FolderPlus className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Push to Samba</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      {media.posterUrl && (
-                        <button
-                          id={`btn-download-art-${media.id}`}
-                          onClick={() => {
-                            const filename = `${media.title.replace(/[/\\?%*:|"<>]/g, '_')}-${media.type === 'album' ? 'folder' : 'poster'}.jpg`;
-                            downloadMediaArtwork(media.posterUrl, filename);
-                          }}
-                          className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-750 text-indigo-300 hover:text-indigo-200 border border-slate-700/80 text-[11px] font-semibold transition cursor-pointer"
-                          title="Download standalone high-resolution poster / cover art image (.jpg)"
-                        >
-                          <ImageIcon className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>Download Artwork (.jpg)</span>
-                        </button>
-                      )}
-
-                      {/* Secondary Play, Details, SQLite, Watchlist, Web Categorizer & NFO buttons */}
-                      <div className="grid grid-cols-5 gap-1 text-[11px]">
-                        <button
-                          id={`btn-play-media-${media.id}`}
-                          onClick={() => onPlayMedia ? onPlayMedia(media) : onOpenDetails(media)}
-                          className="flex items-center justify-center gap-1 py-1.5 rounded bg-indigo-600/90 hover:bg-indigo-500 text-white font-semibold transition cursor-pointer shadow-sm"
-                          title="Play & Stream Media"
-                        >
-                          <Play className="w-3 h-3 fill-white" />
-                          <span>Play</span>
-                        </button>
-
-                        <button
-                          id={`btn-inspect-${media.id}`}
-                          onClick={() => onOpenDetails(media)}
-                          className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
-                        >
-                          <Eye className="w-3 h-3 text-cyan-400" />
-                          <span>Info</span>
-                        </button>
-
-                        <button
-                          id={`btn-watchlist-card-${media.id}`}
-                          onClick={(e) => toggleWatchlist(media, e)}
-                          className={`flex items-center justify-center gap-1 py-1.5 rounded transition cursor-pointer ${
-                            isSavedWatchlist
-                              ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
-                              : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
-                          }`}
-                          title={isSavedWatchlist ? 'In Watchlist (Click to remove)' : 'Add to Watchlist'}
-                        >
-                          <Bookmark className={`w-3 h-3 ${isSavedWatchlist ? 'fill-amber-400 text-amber-400' : ''}`} />
-                          <span>{isSavedWatchlist ? 'Saved' : 'Watch'}</span>
-                        </button>
-
-                        <button
-                          id={`btn-save-sqlite-${media.id}`}
-                          onClick={() => handleSaveToSqlite(media)}
-                          className={`flex items-center justify-center gap-1 py-1.5 rounded transition cursor-pointer ${
-                            savedDbIds[media.id]
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-slate-800/80 hover:bg-slate-700 text-emerald-300'
-                          }`}
-                          title="Store Title and Synopsis in SQLite database"
-                        >
-                          {savedDbIds[media.id] ? (
-                            <>
-                              <Check className="w-3 h-3" />
-                              <span>Saved</span>
-                            </>
-                          ) : (
-                            <>
-                              <Database className="w-3 h-3" />
-                              <span>DB</span>
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          id={`btn-studio-${media.id}`}
-                          onClick={() => onOpenInNfoStudio(media)}
-                          className="flex items-center justify-center gap-1 py-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
-                        >
-                          <Sparkles className="w-3 h-3 text-purple-400" />
-                          <span>XML</span>
+                      <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                        <span className="text-slate-400 font-mono text-[11px] tabular-nums">
+                          {col.items.length} Joined Titles
+                        </span>
+                        <button className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-xs transition-colors whitespace-nowrap shrink-0">
+                          Explore Universe
                         </button>
                       </div>
                     </div>
-                  </div>
-
-                  {/* Thin Colored Progress Bar at Bottom of Media Card */}
-                  {(() => {
-                    const watchInfo = watchedItemsMap[media.id] || watchedItemsMap[media.title.toLowerCase()];
-                    const progressPercent = watchInfo?.progress || (watchInfo?.isCompleted ? 100 : 0);
-                    if (progressPercent <= 0) return null;
-                    return (
-                      <div className="w-full bg-slate-800 h-1.5 overflow-hidden rounded-b-2xl">
-                        <div
-                          className={`h-full transition-all duration-300 ${
-                            progressPercent >= 100 ? 'bg-emerald-500' : 'bg-indigo-500'
-                          }`}
-                          style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-                          title={`Watch Progress: ${Math.round(progressPercent)}%`}
-                        />
-                      </div>
-                    );
-                  })()}
-                </motion.div>
-              );
-            })}
-            <div ref={observerTarget} className="h-10" />
-          </div>
-        )}
+                  </motion.article>
+                ))}
+              </div>
+            ) : (
+              <VirtualizedMediaGrid
+                items={sortedAndFilteredMedia}
+                layoutKey={`${selectedType}-${originFilter}-${activeCategory}-${selectedGenres.join(',')}-${yearRange[0]}-${yearRange[1]}-${debouncedSearchQuery}-${sortBy}`}
+                enableVirtualization={enableVirtualization}
+                pushedIds={pushedIds}
+                savedDbIds={savedDbIds}
+                watchlistIds={watchlistIds}
+                expandedCardIds={expandedCardIds}
+                watchedItemsMap={watchedItemsMap}
+                fileIntegrityMap={fileIntegrityMap}
+                mediaAffinityById={mediaAffinityById}
+                genreAffinityMap={genreAffinityMap}
+                sortBy={sortBy}
+                scanRootPath={scanRootPath}
+                sambaConfig={sambaConfig}
+                onToggleExpand={toggleExpandCard}
+                onToggleWatched={toggleWatchedStatus}
+                onToggleWatchlist={toggleWatchlist}
+                onOpenCategorizer={handleOpenCategorizerForTitle}
+                onPlayMedia={onPlayMedia}
+                onOpenDetails={onOpenDetails}
+                onSelectGenreOrCategory={handleSelectGenreOrCategory}
+                onVerifyFileIntegrity={verifyFileIntegrity}
+                onPushToSamba={handlePush}
+                onSaveToSqlite={handleSaveToSqlite}
+                onOpenInNfoStudio={onOpenInNfoStudio}
+              />
+            )}
+          </section>
         </main>
       </div>
 
@@ -4055,13 +3620,17 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
         </div>
       )}
 
-      {/* Bulk Subtitles Fetcher Modal */}
-      <BulkSubtitlesModal
-        isOpen={isBulkSubtitlesModalOpen}
-        onClose={() => setIsBulkSubtitlesModalOpen(false)}
-        mediaLibrary={mediaLibrary}
-        watchedItemsMap={watchedItemsMap}
-      />
+      {/* Bulk Subtitles Fetcher Modal (lazy-mounted when opened) */}
+      {isBulkSubtitlesModalOpen && (
+        <Suspense fallback={null}>
+          <BulkSubtitlesModal
+            isOpen={isBulkSubtitlesModalOpen}
+            onClose={() => setIsBulkSubtitlesModalOpen(false)}
+            mediaLibrary={mediaLibrary}
+            watchedItemsMap={watchedItemsMap}
+          />
+        </Suspense>
+      )}
 
       {/* Universe / Franchise Collection Detail Modal */}
       {selectedUniverseModal && (

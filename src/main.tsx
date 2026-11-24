@@ -2,20 +2,33 @@ import React, { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './index.css';
-import './lib/firebase'; // Ensure Firebase is initialized
 import { ErrorBoundary } from './components/ErrorBoundary';
-import VConsole from 'vconsole';
 
-const isLocalDevelopment = typeof window !== 'undefined' &&
-  window.location.protocol === 'http:' &&
-  ['localhost', '127.0.0.1'].includes(window.location.hostname);
+// Only load VConsole lazily after initial paint when explicitly requested via ?vconsole=1 or localStorage flag.
+// Synchronous VConsole initialization hooks console/fetch/XHR globally and slows down startup and UI updates.
+const shouldLoadVConsole =
+  typeof window !== 'undefined' &&
+  (window.location.search.includes('vconsole=1') ||
+    (() => {
+      try {
+        return localStorage.getItem('sambavault_enable_vconsole') === 'true';
+      } catch {
+        return false;
+      }
+    })());
 
-if (isLocalDevelopment) {
-  try {
-    const vConsole = new VConsole({ theme: 'dark' });
-    console.log('[VConsole] Initialized successfully for full application debug logging.');
-  } catch (e) {
-    console.error('[VConsole] Failed to initialize:', e);
+if (shouldLoadVConsole) {
+  const loadVConsoleIdle = () => {
+    import('vconsole')
+      .then(({ default: VConsole }) => {
+        new VConsole({ theme: 'dark' });
+      })
+      .catch(() => {});
+  };
+  if ('requestIdleCallback' in window) {
+    (window as any).requestIdleCallback(loadVConsoleIdle, { timeout: 2000 });
+  } else {
+    setTimeout(loadVConsoleIdle, 1000);
   }
 }
 
@@ -29,4 +42,5 @@ if (rootElement) {
     </StrictMode>
   );
 }
+
 

@@ -73,8 +73,17 @@ class ThumbnailStorageService {
     }
     this.isInitialized = true;
 
-    // Asynchronously sync with SQLite backend
-    this.syncFromBackend();
+    // Defer backend cache sync so it does not compete with initial app paint/hydration
+    if (typeof window !== 'undefined') {
+      const scheduleSync = () => {
+        this.syncFromBackend();
+      };
+      if ('requestIdleCallback' in window) {
+        setTimeout(() => (window as any).requestIdleCallback(scheduleSync, { timeout: 2500 }), 400);
+      } else {
+        setTimeout(scheduleSync, 1000);
+      }
+    }
   }
 
   // Sync initial state from SQLite backend table

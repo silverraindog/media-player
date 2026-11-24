@@ -147,11 +147,12 @@ class GlobalSearchIndexerService {
 
   private listeners: Set<() => void> = new Set();
   private backgroundTaskTimer: any = null;
+  private lastIndexedLibraryRef: MediaMetadata[] | null = null;
+  private lastIndexedTreeRef: SambaShareNode[] | null = null;
 
   constructor() {
     this.initAliases();
-    // Kick off initial indexing pass in the background
-    this.scheduleBackgroundIndexing(CURATED_MEDIA_DATABASE, []);
+    this.telemetry.totalIndexedItems = CURATED_MEDIA_DATABASE.length;
   }
 
   private initAliases() {
@@ -177,14 +178,30 @@ class GlobalSearchIndexerService {
    * Schedules background asynchronous indexing without blocking the UI thread
    */
   public scheduleBackgroundIndexing(mediaLibrary: MediaMetadata[], sambaTree: SambaShareNode[]) {
+    if (
+      this.telemetry.status === 'ready' &&
+      this.lastIndexedLibraryRef === mediaLibrary &&
+      this.lastIndexedTreeRef === sambaTree
+    ) {
+      return;
+    }
+
     if (this.backgroundTaskTimer) clearTimeout(this.backgroundTaskTimer);
-
     this.telemetry.status = 'indexing';
-    this.notify();
 
-    this.backgroundTaskTimer = setTimeout(() => {
+    const runIdle = () => {
+      this.lastIndexedLibraryRef = mediaLibrary;
+      this.lastIndexedTreeRef = sambaTree;
       this.runIndexingPass(mediaLibrary, sambaTree);
-    }, 150);
+    };
+
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      this.backgroundTaskTimer = setTimeout(() => {
+        (window as any).requestIdleCallback(runIdle, { timeout: 1500 });
+      }, 350);
+    } else {
+      this.backgroundTaskTimer = setTimeout(runIdle, 500);
+    }
   }
 
   private runIndexingPass(mediaLibrary: MediaMetadata[], sambaTree: SambaShareNode[]) {

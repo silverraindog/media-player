@@ -1,4 +1,5 @@
-import { isTauriEnvironment, detectFFmpegPath } from '../utils/tauriBridge';
+import { isTauriEnvironment, detectFFmpegPath, cleanupTranscodedFile } from '../utils/tauriBridge';
+import { resolveBackendUrl } from '../lib/api';
 
 export interface MediaInfo {
   format: {
@@ -23,6 +24,7 @@ export interface TranscodeStatusInfo {
 }
 
 class TranscodeService {
+  private static readonly MAX_STATUS_ENTRIES = 50;
   private activeStatus: Map<string, TranscodeStatusInfo> = new Map();
   private listeners: Set<(path: string, status: TranscodeStatusInfo) => void> = new Set();
 
@@ -36,6 +38,14 @@ class TranscodeService {
 
   public setStatus(path: string, status: TranscodeStatusInfo) {
     this.activeStatus.set(path, status);
+    while (this.activeStatus.size > TranscodeService.MAX_STATUS_ENTRIES) {
+      const oldestKey = this.activeStatus.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.activeStatus.delete(oldestKey);
+      } else {
+        break;
+      }
+    }
     this.listeners.forEach((listener) => {
       try {
         listener(path, status);
@@ -89,6 +99,11 @@ class TranscodeService {
   }
 
   public async transcode(path: string, mediaType: 'audio' | 'video'): Promise<string> {
+    const previousOutput = this.activeStatus.get(path)?.outputPath;
+    if (previousOutput && previousOutput.includes('sambavault-transcode-')) {
+      cleanupTranscodedFile(previousOutput).catch(() => {});
+    }
+
     this.setStatus(path, {
       state: 'transcoding',
       progressPercent: 15,
@@ -97,95 +112,73 @@ class TranscodeService {
 
     try {
       if (isTauriEnvironment()) {
+        await detectFFmpegPath();
+        const { invoke } = await import('@tauri-apps/api/tauri');
+
+        const p1 = setTimeout(() => {
+          this.setStatus(path, {
+            state: 'transcoding',
+            progressPercent: 45,
+            message: 'Transcoding Video Stream (H.264 / AAC)...',
+          });
+        }, 1200);
+        const p2 = setTimeout(() => {
+          this.setStatus(path, {
+            state: 'transcoding',
+            progressPercent: 80,
+            message: 'Multiplexing & Generating Cues...',
+          });
+        }, 2500);
+
         try {
-          await detectFFmpegPath();
-          const { invoke } = await import('@tauri-apps/api/tauri');
-          
-          const p1 = setTimeout(() => {
-            this.setStatus(path, { state: 'transcoding', progressPercent: 45, message: 'Transcoding Video Stream (H.264 / AAC)...' });
-          }, 1200);
-          const p2 = setTimeout(() => {
-            this.setStatus(path, { state: 'transcoding', progressPercent: 80, message: 'Multiplexing & Generating Cues...' });
-          }, 2500);
-
-          const invokePromise = invoke<string>('transcode_media_file', { sourcePath: path, mediaType });
-          const timeoutPromise = new Promise<string>((_, reject) =>
-            setTimeout(() => reject(new Error('Tauri transcode timeout')), 5000)
-          );
-
-          const res = await Promise.race([invokePromise, timeoutPromise]);
-          clearTimeout(p1);
-          clearTimeout(p2);
-
+          const outputPath = await invoke<string>('transcode_media_file', {
+            sourcePath: path,
+            mediaType,
+          });
           this.setStatus(path, {
             state: 'ready',
             progressPercent: 100,
             message: 'Transcode Complete - Ready for Playback',
-            outputPath: res,
+            outputPath,
           });
-          return res;
-        } catch (tauriErr) {
-          console.warn('Tauri transcode fallback to progressive completion:', tauriErr);
+          return outputPath;
+        } finally {
+          clearTimeout(p1);
+          clearTimeout(p2);
         }
       }
 
-      // Smooth web preview / fallback progression with 5s 80% stall watchdog & soft-restart
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      // Express backend transcode session creation for web / proxy playback
       this.setStatus(path, {
         state: 'transcoding',
-        progressPercent: 45,
-        message: 'Transcoding HEVC / H.265 stream via FFmpeg proxy...',
-      });
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      this.setStatus(path, {
-        state: 'transcoding',
-        progressPercent: 80,
-        message: 'Multiplexing & Generating Cues (Monitoring buffer)...',
+        progressPercent: 50,
+        message: 'Preparing FFmpeg live transcode stream...',
       });
 
-      // Watchdog: monitor if transcoding hangs at 80% for more than 5 seconds
-      await new Promise<void>((resolve) => {
-        let elapsed = 0;
-        const interval = setInterval(() => {
-          elapsed += 500;
-          const current = this.getStatus(path);
-          if (current.state !== 'transcoding' || current.progressPercent > 80) {
-            clearInterval(interval);
-            resolve();
-          } else if (elapsed >= 5000) {
-            clearInterval(interval);
-            console.warn('[FFmpeg Stall Monitor] H.265 transcoding hung at 80% for >5s (buffer full / frame dropped detected). Triggering soft-restart...');
-            resolve();
-          }
-        }, 500);
+      const res = await fetch(resolveBackendUrl('/api/media/transcode'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourcePath: path }),
       });
 
-      // Soft-restart step if stalled at 80%
-      const currentStatus = this.getStatus(path);
-      if (currentStatus.progressPercent === 80) {
-        console.log('[TranscodeService] Soft-restarting transcoding pipeline after 80% stall...');
-        this.setStatus(path, {
-          state: 'transcoding',
-          progressPercent: 65,
-          message: 'Soft-restarting pipeline & resetting buffer queue...',
-        });
-        await new Promise((resolve) => setTimeout(resolve, 700));
+      if (!res.ok) {
+        const errPayload = await res.json().catch(() => ({}));
+        throw new Error(errPayload.error || `Transcode initialization failed (HTTP ${res.status})`);
       }
 
-      this.setStatus(path, {
-        state: 'transcoding',
-        progressPercent: 95,
-        message: 'Finalizing H.264 / AAC container stream...',
-      });
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      const data = await res.json();
+      if (!data?.token) {
+        throw new Error('Server did not return a transcode session token');
+      }
 
+      const streamEndpoint = resolveBackendUrl(`/api/media/transcode/${encodeURIComponent(data.token)}?type=${encodeURIComponent(mediaType)}`);
       this.setStatus(path, {
         state: 'ready',
         progressPercent: 100,
-        message: 'Transcode Complete',
-        outputPath: path,
+        message: 'Live FFmpeg Transcode Stream Ready',
+        outputPath: streamEndpoint,
       });
-      return path;
+      return streamEndpoint;
     } catch (e: any) {
       this.setStatus(path, {
         state: 'error',

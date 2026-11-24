@@ -44,6 +44,8 @@ import { HLSPlayer } from './HLSPlayer';
 import { getDirectMediaPlayUrl } from '../utils/directMediaPlay';
 import { getMountedDisplayPath, extractCleanLocalPath } from '../utils/pathSanitizer';
 import { transcodeService, TranscodeStatusInfo, MediaInfo } from '../services/TranscodeService';
+import { resolveBackendUrl } from '../lib/api';
+import { cleanupTranscodedFile } from '../utils/tauriBridge';
 
 export interface NetworkProbeStats {
   timestamp: number;
@@ -176,6 +178,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   const isAutoReloadingRef = useRef<boolean>(false);
   const lastPlaybackTimeRef = useRef<number>(0);
   const lastTimeAdvanceRef = useRef<number>(Date.now());
+  const isMountedRef = useRef<boolean>(true);
+  const autoReloadTimersRef = useRef<number[]>([]);
+  const autoReloadCleanupRef = useRef<(() => void) | null>(null);
+  const tauriTempOutputsRef = useRef<Set<string>>(new Set());
 
 
   const [hardwareAccel, setHardwareAccel] = useState(transcodeConfig?.hwAccel?.enabled ?? true);
@@ -225,20 +231,50 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }
   };
 
-  // FPS monitor effect
   useEffect(() => {
-    // Simulated FPS monitoring from transcodeStatus message or logs
-    if (transcodeStatus.state === 'transcoding') {
-      const randomFps = 10 + Math.random() * 20; // Simulated FPS
-      setPipelineHealth({ fps: Math.round(randomFps), latency: Math.round(Math.random() * 50) });
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      for (const timerId of autoReloadTimersRef.current) {
+        window.clearTimeout(timerId);
+      }
+      autoReloadTimersRef.current = [];
+      if (autoReloadCleanupRef.current) {
+        autoReloadCleanupRef.current();
+        autoReloadCleanupRef.current = null;
+      }
+      for (const tempPath of tauriTempOutputsRef.current) {
+        cleanupTranscodedFile(tempPath).catch(() => {});
+      }
+      tauriTempOutputsRef.current.clear();
+    };
+  }, []);
+
+  // Track Tauri temp transcoded files for cleanup on unmount
+  useEffect(() => {
+    if (
+      transcodeStatus.outputPath &&
+      transcodeStatus.outputPath.includes('sambavault-transcode-') &&
+      !/^(https?|blob|data):/i.test(transcodeStatus.outputPath) &&
+      !transcodeStatus.outputPath.startsWith('/api/')
+    ) {
+      tauriTempOutputsRef.current.add(transcodeStatus.outputPath);
     }
-  }, [transcodeStatus]);
+  }, [transcodeStatus.outputPath]);
+
+  // Update pipeline health indicator cleanly based on actual transcode state (no random simulation)
+  useEffect(() => {
+    if (transcodeStatus.state === 'transcoding') {
+      setPipelineHealth((prev) => ({ ...prev, fps: prev.fps || 24 }));
+    } else if (transcodeStatus.state === 'ready' || transcodeStatus.state === 'native') {
+      setPipelineHealth({ fps: 60, latency: 0 });
+    }
+  }, [transcodeStatus.state]);
 
   const [isBufferingCache, setIsBufferingCache] = useState(false);
   const [bufferSecondsRemaining, setBufferSecondsRemaining] = useState(10);
 
-  // Pre-load buffer strategy & 5-second buffer threshold monitor:
-  // Automatically pauses when buffer < 5s and waits for transcoder cache to fill before resuming playback.
+  // Passive buffer level monitor (avoids force-pausing HTML5 media, which conflicts with stall watchdog)
   useEffect(() => {
     const el = media.type === 'album' ? audioRef.current : videoRef.current;
     if (!el) return;
@@ -248,36 +284,25 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         if (el.buffered && el.buffered.length > 0) {
           const bufferedEnd = el.buffered.end(el.buffered.length - 1);
           const current = el.currentTime;
-          const bufferRemaining = bufferedEnd - current;
-          setBufferSecondsRemaining(Math.max(0, bufferRemaining));
-
-          if (bufferRemaining < 5 && !el.paused && current < (duration - 2)) {
-            if (!isBufferingCache) {
-              console.warn(`[MediaPlayerModal] Buffer dropped below 5s threshold (${bufferRemaining.toFixed(1)}s). Pausing stream to let transcoder fill cache...`);
-              setIsBufferingCache(true);
-              el.pause();
-            }
-          } else if (bufferRemaining >= 5 && isBufferingCache) {
-            console.log(`[MediaPlayerModal] Buffer refilled (${bufferRemaining.toFixed(1)}s >= 5s). Resuming playback...`);
-            setIsBufferingCache(false);
-            el.play().catch(() => {});
-          }
+          const bufferRemaining = Math.max(0, bufferedEnd - current);
+          setBufferSecondsRemaining(bufferRemaining);
+          setIsBufferingCache(bufferRemaining < 1.5 && !el.paused && !el.ended && el.readyState < 3);
         }
-      } catch (e) {
+      } catch {
         // Ignore
       }
     };
 
     const interval = setInterval(checkBufferHealth, 1000);
     return () => clearInterval(interval);
-  }, [isBufferingCache, duration, media.type]);
+  }, [duration, media.type, playerEngine]);
 
   const handleTimeUpdate = (time: number) => {
     setCurrentTime(time);
     // Sliding-window buffer strategy: every 30s of playback, prune consumed transcode segments from cache
     if (Math.abs(time - lastPruneTime) > 30) {
       setLastPruneTime(time);
-      fetch('/api/samba/transcode/prune', {
+      fetch(resolveBackendUrl('/api/samba/transcode/prune'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ currentTime: time, keepPath: activeFilePath }),
@@ -400,19 +425,27 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     // 1. If explicit transcoding is required or transcode cache is ready, route via transcode endpoint
     const hwParam = hardwareAccel ? '&hwaccel=true' : '';
     if (useTranscode || transcodeStatus.state === 'ready') {
-      const targetPath = transcodeStatus.outputPath || cleanLocalPath || activeFilePath;
-      const relativeTranscode = `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
-      if (typeof window !== 'undefined' && (
-        window.location.protocol === 'tauri:' ||
-        window.location.origin.includes('tauri.localhost') ||
-        window.location.origin.includes('localhost:1420') ||
-        Boolean((window as any).__TAURI__) ||
-        Boolean((window as any).__TAURI_IPC__)
-      )) {
-        const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
-        return `http://localhost:${backendPort}${relativeTranscode}`;
+      const readyOut = transcodeStatus.outputPath;
+      if (readyOut) {
+        if (/^(https?|blob|data):/i.test(readyOut) || readyOut.startsWith('/api/')) {
+          return resolveBackendUrl(readyOut);
+        }
+        // Local Tauri transcoded temp output (.mp4/.m4a) can be played directly without re-transcoding
+        if (readyOut.includes('sambavault-transcode-')) {
+          const convert = (window as any).__TAURI__?.convertFileSrc ||
+            (window as any).__TAURI_IPC__?.convertFileSrc ||
+            (window as any).convertFileSrc;
+          if (typeof convert === 'function') {
+            try {
+              return convert(readyOut);
+            } catch {}
+          }
+          return getDirectMediaPlayUrl(readyOut, sambaConfig);
+        }
       }
-      return relativeTranscode;
+      const targetPath = readyOut || cleanLocalPath || activeFilePath;
+      const relativeTranscode = `/api/samba/transcode?path=${encodeURIComponent(targetPath)}${hwParam}`;
+      return resolveBackendUrl(relativeTranscode);
     }
 
     // 2. THREADING & DEADLOCK FIX (macOS Stackshots diagnostic resolution):
@@ -798,8 +831,8 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     } catch {}
 
     // Step 2: Re-assign original URL and preserve currentTime
-    setTimeout(() => {
-      if (!el) return;
+    const step2Timer = window.setTimeout(() => {
+      if (!isMountedRef.current || !el) return;
       el.src = targetSrc;
 
       const restoreTime = () => {
@@ -821,6 +854,10 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
       };
       el.addEventListener('loadedmetadata', handleLoaded);
       el.addEventListener('canplay', handleLoaded);
+      autoReloadCleanupRef.current = () => {
+        el.removeEventListener('loadedmetadata', handleLoaded);
+        el.removeEventListener('canplay', handleLoaded);
+      };
 
       const playPromise = el.play();
       if (playPromise !== undefined) {
@@ -829,15 +866,23 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         });
       }
 
-      setTimeout(() => {
+      const resetTimer = window.setTimeout(() => {
+        if (!isMountedRef.current) return;
         isAutoReloadingRef.current = false;
         delete el.dataset.autoReloading;
         stallStartTimeRef.current = null;
         lastTimeAdvanceRef.current = Date.now();
         setAutoReloadNotice(`Stream re-established at ${formatPlaybackTime(savedTime)}`);
-        setTimeout(() => setAutoReloadNotice(null), 4000);
+        const clearNoticeTimer = window.setTimeout(() => {
+          if (isMountedRef.current) {
+            setAutoReloadNotice(null);
+          }
+        }, 4000);
+        autoReloadTimersRef.current.push(clearNoticeTimer);
       }, 500);
+      autoReloadTimersRef.current.push(resetTimer);
     }, 150);
+    autoReloadTimersRef.current.push(step2Timer);
   }, [getActiveVideoElement, fallbackPlaybackUrl, streamUrl]);
 
   // Buffer Health & Stall Monitor
@@ -1076,7 +1121,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
     }, 2000);
     
     return () => clearInterval(interval);
-  }, [showDiagnosticOverlay, diagView]); // Dependencies are stable via useCallback
+  }, [showDiagnosticOverlay, diagView, inspectVideoSrc, runNetworkProbe]);
 
 
   const toggleMute = () => {

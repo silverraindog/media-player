@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { logger } from '../utils/loggerService';
 import { hlsPrefetchWorkerService } from '../services/hlsPrefetchWorkerService';
+import { resolveBackendUrl } from '../lib/api';
 
 export interface StreamProbeData {
   format: {
@@ -172,6 +173,11 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   const lastFailureTimestampRef = useRef<number>(0);
   const mediaRecoveryAttemptsRef = useRef<number>(0);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const activeCodecRef = useRef(activeCodec);
+  const streamSrcRef = useRef('');
+  const titleRef = useRef(title);
+  activeCodecRef.current = activeCodec;
+  titleRef.current = title;
 
   // 1. Fetch backend ffprobe metadata for this file
   const fetchProbeData = useCallback(async () => {
@@ -181,7 +187,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     try {
       const targetP = resolvedSourcePath || filePath;
       const qPath = targetP ? `?path=${encodeURIComponent(targetP)}` : '';
-      const res = await fetch(`/api/media/stream/${encodeURIComponent(mediaId)}/probe${qPath}`);
+      const res = await fetch(resolveBackendUrl(`/api/media/stream/${encodeURIComponent(mediaId)}/probe${qPath}`));
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
         throw new Error(errJson.error || `HTTP ${res.status}`);
@@ -235,7 +241,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
   // Fetch settings on mount (stores initial timestamp in pending ref without crashing video element)
   useEffect(() => {
-    fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`)
+    fetch(resolveBackendUrl(`/api/media/settings/${encodeURIComponent(mediaId)}`))
       .then(r => r.json())
       .then(d => {
         if (d.success && d.settings) {
@@ -251,7 +257,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   // Save settings (debounce)
   useEffect(() => {
     const timer = setTimeout(() => {
-      fetch(`/api/media/settings/${encodeURIComponent(mediaId)}`, {
+      fetch(resolveBackendUrl(`/api/media/settings/${encodeURIComponent(mediaId)}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -297,7 +303,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     // If max retries reached, halt auto-recovery loop and show actionable error UI
     if (retryCount >= 2) {
       console.error('[HLSPlayer] Maximum recovery retries reached (3). Halting auto-recovery loop.');
-      logger.error(`[FFmpeg HLS Transcode Error] Transcode session failed after 3 recovery attempts: ${reason}`, 'Transcode', { mediaId, title });
+      logger.error(`[FFmpeg HLS Transcode Error] Transcode session failed after 3 recovery attempts: ${reason}`, 'Transcode', { mediaId, title: titleRef.current });
       setIsRecovering(false);
       setHlsStatus('error');
       const errorMsg = 'Playback interrupted: stream decoding or network error persisted after 3 recovery attempts. The source media or transcode settings may need adjustment.';
@@ -313,7 +319,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
               source: 'hls-player',
               code: 'HLS_MAX_RETRIES_EXHAUSTED',
               message: `${errorMsg} (${reason})`,
-              streamUrl: streamSrc,
+              streamUrl: streamSrcRef.current,
               fatal: true,
             },
           })
@@ -328,8 +334,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     setHlsStatus('initializing');
 
     // On recovery, automatically fall back to software H.264 transcoding
-    if (activeCodec !== 'h264') {
-      console.warn('[HLSPlayer] Stream recovery: Switching codec from', activeCodec, 'to h264 for maximum compatibility');
+    if (activeCodecRef.current !== 'h264') {
+      console.warn('[HLSPlayer] Stream recovery: Switching codec from', activeCodecRef.current, 'to h264 for maximum compatibility');
       setActiveCodec('h264');
     }
     if (hwAccel) {
@@ -348,7 +354,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     }
 
     try {
-      await fetch(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`, {
+      await fetch(resolveBackendUrl(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`), {
         method: 'POST',
         keepalive: true,
       });
@@ -374,22 +380,9 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
     params.set('nonce', String(restartNonce));
     const qs = params.toString();
     const relativeUrl = `/api/media/stream/${encodeURIComponent(mediaId)}/index.m3u8${qs ? `?${qs}` : ''}`;
-
-    // In Tauri desktop environment where window.location.origin is tauri:// or tauri.localhost,
-    // Hls.js XMLHttpRequest must target the Express backend HTTP port directly
-    if (typeof window !== 'undefined' && (
-      window.location.protocol === 'tauri:' ||
-      window.location.origin.includes('tauri.localhost') ||
-      window.location.origin.includes('localhost:1420') ||
-      Boolean((window as any).__TAURI__) ||
-      Boolean((window as any).__TAURI_IPC__)
-    )) {
-      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
-      return `http://localhost:${backendPort}${relativeUrl}`;
-    }
-
-    return relativeUrl;
+    return resolveBackendUrl(relativeUrl);
   }, [mediaId, resolvedSourcePath, filePath, activePreset, hwAccel, activeCodec, forceTranscode, retryCount, activeAudioTrack, restartNonce]);
+  streamSrcRef.current = streamSrc;
 
   // 3. Initialize HLS.js or native HLS video playback
   useEffect(() => {
@@ -410,6 +403,8 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       hlsInstanceRef.current.destroy();
       hlsInstanceRef.current = null;
     }
+
+    let detachNativeListeners: (() => void) | null = null;
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -584,7 +579,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
       // Native Apple Safari / iOS HLS
       video.src = streamSrc;
       video.load();
-      video.addEventListener('loadedmetadata', () => {
+      const onLoadedMetadata = () => {
         setHlsStatus('streaming');
         if (initialSeekPendingRef.current !== null && initialSeekPendingRef.current > 0) {
           const seekTo = initialSeekPendingRef.current;
@@ -594,9 +589,9 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
           safeSeek(lastKnownTimeRef.current);
         }
         video.play().catch(() => setIsPlaying(false));
-      });
-      video.addEventListener('canplay', () => setHlsStatus('streaming'));
-      video.addEventListener('error', () => {
+      };
+      const onCanPlay = () => setHlsStatus('streaming');
+      const onNativeError = () => {
         const errCode = video.error?.code;
         if (errCode === 2 || errCode === 3) {
           handleStreamFailure(`Native HLS error code ${errCode}`);
@@ -618,7 +613,16 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
             );
           }
         }
-      });
+      };
+
+      video.addEventListener('loadedmetadata', onLoadedMetadata);
+      video.addEventListener('canplay', onCanPlay);
+      video.addEventListener('error', onNativeError);
+      detachNativeListeners = () => {
+        video.removeEventListener('loadedmetadata', onLoadedMetadata);
+        video.removeEventListener('canplay', onCanPlay);
+        video.removeEventListener('error', onNativeError);
+      };
     } else {
       const msg = 'HLS streaming is not supported in this browser environment.';
       setHlsStatus('error');
@@ -640,6 +644,9 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
 
     return () => {
       clearTimeout(slowInitTimer);
+      if (detachNativeListeners) {
+        detachNativeListeners();
+      }
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
@@ -651,7 +658,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
   useEffect(() => {
     return () => {
       if (mediaId) {
-        fetch(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`, {
+        fetch(resolveBackendUrl(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`), {
           method: 'POST',
           keepalive: true,
         }).catch(() => {});
@@ -1164,7 +1171,7 @@ export const HLSPlayer: React.FC<HLSPlayerProps> = ({
                     setStreamError(null);
                     setHlsStatus('initializing');
                     try {
-                        await fetch(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`, {
+                        await fetch(resolveBackendUrl(`/api/media/stream/${encodeURIComponent(mediaId)}/stop`), {
                             method: 'POST',
                             keepalive: true,
                         });

@@ -19,20 +19,40 @@ pub mod scanner;
 fn vault_purge_transcode_cache(app_handle: AppHandle, limit_gb: u64) -> Result<(), String> {
     let data_dir = db::get_data_dir(&app_handle);
     let transcode_dir = data_dir.join("transcoded");
-    if !transcode_dir.exists() {
-        return Ok(());
+    let temp_dir = std::env::temp_dir();
+
+    let limit_bytes = limit_gb.saturating_mul(1024 * 1024 * 1024);
+    let mut files: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
+
+    if transcode_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&transcode_dir) {
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        files.push((entry.path(), meta));
+                    }
+                }
+            }
+        }
     }
 
-    let limit_bytes = limit_gb * 1024 * 1024 * 1024;
+    if let Ok(entries) = fs::read_dir(&temp_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("sambavault-transcode-") {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        files.push((entry.path(), meta));
+                    }
+                }
+            }
+        }
+    }
 
-    let mut files: Vec<(PathBuf, std::fs::Metadata)> = fs::read_dir(&transcode_dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let meta = entry.metadata().ok()?;
-            Some((entry.path(), meta))
-        })
-        .collect();
+    if files.is_empty() {
+        return Ok(());
+    }
 
     let total_size: u64 = files.iter().map(|(_, meta)| meta.len()).sum();
     if total_size <= limit_bytes {
@@ -48,7 +68,7 @@ fn vault_purge_transcode_cache(app_handle: AppHandle, limit_gb: u64) -> Result<(
             break;
         }
         if fs::remove_file(&path).is_ok() {
-            current_size -= meta.len();
+            current_size = current_size.saturating_sub(meta.len());
         }
     }
 
@@ -1648,6 +1668,12 @@ async fn scan_samba_volume(
     })
 }
 
+fn reap_child_in_background(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 #[tauri::command]
 async fn open_in_system_player(
     file_path: Option<String>,
@@ -1662,7 +1688,10 @@ async fn open_in_system_player(
     let res = Command::new("xdg-open").arg(&target).spawn();
 
     match res {
-        Ok(_) => Ok(format!("Opened file in system player: {}", target)),
+        Ok(child) => {
+            reap_child_in_background(child);
+            Ok(format!("Opened file in system player: {}", target))
+        }
         Err(e) => Err(format!("Failed to open system player: {}", e)),
     }
 }
@@ -1694,7 +1723,10 @@ async fn open_in_vlc(
     let res = Command::new("vlc").arg(&target).spawn();
 
     match res {
-        Ok(_) => Ok("Opened in VLC".to_string()),
+        Ok(child) => {
+            reap_child_in_background(child);
+            Ok("Opened in VLC".to_string())
+        }
         Err(e) => Err(format!("Failed to launch VLC: {}", e)),
     }
 }
@@ -1722,7 +1754,10 @@ async fn open_in_iina(
     ));
 
     match res {
-        Ok(_) => Ok("Opened in IINA".to_string()),
+        Ok(child) => {
+            reap_child_in_background(child);
+            Ok("Opened in IINA".to_string())
+        }
         Err(e) => Err(format!("Failed to launch IINA: {}", e)),
     }
 }

@@ -59,6 +59,8 @@ import {
   globalSanitizeVaultPaths,
   resetDatabaseInDb,
   hardResetAndDeleteDatabaseFiles,
+  runVaultIntegrityCheck,
+  cleanVaultIntegrityIssues,
 } from './src/server/database';
 import { APP_VERSION, APP_RELEASE_TAG } from './src/version';
 
@@ -5062,6 +5064,36 @@ app.post('/api/vault/sanitize-paths', async (req: Request, res: Response) => {
   }
 });
 
+// Library Integrity Check endpoint: scans SQLite vault for broken paths & orphaned metadata
+app.post('/api/vault/integrity-check', async (req: Request, res: Response) => {
+  try {
+    const { mountPath } = req.body || {};
+    const report = await runVaultIntegrityCheck({
+      mountPath: typeof mountPath === 'string' ? mountPath : undefined,
+    });
+    res.json({ success: true, report });
+  } catch (error: any) {
+    console.error('Error running SQLite vault integrity check:', error);
+    res.status(500).json({ error: 'Failed to run library integrity check', message: error?.message });
+  }
+});
+
+// Library Integrity Cleanup endpoint: purges orphaned metadata, prunes dangling refs, removes broken media records
+app.post('/api/vault/integrity-cleanup', async (req: Request, res: Response) => {
+  try {
+    const { removeAllOrphans, removeBrokenMediaIds, clearStaleBlobUrls } = req.body || {};
+    const result = await cleanVaultIntegrityIssues({
+      removeAllOrphans: Boolean(removeAllOrphans),
+      removeBrokenMediaIds: Array.isArray(removeBrokenMediaIds) ? removeBrokenMediaIds : undefined,
+      clearStaleBlobUrls: Boolean(clearStaleBlobUrls),
+    });
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error cleaning SQLite vault integrity issues:', error);
+    res.status(500).json({ error: 'Failed to clean integrity issues', message: error?.message });
+  }
+});
+
 // Automated Permission Fixer Endpoint (Single or Bulk Path Execution)
 app.post('/api/samba/fix-permissions', async (req: Request, res: Response) => {
   try {
@@ -5927,29 +5959,92 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
       ];
 
       const ffmpegProc = spawn(ffmpegBin, transcodeArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-      res.writeHead(200, {
-        'Content-Type': 'video/mp4',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Range, Content-Type',
-        'Access-Control-Expose-Headers': 'Content-Range, Content-Length',
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'no-cache, no-store',
+      let stderrBuf = '';
+      let streamStarted = false;
+      let clientClosed = false;
+
+      const killTranscodeProc = () => {
+        if (!ffmpegProc.killed) {
+          ffmpegProc.kill('SIGTERM');
+          const forceKill = setTimeout(() => {
+            try {
+              if (!ffmpegProc.killed) ffmpegProc.kill('SIGKILL');
+            } catch {}
+          }, 2000);
+          forceKill.unref();
+        }
+      };
+
+      const onDrain = () => {
+        ffmpegProc.stdout.resume();
+      };
+      res.on('drain', onDrain);
+
+      ffmpegProc.stdout.on('data', (chunk: Buffer) => {
+        if (clientClosed || res.writableEnded) return;
+        if (!streamStarted) {
+          streamStarted = true;
+          res.writeHead(200, {
+            'Content-Type': 'video/mp4',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Range, Content-Type',
+            'Access-Control-Expose-Headers': 'Content-Range, Content-Length',
+            'Cache-Control': 'no-cache, no-store',
+          });
+        }
+        if (!res.write(chunk)) {
+          ffmpegProc.stdout.pause();
+        }
       });
 
-      ffmpegProc.stdout.pipe(res);
+      ffmpegProc.stdout.on('end', () => {
+        res.off('drain', onDrain);
+        if (streamStarted && !res.writableEnded) {
+          res.end();
+        }
+      });
 
       ffmpegProc.stderr.on('data', (d) => {
         const msg = d.toString();
+        stderrBuf = (stderrBuf + msg).slice(-4000);
         if (msg.includes('error') || msg.includes('Error')) {
           console.warn('[Samba Stream FFmpeg Transcode Stderr]:', msg.trim());
         }
       });
 
-      req.on('close', () => {
-        if (!res.writableEnded) {
-          ffmpegProc.kill('SIGTERM');
+      ffmpegProc.on('error', (error: any) => {
+        res.off('drain', onDrain);
+        if (!res.headersSent) {
+          const msg = error?.code === 'ENOENT'
+            ? 'FFmpeg binary not found for Samba stream transcoding.'
+            : `Failed to start FFmpeg: ${error?.message || 'Unknown error'}`;
+          res.status(503).json({ error: msg });
+        } else if (!res.writableEnded) {
+          res.end();
         }
       });
+
+      ffmpegProc.on('close', (code) => {
+        res.off('drain', onDrain);
+        if (!streamStarted && !res.headersSent) {
+          res.status(422).json({
+            error: stderrBuf.trim() || `FFmpeg exited with code ${code} before producing stream data.`,
+          });
+        } else if (!res.writableEnded) {
+          res.end();
+        }
+      });
+
+      const handleDisconnect = () => {
+        clientClosed = true;
+        res.off('drain', onDrain);
+        ffmpegProc.stdout.destroy();
+        if (!res.writableEnded) {
+          killTranscodeProc();
+        }
+      };
+      req.on('close', handleDisconnect);
+      res.on('close', handleDisconnect);
       return;
     }
 
@@ -5963,7 +6058,7 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
 
-      if (start >= fileSize || end >= fileSize) {
+      if (Number.isNaN(start) || Number.isNaN(end) || start < 0 || start >= fileSize || end >= fileSize || start > end) {
         res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
@@ -5983,6 +6078,15 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
         'Access-Control-Expose-Headers': 'Content-Range, Content-Length',
       };
       res.writeHead(206, head);
+      file.on('error', (streamErr) => {
+        console.warn('[Samba Stream Proxy] Range read stream error:', streamErr?.message);
+        if (!res.writableEnded) res.end();
+      });
+      const cleanupRangeStream = () => {
+        if (!file.destroyed) file.destroy();
+      };
+      req.on('close', cleanupRangeStream);
+      res.on('close', cleanupRangeStream);
       file.pipe(res);
     } else {
       const head = {
@@ -5993,8 +6097,18 @@ app.get('/api/samba/stream', async (req: Request, res: Response) => {
         'Access-Control-Allow-Headers': 'Range, Content-Type',
         'Access-Control-Expose-Headers': 'Content-Range, Content-Length',
       };
+      const file = fs.createReadStream(fullPath);
       res.writeHead(200, head);
-      fs.createReadStream(fullPath).pipe(res);
+      file.on('error', (streamErr) => {
+        console.warn('[Samba Stream Proxy] Full-file read stream error:', streamErr?.message);
+        if (!res.writableEnded) res.end();
+      });
+      const cleanupFullStream = () => {
+        if (!file.destroyed) file.destroy();
+      };
+      req.on('close', cleanupFullStream);
+      res.on('close', cleanupFullStream);
+      file.pipe(res);
     }
   } catch (err: any) {
     console.error('Samba stream error:', err);
@@ -6091,63 +6205,165 @@ app.post('/api/media/transcode', (req: Request, res: Response) => {
   });
 });
 
+const MAX_TRANSCODE_UPLOAD_BYTES = Number(process.env.MAX_TRANSCODE_UPLOAD_BYTES || 2 * 1024 * 1024 * 1024);
+
 app.post('/api/media/transcode/upload', (req: Request, res: Response) => {
   const token = randomUUID();
   const inputPath = path.join(os.tmpdir(), `sambavault-transcode-${token}`);
   const output = fs.createWriteStream(inputPath, { flags: 'wx' });
+  let receivedBytes = 0;
+  let uploadFinished = false;
+  let uploadAborted = false;
+
+  const cleanupFailedUpload = () => {
+    output.destroy();
+    fs.promises.unlink(inputPath).catch(() => {});
+  };
+
+  req.on('data', (chunk: Buffer) => {
+    if (uploadAborted) return;
+    receivedBytes += chunk.length;
+    if (receivedBytes > MAX_TRANSCODE_UPLOAD_BYTES) {
+      uploadAborted = true;
+      req.unpipe(output);
+      cleanupFailedUpload();
+      if (!res.headersSent) {
+        res.status(413).json({ error: 'Uploaded media exceeds maximum allowed transcode size.' });
+      }
+      req.destroy();
+    }
+  });
 
   req.pipe(output);
   output.on('finish', () => {
+    if (uploadAborted) return;
+    uploadFinished = true;
     res.json({ token: saveTranscodeJob({ inputPath }) });
   });
   output.on('error', (error) => {
-    fs.promises.unlink(inputPath).catch(() => {});
+    cleanupFailedUpload();
     if (!res.headersSent) res.status(500).json({ error: `Could not prepare local media: ${error.message}` });
   });
-  req.on('aborted', () => {
-    output.destroy();
-    fs.promises.unlink(inputPath).catch(() => {});
-  });
+  const handleUploadAbort = () => {
+    if (!uploadFinished && !uploadAborted) {
+      uploadAborted = true;
+      cleanupFailedUpload();
+    }
+  };
+  req.on('aborted', handleUploadAbort);
+  req.on('close', handleUploadAbort);
 });
 
 class CircularBufferTransform extends Transform {
-  private maxSize: number;
-  private currentSize: number = 0;
-  private chunks: Buffer[] = [];
-
-  constructor(maxSize: number = 4 * 1024 * 1024) {
-    // Dynamically enforce 512KB highWaterMark for the chunking stream
+  constructor() {
+    // Enforce 512KB highWaterMark for chunked backpressure without retaining duplicate buffers in heap
     super({ highWaterMark: 512 * 1024 });
-    this.maxSize = maxSize;
   }
 
-  _transform(chunk: Buffer, encoding: string, callback: () => void) {
-    const heapUsed = process.memoryUsage().heapUsed;
-    if (heapUsed > 500 * 1024 * 1024) { // 500MB
-      console.warn(`[Transcode Memory Monitor] Heap usage high: ${(heapUsed / 1024 / 1024).toFixed(2)}MB. Pruning buffer and forcing flush.`);
-      this.chunks = [];
-      this.currentSize = 0;
-    }
-
-    this.chunks.push(chunk);
-    this.currentSize += chunk.length;
-
-    while (this.currentSize > this.maxSize && this.chunks.length > 0) {
-      const removed = this.chunks.shift();
-      if (removed) {
-        this.currentSize -= removed.length;
-      }
-    }
-
+  _transform(chunk: Buffer, _encoding: string, callback: () => void) {
     this.push(chunk);
     callback();
   }
+}
 
-  _flush(callback: () => void) {
-    this.chunks = [];
-    this.currentSize = 0;
-    callback();
+function streamFfmpegOutputToResponse(
+  ffmpeg: ReturnType<typeof spawn>,
+  req: Request,
+  res: Response,
+  contentType: string,
+  getStderr: () => string,
+  failureContext: string
+) {
+  const bufferStream = new CircularBufferTransform();
+  let streamStarted = false;
+  let clientClosed = false;
+
+  const killProc = () => {
+    if (!ffmpeg.killed) {
+      ffmpeg.kill('SIGTERM');
+      const forceTimer = setTimeout(() => {
+        try {
+          if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
+        } catch {}
+      }, 2000);
+      forceTimer.unref();
+    }
+  };
+
+  const onDrain = () => {
+    bufferStream.resume();
+  };
+  res.on('drain', onDrain);
+
+  if (ffmpeg.stdout) {
+    ffmpeg.stdout.on('error', () => {});
+    ffmpeg.stdout.pipe(bufferStream);
   }
+
+  bufferStream.on('data', (chunk: Buffer) => {
+    if (clientClosed || res.writableEnded) return;
+    if (!streamStarted) {
+      streamStarted = true;
+      if (!res.headersSent) {
+        res.status(200);
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
+    }
+    if (!res.write(chunk)) {
+      bufferStream.pause();
+    }
+  });
+
+  bufferStream.on('end', () => {
+    res.off('drain', onDrain);
+    if (streamStarted && !res.writableEnded) {
+      res.end();
+    }
+  });
+
+  bufferStream.on('error', () => {
+    res.off('drain', onDrain);
+  });
+
+  ffmpeg.on('error', (error) => {
+    res.off('drain', onDrain);
+    if (!res.headersSent) {
+      const message = (error as any).code === 'ENOENT'
+        ? 'FFmpeg is not installed or FFMPEG_PATH is not configured in system PATH.'
+        : `Could not start FFmpeg: ${error.message}`;
+      res.status(503).json({ error: message });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  });
+
+  ffmpeg.on('close', (code) => {
+    res.off('drain', onDrain);
+    if (!streamStarted && !res.headersSent) {
+      res.status(422).json({
+        error: getStderr().trim() || `FFmpeg process exited with code ${code} while decoding media (${failureContext}).`,
+      });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  });
+
+  const handleClose = () => {
+    clientClosed = true;
+    res.off('drain', onDrain);
+    bufferStream.destroy();
+    if (ffmpeg.stdout && !ffmpeg.stdout.destroyed) {
+      ffmpeg.stdout.destroy();
+    }
+    if (!res.writableEnded) {
+      killProc();
+    }
+  };
+
+  req.on('close', handleClose);
+  res.on('close', handleClose);
 }
 
 app.post('/api/samba/transcode/prune', (req: Request, res: Response) => {
@@ -6155,20 +6371,38 @@ app.post('/api/samba/transcode/prune', (req: Request, res: Response) => {
     const { currentTime } = req.body;
     const tmpDir = os.tmpdir();
     const files = fs.readdirSync(tmpDir);
+    const protectedPaths = new Set<string>([path.join(tmpDir, 'sambavault_master_preview.mp4')]);
+    for (const session of activeHlsStreamSessions.values()) {
+      protectedPaths.add(session.sessionDir);
+      protectedPaths.add(session.filePath);
+    }
+    for (const job of transcodeJobs.values()) {
+      if (job.inputPath) protectedPaths.add(job.inputPath);
+    }
+
     let prunedCount = 0;
     for (const file of files) {
-      if (file.startsWith('sambavault_') || file.startsWith('transcode-')) {
+      if (
+        file.startsWith('sambavault_') ||
+        file.startsWith('sambavault-transcode-') ||
+        file.startsWith('transcode-')
+      ) {
         const fullPath = path.join(tmpDir, file);
+        if (protectedPaths.has(fullPath)) continue;
         try {
           const stat = fs.statSync(fullPath);
           if (Date.now() - stat.mtimeMs > 5 * 60 * 1000) {
-            fs.unlinkSync(fullPath);
+            if (stat.isDirectory()) {
+              fs.rmSync(fullPath, { recursive: true, force: true });
+            } else {
+              fs.unlinkSync(fullPath);
+            }
             prunedCount++;
           }
         } catch {}
       }
     }
-    res.json({ success: true, prunedCount, message: `Sliding-window buffer successfully pruned ${prunedCount} stale transcode segments at playback time ${currentTime || 0}s.` });
+    res.json({ success: true, prunedCount, message: `Sliding-window buffer successfully pruned ${prunedCount} stale transcode artifacts at playback time ${currentTime || 0}s.` });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to prune buffer cache', message: err?.message });
   }
@@ -6275,49 +6509,14 @@ app.get('/api/samba/transcode', (req: Request, res: Response) => {
       }
     });
 
-    if (!res.headersSent) {
-      res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
-      res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-    }
-
-    const circularBuffer = new CircularBufferTransform(4 * 1024 * 1024);
-    circularBuffer.on('drain', () => {
-      // Explicitly drained
-    });
-
-    pipeline(ffmpeg.stdout, circularBuffer, res, (err) => {
-      if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
-        console.error('[FFmpeg Circular Buffer Stream Pipeline Error]:', err);
-      }
-    });
-
-    ffmpeg.on('error', (error) => {
-      if (!res.headersSent) {
-        const message = (error as any).code === 'ENOENT'
-          ? 'FFmpeg is not installed or FFMPEG_PATH is not configured in system PATH.'
-          : `Could not start FFmpeg: ${error.message}`;
-        res.status(503).json({ error: message });
-      } else if (!res.writableEnded) {
-        res.end();
-      }
-    });
-
-    ffmpeg.on('close', (code) => {
-      if (code && code !== 0 && !res.headersSent) {
-        res.status(422).json({
-          error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media (HEVC/H.265 transcode).`,
-        });
-      } else if (!res.writableEnded) {
-        res.end();
-      }
-    });
-
-    res.on('close', () => {
-      if (!res.writableEnded) {
-        ffmpeg.kill('SIGTERM');
-      }
-    });
+    streamFfmpegOutputToResponse(
+      ffmpeg,
+      req,
+      res,
+      mediaType === 'audio' ? 'audio/mp4' : 'video/mp4',
+      () => stderr,
+      'HEVC/H.265 transcode'
+    );
   } catch (err: any) {
     if (!res.headersSent) {
       res.status(500).json({ error: 'Transcode streaming failed', details: err?.message });
@@ -6396,49 +6595,14 @@ app.get('/api/media/transcode/:token', (req: Request, res: Response) => {
     }
   });
 
-  if (!res.headersSent) {
-    res.status(200).setHeader('Content-Type', mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-
-  const circularBuffer = new CircularBufferTransform(4 * 1024 * 1024);
-  circularBuffer.on('drain', () => {
-    // Explicitly drained
-  });
-
-  pipeline(ffmpeg.stdout, circularBuffer, res, (err) => {
-    if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
-      console.error('[FFmpeg Token Circular Buffer Pipeline Error]:', err);
-    }
-  });
-
-  ffmpeg.on('error', (error) => {
-    if (!res.headersSent) {
-      const message = (error as any).code === 'ENOENT'
-        ? 'FFmpeg is not installed or FFMPEG_PATH is not configured in system PATH.'
-        : `Could not start FFmpeg: ${error.message}`;
-      res.status(503).json({ error: message });
-    } else if (!res.writableEnded) {
-      res.end();
-    }
-  });
-
-  ffmpeg.on('close', (code) => {
-    if (code && code !== 0 && !res.headersSent) {
-      res.status(422).json({
-        error: stderr.trim() || `FFmpeg process exited with code ${code} while decoding media (HEVC/H.265 transcode).`,
-      });
-    } else if (!res.writableEnded) {
-      res.end();
-    }
-  });
-
-  res.on('close', () => {
-    if (!res.writableEnded) {
-      ffmpeg.kill('SIGTERM');
-    }
-  });
+  streamFfmpegOutputToResponse(
+    ffmpeg,
+    req,
+    res,
+    mediaType === 'audio' ? 'audio/mp4' : 'video/mp4',
+    () => stderr,
+    'HEVC/H.265 token transcode'
+  );
 });
 
 const ffmpegLogRingBuffer: string[] = [];
@@ -6675,14 +6839,53 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
       filePath,
     ];
 
-    const proc = spawn(ffprobeBin, args);
+    const proc = spawn(ffprobeBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const MAX_PROBE_BYTES = 10 * 1024 * 1024;
     let stdout = '';
     let stderr = '';
+    let settled = false;
 
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    const killProbe = () => {
+      try {
+        if (!proc.killed) proc.kill('SIGTERM');
+        const force = setTimeout(() => {
+          try {
+            if (!proc.killed) proc.kill('SIGKILL');
+          } catch {}
+        }, 1500);
+        force.unref();
+      } catch {}
+    };
+
+    const probeTimeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      killProbe();
+      reject(new Error(`ffprobe timed out after 15s for "${filePath}"`));
+    }, 15000);
+    probeTimeout.unref();
+
+    proc.stdout.on('data', (d) => {
+      if (settled) return;
+      if (stdout.length + d.length > MAX_PROBE_BYTES) {
+        settled = true;
+        clearTimeout(probeTimeout);
+        killProbe();
+        reject(new Error('ffprobe output exceeded 10MB limit'));
+        return;
+      }
+      stdout += d.toString();
+    });
+    proc.stderr.on('data', (d) => {
+      if (stderr.length < 64 * 1024) {
+        stderr += d.toString();
+      }
+    });
 
     proc.on('close', (code) => {
+      clearTimeout(probeTimeout);
+      if (settled) return;
+      settled = true;
       if (code !== 0 && !stdout) {
         return reject(new Error(stderr || `ffprobe exited with code ${code}`));
       }
@@ -6814,6 +7017,9 @@ export function probeMediaFile(filePath: string): Promise<StreamProbeResult> {
     });
 
     proc.on('error', (err) => {
+      clearTimeout(probeTimeout);
+      if (settled) return;
+      settled = true;
       reject(err);
     });
   });
@@ -7015,13 +7221,20 @@ interface HlsSessionRecord {
 const activeHlsStreamSessions = new Map<string, HlsSessionRecord>();
 
 // Periodic session garbage collector (idle > 15 minutes)
-setInterval(() => {
+const hlsGcInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, session] of activeHlsStreamSessions.entries()) {
     if (now - session.lastAccessed > 15 * 60 * 1000) {
       try {
         if (session.process && !session.process.killed) {
-          session.process.kill('SIGTERM');
+          const p = session.process;
+          p.kill('SIGTERM');
+          const fk = setTimeout(() => {
+            try {
+              if (!p.killed) p.kill('SIGKILL');
+            } catch {}
+          }, 2000);
+          fk.unref();
         }
         if (fs.existsSync(session.sessionDir)) {
           fs.rmSync(session.sessionDir, { recursive: true, force: true });
@@ -7032,6 +7245,7 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+hlsGcInterval.unref();
 
 // Media Playback Settings
 app.get('/api/media/settings/:id', async (req: Request, res: Response) => {
@@ -7138,22 +7352,12 @@ app.get('/api/media/stream/:id/:segment', async (req: Request, res: Response) =>
     return handleHlsMasterStream(req, res);
   }
 
-  // Find corresponding session (prefer most recently active session)
+  // Find corresponding session strictly scoped to this mediaId (prefer most recently active session)
   let matchedSession: HlsSessionRecord | undefined;
   for (const session of activeHlsStreamSessions.values()) {
-    if (session.mediaId === id || session.sessionId.startsWith(id)) {
+    if (session.mediaId === id || session.sessionId.startsWith(`${id}_`) || session.sessionId === id) {
       if (!matchedSession || session.lastAccessed > matchedSession.lastAccessed) {
         matchedSession = session;
-      }
-    }
-  }
-
-  // Fallback: check if any active session contains this segment file
-  if (!matchedSession) {
-    for (const session of activeHlsStreamSessions.values()) {
-      if (fs.existsSync(path.join(session.sessionDir, segment))) {
-        matchedSession = session;
-        break;
       }
     }
   }
@@ -7213,21 +7417,33 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
 
     // Safety guard: If a client or browser resolved a relative segment directly against /api/media/stream/:id
     if (mediaId && (mediaId.endsWith('.ts') || mediaId.endsWith('.m4s') || mediaId.endsWith('.mp4'))) {
+      const safeSegName = path.basename(mediaId);
+      const referer = req.get('referer') || '';
+      const refMatch = referer.match(/\/api\/media\/stream\/([^/?#]+)/);
+      const refMediaId = refMatch ? decodeURIComponent(refMatch[1]) : null;
+      let targetSession: HlsSessionRecord | undefined;
       for (const session of activeHlsStreamSessions.values()) {
-        const segPath = path.join(session.sessionDir, mediaId);
-        if (fs.existsSync(segPath)) {
-          session.lastAccessed = Date.now();
-          if (mediaId.endsWith('.m4s')) res.setHeader('Content-Type', 'video/iso.segment');
-          else if (mediaId.endsWith('.mp4')) res.setHeader('Content-Type', 'video/mp4');
-          else res.setHeader('Content-Type', 'video/mp2t');
-          res.setHeader('Cache-Control', 'public, max-age=3600');
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
-          res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
-          return res.sendFile(segPath);
+        if (refMediaId && session.mediaId !== refMediaId && !session.sessionId.startsWith(`${refMediaId}_`)) {
+          continue;
+        }
+        const segPath = path.join(session.sessionDir, safeSegName);
+        if (fs.existsSync(segPath) && (!targetSession || session.lastAccessed > targetSession.lastAccessed)) {
+          targetSession = session;
         }
       }
-      return res.status(404).send(`Segment not found: ${mediaId}`);
+      if (targetSession) {
+        const segPath = path.join(targetSession.sessionDir, safeSegName);
+        targetSession.lastAccessed = Date.now();
+        if (safeSegName.endsWith('.m4s')) res.setHeader('Content-Type', 'video/iso.segment');
+        else if (safeSegName.endsWith('.mp4')) res.setHeader('Content-Type', 'video/mp4');
+        else res.setHeader('Content-Type', 'video/mp2t');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length');
+        return res.sendFile(segPath);
+      }
+      return res.status(404).send(`Segment not found: ${safeSegName}`);
     }
 
     const rawPath = ((req.query.path || req.query.file || mediaId) as string || '').trim();
@@ -7465,6 +7681,21 @@ const handleHlsMasterStream = async (req: Request, res: Response) => {
     }
 
     if (!ready) {
+      if (!procClosed && !proc.killed) {
+        proc.kill('SIGTERM');
+        const forceKillTimer = setTimeout(() => {
+          try {
+            if (!proc.killed) proc.kill('SIGKILL');
+          } catch {}
+        }, 2000);
+        forceKillTimer.unref();
+      }
+      activeHlsStreamSessions.delete(sessionKey);
+      try {
+        if (fs.existsSync(sessionDir)) {
+          fs.rmSync(sessionDir, { recursive: true, force: true });
+        }
+      } catch {}
       return res.status(500).json({
         error: `FFmpeg HLS generation failed to initialize (exit code ${procExitCode ?? 'timeout'})`,
         details: stderr || 'Process exited before generating initial HLS playlist chunk and segment',
@@ -7645,6 +7876,17 @@ async function startServer() {
   });
 
   const handleGracefulShutdown = () => {
+    for (const [key, session] of activeHlsStreamSessions.entries()) {
+      try {
+        if (session.process && !session.process.killed) {
+          session.process.kill('SIGTERM');
+        }
+        if (fs.existsSync(session.sessionDir)) {
+          fs.rmSync(session.sessionDir, { recursive: true, force: true });
+        }
+      } catch {}
+      activeHlsStreamSessions.delete(key);
+    }
     try {
       flushPendingVaultWritesSync();
     } catch {}

@@ -26,15 +26,20 @@ import {
   RefreshCw,
   Loader2,
   SlidersHorizontal,
+  FolderOpen,
+  FolderSync,
 } from 'lucide-react';
-import { MediaMetadata, MediaType } from '../types';
+import { MediaMetadata, MediaType, SambaShareNode } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import {
   fetchSecondaryMetadata,
+  findUnimportedUnsortedNodes,
+  isMediaInUnsortedPath,
   isMediaMissingArtwork,
   isMediaMissingGenres,
   isMediaMissingSynopsis,
   isMediaUncategorized,
+  nodeToMediaMetadata,
 } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 
@@ -42,13 +47,16 @@ interface WebSearchCategorizerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaveCategorizedMedia: (media: MediaMetadata) => void;
+  onImportMediaBatch?: (items: MediaMetadata[]) => void;
   onPlayMedia?: (media: MediaMetadata) => void;
   onOpenInNfoStudio?: (media: MediaMetadata) => void;
   onOpenManualMatch?: (media: MediaMetadata) => void;
   onOpenApiDebugger?: () => void;
+  onOpenClassifierModal?: () => void;
   initialQuery?: string;
   initialType?: MediaType | 'all';
   mediaLibrary?: MediaMetadata[];
+  sambaTree?: SambaShareNode[];
 }
 
 const POPULAR_SEARCH_PRESETS = [
@@ -70,16 +78,19 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   isOpen,
   onClose,
   onSaveCategorizedMedia,
+  onImportMediaBatch,
   onPlayMedia,
   onOpenInNfoStudio,
   onOpenManualMatch,
   onOpenApiDebugger,
+  onOpenClassifierModal,
   initialQuery = '',
   initialType = 'all',
   mediaLibrary = [],
+  sambaTree = [],
 }) => {
   const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
-  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'synopsis' | 'artwork' | 'genres' | 'series' | 'movie' | 'album'>('all');
+  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'unsorted' | 'synopsis' | 'artwork' | 'genres' | 'series' | 'movie' | 'album'>('all');
   const [uncatSearchQuery, setUncatSearchQuery] = useState('');
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
@@ -208,9 +219,39 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const incompleteItems = mediaLibrary.filter(isMediaUncategorized);
   const sourceUncatList = showAllLibraryInUncat ? mediaLibrary : incompleteItems;
 
+  const unsortedPathCount = incompleteItems.filter(isMediaInUnsortedPath).length;
   const missingSynopsisCount = incompleteItems.filter(isMediaMissingSynopsis).length;
   const missingArtworkCount = incompleteItems.filter(isMediaMissingArtwork).length;
   const missingGenresCount = incompleteItems.filter(isMediaMissingGenres).length;
+
+  const unimportedUnsorted = React.useMemo(
+    () => findUnimportedUnsortedNodes(sambaTree, mediaLibrary),
+    [sambaTree, mediaLibrary]
+  );
+
+  const handleImportUnsortedFromTree = () => {
+    if (unimportedUnsorted.fileNodes.length === 0) return;
+    const extracted: MediaMetadata[] = [];
+    for (const entry of unimportedUnsorted.fileNodes) {
+      const converted = nodeToMediaMetadata(entry.node, entry.parentPath);
+      if (converted) {
+        extracted.push({
+          ...converted,
+          status: 'uncategorized',
+        });
+      }
+    }
+    if (extracted.length > 0) {
+      if (onImportMediaBatch) {
+        onImportMediaBatch(extracted);
+      } else {
+        extracted.forEach((item) => onSaveCategorizedMedia(item));
+      }
+      setBatchMessage(`Imported ${extracted.length} media item(s) from Unsorted / Staging folders for categorization.`);
+      setUncatSubFilter('unsorted');
+      setShowAllLibraryInUncat(false);
+    }
+  };
 
   const seriesIncompleteCount = sourceUncatList.filter((m) => m.type === 'series').length;
   const movieIncompleteCount = sourceUncatList.filter((m) => m.type === 'movie').length;
@@ -228,6 +269,9 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
 
     // Sub-category filter
+    if (uncatSubFilter === 'unsorted') {
+      return isMediaInUnsortedPath(item);
+    }
     if (uncatSubFilter === 'synopsis') {
       return isMediaMissingSynopsis(item);
     }
@@ -636,6 +680,17 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   </button>
                   <button
                     type="button"
+                    onClick={() => setUncatSubFilter('unsorted')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                      uncatSubFilter === 'unsorted'
+                        ? 'bg-orange-600 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    Unsorted Path ({unsortedPathCount})
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setUncatSubFilter('genres')}
                     className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
                       uncatSubFilter === 'genres'
@@ -717,13 +772,57 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 </div>
               </div>
 
+              {/* Unimported Unsorted / Staging Folders Diagnostic Notice */}
+              {unimportedUnsorted.fileNodes.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-orange-950/30 border border-orange-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs font-bold text-orange-300">
+                      <FolderOpen className="w-4 h-4 text-orange-400 shrink-0" />
+                      <span>
+                        {unimportedUnsorted.fileNodes.length} Unimported Media File(s) Detected in Unsorted / Staging Folders
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      These files sit in {unimportedUnsorted.folderPaths.slice(0, 3).map((p) => `"${p}"`).join(', ')}
+                      {unimportedUnsorted.folderPaths.length > 3 ? ` (+${unimportedUnsorted.folderPaths.length - 3} more)` : ''} and were excluded by default because the Folder Classifier assigns <span className="font-mono text-orange-300">Unsorted / Staging</span> below its auto-import threshold.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleImportUnsortedFromTree}
+                      className="px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    >
+                      <FolderSync className="w-3.5 h-3.5" />
+                      <span>Import {unimportedUnsorted.fileNodes.length} Unsorted</span>
+                    </button>
+                    {onOpenClassifierModal && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenClassifierModal();
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
+                      >
+                        Folder Classifier
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Items List */}
               {filteredUncategorized.length === 0 ? (
                 <div className="p-8 text-center bg-slate-900/50 border border-slate-800 rounded-xl space-y-3">
                   <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
                   <div className="text-xs font-bold text-white">No uncategorized items found matching this filter!</div>
-                  <p className="text-[11px] text-slate-400">
-                    All {mediaLibrary.length} items in your active library currently have genres, synopses, and artwork. Scan a Samba share or import new files to inspect newly added uncategorized items here.
+                  <p className="text-[11px] text-slate-400 max-w-xl mx-auto">
+                    {unimportedUnsorted.fileNodes.length > 0
+                      ? `Your active library has 0 uncategorized records, but ${unimportedUnsorted.fileNodes.length} file(s) in Unsorted / Staging folders have not been imported yet. Click "Import ${unimportedUnsorted.fileNodes.length} Unsorted" above to queue them for Web Search categorization.`
+                      : sambaTree.length === 0
+                      ? `All ${mediaLibrary.length} active library item(s) currently have genres, synopses, and artwork. No Samba or local folder scan tree is loaded yet — scan a share or import files to inspect new unsorted/uncategorized media here.`
+                      : `All ${mediaLibrary.length} items in your active library currently have genres, synopses, and artwork.`}
                   </p>
                   {mediaLibrary.length > 0 && !showAllLibraryInUncat && (
                     <button
@@ -806,6 +905,12 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
                             {/* Defect Badges */}
                             <div className="flex items-center gap-1.5 flex-wrap">
+                              {isMediaInUnsortedPath(item) && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-950/80 border border-orange-700/70 text-orange-300 flex items-center gap-1 font-medium">
+                                  <FolderOpen className="w-3 h-3" />
+                                  <span>Unsorted Path</span>
+                                </span>
+                              )}
                               {missingGen && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-950/80 border border-indigo-800/70 text-indigo-300 flex items-center gap-1 font-medium">
                                   <Tag className="w-3 h-3" />
@@ -877,12 +982,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           {/* TAB 2: WEB SEARCH & CATEGORIZE VIEW */}
           {activeTabFilter === 'search' && (
             <>
-              {/* Reminder banner for uncategorized media if any */}
-              {incompleteItems.length > 0 && (
+              {/* Reminder banner for uncategorized media or unimported unsorted folders */}
+              {incompleteItems.length > 0 ? (
                 <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-semibold text-amber-300">
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-                    <span>{incompleteItems.length} library item(s) currently lack a synopsis or artwork</span>
+                    <span>
+                      {incompleteItems.length} library item(s) need categorization
+                      {unsortedPathCount > 0 ? ` (${unsortedPathCount} in Unsorted/Staging paths)` : ''}
+                    </span>
                   </div>
                   <button
                     type="button"
@@ -892,7 +1000,23 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                     View Uncategorized Media →
                   </button>
                 </div>
-              )}
+              ) : unimportedUnsorted.fileNodes.length > 0 ? (
+                <div className="bg-orange-950/25 border border-orange-700/40 rounded-xl p-3 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-orange-300">
+                    <FolderOpen className="w-4 h-4 text-orange-400 shrink-0" />
+                    <span>
+                      0 uncategorized in library, but {unimportedUnsorted.fileNodes.length} unimported file(s) found in Unsorted / Staging folders
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTabFilter('uncategorized')}
+                    className="px-2.5 py-1 rounded-md bg-orange-900/60 hover:bg-orange-800/80 border border-orange-700/60 text-orange-200 text-xs font-bold transition cursor-pointer"
+                  >
+                    Inspect Unsorted →
+                  </button>
+                </div>
+              ) : null}
 
               {/* Search Inputs */}
           <form

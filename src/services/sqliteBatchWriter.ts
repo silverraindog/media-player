@@ -1,5 +1,5 @@
 import { MediaMetadata } from '../types';
-import { apiCall, isTauri } from '../lib/api';
+import { apiCall, isTauri, resolveBackendUrl } from '../lib/api';
 
 export interface QueuedMediaItem {
   id: string;
@@ -259,10 +259,20 @@ class SqliteBatchWriterService {
     if (this.isLocked || this.queue.size === 0) return;
     const itemsToFlush = Array.from(this.queue.values()).map((q) => q.media);
     try {
+      const targetUrl = resolveBackendUrl('/api/db/media/batch');
+      if (isTauri) {
+        fetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: itemsToFlush }),
+          keepalive: true,
+        }).catch(() => {});
+        return;
+      }
       const blob = new Blob([JSON.stringify({ items: itemsToFlush })], {
         type: 'application/json',
       });
-      navigator.sendBeacon('/api/db/media/batch', blob);
+      navigator.sendBeacon(targetUrl, blob);
     } catch (e) {
       console.warn('Failed to sendBeacon on unload:', e);
     }

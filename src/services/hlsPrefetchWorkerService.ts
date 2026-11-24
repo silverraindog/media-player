@@ -148,6 +148,7 @@ export interface NetworkJitterStats {
 }
 
 export class HlsPrefetchWorkerService {
+  private static readonly MAX_TRACKED_URLS = 250;
   private worker: Worker | null = null;
   private isSupported = false;
   private activePrefetchedUrls = new Set<string>();
@@ -168,10 +169,13 @@ export class HlsPrefetchWorkerService {
       return;
     }
 
+    let workerUrl: string | null = null;
     try {
       const blob = new Blob([WORKER_CODE], { type: 'application/javascript' });
-      const workerUrl = URL.createObjectURL(blob);
+      workerUrl = URL.createObjectURL(blob);
       this.worker = new Worker(workerUrl);
+      URL.revokeObjectURL(workerUrl);
+      workerUrl = null;
       this.isSupported = true;
 
       this.worker.onmessage = (e) => {
@@ -194,6 +198,14 @@ export class HlsPrefetchWorkerService {
             results.forEach((r: PrefetchResult) => {
               if (r.status === 'cached' || r.status === 'hit') {
                 this.activePrefetchedUrls.add(r.url);
+                while (this.activePrefetchedUrls.size > HlsPrefetchWorkerService.MAX_TRACKED_URLS) {
+                  const oldest = this.activePrefetchedUrls.values().next().value;
+                  if (oldest !== undefined) {
+                    this.activePrefetchedUrls.delete(oldest);
+                  } else {
+                    break;
+                  }
+                }
               }
             });
           }
@@ -208,6 +220,9 @@ export class HlsPrefetchWorkerService {
 
       console.log('[HlsPrefetchWorker] Web Worker pre-fetch service initialized with dynamic jitter scaling (3-8 segments).');
     } catch (err) {
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+      }
       console.warn('[HlsPrefetchWorker] Failed to create worker:', err);
     }
   }
@@ -266,6 +281,7 @@ export class HlsPrefetchWorkerService {
       this.worker.terminate();
       this.worker = null;
     }
+    this.clearPrefetchCache();
   }
 }
 

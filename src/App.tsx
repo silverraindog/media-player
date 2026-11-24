@@ -310,6 +310,7 @@ export default function App() {
   const removedMediaIdsRef = useRef<string[]>(readStorageJson<string[]>('sambavault_removed_media_ids', []));
   const latestVaultPayloadRef = useRef<any>(null);
   const vaultPersistTimerRef = useRef<number | null>(null);
+  const createdBlobUrlsRef = useRef<Set<string>>(new Set());
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -605,7 +606,54 @@ export default function App() {
     };
   }, [flushVaultPayloadToDisk]);
 
-  // Global Stream Recovery monitor: catches unhandled playback/stream errors while player is open
+  // Revoke any blob: URLs created during file imports once they are no longer referenced by mediaLibrary
+  useEffect(() => {
+    const activeBlobUrls = new Set<string>();
+    for (const item of mediaLibrary) {
+      if (typeof item.localBlobUrl === 'string' && item.localBlobUrl.startsWith('blob:')) {
+        activeBlobUrls.add(item.localBlobUrl);
+      }
+      if (typeof item.playbackUrl === 'string' && item.playbackUrl.startsWith('blob:')) {
+        activeBlobUrls.add(item.playbackUrl);
+      }
+      if (Array.isArray(item.seasons)) {
+        for (const season of item.seasons) {
+          if (Array.isArray(season.episodes)) {
+            for (const ep of season.episodes) {
+              if (typeof ep.playbackUrl === 'string' && ep.playbackUrl.startsWith('blob:')) {
+                activeBlobUrls.add(ep.playbackUrl);
+              }
+            }
+          }
+        }
+      }
+      if (Array.isArray(item.tracks)) {
+        for (const tr of item.tracks) {
+          if (typeof tr.playbackUrl === 'string' && tr.playbackUrl.startsWith('blob:')) {
+            activeBlobUrls.add(tr.playbackUrl);
+          }
+        }
+      }
+    }
+
+    for (const blobUrl of Array.from(createdBlobUrlsRef.current)) {
+      if (!activeBlobUrls.has(blobUrl)) {
+        URL.revokeObjectURL(blobUrl);
+        createdBlobUrlsRef.current.delete(blobUrl);
+      }
+    }
+  }, [mediaLibrary]);
+
+  useEffect(() => {
+    return () => {
+      for (const blobUrl of createdBlobUrlsRef.current) {
+        URL.revokeObjectURL(blobUrl);
+      }
+      createdBlobUrlsRef.current.clear();
+    };
+  }, []);
+
+  // Global Stream Recovery monitor: catches unhandled playback/stream errors & CustomEvents while player is open
   useEffect(() => {
     if (!playerState.isOpen) return;
 
@@ -617,8 +665,20 @@ export default function App() {
       }
     };
 
+    const handleCustomPlayerError = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      if (!detail || detail.fatal === false) return;
+      const msg = detail.message || 'Stream playback encountered a fatal interruption.';
+      console.error('[StreamRecovery] Player error event intercepted:', detail);
+      setPlayerRecoveryError(msg);
+    };
+
     window.addEventListener('error', handleGlobalPlayerError);
-    return () => window.removeEventListener('error', handleGlobalPlayerError);
+    window.addEventListener('sambavault-player-error', handleCustomPlayerError);
+    return () => {
+      window.removeEventListener('error', handleGlobalPlayerError);
+      window.removeEventListener('sambavault-player-error', handleCustomPlayerError);
+    };
   }, [playerState.isOpen]);
 
   const handleRetryStream = useCallback(() => {
@@ -825,6 +885,7 @@ export default function App() {
           const colMatch = extractCollectionFromPath(relPath);
           const parentFolder = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : undefined;
           const objectUrl = URL.createObjectURL(entry);
+          createdBlobUrlsRef.current.add(objectUrl);
 
           const meta = parsedFileToMediaMetadata({
             id: `imported-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1254,6 +1315,7 @@ export default function App() {
                 setManualMatchState({ isOpen: true, rawPathOrName: rawPathOrName || '', mediaType })
               }
               onSaveCategorizedMedia={(m) => upsertMediaItems([m])}
+              onImportMediaBatch={(items) => upsertMediaItems(items)}
               isSyncing={isSyncing}
               scanRootPath={sambaConfig.hostPath || sambaConfig.mountPath}
               selectedMediaType={selectedSearchMediaType}
@@ -1482,6 +1544,13 @@ export default function App() {
               transcodeConfig={transcodeConfig}
               onUpdateTranscodeConfig={setTranscodeConfig}
               serverVersionInfo={serverVersionInfo}
+              mediaLibrary={mediaLibrary}
+              sambaTree={sambaTree}
+              customCollections={customCollections}
+              onRemoveMediaItemsByIds={(ids) => {
+                const removeSet = new Set(ids);
+                setMediaLibrary((prev) => prev.filter((m) => !removeSet.has(m.id)));
+              }}
             />
           </ErrorBoundary>
         )}

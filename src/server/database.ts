@@ -2598,5 +2598,670 @@ export async function resetDatabaseInDb(): Promise<void> {
   await hardResetAndDeleteDatabaseFiles();
 }
 
+export type BrokenPathReason =
+  | 'missing_on_disk'
+  | 'unmounted_volume'
+  | 'missing_in_samba_tree'
+  | 'missing_file_path'
+  | 'stale_blob_url'
+  | 'malformed_path'
+  | 'corrupted_metadata';
+
+export interface BrokenPathRecord {
+  id: string;
+  title: string;
+  mediaType: string;
+  path: string;
+  reason: BrokenPathReason;
+  details: string;
+  sourceTable: 'media_items' | 'thumbnail_metadata_cache';
+  recoverable?: boolean;
+}
+
+export interface OrphanedMetadataRecord {
+  id: string;
+  table:
+    | 'series_watch_progress'
+    | 'watch_history_log'
+    | 'user_watchlist'
+    | 'media_playback_settings'
+    | 'thumbnail_metadata_cache'
+    | 'media_collections';
+  referencedId: string;
+  label: string;
+  details: string;
+}
+
+export interface VaultIntegrityReport {
+  checkedAt: string;
+  dbFilePath: string;
+  summary: {
+    totalMediaItems: number;
+    brokenPathCount: number;
+    missingOnDiskCount: number;
+    unmountedVolumeCount: number;
+    staleBlobCount: number;
+    malformedPathCount: number;
+    missingFilePathCount: number;
+    corruptedMetadataCount: number;
+    orphanedMetadataCount: number;
+    danglingCollectionRefsCount: number;
+  };
+  tableCounts: {
+    media_items: number;
+    series_watch_progress: number;
+    watch_history_log: number;
+    user_watchlist: number;
+    media_playback_settings: number;
+    thumbnail_metadata_cache: number;
+    media_collections: number;
+  };
+  brokenPathItems: BrokenPathRecord[];
+  orphanedRecords: OrphanedMetadataRecord[];
+}
+
+function isAbsoluteLocalFsPath(p: string): boolean {
+  if (!p) return false;
+  const trimmed = p.trim();
+  if (/^(https?:|smb:|blob:|data:)/i.test(trimmed)) return false;
+  if (trimmed.startsWith('//')) return false;
+  return trimmed.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(trimmed);
+}
+
+function getMountRootIfVolumePath(p: string): string | null {
+  const macMatch = p.match(/^(\/Volumes\/[^/]+)/i);
+  if (macMatch) return macMatch[1];
+  const mntMatch = p.match(/^(\/(?:mnt|media)\/[^/]+)/i);
+  if (mntMatch) return mntMatch[1];
+  return null;
+}
+
+function hasMalformedPathIssues(p: string): string | null {
+  if (!p) return null;
+  if (/[\x00-\x1f]/.test(p)) return 'Contains control characters';
+  if (/%20/i.test(p) && !/^https?:/i.test(p)) return 'Contains URL-encoded %20 spaces';
+  const strippedProtocol = p.replace(/^(https?:\/\/|smb:\/\/|\/\/)/i, '');
+  if (/\/\//.test(strippedProtocol)) return 'Contains duplicate consecutive slashes (//)';
+  return null;
+}
+
+function collectSambaTreePathSet(sambaTree: any[]): Set<string> {
+  const paths = new Set<string>();
+  const norm = (s: string) =>
+    s
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '')
+      .toLowerCase()
+      .trim();
+
+  const walk = (nodes: any[]) => {
+    for (const n of nodes) {
+      if (!n) continue;
+      if (typeof n.path === 'string' && n.path.trim()) {
+        paths.add(norm(n.path));
+      }
+      if (Array.isArray(n.children)) {
+        walk(n.children);
+      }
+    }
+  };
+  walk(sambaTree);
+  return paths;
+}
+
+export async function runVaultIntegrityCheck(options?: {
+  mountPath?: string;
+}): Promise<VaultIntegrityReport> {
+  const db = await getDatabase();
+  const checkedAt = new Date().toISOString();
+  const mountPath = (options?.mountPath || '').trim();
+  const mountPathExists = mountPath ? fs.existsSync(mountPath) : false;
+
+  const vaultState = getVaultStateFromDisk();
+  const sambaTree: any[] = Array.isArray(vaultState?.sambaTree) ? vaultState.sambaTree : [];
+  const sambaPathSet = sambaTree.length > 0 ? collectSambaTreePathSet(sambaTree) : new Set<string>();
+
+  const norm = (s: string) =>
+    s
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '')
+      .toLowerCase()
+      .trim();
+
+  const brokenPathItems: BrokenPathRecord[] = [];
+  const orphanedRecords: OrphanedMetadataRecord[] = [];
+
+  const mediaIdSet = new Set<string>();
+  const mediaPathSet = new Set<string>();
+
+  // 1. Inspect media_items
+  const mediaRes = db.exec(
+    `SELECT id, media_type, title, recommended_folder, file_path, raw_data FROM media_items`
+  );
+  const mediaRows = mediaRes.length > 0 ? mediaRes[0].values : [];
+
+  for (const row of mediaRows) {
+    const id = String(row[0] || '');
+    const mediaType = String(row[1] || 'movie');
+    const title = String(row[2] || '');
+    const recFolder = typeof row[3] === 'string' ? row[3] : '';
+    const filePath = typeof row[4] === 'string' ? row[4] : '';
+    const rawDataStr = typeof row[5] === 'string' ? row[5] : '';
+
+    if (id) mediaIdSet.add(id);
+
+    let raw: any = null;
+    let rawJsonInvalid = false;
+    if (rawDataStr && rawDataStr.trim()) {
+      try {
+        raw = JSON.parse(rawDataStr);
+      } catch {
+        rawJsonInvalid = true;
+      }
+    }
+
+    if (!title.trim() || rawJsonInvalid) {
+      brokenPathItems.push({
+        id,
+        title: title || '(Empty Title)',
+        mediaType,
+        path: filePath || recFolder || '',
+        reason: 'corrupted_metadata',
+        details: rawJsonInvalid
+          ? 'raw_data column contains malformed JSON'
+          : 'Media item has an empty title in SQLite vault',
+        sourceTable: 'media_items',
+      });
+    }
+
+    const candidatePaths: string[] = [];
+    if (filePath.trim()) candidatePaths.push(filePath.trim());
+    if (raw?.path && typeof raw.path === 'string' && raw.path.trim() && raw.path.trim() !== filePath.trim()) {
+      candidatePaths.push(raw.path.trim());
+    }
+    if (raw?.folderPath && typeof raw.folderPath === 'string' && isAbsoluteLocalFsPath(raw.folderPath)) {
+      candidatePaths.push(raw.folderPath.trim());
+    }
+    if (recFolder && isAbsoluteLocalFsPath(recFolder)) {
+      candidatePaths.push(recFolder.trim());
+    }
+
+    // Check episode / track paths and blob URLs
+    const blobUrls: string[] = [];
+    if (typeof raw?.localBlobUrl === 'string' && raw.localBlobUrl.startsWith('blob:')) {
+      blobUrls.push(raw.localBlobUrl);
+    }
+    if (typeof raw?.playbackUrl === 'string' && raw.playbackUrl.startsWith('blob:')) {
+      blobUrls.push(raw.playbackUrl);
+    }
+    if (Array.isArray(raw?.seasons)) {
+      for (const s of raw.seasons) {
+        for (const ep of s?.episodes || []) {
+          if (typeof ep?.filePath === 'string' && ep.filePath.trim()) {
+            candidatePaths.push(ep.filePath.trim());
+          }
+          if (typeof ep?.playbackUrl === 'string' && ep.playbackUrl.startsWith('blob:')) {
+            blobUrls.push(ep.playbackUrl);
+          }
+        }
+      }
+    }
+    if (Array.isArray(raw?.tracks)) {
+      for (const tr of raw.tracks) {
+        if (typeof tr?.filePath === 'string' && tr.filePath.trim()) {
+          candidatePaths.push(tr.filePath.trim());
+        }
+        if (typeof tr?.playbackUrl === 'string' && tr.playbackUrl.startsWith('blob:')) {
+          blobUrls.push(tr.playbackUrl);
+        }
+      }
+    }
+
+    candidatePaths.forEach((p) => mediaPathSet.add(norm(p)));
+    if (recFolder) mediaPathSet.add(norm(recFolder));
+    if (raw?.folderPath) mediaPathSet.add(norm(String(raw.folderPath)));
+
+    if (filePath.startsWith('blob:') || blobUrls.length > 0) {
+      brokenPathItems.push({
+        id,
+        title: title || id,
+        mediaType,
+        path: filePath.startsWith('blob:') ? filePath : blobUrls[0],
+        reason: 'stale_blob_url',
+        details: 'Record persists an ephemeral browser blob: URL that becomes invalid across restarts',
+        sourceTable: 'media_items',
+        recoverable: true,
+      });
+    }
+
+    const isImportedOrigin =
+      id.startsWith('imported-') ||
+      id.startsWith('batch-imported-') ||
+      id.startsWith('samba-') ||
+      id.startsWith('folder-') ||
+      raw?.source === 'local' ||
+      raw?.source === 'samba';
+
+    if (isImportedOrigin && candidatePaths.length === 0) {
+      brokenPathItems.push({
+        id,
+        title: title || id,
+        mediaType,
+        path: recFolder || '',
+        reason: 'missing_file_path',
+        details: 'Imported/Samba media record has no linked file_path or episode/track paths',
+        sourceTable: 'media_items',
+      });
+      continue;
+    }
+
+    // Validate the primary path(s) (avoid reporting dozens of episodes for one series; check first broken one per item)
+    let itemBrokenAdded = false;
+    for (const cand of candidatePaths) {
+      if (itemBrokenAdded) break;
+
+      const malformed = hasMalformedPathIssues(cand);
+      if (malformed) {
+        brokenPathItems.push({
+          id,
+          title: title || id,
+          mediaType,
+          path: cand,
+          reason: 'malformed_path',
+          details: malformed,
+          sourceTable: 'media_items',
+          recoverable: true,
+        });
+        itemBrokenAdded = true;
+        continue;
+      }
+
+      if (isAbsoluteLocalFsPath(cand)) {
+        const volRoot = getMountRootIfVolumePath(cand);
+        if (volRoot && !fs.existsSync(volRoot)) {
+          brokenPathItems.push({
+            id,
+            title: title || id,
+            mediaType,
+            path: cand,
+            reason: 'unmounted_volume',
+            details: `Mount root "${volRoot}" is not currently mounted on disk`,
+            sourceTable: 'media_items',
+          });
+          itemBrokenAdded = true;
+        } else if (!fs.existsSync(cand)) {
+          brokenPathItems.push({
+            id,
+            title: title || id,
+            mediaType,
+            path: cand,
+            reason: 'missing_on_disk',
+            details: `Path does not exist on disk: ${cand}`,
+            sourceTable: 'media_items',
+          });
+          itemBrokenAdded = true;
+        }
+      } else if (!/^(https?:|smb:|blob:|data:)/i.test(cand)) {
+        // Relative Samba/vault path
+        if (mountPathExists) {
+          const joined = path.join(mountPath, cand.replace(/^\/+/, ''));
+          if (!fs.existsSync(joined)) {
+            brokenPathItems.push({
+              id,
+              title: title || id,
+              mediaType,
+              path: cand,
+              reason: 'missing_on_disk',
+              details: `Relative path not found under mounted volume (${joined})`,
+              sourceTable: 'media_items',
+            });
+            itemBrokenAdded = true;
+          }
+        } else if (isImportedOrigin && sambaPathSet.size > 0) {
+          const nCand = norm(cand);
+          const inTree =
+            sambaPathSet.has(nCand) ||
+            sambaPathSet.has(`/${nCand}`) ||
+            Array.from(sambaPathSet).some((sp) => sp.endsWith(`/${nCand}`) || nCand.endsWith(sp));
+          if (!inTree) {
+            brokenPathItems.push({
+              id,
+              title: title || id,
+              mediaType,
+              path: cand,
+              reason: 'missing_in_samba_tree',
+              details: 'Path was not found in the last scanned Samba share tree',
+              sourceTable: 'media_items',
+            });
+            itemBrokenAdded = true;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Check series_watch_progress for orphaned rows
+  const progressRes = db.exec(
+    `SELECT id, series_id, series_title, season_number, episode_number FROM series_watch_progress`
+  );
+  const progressRows = progressRes.length > 0 ? progressRes[0].values : [];
+  for (const row of progressRows) {
+    const id = String(row[0] || '');
+    const seriesId = String(row[1] || '');
+    const seriesTitle = String(row[2] || 'Unknown Series');
+    const seasonNum = row[3] ?? 1;
+    const epNum = row[4] ?? 1;
+    if (!seriesId || !mediaIdSet.has(seriesId)) {
+      orphanedRecords.push({
+        id,
+        table: 'series_watch_progress',
+        referencedId: seriesId,
+        label: `${seriesTitle} (S${String(seasonNum).padStart(2, '0')}E${String(epNum).padStart(2, '0')})`,
+        details: `Watch progress references missing series_id "${seriesId}" not in media_items`,
+      });
+    }
+  }
+
+  // 3. Check watch_history_log for orphaned rows
+  const historyRes = db.exec(
+    `SELECT id, media_id, series_id, title FROM watch_history_log`
+  );
+  const historyRows = historyRes.length > 0 ? historyRes[0].values : [];
+  for (const row of historyRows) {
+    const id = String(row[0] || '');
+    const mediaId = row[1] ? String(row[1]) : '';
+    const seriesId = row[2] ? String(row[2]) : '';
+    const title = String(row[3] || 'Unknown');
+    const refId = mediaId || seriesId;
+    if (refId && !mediaIdSet.has(refId) && !(seriesId && mediaIdSet.has(seriesId))) {
+      orphanedRecords.push({
+        id,
+        table: 'watch_history_log',
+        referencedId: refId,
+        label: title,
+        details: `Watch history entry references missing media_id/series_id "${refId}"`,
+      });
+    }
+  }
+
+  // 4. Check user_watchlist for orphaned rows
+  const watchlistRes = db.exec(`SELECT id, media_id, title FROM user_watchlist`);
+  const watchlistRows = watchlistRes.length > 0 ? watchlistRes[0].values : [];
+  for (const row of watchlistRows) {
+    const id = String(row[0] || '');
+    const mediaId = String(row[1] || '');
+    const title = String(row[2] || 'Untitled');
+    if (!mediaId || !mediaIdSet.has(mediaId)) {
+      orphanedRecords.push({
+        id,
+        table: 'user_watchlist',
+        referencedId: mediaId,
+        label: title,
+        details: `Watchlist item references missing media_id "${mediaId}"`,
+      });
+    }
+  }
+
+  // 5. Check media_playback_settings for orphaned rows
+  const playbackRes = db.exec(`SELECT media_id, subtitle_offset_ms, last_watched_seconds FROM media_playback_settings`);
+  const playbackRows = playbackRes.length > 0 ? playbackRes[0].values : [];
+  for (const row of playbackRows) {
+    const mediaId = String(row[0] || '');
+    if (!mediaId || !mediaIdSet.has(mediaId)) {
+      orphanedRecords.push({
+        id: mediaId,
+        table: 'media_playback_settings',
+        referencedId: mediaId,
+        label: `Playback settings (${mediaId})`,
+        details: `Playback settings row references missing media_id "${mediaId}"`,
+      });
+    }
+  }
+
+  // 6. Check media_collections for dangling item_ids_json / excluded_item_ids_json
+  const collectionsRes = db.exec(`SELECT id, name, item_ids_json, excluded_item_ids_json FROM media_collections`);
+  const collectionsRows = collectionsRes.length > 0 ? collectionsRes[0].values : [];
+  let danglingCollectionRefsCount = 0;
+  for (const row of collectionsRows) {
+    const colId = String(row[0] || '');
+    const colName = String(row[1] || 'Collection');
+    let itemIds: string[] = [];
+    let excludedIds: string[] = [];
+    try {
+      itemIds = JSON.parse(String(row[2] || '[]'));
+    } catch {}
+    try {
+      excludedIds = JSON.parse(String(row[3] || '[]'));
+    } catch {}
+
+    const danglingItems = (Array.isArray(itemIds) ? itemIds : []).filter((mid) => !mediaIdSet.has(String(mid)));
+    const danglingExcluded = (Array.isArray(excludedIds) ? excludedIds : []).filter((mid) => !mediaIdSet.has(String(mid)));
+    const totalDangling = danglingItems.length + danglingExcluded.length;
+    if (totalDangling > 0) {
+      danglingCollectionRefsCount += totalDangling;
+      orphanedRecords.push({
+        id: colId,
+        table: 'media_collections',
+        referencedId: [...danglingItems, ...danglingExcluded].slice(0, 3).join(', '),
+        label: colName,
+        details: `Collection holds ${totalDangling} dangling media ID reference(s) missing from media_items`,
+      });
+    }
+  }
+
+  // 7. Check thumbnail_metadata_cache for orphaned entries or broken local paths
+  const thumbRes = db.exec(`SELECT id, media_path, title, media_type FROM thumbnail_metadata_cache`);
+  const thumbRows = thumbRes.length > 0 ? thumbRes[0].values : [];
+  for (const row of thumbRows) {
+    const id = String(row[0] || '');
+    const mediaPath = String(row[1] || '');
+    const title = String(row[2] || mediaPath);
+    const mediaType = String(row[3] || 'movie');
+    const normPath = norm(mediaPath);
+
+    const hasSambaMatch =
+      sambaPathSet.size > 0 &&
+      (sambaPathSet.has(normPath) || Array.from(sambaPathSet).some((sp) => sp.endsWith(normPath) || normPath.endsWith(sp)));
+    const hasMediaMatch =
+      mediaPathSet.has(normPath) ||
+      Array.from(mediaPathSet).some((mp) => mp && (mp === normPath || mp.includes(normPath) || normPath.includes(mp)));
+
+    if ((mediaIdSet.size > 0 || sambaPathSet.size > 0) && !hasMediaMatch && !hasSambaMatch) {
+      orphanedRecords.push({
+        id,
+        table: 'thumbnail_metadata_cache',
+        referencedId: mediaPath,
+        label: title,
+        details: `Cached thumbnail path "${mediaPath}" does not match any active media item or scanned Samba node`,
+      });
+    } else if (isAbsoluteLocalFsPath(mediaPath)) {
+      const volRoot = getMountRootIfVolumePath(mediaPath);
+      if ((!volRoot || fs.existsSync(volRoot)) && !fs.existsSync(mediaPath)) {
+        brokenPathItems.push({
+          id,
+          title,
+          mediaType,
+          path: mediaPath,
+          reason: 'missing_on_disk',
+          details: `Cached thumbnail source path no longer exists on disk: ${mediaPath}`,
+          sourceTable: 'thumbnail_metadata_cache',
+        });
+      }
+    }
+  }
+
+  return {
+    checkedAt,
+    dbFilePath: DB_PATH,
+    summary: {
+      totalMediaItems: mediaRows.length,
+      brokenPathCount: brokenPathItems.length,
+      missingOnDiskCount: brokenPathItems.filter((b) => b.reason === 'missing_on_disk' || b.reason === 'missing_in_samba_tree').length,
+      unmountedVolumeCount: brokenPathItems.filter((b) => b.reason === 'unmounted_volume').length,
+      staleBlobCount: brokenPathItems.filter((b) => b.reason === 'stale_blob_url').length,
+      malformedPathCount: brokenPathItems.filter((b) => b.reason === 'malformed_path').length,
+      missingFilePathCount: brokenPathItems.filter((b) => b.reason === 'missing_file_path').length,
+      corruptedMetadataCount: brokenPathItems.filter((b) => b.reason === 'corrupted_metadata').length,
+      orphanedMetadataCount: orphanedRecords.length,
+      danglingCollectionRefsCount,
+    },
+    tableCounts: {
+      media_items: mediaRows.length,
+      series_watch_progress: progressRows.length,
+      watch_history_log: historyRows.length,
+      user_watchlist: watchlistRows.length,
+      media_playback_settings: playbackRows.length,
+      thumbnail_metadata_cache: thumbRows.length,
+      media_collections: collectionsRows.length,
+    },
+    brokenPathItems,
+    orphanedRecords,
+  };
+}
+
+export async function cleanVaultIntegrityIssues(options: {
+  removeAllOrphans?: boolean;
+  removeBrokenMediaIds?: string[];
+  clearStaleBlobUrls?: boolean;
+}): Promise<{
+  success: boolean;
+  removedMediaCount: number;
+  removedOrphanedRows: number;
+  prunedCollectionRefs: number;
+  clearedBlobUrls: number;
+  message: string;
+}> {
+  const db = await getDatabase();
+  const report = await runVaultIntegrityCheck();
+
+  let removedMediaCount = 0;
+  let removedOrphanedRows = 0;
+  let prunedCollectionRefs = 0;
+  let clearedBlobUrls = 0;
+
+  // 1. Remove requested broken media_items
+  if (Array.isArray(options.removeBrokenMediaIds) && options.removeBrokenMediaIds.length > 0) {
+    const validIds = new Set(
+      options.removeBrokenMediaIds.map((id) => String(id).trim()).filter(Boolean)
+    );
+    validIds.forEach((id) => {
+      db.run(`DELETE FROM media_items WHERE id = ?`, [id]);
+      removedMediaCount++;
+    });
+  }
+
+  // 2. Clear stale blob: URLs from media_items
+  if (options.clearStaleBlobUrls) {
+    const staleItems = report.brokenPathItems.filter(
+      (b) => b.reason === 'stale_blob_url' && b.sourceTable === 'media_items'
+    );
+    for (const item of staleItems) {
+      const res = db.exec(`SELECT file_path, raw_data FROM media_items WHERE id = ?`, [item.id]);
+      if (res.length > 0 && res[0].values[0]) {
+        let filePath = res[0].values[0][0] ? String(res[0].values[0][0]) : '';
+        const rawStr = res[0].values[0][1] ? String(res[0].values[0][1]) : '';
+        if (filePath.startsWith('blob:')) filePath = '';
+        let nextRawStr = rawStr;
+        if (rawStr) {
+          try {
+            const parsed = JSON.parse(rawStr);
+            if (typeof parsed.localBlobUrl === 'string' && parsed.localBlobUrl.startsWith('blob:')) {
+              delete parsed.localBlobUrl;
+            }
+            if (typeof parsed.playbackUrl === 'string' && parsed.playbackUrl.startsWith('blob:')) {
+              delete parsed.playbackUrl;
+            }
+            if (Array.isArray(parsed.seasons)) {
+              parsed.seasons = parsed.seasons.map((s: any) => ({
+                ...s,
+                episodes: Array.isArray(s.episodes)
+                  ? s.episodes.map((ep: any) =>
+                      typeof ep?.playbackUrl === 'string' && ep.playbackUrl.startsWith('blob:')
+                        ? { ...ep, playbackUrl: undefined }
+                        : ep
+                    )
+                  : s.episodes,
+              }));
+            }
+            if (Array.isArray(parsed.tracks)) {
+              parsed.tracks = parsed.tracks.map((tr: any) =>
+                typeof tr?.playbackUrl === 'string' && tr.playbackUrl.startsWith('blob:')
+                  ? { ...tr, playbackUrl: undefined }
+                  : tr
+              );
+            }
+            nextRawStr = JSON.stringify(parsed);
+          } catch {}
+        }
+        db.run(`UPDATE media_items SET file_path = ?, raw_data = ?, updated_at = datetime('now') WHERE id = ?`, [
+          filePath || null,
+          nextRawStr || null,
+          item.id,
+        ]);
+        clearedBlobUrls++;
+      }
+    }
+  }
+
+  // 3. Re-compute orphans (especially if media items were just deleted) and purge them
+  if (options.removeAllOrphans) {
+    const postMediaReport = removedMediaCount > 0 ? await runVaultIntegrityCheck() : report;
+    for (const orphan of postMediaReport.orphanedRecords) {
+      if (orphan.table === 'series_watch_progress') {
+        db.run(`DELETE FROM series_watch_progress WHERE id = ?`, [orphan.id]);
+        removedOrphanedRows++;
+      } else if (orphan.table === 'watch_history_log') {
+        db.run(`DELETE FROM watch_history_log WHERE id = ?`, [orphan.id]);
+        removedOrphanedRows++;
+      } else if (orphan.table === 'user_watchlist') {
+        db.run(`DELETE FROM user_watchlist WHERE id = ?`, [orphan.id]);
+        removedOrphanedRows++;
+      } else if (orphan.table === 'media_playback_settings') {
+        db.run(`DELETE FROM media_playback_settings WHERE media_id = ?`, [orphan.id]);
+        removedOrphanedRows++;
+      } else if (orphan.table === 'thumbnail_metadata_cache') {
+        db.run(`DELETE FROM thumbnail_metadata_cache WHERE id = ?`, [orphan.id]);
+        removedOrphanedRows++;
+      } else if (orphan.table === 'media_collections') {
+        const mediaIdRes = db.exec(`SELECT id FROM media_items`);
+        const validMediaIds = new Set<string>(
+          mediaIdRes.length > 0 ? mediaIdRes[0].values.map((v) => String(v[0])) : []
+        );
+        const colRes = db.exec(
+          `SELECT item_ids_json, excluded_item_ids_json FROM media_collections WHERE id = ?`,
+          [orphan.id]
+        );
+        if (colRes.length > 0 && colRes[0].values[0]) {
+          let itemIds: string[] = [];
+          let excludedIds: string[] = [];
+          try { itemIds = JSON.parse(String(colRes[0].values[0][0] || '[]')); } catch {}
+          try { excludedIds = JSON.parse(String(colRes[0].values[0][1] || '[]')); } catch {}
+          const filteredItems = itemIds.filter((id) => validMediaIds.has(String(id)));
+          const filteredExcluded = excludedIds.filter((id) => validMediaIds.has(String(id)));
+          prunedCollectionRefs += (itemIds.length - filteredItems.length) + (excludedIds.length - filteredExcluded.length);
+          db.run(
+            `UPDATE media_collections SET item_ids_json = ?, excluded_item_ids_json = ?, updated_at = ? WHERE id = ?`,
+            [JSON.stringify(filteredItems), JSON.stringify(filteredExcluded), new Date().toISOString(), orphan.id]
+          );
+        }
+      }
+    }
+  }
+
+  persistDbToDiskSync();
+
+  return {
+    success: true,
+    removedMediaCount,
+    removedOrphanedRows,
+    prunedCollectionRefs,
+    clearedBlobUrls,
+    message: `Integrity cleanup completed: ${removedMediaCount} broken item(s) removed, ${removedOrphanedRows} orphaned metadata row(s) purged, ${prunedCollectionRefs} collection reference(s) pruned, ${clearedBlobUrls} stale blob URL(s) cleared.`,
+  };
+}
+
+
 
 

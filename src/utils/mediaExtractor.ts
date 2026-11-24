@@ -604,7 +604,7 @@ export function extractAllMediaFromSambaTree(
           c.type === 'folder' && isSeasonDirectory(c.name)
         );
 
-        const isRootContainer = ['movies', 'series', 'franchises', 'collections', 'collection', 'universes', 'sagas', 'audio books', 'books', 'music', 'sort', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage', 'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'].includes(node.name.toLowerCase());
+        const isRootContainer = ['movies', 'series', 'franchises', 'collections', 'collection', 'universes', 'sagas', 'audio books', 'books', 'music', 'sort', 'unsorted', 'staging', 'incoming', 'temp', 'scratch', 'misc', 'lost+found', 'anime', 'documentaries', 'tv shows', 'tv', 'shows', 'downloads', 'share', 'storage', 'comedy', "comedy's", "comedy’s", 'series-tv', 'tv-series', 'drama', 'dramas', 'accion', 'action', 'thriller', 'terror', 'horror', 'scifi', 'sci-fi'].includes(node.name.toLowerCase());
         const isSeasonFolder = isSeasonDirectory(node.name);
 
         if (!isRootContainer && !isSeasonFolder && (node.hasNfo || node.mediaType || hasMediaChildren || hasSeasonFolderChildren)) {
@@ -724,6 +724,12 @@ export async function extractAllMediaFromSambaTreeAsync(
         'books',
         'music',
         'sort',
+        'unsorted',
+        'staging',
+        'incoming',
+        'temp',
+        'scratch',
+        'misc',
         'lost+found',
         'anime',
         'documentaries',
@@ -1145,12 +1151,109 @@ export function isMediaMissingGenres(m: MediaMetadata): boolean {
   return !hasSpecificGenre;
 }
 
+export const UNSORTED_FOLDER_REGEX =
+  /(?:^|[\\/])(sort|unsorted|in[\s._-]?flight|downloads?|incoming|temp|staging|scratch|misc)(?:[\\/]|$)/i;
+
+export function isMediaInUnsortedPath(m: MediaMetadata): boolean {
+  const candidates = [
+    m.path,
+    m.folderPath,
+    m.recommendedFolderStructure,
+  ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+  return candidates.some((p) => UNSORTED_FOLDER_REGEX.test(p));
+}
+
+export interface UnimportedUnsortedEntry {
+  node: SambaShareNode;
+  parentPath: string;
+  fullPath: string;
+}
+
+export function findUnimportedUnsortedNodes(
+  nodes: SambaShareNode[] = [],
+  existingLibrary: MediaMetadata[] = [],
+  config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG
+): { folderPaths: string[]; fileNodes: UnimportedUnsortedEntry[] } {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return { folderPaths: [], fileNodes: [] };
+  }
+
+  const normalize = (p?: string) =>
+    (p || '')
+      .replace(/\\/g, '/')
+      .replace(/\/+/g, '/')
+      .replace(/\/$/, '')
+      .toLowerCase()
+      .trim();
+
+  const knownPaths = new Set<string>();
+  const knownFilenames = new Set<string>();
+  for (const item of existingLibrary) {
+    [item.path, item.folderPath, item.recommendedFolderStructure].forEach((p) => {
+      const n = normalize(p);
+      if (n) knownPaths.add(n);
+    });
+    if (item.matchedFilename) knownFilenames.add(item.matchedFilename.toLowerCase());
+    if (Array.isArray(item.seasons)) {
+      for (const s of item.seasons) {
+        for (const ep of s.episodes || []) {
+          const epPath = normalize(ep.filePath);
+          if (epPath) knownPaths.add(epPath);
+          if (ep.filename) knownFilenames.add(ep.filename.toLowerCase());
+        }
+      }
+    }
+  }
+
+  const folderPathSet = new Set<string>();
+  const fileNodes: UnimportedUnsortedEntry[] = [];
+
+  const walk = (list: SambaShareNode[], parentPath: string, insideUnsorted: boolean) => {
+    for (const node of list) {
+      const fullPath = (node.path || (parentPath ? `${parentPath}/${node.name}` : node.name)).replace(/\/+/g, '/');
+      const isNodeUnsorted =
+        insideUnsorted ||
+        UNSORTED_FOLDER_REGEX.test(`/${node.name}/`) ||
+        UNSORTED_FOLDER_REGEX.test(fullPath);
+
+      if (node.type === 'folder') {
+        if (UNSORTED_FOLDER_REGEX.test(`/${node.name}/`)) {
+          folderPathSet.add(fullPath);
+        }
+        if (node.children && node.children.length > 0) {
+          walk(node.children, fullPath, isNodeUnsorted);
+        }
+      } else if (node.type === 'file' && isNodeUnsorted && isMediaFile(node.name, config)) {
+        const normFull = normalize(fullPath);
+        const normParent = normalize(parentPath);
+        const alreadyImported =
+          knownPaths.has(normFull) ||
+          (normParent && knownPaths.has(normParent)) ||
+          knownFilenames.has(node.name.toLowerCase());
+
+        if (!alreadyImported) {
+          if (parentPath) folderPathSet.add(parentPath);
+          fileNodes.push({ node, parentPath, fullPath });
+        }
+      }
+    }
+  };
+
+  walk(nodes, '', false);
+  return {
+    folderPaths: Array.from(folderPathSet),
+    fileNodes,
+  };
+}
+
 export function isMediaUncategorized(m: MediaMetadata): boolean {
   return (
     isMediaMissingSynopsis(m) ||
     isMediaMissingArtwork(m) ||
     isMediaMissingGenres(m) ||
+    (isMediaInUnsortedPath(m) && m.status !== 'categorized') ||
     (isMediaImportedOrUnverified(m) && m.status !== 'categorized')
   );
 }
+
 

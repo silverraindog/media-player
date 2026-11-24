@@ -31,8 +31,20 @@ import {
   Terminal,
   Wifi,
   FolderOpen,
+  FileWarning,
+  Search,
+  Unlink,
 } from 'lucide-react';
-import { SyncScheduleConfig, ClassifierSettings, SambaConfig, TranscodeConfig, TranscodePreset } from '../types';
+import {
+  SyncScheduleConfig,
+  ClassifierSettings,
+  SambaConfig,
+  TranscodeConfig,
+  TranscodePreset,
+  MediaMetadata,
+  SambaShareNode,
+  MediaCollection,
+} from '../types';
 import { APP_VERSION, APP_RELEASE_TAG, getNextReleaseTag, BUILD_INCREMENTS, ReleaseIncrement } from '../version';
 import {
   syncScheduler,
@@ -54,6 +66,12 @@ import { HwAccelSettingsCard } from './HwAccelSettingsCard';
 import { PresetManager } from './PresetManager';
 import { NetworkConnectionDiagnosticsCard } from './NetworkConnectionDiagnosticsCard';
 import { FfmpegTranscodeLogsCard } from './FfmpegTranscodeLogsCard';
+import {
+  runLibraryIntegrityCheck,
+  cleanLibraryIntegrityIssues,
+  LibraryIntegrityReport,
+  BrokenPathReason,
+} from '../utils/libraryIntegrity';
 
 interface SettingsTabProps {
   classifierSettings: ClassifierSettings;
@@ -68,6 +86,10 @@ interface SettingsTabProps {
   transcodeConfig: TranscodeConfig;
   onUpdateTranscodeConfig: (config: TranscodeConfig) => void;
   serverVersionInfo?: any;
+  mediaLibrary?: MediaMetadata[];
+  sambaTree?: SambaShareNode[];
+  customCollections?: MediaCollection[];
+  onRemoveMediaItemsByIds?: (ids: string[]) => void;
 }
 
 export function validateTranscodePreset(preset: any): preset is TranscodePreset {
@@ -91,6 +113,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   transcodeConfig,
   onUpdateTranscodeConfig,
   serverVersionInfo,
+  mediaLibrary = [],
+  sambaTree = [],
+  customCollections = [],
+  onRemoveMediaItemsByIds,
 }) => {
   const safeTranscodeConfig: TranscodeConfig = React.useMemo(() => {
     if (!transcodeConfig || typeof transcodeConfig !== 'object') {
@@ -132,6 +158,113 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [isConfirmingReset, setIsConfirmingReset] = useState(false);
   const [confirmDeleteText, setConfirmDeleteText] = useState('');
   const [isResetting, setIsResetting] = useState(false);
+
+  // Library Integrity Check State
+  const [isRunningIntegrityCheck, setIsRunningIntegrityCheck] = useState(false);
+  const [isCleaningIntegrity, setIsCleaningIntegrity] = useState(false);
+  const [integrityReport, setIntegrityReport] = useState<LibraryIntegrityReport | null>(null);
+  const [integrityFilter, setIntegrityFilter] = useState<'all' | 'broken' | 'orphaned'>('all');
+  const [integrityFeedback, setIntegrityFeedback] = useState<string | null>(null);
+
+  const handleRunIntegrityCheck = async () => {
+    setIsRunningIntegrityCheck(true);
+    setIntegrityFeedback(null);
+    try {
+      const report = await runLibraryIntegrityCheck({
+        sambaConfig,
+        mediaLibrary,
+        sambaTree,
+        customCollections,
+      });
+      setIntegrityReport(report);
+      logger.info(
+        `SQLite Integrity Check completed: ${report.summary.brokenPathCount} broken path(s), ${report.summary.orphanedMetadataCount} orphaned metadata row(s).`,
+        'Database'
+      );
+    } catch (err: any) {
+      setIntegrityFeedback(`Integrity check failed: ${err?.message || String(err)}`);
+    } finally {
+      setIsRunningIntegrityCheck(false);
+    }
+  };
+
+  const handleCleanOrphanedMetadata = async () => {
+    if (!integrityReport) return;
+    setIsCleaningIntegrity(true);
+    try {
+      const res = await cleanLibraryIntegrityIssues({ removeAllOrphans: true });
+      setIntegrityFeedback(res.message);
+      await handleRunIntegrityCheck();
+    } catch (err: any) {
+      setIntegrityFeedback(`Failed to clean orphaned metadata: ${err?.message || String(err)}`);
+    } finally {
+      setIsCleaningIntegrity(false);
+    }
+  };
+
+  const handleClearStaleBlobUrls = async () => {
+    if (!integrityReport) return;
+    setIsCleaningIntegrity(true);
+    try {
+      const res = await cleanLibraryIntegrityIssues({ clearStaleBlobUrls: true });
+      setIntegrityFeedback(res.message);
+      await handleRunIntegrityCheck();
+    } catch (err: any) {
+      setIntegrityFeedback(`Failed to clear stale blob URLs: ${err?.message || String(err)}`);
+    } finally {
+      setIsCleaningIntegrity(false);
+    }
+  };
+
+  const handleRemoveBrokenMediaIds = async (ids: string[]) => {
+    if (!ids.length) return;
+    setIsCleaningIntegrity(true);
+    try {
+      const res = await cleanLibraryIntegrityIssues({
+        removeBrokenMediaIds: ids,
+        removeAllOrphans: true,
+      });
+      if (onRemoveMediaItemsByIds) {
+        onRemoveMediaItemsByIds(ids);
+      }
+      setIntegrityFeedback(res.message);
+      await handleRunIntegrityCheck();
+    } catch (err: any) {
+      setIntegrityFeedback(`Failed to remove broken records: ${err?.message || String(err)}`);
+    } finally {
+      setIsCleaningIntegrity(false);
+    }
+  };
+
+  const handleExportIntegrityReport = () => {
+    if (!integrityReport) return;
+    const blob = new Blob([JSON.stringify(integrityReport, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sambavault-integrity-report-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const formatBrokenReasonBadge = (reason: BrokenPathReason): { label: string; cls: string } => {
+    switch (reason) {
+      case 'missing_on_disk':
+        return { label: 'Missing on Disk', cls: 'bg-rose-950 text-rose-300 border-rose-700/60' };
+      case 'unmounted_volume':
+        return { label: 'Unmounted Volume', cls: 'bg-amber-950 text-amber-300 border-amber-700/60' };
+      case 'missing_in_samba_tree':
+        return { label: 'Missing in Share Tree', cls: 'bg-orange-950 text-orange-300 border-orange-700/60' };
+      case 'stale_blob_url':
+        return { label: 'Stale Blob URL', cls: 'bg-purple-950 text-purple-300 border-purple-700/60' };
+      case 'malformed_path':
+        return { label: 'Malformed Path', cls: 'bg-yellow-950 text-yellow-300 border-yellow-700/60' };
+      case 'missing_file_path':
+        return { label: 'Missing File Path', cls: 'bg-red-950 text-red-300 border-red-700/60' };
+      case 'corrupted_metadata':
+        return { label: 'Corrupted JSON/Title', cls: 'bg-pink-950 text-pink-300 border-pink-700/60' };
+    }
+  };
 
   const handleDatabaseReset = async () => {
     if (confirmDeleteText !== 'DELETE') return;
@@ -1419,6 +1552,306 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </div>
             )}
           </div>
+        </div>
+
+        {/* Library & SQLite Vault Integrity Check Panel */}
+        <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3.5">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2 flex-wrap">
+                  <span>Library & SQLite Vault Integrity Check</span>
+                  {integrityReport && (
+                    <span
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                        integrityReport.summary.brokenPathCount === 0 &&
+                        integrityReport.summary.orphanedMetadataCount === 0
+                          ? 'bg-emerald-950 text-emerald-300 border-emerald-700/60'
+                          : 'bg-amber-950 text-amber-300 border-amber-700/60'
+                      }`}
+                    >
+                      {integrityReport.summary.brokenPathCount === 0 &&
+                      integrityReport.summary.orphanedMetadataCount === 0
+                        ? 'Vault Healthy'
+                        : `${
+                            integrityReport.summary.brokenPathCount +
+                            integrityReport.summary.orphanedMetadataCount
+                          } Issue(s) Found`}
+                    </span>
+                  )}
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Scans <code className="text-cyan-300 font-mono">media_items</code>, watch progress, history, watchlist, collections, and thumbnail cache in the SQLite vault for broken paths or orphaned metadata.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {integrityReport && (
+                <button
+                  type="button"
+                  onClick={handleExportIntegrityReport}
+                  className="px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Export JSON</span>
+                </button>
+              )}
+              <button
+                type="button"
+                id="btn-run-library-integrity-check"
+                onClick={handleRunIntegrityCheck}
+                disabled={isRunningIntegrityCheck || isCleaningIntegrity}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-2 shadow"
+              >
+                {isRunningIntegrityCheck ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Scanning SQLite Vault...</span>
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-3.5 h-3.5" />
+                    <span>{integrityReport ? 'Re-Run Integrity Check' : 'Run Integrity Check'}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {integrityFeedback && (
+            <div className="p-3 rounded-lg bg-indigo-950/40 border border-indigo-700/50 text-xs text-indigo-200 flex items-center gap-2">
+              <Info className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span>{integrityFeedback}</span>
+            </div>
+          )}
+
+          {integrityReport && (
+            <div className="space-y-4">
+              {/* Summary Metrics */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                    Vault Media Items
+                  </div>
+                  <div className="text-xl font-bold font-mono text-white mt-1">
+                    {integrityReport.summary.totalMediaItems}
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5" title={integrityReport.dbFilePath}>
+                    {integrityReport.backendSource}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                    Broken / Invalid Paths
+                  </div>
+                  <div
+                    className={`text-xl font-bold font-mono mt-1 ${
+                      integrityReport.summary.brokenPathCount > 0 ? 'text-rose-400' : 'text-emerald-400'
+                    }`}
+                  >
+                    {integrityReport.summary.brokenPathCount}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">
+                    {integrityReport.summary.missingOnDiskCount} missing • {integrityReport.summary.staleBlobCount} stale blob
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                    Orphaned Metadata Rows
+                  </div>
+                  <div
+                    className={`text-xl font-bold font-mono mt-1 ${
+                      integrityReport.summary.orphanedMetadataCount > 0 ? 'text-amber-400' : 'text-emerald-400'
+                    }`}
+                  >
+                    {integrityReport.summary.orphanedMetadataCount}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">
+                    {integrityReport.summary.danglingCollectionRefsCount} dangling collection ref(s)
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+                  <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                    Last Checked
+                  </div>
+                  <div className="text-xs font-mono text-slate-200 mt-1.5">
+                    {new Date(integrityReport.checkedAt).toLocaleTimeString()}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    {integrityReport.tableCounts.series_watch_progress} progress • {integrityReport.tableCounts.watch_history_log} history • {integrityReport.tableCounts.user_watchlist} watchlist
+                  </div>
+                </div>
+              </div>
+
+              {/* Bulk Remediation Bar */}
+              {(integrityReport.summary.orphanedMetadataCount > 0 ||
+                integrityReport.summary.brokenPathCount > 0) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-slate-900/90 border border-slate-800">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setIntegrityFilter('all')}
+                      className={`px-2.5 py-1 rounded text-[11px] font-semibold cursor-pointer ${
+                        integrityFilter === 'all'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                      }`}
+                    >
+                      All ({integrityReport.brokenPathItems.length + integrityReport.orphanedRecords.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIntegrityFilter('broken')}
+                      className={`px-2.5 py-1 rounded text-[11px] font-semibold cursor-pointer ${
+                        integrityFilter === 'broken'
+                          ? 'bg-rose-600 text-white'
+                          : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                      }`}
+                    >
+                      Broken Paths ({integrityReport.brokenPathItems.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIntegrityFilter('orphaned')}
+                      className={`px-2.5 py-1 rounded text-[11px] font-semibold cursor-pointer ${
+                        integrityFilter === 'orphaned'
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                      }`}
+                    >
+                      Orphaned Metadata ({integrityReport.orphanedRecords.length})
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {integrityReport.summary.staleBlobCount > 0 && (
+                      <button
+                        type="button"
+                        disabled={isCleaningIntegrity}
+                        onClick={handleClearStaleBlobUrls}
+                        className="px-2.5 py-1.5 rounded-lg bg-purple-950/60 hover:bg-purple-900/70 border border-purple-700/60 text-purple-200 text-[11px] font-bold transition cursor-pointer disabled:opacity-50"
+                      >
+                        Clear Stale Blob URLs ({integrityReport.summary.staleBlobCount})
+                      </button>
+                    )}
+                    {integrityReport.summary.orphanedMetadataCount > 0 && (
+                      <button
+                        type="button"
+                        disabled={isCleaningIntegrity}
+                        onClick={handleCleanOrphanedMetadata}
+                        className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold transition cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                      >
+                        <Unlink className="w-3 h-3" />
+                        <span>Purge All Orphaned Metadata ({integrityReport.summary.orphanedMetadataCount})</span>
+                      </button>
+                    )}
+                    {integrityReport.brokenPathItems.some(
+                      (b) => b.sourceTable === 'media_items' && b.reason !== 'unmounted_volume'
+                    ) && (
+                      <button
+                        type="button"
+                        disabled={isCleaningIntegrity}
+                        onClick={() => {
+                          const removableIds = Array.from(
+                            new Set(
+                              integrityReport.brokenPathItems
+                                .filter((b) => b.sourceTable === 'media_items' && b.reason !== 'unmounted_volume')
+                                .map((b) => b.id)
+                            )
+                          );
+                          handleRemoveBrokenMediaIds(removableIds);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold transition cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove Broken Items</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Findings List */}
+              {integrityReport.brokenPathItems.length === 0 &&
+              integrityReport.orphanedRecords.length === 0 ? (
+                <div className="p-4 rounded-lg bg-emerald-950/20 border border-emerald-800/40 flex items-center gap-3 text-xs text-emerald-300">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                  <span>
+                    Integrity check passed with 0 broken paths and 0 orphaned metadata records across all SQLite vault tables.
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {integrityFilter !== 'orphaned' &&
+                    integrityReport.brokenPathItems.map((item, idx) => {
+                      const badge = formatBrokenReasonBadge(item.reason);
+                      return (
+                        <div
+                          key={`broken-${item.id}-${item.reason}-${idx}`}
+                          className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <FileWarning className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                              <span className="text-xs font-bold text-white truncate">{item.title}</span>
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${badge.cls}`}>
+                                {badge.label}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-500">{item.sourceTable}</span>
+                            </div>
+                            <p className="text-[11px] text-slate-400">{item.details}</p>
+                            {item.path && (
+                              <div className="text-[10px] font-mono text-slate-500 truncate" title={item.path}>
+                                {item.path}
+                              </div>
+                            )}
+                          </div>
+                          {item.sourceTable === 'media_items' && (
+                            <button
+                              type="button"
+                              disabled={isCleaningIntegrity}
+                              onClick={() => handleRemoveBrokenMediaIds([item.id])}
+                              className="shrink-0 px-2.5 py-1 rounded bg-rose-950/60 hover:bg-rose-900/80 border border-rose-800/60 text-rose-200 text-[11px] font-semibold transition cursor-pointer disabled:opacity-50"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                  {integrityFilter !== 'broken' &&
+                    integrityReport.orphanedRecords.map((orphan, idx) => (
+                      <div
+                        key={`orphan-${orphan.table}-${orphan.id}-${idx}`}
+                        className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Unlink className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            <span className="text-xs font-bold text-white truncate">{orphan.label}</span>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-700/60">
+                              {orphan.table}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">{orphan.details}</p>
+                          <div className="text-[10px] font-mono text-slate-500 truncate">
+                            Row ID: {orphan.id} • Missing Target: {orphan.referencedId}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

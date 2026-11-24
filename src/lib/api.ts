@@ -1,14 +1,30 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { localDbFallback } from '../utils/localDatabaseFallback';
 
-export const isTauri = typeof window !== 'undefined' && Boolean((window as any).__TAURI__ || (window as any).__TAURI_IPC__);
+export const isTauri = typeof window !== 'undefined' && Boolean(
+  (window as any).__TAURI__ ||
+  (window as any).__TAURI_IPC__ ||
+  window.location.protocol === 'tauri:' ||
+  window.location.origin.includes('tauri.localhost')
+);
+
+export function resolveBackendUrl(endpoint: string): string {
+  if (!endpoint || !endpoint.startsWith('/')) return endpoint;
+  if (
+    typeof window !== 'undefined' &&
+    (isTauri || window.location.origin.includes('localhost:1420'))
+  ) {
+    const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
+    return `http://localhost:${backendPort}${endpoint}`;
+  }
+  return endpoint;
+}
 
 export async function apiCall<T>(endpoint: string, options: any = {}): Promise<T> {
   if (isTauri) {
     // Never intercept streaming media endpoints with native database commands
     if (endpoint.startsWith('/api/media/stream') || endpoint.startsWith('/api/samba/stream') || endpoint.includes('/stream')) {
-      const backendPort = (window as any).__EXPRESS_PORT__ || 3000;
-      const url = endpoint.startsWith('/') ? `http://localhost:${backendPort}${endpoint}` : endpoint;
+      const url = resolveBackendUrl(endpoint);
       return window.fetch(url, options).then((r) => r.json()) as any;
     }
 

@@ -27,7 +27,7 @@ interface MusicTabProps {
   sambaConfig: SambaConfig;
 }
 
-export const MusicTab: React.FC<MusicTabProps> = ({
+export const MusicTab: React.FC<MusicTabProps> = React.memo(({
   mediaLibrary,
   onPlayMedia,
   onOpenDetails,
@@ -460,4 +460,4 @@ export const MusicTab: React.FC<MusicTabProps> = ({
       </div>
     </div>
   );
-};
+});

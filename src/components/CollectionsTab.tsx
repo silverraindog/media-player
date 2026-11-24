@@ -156,7 +156,7 @@ const CollectionCollageThumbnail: React.FC<CollectionCollageThumbnailProps> = ({
   );
 };
 
-export const CollectionsTab: React.FC<CollectionsTabProps> = ({
+export const CollectionsTab: React.FC<CollectionsTabProps> = React.memo(({
   mediaLibrary,
   sambaTree,
   customCollections,
@@ -1208,4 +1208,4 @@ export const CollectionsTab: React.FC<CollectionsTabProps> = ({
       )}
     </div>
   );
-};
+});

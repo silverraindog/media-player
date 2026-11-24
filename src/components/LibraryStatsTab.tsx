@@ -61,7 +61,7 @@ interface LibraryStatsTabProps {
 
 type GenreSortOption = 'storage-desc' | 'count-desc' | 'rating-desc' | 'name-asc';
 
-export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
+export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = React.memo(({
   onNavigateToVault,
   onOpenDetails,
   mediaLibrary,
@@ -1050,4 +1050,4 @@ export const LibraryStatsTab: React.FC<LibraryStatsTabProps> = ({
       </div>
     </div>
   );
-};
+});

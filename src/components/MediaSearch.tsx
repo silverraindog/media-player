@@ -225,7 +225,7 @@ export function getSafeRating(rating: any): number {
 
 export type UniverseCollection = UnifiedCollection;
 
-export const MediaSearch: React.FC<MediaSearchProps> = ({
+export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   mediaLibrary = [],
   sambaTree,
   customCollections = [],
@@ -4224,4 +4224,4 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       )}
     </div>
   );
-};
+});

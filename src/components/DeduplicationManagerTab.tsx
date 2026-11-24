@@ -74,7 +74,7 @@ function evaluateQuality(item: MediaMetadata): QualityEvaluation {
   };
 }
 
-export const DeduplicationManagerTab: React.FC<DeduplicationManagerTabProps> = ({
+export const DeduplicationManagerTab: React.FC<DeduplicationManagerTabProps> = React.memo(({
   mediaLibrary,
   onRemoveItem
 }) => {
@@ -428,4 +428,4 @@ export const DeduplicationManagerTab: React.FC<DeduplicationManagerTabProps> = (
       </div>
     </div>
   );
-};
+});

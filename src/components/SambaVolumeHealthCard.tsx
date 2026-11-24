@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Activity, ShieldCheck, Wifi, AlertTriangle, RefreshCw, Zap, Server, ChevronDown, ChevronUp } from 'lucide-react';
 import { SambaConfig, SambaShareNode } from '../types';
 import { probeLocalNetwork } from '../utils/tauriBridge';
@@ -93,6 +93,9 @@ export const SambaVolumeHealthCard: React.FC<SambaVolumeHealthCardProps> = ({
     return () => clearInterval(interval);
   }, [sambaConfig, isScanningOrSyncing]);
 
+  const latencyRef = useRef(latency);
+  latencyRef.current = latency;
+
   // Dynamic simulated throughput rates
   useEffect(() => {
     const interval = setInterval(() => {
@@ -110,7 +113,7 @@ export const SambaVolumeHealthCard: React.FC<SambaVolumeHealthCardProps> = ({
 
         const nextPoint: HistoricalData = {
           time: now,
-          latency: latency || (sambaConfig.enabled === false ? 1 : 12 + Math.floor(Math.random() * 5)),
+          latency: latencyRef.current || (sambaConfig.enabled === false ? 1 : 12 + Math.floor(Math.random() * 5)),
           readSpeed: parseFloat(readBase.toFixed(2)),
           writeSpeed: parseFloat(writeBase.toFixed(2)),
         };
@@ -119,10 +122,10 @@ export const SambaVolumeHealthCard: React.FC<SambaVolumeHealthCardProps> = ({
         const sliced = prev.length >= 15 ? prev.slice(1) : prev;
         return [...sliced, nextPoint];
       });
-    }, 1500);
+    }, isScanningOrSyncing ? 1500 : 5000);
 
     return () => clearInterval(interval);
-  }, [isScanningOrSyncing, latency, sambaConfig]);
+  }, [isScanningOrSyncing, sambaConfig.enabled]);
 
   // Calculate current averages
   const currentReadSpeed = useMemo(() => {

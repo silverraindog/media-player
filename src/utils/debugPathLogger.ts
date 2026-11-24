@@ -15,6 +15,8 @@ export interface PathDebugLogEntry {
 class PathDebugLogger {
   private logs: PathDebugLogEntry[] = [];
   private listeners: ((logs: PathDebugLogEntry[]) => void)[] = [];
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -35,11 +37,10 @@ class PathDebugLogger {
     };
     this.logs.unshift(fullEntry);
     if (this.logs.length > 500) {
-      this.logs = this.logs.slice(0, 500);
+      this.logs.length = 500;
     }
     this.save();
     this.notify();
-    console.debug(`[PathDebugLogger] [${fullEntry.eventType}] node="${fullEntry.nodeName}" raw="${fullEntry.rawPath}" resolved="${fullEntry.resolvedPath}" dirty=${fullEntry.isDirty}`, fullEntry);
   }
 
   public getLogs(): PathDebugLogEntry[] {
@@ -48,8 +49,8 @@ class PathDebugLogger {
 
   public clear() {
     this.logs = [];
-    this.save();
-    this.notify();
+    this.save(true);
+    this.notify(true);
   }
 
   public subscribe(listener: (logs: PathDebugLogEntry[]) => void) {
@@ -59,16 +60,45 @@ class PathDebugLogger {
     };
   }
 
-  private save() {
-    if (typeof window !== 'undefined') {
+  private save(immediate = false) {
+    if (typeof window === 'undefined') return;
+    if (immediate) {
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
       try {
         localStorage.setItem('samba_path_debug_logs', JSON.stringify(this.logs.slice(0, 200)));
       } catch {}
+      return;
     }
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      try {
+        localStorage.setItem('samba_path_debug_logs', JSON.stringify(this.logs.slice(0, 200)));
+      } catch {}
+    }, 500);
   }
 
-  private notify() {
-    this.listeners.forEach((l) => l(this.logs));
+  private notify(immediate = false) {
+    if (this.listeners.length === 0) return;
+    if (immediate) {
+      if (this.notifyTimer) {
+        clearTimeout(this.notifyTimer);
+        this.notifyTimer = null;
+      }
+      const snapshot = [...this.logs];
+      this.listeners.forEach((l) => l(snapshot));
+      return;
+    }
+    if (this.notifyTimer) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      if (this.listeners.length === 0) return;
+      const snapshot = [...this.logs];
+      this.listeners.forEach((l) => l(snapshot));
+    }, 150);
   }
 }
 

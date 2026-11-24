@@ -142,7 +142,7 @@ function persistDbToDisk() {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistDbToDiskSync();
-  }, 250);
+  }, 1000);
 }
 
 export async function getDatabase(): Promise<Database> {

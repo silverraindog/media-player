@@ -14,7 +14,15 @@ export const FfmpegTranscodeLogsCard: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.lines)) {
-          setLogs(data.lines);
+          setLogs((prev) => {
+            if (
+              prev.length === data.lines.length &&
+              prev[prev.length - 1] === data.lines[data.lines.length - 1]
+            ) {
+              return prev;
+            }
+            return data.lines;
+          });
         }
       }
     } catch (err) {
@@ -27,7 +35,7 @@ export const FfmpegTranscodeLogsCard: React.FC = () => {
   useEffect(() => {
     fetchLogs();
     if (!autoRefresh) return;
-    const interval = setInterval(fetchLogs, 3000);
+    const interval = setInterval(fetchLogs, 4000);
     return () => clearInterval(interval);
   }, [fetchLogs, autoRefresh]);
 

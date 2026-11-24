@@ -189,27 +189,29 @@ class GlobalSearchIndexerService {
 
   private runIndexingPass(mediaLibrary: MediaMetadata[], sambaTree: SambaShareNode[]) {
     const startTime = performance.now();
+    const nextIndexedMap = new Map<string, MediaMetadata>();
 
     // 1. Index media library
     for (const item of mediaLibrary) {
-      this.indexedItemsMap.set(item.title.toLowerCase(), item);
+      if (!item || !item.title) continue;
+      nextIndexedMap.set(item.title.toLowerCase(), item);
       if (item.originalTitle) {
-        this.indexedItemsMap.set(item.originalTitle.toLowerCase(), item);
+        nextIndexedMap.set(item.originalTitle.toLowerCase(), item);
       }
     }
 
     // 2. Index curated database
     for (const item of CURATED_MEDIA_DATABASE) {
-      if (!this.indexedItemsMap.has(item.title.toLowerCase())) {
-        this.indexedItemsMap.set(item.title.toLowerCase(), item);
+      if (!nextIndexedMap.has(item.title.toLowerCase())) {
+        nextIndexedMap.set(item.title.toLowerCase(), item);
       }
     }
 
     // 3. Index Samba Tree nodes
     const traverse = (nodes: SambaShareNode[]) => {
       for (const node of nodes) {
-        if (node.matchedMedia) {
-          this.indexedItemsMap.set(node.matchedMedia.title.toLowerCase(), node.matchedMedia);
+        if (node.matchedMedia?.title) {
+          nextIndexedMap.set(node.matchedMedia.title.toLowerCase(), node.matchedMedia);
         }
         if (node.children) {
           traverse(node.children);
@@ -218,6 +220,7 @@ class GlobalSearchIndexerService {
     };
     traverse(sambaTree);
 
+    this.indexedItemsMap = nextIndexedMap;
     this.telemetry.status = 'ready';
     this.telemetry.totalIndexedItems = this.indexedItemsMap.size;
     this.telemetry.lastIndexedAt = Date.now();

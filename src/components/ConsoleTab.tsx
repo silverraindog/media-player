@@ -1152,7 +1152,15 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.lines)) {
-          setFfmpegLogs(data.lines);
+          setFfmpegLogs((prev) => {
+            if (
+              prev.length === data.lines.length &&
+              prev[prev.length - 1] === data.lines[data.lines.length - 1]
+            ) {
+              return prev;
+            }
+            return data.lines;
+          });
           if (typeof data.errorCount === 'number') {
             setFfmpegErrorCount(data.errorCount);
           }
@@ -1173,7 +1181,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
   useEffect(() => {
     fetchFfmpegLogs();
     if (activeDiagnosticTab === 'ffmpeg-transcode' && isFfmpegAutoRefresh) {
-      const interval = setInterval(fetchFfmpegLogs, 2500);
+      const interval = setInterval(fetchFfmpegLogs, 3500);
       return () => clearInterval(interval);
     }
   }, [activeDiagnosticTab, isFfmpegAutoRefresh]);
@@ -1208,7 +1216,9 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
 
   // Real-Time Scanner Logs Listener (Listens to Tauri & custom progress events)
   useEffect(() => {
+    let isDisposed = false;
     let unlistenTauri: (() => void) | null = null;
+    let fallbackItemNumber = 0;
 
     const parseLogTextForError = (text: string) => {
       const lower = text.toLowerCase();
@@ -1226,7 +1236,7 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
     };
 
     const handleProgressData = (payload: any) => {
-      if (isScannerPaused || !payload) return;
+      if (isDisposed || isScannerPaused || !payload) return;
 
       const rawFile = payload.current_file || payload.currentFile || payload.path || '';
       const rawPath = payload.current_path || payload.currentPath || rawFile;
@@ -1246,11 +1256,12 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
       const errorCode = isBarrier ? parseLogTextForError(cleanPath) || 'os error 13' : undefined;
 
       const now = Date.now();
+      fallbackItemNumber += 1;
       const newEntry: ScannerProgressLogItem = {
         id: `scan-log-${now}-${Math.random().toString(36).substr(2, 6)}`,
         timestamp: new Date(now).toLocaleTimeString(),
         createdAt: now,
-        itemNumber: count || (scannerLogs.length + 1),
+        itemNumber: count || fallbackItemNumber,
         rawPath: rawPath || cleanPath,
         sanitizedPath: cleanPath,
         isDir,
@@ -1271,8 +1282,12 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
               handleProgressData(event.payload);
             }
           }).then((unlisten) => {
-            unlistenTauri = unlisten;
-          });
+            if (isDisposed) {
+              unlisten();
+            } else {
+              unlistenTauri = unlisten;
+            }
+          }).catch(() => {});
         })
         .catch(() => {});
     }
@@ -1285,11 +1300,12 @@ export const ConsoleTab: React.FC<ConsoleTabProps> = ({
     window.addEventListener('scan-progress-stream', customListener);
 
     return () => {
+      isDisposed = true;
       if (unlistenTauri) unlistenTauri();
       window.removeEventListener('samba-scan-progress', customListener);
       window.removeEventListener('scan-progress-stream', customListener);
     };
-  }, [isScannerPaused, scannerLogs.length]);
+  }, [isScannerPaused]);
 
   // Auto-scroll on logs
   useEffect(() => {

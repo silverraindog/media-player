@@ -488,11 +488,15 @@ export default function App() {
     };
   }, []);
 
-  // Persist key settings and library snapshots to localStorage
+  // Persist key settings and library snapshots to localStorage (debounced for large arrays)
   useEffect(() => {
-    try {
-      localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
-    } catch {}
+    if (!hasHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
+      } catch {}
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, [mediaLibrary]);
 
   useEffect(() => {
@@ -502,9 +506,13 @@ export default function App() {
   }, [sambaConfig]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('samba_vault_tree', JSON.stringify(sambaTree));
-    } catch {}
+    if (!hasHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem('samba_vault_tree', JSON.stringify(sambaTree));
+      } catch {}
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, [sambaTree]);
 
   useEffect(() => {
@@ -561,7 +569,7 @@ export default function App() {
     }
     vaultPersistTimerRef.current = window.setTimeout(() => {
       flushVaultPayloadToDisk(latestVaultPayloadRef.current).catch(() => null);
-    }, 350);
+    }, 800);
 
     return () => {
       if (vaultPersistTimerRef.current) {
@@ -823,15 +831,6 @@ export default function App() {
             next.unshift(item);
           }
         }
-        if (hasHydratedRef.current) {
-          const immediatePayload = {
-            ...(latestVaultPayloadRef.current || {}),
-            mediaLibrary: next,
-            removedMediaIds: removedMediaIdsRef.current,
-          };
-          latestVaultPayloadRef.current = immediatePayload;
-          flushVaultPayloadToDisk(immediatePayload).catch(() => null);
-        }
         return next;
       });
 
@@ -842,7 +841,7 @@ export default function App() {
         body: JSON.stringify({ items: incoming }),
       }).catch(() => null);
     },
-    [flushVaultPayloadToDisk]
+    []
   );
 
   // Import local files / folder drops preserving webkitRelativePath for collection auto-grouping

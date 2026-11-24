@@ -932,43 +932,60 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     return `${cleanBase}/${cleanSub}`;
   };
 
+  const lastAuditedTreeRef = useRef<SambaShareNode[] | null>(null);
+
   useEffect(() => {
-    const logNodesRecursive = (nodes: SambaShareNode[]) => {
-      nodes.forEach((node) => {
-        const dirtyCheck = checkPathDirtyState(node.path);
-        const resolved = getMountPath(node.path);
-        // Track transformation in SanitizationTracker
-        sanitizationTracker.recordTransform(node.path, {
-          nodeName: node.name,
-          nodeType: node.type,
-          source: 'Folder Traversal',
-        });
-        pathDebugLogger.log({
-          eventType: 'scan_node',
-          rawPath: node.path,
-          resolvedPath: resolved,
-          sanitizedPath: sanitizeSambaPath(node.path),
-          isDirty: dirtyCheck.isDirty,
-          dirtyReason: dirtyCheck.reason,
-          nodeName: node.name,
-          nodeType: node.type,
-          details: { id: node.id, size: node.size, hasNfo: node.hasNfo, matchedMedia: node.matchedMedia },
-        });
-        logger.debug(`Path scan traversal [${node.type}]: ${node.name} -> raw="${node.path}" resolved="${resolved}"`, 'Scanner', {
-          rawPath: node.path,
-          resolvedPath: resolved,
-          sanitizedPath: sanitizeSambaPath(node.path),
-          isDirty: dirtyCheck.isDirty,
-          dirtyReason: dirtyCheck.reason,
-        });
-        if (node.children) {
-          logNodesRecursive(node.children);
-        }
-      });
-    };
-    if (sambaTree && sambaTree.length > 0) {
-      logNodesRecursive(sambaTree);
+    if (!sambaTree || sambaTree.length === 0 || lastAuditedTreeRef.current === sambaTree) {
+      return;
     }
+    lastAuditedTreeRef.current = sambaTree;
+
+    // Defer and cap path auditing so large trees never stall the UI thread
+    const timer = setTimeout(() => {
+      let recorded = 0;
+      let dirtyCount = 0;
+      const MAX_AUDIT_NODES = 120;
+
+      const logNodesRecursive = (nodes: SambaShareNode[]) => {
+        for (const node of nodes) {
+          if (recorded >= MAX_AUDIT_NODES) return;
+          const dirtyCheck = checkPathDirtyState(node.path);
+          if (dirtyCheck.isDirty || recorded < 40) {
+            const resolved = getMountPath(node.path);
+            sanitizationTracker.recordTransform(node.path, {
+              nodeName: node.name,
+              nodeType: node.type,
+              source: 'Folder Traversal',
+            });
+            if (dirtyCheck.isDirty) {
+              dirtyCount++;
+              pathDebugLogger.log({
+                eventType: 'scan_node',
+                rawPath: node.path,
+                resolvedPath: resolved,
+                sanitizedPath: sanitizeSambaPath(node.path),
+                isDirty: dirtyCheck.isDirty,
+                dirtyReason: dirtyCheck.reason,
+                nodeName: node.name,
+                nodeType: node.type,
+                details: { id: node.id, size: node.size, hasNfo: node.hasNfo, matchedMedia: node.matchedMedia },
+              });
+            }
+            recorded++;
+          }
+          if (node.children && node.children.length > 0) {
+            logNodesRecursive(node.children);
+          }
+        }
+      };
+
+      logNodesRecursive(sambaTree);
+      if (dirtyCount > 0) {
+        logger.debug(`Path audit inspected ${recorded} nodes (${dirtyCount} dirty paths flagged).`, 'Scanner');
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
   }, [sambaTree, sambaConfig]);
 
   const [selectedNode, setSelectedNode] = useState<SambaShareNode | null>(null);
@@ -1266,35 +1283,29 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
   // Local Download State Tracker for each file node
   const [downloadStates, setDownloadStates] = useState<Record<string, 'pending' | 'downloading' | 'cached' | 'error'>>({});
 
-  // Synchronize download states whenever the sambaTree changes
+  // Synchronize download states whenever the sambaTree changes (batched synchronously without per-file async ticks)
   useEffect(() => {
     if (!sambaTree || sambaTree.length === 0) return;
 
-    let isMounted = true;
-    const loadStates = async () => {
-      const traversedStates: Record<string, 'pending' | 'downloading' | 'cached' | 'error'> = {};
-      const traverse = async (nodes: SambaShareNode[]) => {
-        for (const n of nodes) {
-          if (n.type === 'file') {
-            const st = await checkLocalFileAvailability(n.path);
-            traversedStates[n.path] = st;
-          }
-          if (n.children && n.children.length > 0) {
-            await traverse(n.children);
-          }
+    const traversedStates: Record<string, 'pending' | 'downloading' | 'cached' | 'error'> = {};
+    const traverse = (nodes: SambaShareNode[]) => {
+      for (const n of nodes) {
+        if (n.type === 'file' && n.path) {
+          const cleanPath = n.path.trim();
+          const storedState = localStorage.getItem(`samba_download_state_${cleanPath}`);
+          traversedStates[n.path] =
+            storedState === 'cached' || storedState === 'error' || storedState === 'downloading'
+              ? storedState
+              : 'pending';
         }
-      };
-
-      await traverse(sambaTree);
-      if (isMounted) {
-        setDownloadStates((prev) => ({ ...prev, ...traversedStates }));
+        if (n.children && n.children.length > 0) {
+          traverse(n.children);
+        }
       }
     };
 
-    loadStates();
-    return () => {
-      isMounted = false;
-    };
+    traverse(sambaTree);
+    setDownloadStates((prev) => ({ ...prev, ...traversedStates }));
   }, [sambaTree]);
 
   // Bulk Move Modal State
@@ -2053,11 +2064,12 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
 
   // Listen for progress events from Tauri IPC, custom DOM events, and live stream updates
   useEffect(() => {
+    let isDisposed = false;
     let unlistenTauri: any;
     let scanStartTime = Date.now();
 
     const handleProgressPayload = (payload: any) => {
-      if (!payload) return;
+      if (isDisposed || !payload) return;
       const count = payload.items_count ?? payload.scannedCount ?? payload.scanned_count ?? payload.total_discovered ?? (payload.items ? payload.items.length : 0);
       const currentItem = payload.current_item || payload.currentFile || payload.current_file || payload.currentPath || payload.current_path || '';
       
@@ -2089,7 +2101,11 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
         listen('scan-progress', (event: any) => {
           handleProgressPayload(event?.payload);
         }).then((unlisten: any) => {
-          unlistenTauri = unlisten;
+          if (isDisposed) {
+            if (typeof unlisten === 'function') unlisten();
+          } else {
+            unlistenTauri = unlisten;
+          }
         }).catch(() => {});
       } catch {}
     }
@@ -2102,9 +2118,9 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     window.addEventListener('scan-progress-stream', customListener);
 
     return () => {
+      isDisposed = true;
       if (unlistenTauri) {
         if (typeof unlistenTauri === 'function') unlistenTauri();
-        else if (typeof unlistenTauri.then === 'function') unlistenTauri.then((fn: any) => fn());
       }
       window.removeEventListener('samba-scan-progress', customListener);
       window.removeEventListener('scan-progress-stream', customListener);
@@ -2196,6 +2212,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
     let isSubscribed = true;
     const pollInterval = setInterval(async () => {
       for (const folder of pendingFolders) {
+        if (!isSubscribed) return;
         try {
           const encodedPath = encodeSambaPathForUrl(folder.path);
           const res = await fetch(`/api/samba/verify-file?folderPath=${encodedPath}&filenames=poster.jpg,fanart.jpg`);
@@ -2264,7 +2281,7 @@ export const SambaExplorer: React.FC<SambaExplorerProps> = ({
           console.warn('Samba pending artwork verify failed:', folder.path, err);
         }
       }
-    }, 2500);
+    }, 5000);
 
     return () => {
       isSubscribed = false;

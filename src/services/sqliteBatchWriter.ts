@@ -28,17 +28,22 @@ class SqliteBatchWriterService {
   private secondsRemaining: number = BATCH_INTERVAL_SECONDS;
   private isFlushing: boolean = false;
   private isLocked: boolean = false;
+  private cacheSaveTimer: any = null;
   private lastFlushTime: number | null = null;
   private lastFlushCount: number = 0;
   private subscribers: Set<(status: SqliteQueueStatus) => void> = new Set();
 
   constructor() {
     this.initPersistentCache();
-    this.startBatchTimer();
 
     // Flush automatically before page unload to prevent any data loss
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
+        if (this.cacheSaveTimer) {
+          clearTimeout(this.cacheSaveTimer);
+          this.cacheSaveTimer = null;
+          this.saveCacheToDiskSync();
+        }
         this.flushNowSync();
       });
     }
@@ -49,9 +54,10 @@ class SqliteBatchWriterService {
    */
   public lockWrites(): void {
     this.isLocked = true;
-    if (this.countdownTimer) {
-      clearInterval(this.countdownTimer);
-      this.countdownTimer = null;
+    this.stopBatchTimer();
+    if (this.cacheSaveTimer) {
+      clearTimeout(this.cacheSaveTimer);
+      this.cacheSaveTimer = null;
     }
     this.queue.clear();
     this.cache.clear();
@@ -70,7 +76,9 @@ class SqliteBatchWriterService {
    */
   public unlockWrites(): void {
     this.isLocked = false;
-    this.startBatchTimer();
+    if (this.queue.size > 0) {
+      this.startBatchTimer();
+    }
     this.notifySubscribers();
   }
 
@@ -101,9 +109,9 @@ class SqliteBatchWriterService {
   }
 
   /**
-   * Persist current in-memory cache to localStorage
+   * Persist current in-memory cache to localStorage synchronously
    */
-  private saveCacheToDisk(): void {
+  private saveCacheToDiskSync(): void {
     if (typeof window === 'undefined') return;
     try {
       const items = Array.from(this.cache.values());
@@ -111,6 +119,18 @@ class SqliteBatchWriterService {
     } catch (e) {
       console.warn('Failed to write persistent SQLite cache to localStorage:', e);
     }
+  }
+
+  /**
+   * Debounced disk cache write to prevent main-thread JSON.stringify freezes
+   */
+  private saveCacheToDisk(): void {
+    if (typeof window === 'undefined') return;
+    if (this.cacheSaveTimer) clearTimeout(this.cacheSaveTimer);
+    this.cacheSaveTimer = setTimeout(() => {
+      this.cacheSaveTimer = null;
+      this.saveCacheToDiskSync();
+    }, 600);
   }
 
   /**
@@ -124,7 +144,7 @@ class SqliteBatchWriterService {
    * Synchronously update the persistent cache
    */
   public updateCache(items: MediaMetadata[]): void {
-    if (this.isLocked) return;
+    if (this.isLocked || !items || items.length === 0) return;
     items.forEach((item) => {
       if (item && item.id) {
         this.cache.set(item.id, item);
@@ -140,6 +160,11 @@ class SqliteBatchWriterService {
   public clear(): void {
     this.cache.clear();
     this.queue.clear();
+    this.stopBatchTimer();
+    if (this.cacheSaveTimer) {
+      clearTimeout(this.cacheSaveTimer);
+      this.cacheSaveTimer = null;
+    }
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem(CACHE_STORAGE_KEY);
@@ -168,6 +193,7 @@ class SqliteBatchWriterService {
       timestamp: Date.now(),
     });
 
+    this.ensureBatchTimerRunning();
     this.notifySubscribers();
   }
 
@@ -190,18 +216,42 @@ class SqliteBatchWriterService {
     });
 
     this.saveCacheToDisk();
+    this.ensureBatchTimerRunning();
     this.notifySubscribers();
   }
 
+  private stopBatchTimer(): void {
+    if (this.countdownTimer) {
+      clearInterval(this.countdownTimer);
+      this.countdownTimer = null;
+    }
+    this.secondsRemaining = BATCH_INTERVAL_SECONDS;
+  }
+
+  private ensureBatchTimerRunning(): void {
+    if (this.isLocked || this.queue.size === 0 || this.countdownTimer) return;
+    this.startBatchTimer();
+  }
+
   /**
-   * Start the recurring 30-second batch timer and 1-second countdown
+   * Start the recurring 30-second batch timer and 1-second countdown (only while items are queued)
    */
   private startBatchTimer(): void {
     if (this.countdownTimer) clearInterval(this.countdownTimer);
+    if (this.isLocked || this.queue.size === 0) {
+      this.countdownTimer = null;
+      this.secondsRemaining = BATCH_INTERVAL_SECONDS;
+      return;
+    }
 
     this.secondsRemaining = BATCH_INTERVAL_SECONDS;
 
     this.countdownTimer = setInterval(() => {
+      if (this.queue.size === 0 || this.isLocked) {
+        this.stopBatchTimer();
+        this.notifySubscribers();
+        return;
+      }
       this.secondsRemaining -= 1;
       if (this.secondsRemaining <= 0) {
         this.secondsRemaining = BATCH_INTERVAL_SECONDS;
@@ -240,7 +290,11 @@ class SqliteBatchWriterService {
       // Remove successfully written items from queue
       itemsToFlush.forEach((item) => this.queue.delete(item.id));
 
-      this.secondsRemaining = BATCH_INTERVAL_SECONDS;
+      if (this.queue.size === 0) {
+        this.stopBatchTimer();
+      } else {
+        this.secondsRemaining = BATCH_INTERVAL_SECONDS;
+      }
       return { success: true, count: flushCount };
     } catch (err) {
       console.error('Error during SQLite batch write flush:', err);

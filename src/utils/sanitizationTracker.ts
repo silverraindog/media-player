@@ -145,6 +145,8 @@ class SanitizationTracker {
   private listeners: Set<(logs: SanitizationLogEntry[]) => void> = new Set();
   private storageKey = 'samba_sanitization_history';
   private maxLogs = 500;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.loadFromStorage();
@@ -160,7 +162,7 @@ class SanitizationTracker {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          this.history = parsed;
+          this.history = parsed.slice(0, this.maxLogs);
         }
       }
     } catch {
@@ -168,7 +170,7 @@ class SanitizationTracker {
     }
   }
 
-  private persist() {
+  private persistSync() {
     if (typeof window === 'undefined') return;
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(this.history.slice(0, 300)));
@@ -177,15 +179,53 @@ class SanitizationTracker {
     }
   }
 
-  private notify() {
-    const copy = [...this.history];
-    this.listeners.forEach((listener) => {
-      try {
-        listener(copy);
-      } catch (err) {
-        console.error('SanitizationTracker listener error:', err);
+  private persist(immediate = false) {
+    if (typeof window === 'undefined') return;
+    if (immediate) {
+      if (this.persistTimer) {
+        clearTimeout(this.persistTimer);
+        this.persistTimer = null;
       }
-    });
+      this.persistSync();
+      return;
+    }
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistSync();
+    }, 500);
+  }
+
+  private notify(immediate = false) {
+    if (this.listeners.size === 0) return;
+    if (immediate) {
+      if (this.notifyTimer) {
+        clearTimeout(this.notifyTimer);
+        this.notifyTimer = null;
+      }
+      const copy = [...this.history];
+      this.listeners.forEach((listener) => {
+        try {
+          listener(copy);
+        } catch (err) {
+          console.error('SanitizationTracker listener error:', err);
+        }
+      });
+      return;
+    }
+    if (this.notifyTimer) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      if (this.listeners.size === 0) return;
+      const copy = [...this.history];
+      this.listeners.forEach((listener) => {
+        try {
+          listener(copy);
+        } catch (err) {
+          console.error('SanitizationTracker listener error:', err);
+        }
+      });
+    }, 150);
   }
 
   private seedInitialHistory() {
@@ -230,7 +270,7 @@ class SanitizationTracker {
       });
     });
 
-    this.persist();
+    this.persist(true);
   }
 
   public recordTransform(
@@ -241,6 +281,12 @@ class SanitizationTracker {
       source?: SanitizationLogEntry['source'];
     }
   ): SanitizationLogEntry {
+    // Avoid exact duplicate consecutive records before doing full analysis
+    const source = options?.source || 'Folder Traversal';
+    if (this.history.length > 0 && this.history[0].rawPath === rawPath && this.history[0].source === source) {
+      return this.history[0];
+    }
+
     const analyzed = analyzePathSanitization(rawPath, options);
     const entry: SanitizationLogEntry = {
       id: `san-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -248,14 +294,9 @@ class SanitizationTracker {
       ...analyzed,
     };
 
-    // Avoid exact duplicate consecutive records for the same rawPath & source
-    if (this.history.length > 0 && this.history[0].rawPath === rawPath && this.history[0].source === entry.source) {
-      return this.history[0];
-    }
-
     this.history.unshift(entry);
     if (this.history.length > this.maxLogs) {
-      this.history = this.history.slice(0, this.maxLogs);
+      this.history.length = this.maxLogs;
     }
 
     this.persist();

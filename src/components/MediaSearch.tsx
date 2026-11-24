@@ -288,28 +288,28 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   const [displayedCount, setDisplayedCount] = useState(20);
   const observerTarget = useRef<HTMLDivElement>(null);
   const [sortedAndFilteredMedia, setSortedAndFilteredMedia] = useState<MediaMetadata[]>([]);
-
+  const sortedLengthRef = useRef(0);
+  sortedLengthRef.current = sortedAndFilteredMedia.length;
 
   useEffect(() => {
+    const target = observerTarget.current;
+    if (!target) return;
+
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
-          setDisplayedCount((prev) => Math.min(prev + 20, sortedAndFilteredMedia.length));
+        if (entries[0]?.isIntersecting) {
+          setDisplayedCount((prev) => Math.min(prev + 20, sortedLengthRef.current));
         }
       },
       { threshold: 1.0 }
     );
 
-    if (observerTarget.current) {
-      observer.observe(observerTarget.current);
-    }
+    observer.observe(target);
 
     return () => {
-      if (observerTarget.current) {
-        observer.unobserve(observerTarget.current);
-      }
+      observer.disconnect();
     };
-  }, [sortedAndFilteredMedia.length]);
+  }, []);
 
   // Reset displayedCount when search filter changes
   useEffect(() => {
@@ -416,14 +416,15 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [debouncedSearchQuery, mediaLibrary, selectedType]);
+  }, [debouncedSearchQuery, selectedType]);
 
   useEffect(() => {
+    let isCancelled = false;
     const fetchWatchStatus = async () => {
       try {
         const res = await fetch('/api/db/history?limit=500');
         const data = await res.json();
-        if (data.success && Array.isArray(data.history)) {
+        if (!isCancelled && data.success && Array.isArray(data.history)) {
           setRawHistory(data.history);
           const map: Record<string, { isCompleted: boolean; progress: number }> = {};
           data.history.forEach((h: any) => {
@@ -442,7 +443,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
       }
     };
     fetchWatchStatus();
-  }, [mediaLibrary]);
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const diagnosticFileInputRef = useRef<HTMLInputElement>(null);
@@ -718,13 +722,27 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
 
 
   // Compute live counts across the library
-  const allCount = safeMediaLibrary.length;
-  const seriesCount = safeMediaLibrary.filter((m) => m.type === 'series').length;
-  const moviesCount = safeMediaLibrary.filter((m) => m.type === 'movie').length;
-  const albumsCount = safeMediaLibrary.filter((m) => m.type === 'album').length;
-  const importedCount = safeMediaLibrary.filter(
-    (m) => m.id.startsWith('imported-') || m.id.startsWith('batch-') || m.matchedFilename
-  ).length;
+  const { allCount, seriesCount, moviesCount, albumsCount, importedCount } = useMemo(() => {
+    let series = 0;
+    let movies = 0;
+    let albums = 0;
+    let imported = 0;
+    for (const m of safeMediaLibrary) {
+      if (m.type === 'series') series++;
+      else if (m.type === 'movie') movies++;
+      else if (m.type === 'album') albums++;
+      if (m.id.startsWith('imported-') || m.id.startsWith('batch-') || m.matchedFilename) {
+        imported++;
+      }
+    }
+    return {
+      allCount: safeMediaLibrary.length,
+      seriesCount: series,
+      moviesCount: movies,
+      albumsCount: albums,
+      importedCount: imported,
+    };
+  }, [safeMediaLibrary]);
 
   // Compute category counts for Movies & Series
   const categoryCounts = useMemo(() => {
@@ -838,15 +856,19 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
     }
 
     let validEvents = 0;
+    const mediaById = new Map<string, MediaMetadata>();
+    const mediaByTitle = new Map<string, MediaMetadata>();
+    for (const m of safeMediaLibrary) {
+      mediaById.set(m.id, m);
+      if (m.title) mediaByTitle.set(m.title.toLowerCase(), m);
+    }
 
     rawHistory.forEach((h: any) => {
-      // Find matching media in library to discover genres
-      const matched = safeMediaLibrary.find(
-        (m) =>
-          m.id === h.media_id ||
-          m.id === h.series_id ||
-          m.title.toLowerCase() === (h.title || '').toLowerCase()
-      );
+      // Find matching media in library in O(1)
+      const matched =
+        (h.media_id && mediaById.get(h.media_id)) ||
+        (h.series_id && mediaById.get(h.series_id)) ||
+        (h.title ? mediaByTitle.get(String(h.title).toLowerCase()) : undefined);
 
       let genres = matched?.genres && matched.genres.length > 0 ? matched.genres : [];
 
@@ -1053,11 +1075,17 @@ export const MediaSearch: React.FC<MediaSearchProps> = ({
   // Apply Sort to Filtered Media (prioritizing Genre Affinity when active)
   useEffect(() => {
     const list = [...filteredMedia];
+    const affinityScores = new Map<string, number>();
+    if (sortBy === 'affinity') {
+      for (const item of list) {
+        affinityScores.set(item.id, getMediaAffinity(item).score);
+      }
+    }
 
     list.sort((a, b) => {
       if (sortBy === 'affinity') {
-        const affA = getMediaAffinity(a).score;
-        const affB = getMediaAffinity(b).score;
+        const affA = affinityScores.get(a.id) ?? 0;
+        const affB = affinityScores.get(b.id) ?? 0;
         if (affB !== affA) {
           return affB - affA; // Highest affinity first!
         }

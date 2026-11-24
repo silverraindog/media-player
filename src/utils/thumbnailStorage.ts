@@ -109,6 +109,7 @@ class ThumbnailStorageService {
             });
           }
         });
+        this.enforceMemoryCacheLimit();
         this.notifyListeners();
       }
     } catch (e) {
@@ -238,21 +239,24 @@ class ThumbnailStorageService {
     return null;
   }
 
+  private enforceMemoryCacheLimit(): void {
+    if (this.memoryCache.size <= MAX_MEMORY_CACHE_SIZE) return;
+    // Evict oldest entries by Map insertion order first (O(1) per eviction)
+    while (this.memoryCache.size > MAX_MEMORY_CACHE_SIZE) {
+      const oldestKey = this.memoryCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.memoryCache.delete(oldestKey);
+    }
+  }
+
   // Store thumbnail metadata in memory, localStorage, and schedule SQLite sync
   public set(metadata: ThumbnailMetadata): void {
     const key = this.normalizeKey(metadata.mediaPath);
-
-    // Evict oldest if exceeding max memory size
-    if (this.memoryCache.size >= MAX_MEMORY_CACHE_SIZE && !this.memoryCache.has(key)) {
-      const oldestKey = Array.from(this.memoryCache.entries()).sort(
-        (a, b) => a[1].lastAccessedAt - b[1].lastAccessedAt
-      )[0]?.[0];
-      if (oldestKey) {
-        this.memoryCache.delete(oldestKey);
-      }
+    if (this.memoryCache.has(key)) {
+      this.memoryCache.delete(key);
     }
-
     this.memoryCache.set(key, metadata);
+    this.enforceMemoryCacheLimit();
     this.scheduleLocalStoragePersist();
     this.scheduleBackendSync(metadata);
     this.notifyListeners();
@@ -263,9 +267,13 @@ class ThumbnailStorageService {
     if (items.length === 0) return;
     items.forEach((item) => {
       const key = this.normalizeKey(item.mediaPath);
+      if (this.memoryCache.has(key)) {
+        this.memoryCache.delete(key);
+      }
       this.memoryCache.set(key, item);
       this.pendingBackendSync.push(item);
     });
+    this.enforceMemoryCacheLimit();
     this.scheduleLocalStoragePersist();
     this.scheduleBackendSync(items[0]);
     this.notifyListeners();
@@ -407,7 +415,11 @@ class ThumbnailStorageService {
 
     // Cache in memory and schedule persistence without triggering render storms
     const key = this.normalizeKey(fullPath);
+    if (this.memoryCache.has(key)) {
+      this.memoryCache.delete(key);
+    }
     this.memoryCache.set(key, meta);
+    this.enforceMemoryCacheLimit();
     if (!skipImmediatePersist) {
       this.scheduleLocalStoragePersist();
       this.scheduleBackendSync(meta);

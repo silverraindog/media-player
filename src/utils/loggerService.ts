@@ -21,11 +21,22 @@ class LoggerService {
   private incidentStorageKey = 'samba_vault_active_incident';
   private debugEnabled: boolean = true;
   private minLevel: ConsoleLogLevel = 'info';
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.loadFromStorage();
     if (this.logs.length === 0) {
       this.info('SambaVault Console Log Subsystem initialized. Monitoring active.', 'System');
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', () => {
+        if (this.persistTimer) {
+          clearTimeout(this.persistTimer);
+          this.persistTimer = null;
+          this.persistToStorageSync();
+        }
+      });
     }
   }
 
@@ -55,7 +66,7 @@ class LoggerService {
     }
   }
 
-  private persistToStorage() {
+  private persistToStorageSync() {
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(this.logs.slice(-300)));
       localStorage.setItem('samba_vault_debug_enabled', JSON.stringify(this.debugEnabled));
@@ -70,15 +81,52 @@ class LoggerService {
     }
   }
 
-  private notify() {
-    const copy = [...this.logs];
-    this.listeners.forEach((listener) => {
-      try {
-        listener(copy, this.minLevel, this.debugEnabled);
-      } catch (err) {
-        console.error('Logger listener error:', err);
+  private persistToStorage(immediate = false) {
+    if (immediate) {
+      if (this.persistTimer) {
+        clearTimeout(this.persistTimer);
+        this.persistTimer = null;
       }
-    });
+      this.persistToStorageSync();
+      return;
+    }
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistToStorageSync();
+    }, 600);
+  }
+
+  private notify(immediate = false) {
+    if (this.listeners.size === 0) return;
+    if (immediate) {
+      if (this.notifyTimer) {
+        clearTimeout(this.notifyTimer);
+        this.notifyTimer = null;
+      }
+      const copy = [...this.logs];
+      this.listeners.forEach((listener) => {
+        try {
+          listener(copy, this.minLevel, this.debugEnabled);
+        } catch (err) {
+          console.error('Logger listener error:', err);
+        }
+      });
+      return;
+    }
+    if (this.notifyTimer) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      if (this.listeners.size === 0) return;
+      const copy = [...this.logs];
+      this.listeners.forEach((listener) => {
+        try {
+          listener(copy, this.minLevel, this.debugEnabled);
+        } catch (err) {
+          console.error('Logger listener error:', err);
+        }
+      });
+    }, 150);
   }
 
   private notifyIncident() {
@@ -129,7 +177,7 @@ class LoggerService {
       resolved: false,
     };
     this.activeIncident = incident;
-    this.persistToStorage();
+    this.persistToStorage(true);
     this.notifyIncident();
     return incident;
   }
@@ -147,7 +195,7 @@ class LoggerService {
   public resolveIncident(id?: string) {
     if (this.activeIncident && (!id || this.activeIncident.id === id)) {
       this.activeIncident = null;
-      this.persistToStorage();
+      this.persistToStorage(true);
       this.notifyIncident();
       this.success('Sync Incident resolved: All failed operations re-attempted and verified.', 'Sync');
     }
@@ -155,7 +203,7 @@ class LoggerService {
 
   public dismissIncident() {
     this.activeIncident = null;
-    this.persistToStorage();
+    this.persistToStorage(true);
     this.notifyIncident();
   }
 
@@ -169,8 +217,8 @@ class LoggerService {
 
   public setDebugEnabled(enabled: boolean) {
     this.debugEnabled = enabled;
-    this.persistToStorage();
-    this.notify();
+    this.persistToStorage(true);
+    this.notify(true);
     this.info(`Debug logging ${enabled ? 'ENABLED' : 'DISABLED'}`, 'System', { debugEnabled: enabled });
   }
 
@@ -180,15 +228,15 @@ class LoggerService {
 
   public setMinLevel(level: ConsoleLogLevel) {
     this.minLevel = level;
-    this.persistToStorage();
-    this.notify();
+    this.persistToStorage(true);
+    this.notify(true);
     this.info(`Minimum log level set to ${level.toUpperCase()}`, 'System', { minLevel: level });
   }
 
   public clearLogs() {
     this.logs = [];
-    this.persistToStorage();
-    this.notify();
+    this.persistToStorage(true);
+    this.notify(true);
     this.info('Console log buffer cleared.', 'System');
   }
 

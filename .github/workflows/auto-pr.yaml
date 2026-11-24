@@ -5,17 +5,34 @@ on:
     branches-ignore:
       - main
       - master
+      - ai-studio-sync # Prevent infinite loops when the action pushes to this branch
 
 jobs:
-  create-pr:
+  build-and-create-pr:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # 1. Setup your runtime (Example: Node.js - swap for Python, Go, Rust, etc.)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 2. Install dependencies & compile/build
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Compile / Build Project
+        run: npm run build
+
+      # 3. Create or Update Pull Request (only runs if build succeeds)
       - name: Create or Update Pull Request
         uses: peter-evans/create-pull-request@v6
         with:

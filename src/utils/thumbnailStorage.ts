@@ -170,9 +170,12 @@ class ThumbnailStorageService {
   // Queue thumbnail metadata for persistence to SQLite backend
   private scheduleBackendSync(thumb: ThumbnailMetadata) {
     this.pendingBackendSync.push(thumb);
-    if (this.syncTimer) clearTimeout(this.syncTimer);
+    if (this.syncTimer !== null) {
+      clearTimeout(this.syncTimer);
+    }
     this.syncTimer = setTimeout(() => {
       this.flushPendingBackendSync();
+      // Reset timer after flush to prevent duplicate flushes
     }, 1500);
   }
 
@@ -464,6 +467,19 @@ class ThumbnailStorageService {
         this.notifyListeners();
       }
     };
+  // Cleanup function for unmounting (component lifecycle)
+  public async onUnmount(): Promise<void> {
+    if (this.syncTimer !== null) clearTimeout(this.syncTimer);
+    if (this.notifyTimeout !== null) clearTimeout(this.notifyTimeout);
+    if (this.localStorageTimer !== null) clearTimeout(this.localStorageTimer);
+    this.pendingBackendSync = [];
+    this.memoryCache.clear();
+    this.hitCount = 0;
+    this.missCount = 0;
+    this.totalLookupDurationMs = 0;
+    this.isInitialized = false;
+  }
+
 
     // Kick off time-sliced processing asynchronously
     setTimeout(processChunk, 50);

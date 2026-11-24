@@ -302,6 +302,13 @@ class SqliteBatchWriterService {
     });
   }
 }
+  public async onUnmount(): Promise<void> {
+    if (this.countdownTimer !== null) clearTimeout(this.countdownTimer);
+    this.isFlushing = true;
+    await this.flushNowSync();
+    this.isFlushing = false;
+  }
+
 
 // Export singleton instance
 export const sqliteBatchWriter = new SqliteBatchWriterService();

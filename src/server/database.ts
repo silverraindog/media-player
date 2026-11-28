@@ -2319,21 +2319,51 @@ export function getPersistentStorageInfo() {
   };
 }
 
+let cachedVaultState: PersistentVaultState | null | undefined = undefined;
+let vaultStatePersistTimer: NodeJS.Timeout | null = null;
+let pendingVaultState: PersistentVaultState | null = null;
+let isWritingVaultState = false;
+let rerunVaultStateWrite = false;
+
+async function writeVaultStateAsync(snapshot: PersistentVaultState): Promise<void> {
+  if (isWritingVaultState) {
+    rerunVaultStateWrite = true;
+    return;
+  }
+  isWritingVaultState = true;
+  try {
+    await fs.promises.mkdir(DATA_DIR, { recursive: true });
+    const tempPath = `${VAULT_STATE_FILE}.tmp`;
+    await fs.promises.writeFile(tempPath, JSON.stringify(snapshot), 'utf-8');
+    await fs.promises.rename(tempPath, VAULT_STATE_FILE);
+  } catch (e) {
+    console.error('[SambaVault Storage] Failed saving vault_state.json to disk:', e);
+  } finally {
+    isWritingVaultState = false;
+    if (rerunVaultStateWrite && pendingVaultState) {
+      rerunVaultStateWrite = false;
+      void writeVaultStateAsync(pendingVaultState);
+    }
+  }
+}
+
 export function getVaultStateFromDisk(): PersistentVaultState | null {
+  if (cachedVaultState !== undefined) {
+    return cachedVaultState;
+  }
   try {
     if (fs.existsSync(VAULT_STATE_FILE)) {
       const raw = fs.readFileSync(VAULT_STATE_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
+      cachedVaultState = parsed;
       return parsed;
     }
   } catch (e) {
     console.error('[SambaVault Storage] Error reading vault_state.json:', e);
   }
+  cachedVaultState = null;
   return null;
 }
-
-let vaultStatePersistTimer: NodeJS.Timeout | null = null;
-let pendingVaultState: PersistentVaultState | null = null;
 
 export function saveVaultStateToDiskSync(state: Partial<PersistentVaultState>): PersistentVaultState {
   const existing = getVaultStateFromDisk() || {
@@ -2348,6 +2378,7 @@ export function saveVaultStateToDiskSync(state: Partial<PersistentVaultState>): 
     lastSavedAt: new Date().toISOString(),
   };
 
+  cachedVaultState = updated;
   pendingVaultState = updated;
   if (vaultStatePersistTimer) {
     clearTimeout(vaultStatePersistTimer);
@@ -2359,7 +2390,7 @@ export function saveVaultStateToDiskSync(state: Partial<PersistentVaultState>): 
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     const tempPath = `${VAULT_STATE_FILE}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
+    fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState), 'utf-8');
     fs.renameSync(tempPath, VAULT_STATE_FILE);
   } catch (e) {
     console.error('[SambaVault Storage] Failed saving vault_state.json synchronously to disk:', e);
@@ -2381,19 +2412,14 @@ export function saveVaultStateToDisk(state: Partial<PersistentVaultState>): Pers
     lastSavedAt: new Date().toISOString(),
   };
 
+  cachedVaultState = updated;
   pendingVaultState = updated;
 
   if (vaultStatePersistTimer) clearTimeout(vaultStatePersistTimer);
   vaultStatePersistTimer = setTimeout(() => {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      const tempPath = `${VAULT_STATE_FILE}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
-      fs.renameSync(tempPath, VAULT_STATE_FILE);
-    } catch (e) {
-      console.error('[SambaVault Storage] Failed saving vault_state.json to disk:', e);
+    vaultStatePersistTimer = null;
+    if (pendingVaultState) {
+      void writeVaultStateAsync(pendingVaultState);
     }
   }, 150);
 
@@ -2412,7 +2438,7 @@ export function flushPendingVaultWritesSync(): void {
         fs.mkdirSync(DATA_DIR, { recursive: true });
       }
       const tempPath = `${VAULT_STATE_FILE}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState, null, 2), 'utf-8');
+      fs.writeFileSync(tempPath, JSON.stringify(pendingVaultState), 'utf-8');
       fs.renameSync(tempPath, VAULT_STATE_FILE);
     } catch (e) {
       console.error('[SambaVault Storage] Failed flushing pending vault_state.json on exit:', e);

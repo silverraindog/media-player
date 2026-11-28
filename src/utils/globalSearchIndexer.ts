@@ -100,19 +100,29 @@ export function normalizeMediaSearchQuery(raw: string): string {
  * Levenshtein distance calculation for fuzzy search scoring
  */
 function calculateSimilarity(s1: string, s2: string): number {
-  const longer = s1.length > s2.length ? s1.toLowerCase() : s2.toLowerCase();
-  const shorter = s1.length > s2.length ? s2.toLowerCase() : s1.toLowerCase();
+  const l1 = s1.length;
+  const l2 = s2.length;
+  if (l1 === 0 && l2 === 0) return 1.0;
+  if (l1 === 0 || l2 === 0) return 0;
+
+  const longer = l1 > l2 ? s1.toLowerCase() : s2.toLowerCase();
+  const shorter = l1 > l2 ? s2.toLowerCase() : s1.toLowerCase();
   const longerLength = longer.length;
-  if (longerLength === 0) return 1.0;
+  const shorterLength = shorter.length;
 
   if (longer.includes(shorter)) {
-    return Math.min(1.0, 0.7 + (shorter.length / longerLength) * 0.3);
+    return Math.min(1.0, 0.7 + (shorterLength / longerLength) * 0.3);
   }
 
-  const costs = new Array();
-  for (let i = 0; i <= longer.length; i++) {
+  // Fast upper-bound bailout: edit distance >= length difference, so max similarity <= shorterLength / longerLength
+  if (shorterLength / longerLength <= 0.55) {
+    return 0;
+  }
+
+  const costs = new Array<number>(shorterLength + 1);
+  for (let i = 0; i <= longerLength; i++) {
     let lastValue = i;
-    for (let j = 0; j <= shorter.length; j++) {
+    for (let j = 0; j <= shorterLength; j++) {
       if (i === 0) {
         costs[j] = j;
       } else if (j > 0) {
@@ -124,9 +134,9 @@ function calculateSimilarity(s1: string, s2: string): number {
         lastValue = newValue;
       }
     }
-    if (i > 0) costs[shorter.length] = lastValue;
+    if (i > 0) costs[shorterLength] = lastValue;
   }
-  const editDistance = costs[shorter.length];
+  const editDistance = costs[shorterLength];
   return (longerLength - editDistance) / longerLength;
 }
 
@@ -149,6 +159,8 @@ class GlobalSearchIndexerService {
   private backgroundTaskTimer: any = null;
   private lastIndexedLibraryRef: MediaMetadata[] | null = null;
   private lastIndexedTreeRef: SambaShareNode[] | null = null;
+  private searchCache = new Map<string, { suggestions: SmartSearchSuggestion[]; bestMatch: MediaMetadata | null }>();
+  private activeAbortController: AbortController | null = null;
 
   constructor() {
     this.initAliases();
@@ -238,6 +250,7 @@ class GlobalSearchIndexerService {
     traverse(sambaTree);
 
     this.indexedItemsMap = nextIndexedMap;
+    this.searchCache.clear();
     this.telemetry.status = 'ready';
     this.telemetry.totalIndexedItems = this.indexedItemsMap.size;
     this.telemetry.lastIndexedAt = Date.now();
@@ -261,14 +274,22 @@ class GlobalSearchIndexerService {
       return { suggestions: [], bestMatch: null };
     }
 
+    const cacheKey = `${preferredType}:${rawQuery.toLowerCase()}`;
+    const cached = this.searchCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const normalized = normalizeMediaSearchQuery(rawQuery).toLowerCase();
     const suggestions: SmartSearchSuggestion[] = [];
+    const seenTitles = new Set<string>();
 
     // 1. Check Alias / Abbreviation Dictionary (e.g. '24', 'bsg', 'got', 'bb')
     const aliasCandidate = COMMON_ALIASES[normalized] || COMMON_ALIASES[rawQuery.toLowerCase()];
     if (aliasCandidate) {
       // Find or build metadata for the alias
       const resolved = await resolveMediaWithFallback(aliasCandidate.canonical, aliasCandidate.type, aliasCandidate.year);
+      seenTitles.add(aliasCandidate.canonical.toLowerCase());
       suggestions.push({
         id: `suggestion-alias-${aliasCandidate.canonical.toLowerCase()}`,
         title: aliasCandidate.canonical,
@@ -288,28 +309,43 @@ class GlobalSearchIndexerService {
     // 2. Check Local / Curated Index with fuzzy scoring
     for (const [key, media] of this.indexedItemsMap.entries()) {
       const sim = calculateSimilarity(normalized, key);
-      if (sim > 0.55 && !suggestions.some((s) => s.title.toLowerCase() === media.title.toLowerCase())) {
-        suggestions.push({
-          id: `suggestion-local-${media.id}`,
-          title: media.title,
-          originalTitle: media.originalTitle,
-          year: media.year,
-          type: media.type,
-          confidence: Math.round(sim * 100),
-          source: 'Encyclopedic Vault',
-          overview: media.overview,
-          posterUrl: media.posterUrl,
-          genres: media.genres,
-          rating: media.rating,
-          preloadedMetadata: media,
-        });
+      if (sim > 0.55) {
+        const titleLower = media.title.toLowerCase();
+        if (!seenTitles.has(titleLower)) {
+          seenTitles.add(titleLower);
+          suggestions.push({
+            id: `suggestion-local-${media.id}`,
+            title: media.title,
+            originalTitle: media.originalTitle,
+            year: media.year,
+            type: media.type,
+            confidence: Math.round(sim * 100),
+            source: 'Encyclopedic Vault',
+            overview: media.overview,
+            posterUrl: media.posterUrl,
+            genres: media.genres,
+            rating: media.rating,
+            preloadedMetadata: media,
+          });
+        }
       }
     }
 
-    // 3. Query External TVMaze API for TV Shows
-    if (preferredType === 'series' || preferredType === 'all') {
+    const highConfidenceLocalHits = suggestions.filter((s) => s.confidence >= 80).length;
+
+    // 3. Query External TVMaze API only when query is >= 2 chars and local matches don't already cover it
+    if ((preferredType === 'series' || preferredType === 'all') && rawQuery.length >= 2 && highConfidenceLocalHits < 3) {
+      if (this.activeAbortController) {
+        this.activeAbortController.abort();
+      }
+      const controller = new AbortController();
+      this.activeAbortController = controller;
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
       try {
-        const tvmazeRes = await fetch(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(normalized || rawQuery)}`);
+        const tvmazeRes = await fetch(
+          `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(normalized || rawQuery)}`,
+          { signal: controller.signal }
+        );
         if (tvmazeRes.ok) {
           const shows = await tvmazeRes.json();
           if (Array.isArray(shows)) {
@@ -317,7 +353,8 @@ class GlobalSearchIndexerService {
               const show = item.show;
               if (!show || !show.name) continue;
               const titleLower = show.name.toLowerCase();
-              if (suggestions.some((s) => s.title.toLowerCase() === titleLower)) continue;
+              if (seenTitles.has(titleLower)) continue;
+              seenTitles.add(titleLower);
 
               const year = show.premiered ? parseInt(show.premiered.substring(0, 4), 10) : undefined;
               const sim = calculateSimilarity(normalized || rawQuery.toLowerCase(), titleLower);
@@ -355,8 +392,15 @@ class GlobalSearchIndexerService {
             }
           }
         }
-      } catch (err) {
-        console.warn('[GlobalSearchIndexer] TVMaze query non-fatal failure:', err);
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          console.warn('[GlobalSearchIndexer] TVMaze query non-fatal failure:', err);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        if (this.activeAbortController === controller) {
+          this.activeAbortController = null;
+        }
       }
     }
 
@@ -384,11 +428,20 @@ class GlobalSearchIndexerService {
     suggestions.sort((a, b) => b.confidence - a.confidence);
 
     const bestMatch = suggestions.length > 0 && suggestions[0].preloadedMetadata ? suggestions[0].preloadedMetadata : null;
-
-    return {
+    const result = {
       suggestions: suggestions.slice(0, 5),
       bestMatch,
     };
+
+    if (this.searchCache.size >= 100) {
+      const oldestKey = this.searchCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.searchCache.delete(oldestKey);
+      }
+    }
+    this.searchCache.set(cacheKey, result);
+
+    return result;
   }
 }
 

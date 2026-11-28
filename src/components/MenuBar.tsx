@@ -57,7 +57,7 @@ interface MenuBarProps {
   onOpenApiDebugger?: () => void;
 }
 
-export const MenuBar: React.FC<MenuBarProps> = ({
+export const MenuBar: React.FC<MenuBarProps> = React.memo(({
   activeTab,
   setActiveTab,
   onSelectViewMediaType,
@@ -94,59 +94,72 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     return () => window.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Keyboard shortcut listener
+  const shortcutActionsRef = useRef({
+    onScanSamba,
+    setActiveTab,
+    onSelectViewMediaType,
+    onOpenApiDebugger,
+  });
+  shortcutActionsRef.current = {
+    onScanSamba,
+    setActiveTab,
+    onSelectViewMediaType,
+    onOpenApiDebugger,
+  };
+
+  // Keyboard shortcut listener (stable registration via ref)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Check if inside input or textarea
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
+      const actions = shortcutActionsRef.current;
 
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
         e.preventDefault();
-        onScanSamba();
+        actions.onScanSamba();
       } else if ((e.metaKey || e.ctrlKey) && e.key === '1') {
         e.preventDefault();
-        setActiveTab('search');
-        if (onSelectViewMediaType) onSelectViewMediaType('all');
+        actions.setActiveTab('search');
+        if (actions.onSelectViewMediaType) actions.onSelectViewMediaType('all');
       } else if ((e.metaKey || e.ctrlKey) && e.key === '2') {
         e.preventDefault();
-        setActiveTab('search');
-        if (onSelectViewMediaType) onSelectViewMediaType('series');
+        actions.setActiveTab('search');
+        if (actions.onSelectViewMediaType) actions.onSelectViewMediaType('series');
       } else if ((e.metaKey || e.ctrlKey) && e.key === '3') {
         e.preventDefault();
-        setActiveTab('search');
-        if (onSelectViewMediaType) onSelectViewMediaType('movie');
+        actions.setActiveTab('search');
+        if (actions.onSelectViewMediaType) actions.onSelectViewMediaType('movie');
       } else if ((e.metaKey || e.ctrlKey) && e.key === '4') {
         e.preventDefault();
-        setActiveTab('search');
-        if (onSelectViewMediaType) onSelectViewMediaType('album');
+        actions.setActiveTab('search');
+        if (actions.onSelectViewMediaType) actions.onSelectViewMediaType('album');
       } else if ((e.metaKey || e.ctrlKey) && e.key === '5') {
         e.preventDefault();
-        setActiveTab('explorer');
+        actions.setActiveTab('explorer');
       } else if ((e.metaKey || e.ctrlKey) && e.key === '6') {
         e.preventDefault();
-        setActiveTab('sqlite-vault');
+        actions.setActiveTab('sqlite-vault');
       } else if ((e.metaKey || e.ctrlKey) && e.key === '7') {
         e.preventDefault();
-        setActiveTab('stats');
+        actions.setActiveTab('stats');
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
-        if (onOpenApiDebugger) {
+        if (actions.onOpenApiDebugger) {
           e.preventDefault();
-          onOpenApiDebugger();
+          actions.onOpenApiDebugger();
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onScanSamba, setActiveTab, onSelectViewMediaType]);
+  }, []);
 
   const handleMenuClick = (menu: 'file' | 'edit' | 'view' | 'help', e?: React.MouseEvent) => {
     if (e) {
       e.stopPropagation();
     }
-    console.log('[MenuBar] handleMenuClick verified event propagation for menu:', menu);
     setOpenMenu(openMenu === menu ? null : menu);
   };
 
@@ -157,7 +170,6 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   };
 
   const executeAction = (action: () => void) => {
-    console.log('[MenuBar] executeAction called');
     setOpenMenu(null);
     action();
   };
@@ -1081,4 +1093,4 @@ export const MenuBar: React.FC<MenuBarProps> = ({
       )}
     </>
   );
-};
+});

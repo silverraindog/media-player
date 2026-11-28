@@ -31,7 +31,7 @@ interface WatchlistTabProps {
   onWatchlistCountChange?: (count: number) => void;
 }
 
-export const WatchlistTab: React.FC<WatchlistTabProps> = ({
+export const WatchlistTab: React.FC<WatchlistTabProps> = React.memo(({
   onPlayMedia,
   onOpenDetails,
   onPushToSamba,
@@ -463,4 +463,4 @@ export const WatchlistTab: React.FC<WatchlistTabProps> = ({
       )}
     </div>
   );
-};
+});

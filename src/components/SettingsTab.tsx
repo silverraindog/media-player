@@ -100,7 +100,7 @@ export function validateTranscodePreset(preset: any): preset is TranscodePreset 
   return hasId && hasName && hasResolution;
 }
 
-export const SettingsTab: React.FC<SettingsTabProps> = ({
+export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
   classifierSettings,
   onUpdateClassifierSettings,
   sambaConfig,
@@ -2105,5 +2105,5 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       </div>
     </div>
   );
-};
+});
 

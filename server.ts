@@ -7,6 +7,7 @@ import { pipeline, Transform } from 'stream';
 import crypto, { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import net from 'net';
+import zlib from 'zlib';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -141,6 +142,32 @@ function resolveServerPort(): number {
 const PORT = resolveServerPort();
 
 app.use(express.json({ limit: '10mb' }));
+
+// Lightweight gzip compression for JSON API payloads > 2KB
+app.use('/api', (req: Request, res: Response, next) => {
+  const acceptEncoding = req.headers['accept-encoding'] || '';
+  if (typeof acceptEncoding !== 'string' || !acceptEncoding.includes('gzip')) {
+    return next();
+  }
+  const origJson = res.json.bind(res);
+  res.json = ((body: any) => {
+    const jsonStr = JSON.stringify(body);
+    if (jsonStr.length < 2048 || res.headersSent) {
+      return origJson(body);
+    }
+    zlib.gzip(jsonStr, { level: 4 }, (err, compressed) => {
+      if (err || res.headersSent) {
+        return origJson(body);
+      }
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Vary', 'Accept-Encoding');
+      res.send(compressed);
+    });
+    return res;
+  }) as any;
+  next();
+});
 
 // Lazy Google GenAI Client
 let genAIClient: GoogleGenAI | null = null;
@@ -4574,7 +4601,7 @@ app.post('/api/vault/state', (req: Request, res: Response) => {
     if (!payload || typeof payload !== 'object') {
       return res.status(400).json({ error: 'Invalid vault state payload' });
     }
-    const saved = saveVaultStateToDiskSync(payload);
+    const saved = saveVaultStateToDisk(payload);
     res.json({ success: true, savedAt: saved.lastSavedAt, version: saved.version });
   } catch (err: any) {
     console.error('Error saving vault state:', err);

@@ -93,7 +93,11 @@ class LoggerService {
     if (this.persistTimer) return;
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
-      this.persistToStorageSync();
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        (window as any).requestIdleCallback(() => this.persistToStorageSync(), { timeout: 1500 });
+      } else {
+        this.persistToStorageSync();
+      }
     }, 600);
   }
 

@@ -86,6 +86,7 @@ interface MediaSearchProps {
   onOpenCollectionsTab?: () => void;
   enableVirtualization?: boolean;
   onIndexedDbSearch?: (mediaType?: string, query?: string) => Promise<MediaMetadata[]>;
+  initialWatchlistIds?: string[] | null;
 }
 
 // Curated Category Taxonomy with Icons & Brand Colors
@@ -222,6 +223,29 @@ export function getSafeRating(rating: any): number {
 
 export type UniverseCollection = UnifiedCollection;
 
+const RECENT_CARD_VARIANTS = {
+  rest: { y: 0 },
+  hover: { y: -3 },
+};
+const COLLECTION_CARD_VARIANTS = {
+  rest: { y: 0 },
+  hover: { y: -4 },
+};
+const CARD_VARIANTS_REDUCED = {
+  rest: { y: 0 },
+  hover: { y: 0 },
+};
+const MEDIA_CARD_TRANSITION = { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const };
+const POSTER_IMG_VARIANTS = {
+  rest: { scale: 1 },
+  hover: { scale: 1.05 },
+};
+const POSTER_IMG_VARIANTS_REDUCED = {
+  rest: { scale: 1 },
+  hover: { scale: 1 },
+};
+const POSTER_IMG_TRANSITION = { duration: 0.25, ease: [0.16, 1, 0.3, 1] as const };
+
 export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   mediaLibrary = [],
   sambaTree,
@@ -246,21 +270,44 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   onOpenCollectionsTab,
   enableVirtualization = true,
   onIndexedDbSearch,
+  initialWatchlistIds,
 }) => {
   const shouldReduceMotion = Boolean(useReducedMotion());
+  const mediaLibraryRef = useRef<MediaMetadata[]>(mediaLibrary);
+  mediaLibraryRef.current = mediaLibrary;
+
   const safeMediaLibrary = useMemo(() => {
     if (!Array.isArray(mediaLibrary)) return [];
-    return mediaLibrary.map((m) => ({
-      ...m,
-      genres: getSafeGenres(m.genres),
-      rating: getSafeRating(m.rating),
-      title: m.title || 'Untitled',
-      type: m.type || 'series',
-      year: m.year || 2024,
-      posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
-      overview: m.overview || '',
-      recommendedFolderStructure: m.recommendedFolderStructure || '',
-    }));
+    let changed = false;
+    const mapped = mediaLibrary.map((m) => {
+      const hasValidGenres = Array.isArray(m.genres);
+      const hasValidRating = typeof m.rating === 'number' && !Number.isNaN(m.rating);
+      if (
+        hasValidGenres &&
+        hasValidRating &&
+        m.title &&
+        m.type &&
+        m.year &&
+        m.posterUrl &&
+        m.overview !== undefined &&
+        m.recommendedFolderStructure !== undefined
+      ) {
+        return m;
+      }
+      changed = true;
+      return {
+        ...m,
+        genres: hasValidGenres ? m.genres : getSafeGenres(m.genres),
+        rating: hasValidRating ? m.rating : getSafeRating(m.rating),
+        title: m.title || 'Untitled',
+        type: m.type || 'series',
+        year: m.year || 2024,
+        posterUrl: m.posterUrl || 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
+        overview: m.overview || '',
+        recommendedFolderStructure: m.recommendedFolderStructure || '',
+      };
+    });
+    return changed ? mapped : mediaLibrary;
   }, [mediaLibrary]);
 
   const [rawSearchInput, setRawSearchInput] = useState('');
@@ -488,13 +535,21 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     setYearRange([minLibraryYear, maxLibraryYear]);
   }, [minLibraryYear, maxLibraryYear]);
 
-  // Fetch Watchlist IDs from SQLite on mount
+  // Sync Watchlist IDs from parent hydration prop or fallback to SQLite on standalone mount
   useEffect(() => {
+    if (Array.isArray(initialWatchlistIds)) {
+      setWatchlistIds(new Set(initialWatchlistIds));
+      return;
+    }
+    if (initialWatchlistIds === null) {
+      return;
+    }
+    let cancelled = false;
     const fetchWatchlist = async () => {
       try {
         const res = await fetch('/api/db/watchlist');
         const data = await res.json();
-        if (data.success && Array.isArray(data.watchlist)) {
+        if (!cancelled && data.success && Array.isArray(data.watchlist)) {
           const idSet = new Set<string>(data.watchlist.map((item: any) => item.media_id));
           setWatchlistIds(idSet);
         }
@@ -503,25 +558,28 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       }
     };
     fetchWatchlist();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [initialWatchlistIds]);
 
-  // Fetch Top Recently Added from SQLite
-  const fetchRecentMedia = async () => {
+  // Fetch Top Recently Added from SQLite using ref-backed library lookup for callback stability
+  const fetchRecentMedia = useCallback(async () => {
     setIsRecentLoading(true);
     try {
       const res = await fetch('/api/db/media/recent?limit=20');
       const data = await res.json();
       if (data.success && Array.isArray(data.items)) {
+        const currentLibrary = mediaLibraryRef.current || [];
         const byId = new Map<string, MediaMetadata>();
         const byTitle = new Map<string, MediaMetadata>();
-        for (const m of mediaLibrary) {
+        for (const m of currentLibrary) {
           byId.set(m.id, m);
           if (m.title) byTitle.set(m.title.toLowerCase(), m);
         }
 
         // Map SQLite db rows to MediaMetadata
         const mapped: MediaMetadata[] = data.items.map((row: any) => {
-          // Check if already present in mediaLibrary for full metadata in O(1)
           const existing =
             byId.get(row.id) ||
             (row.title ? byTitle.get(String(row.title).toLowerCase()) : undefined);
@@ -556,14 +614,14 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     } finally {
       setIsRecentLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       fetchRecentMedia();
-    }, 150);
+    }, 450);
     return () => window.clearTimeout(timer);
-  }, [mediaLibrary.length]);
+  }, [mediaLibrary.length, fetchRecentMedia]);
 
   // Toggle item in Watchlist (stored in SQLite)
   const toggleWatchlist = useCallback(async (media: MediaMetadata, e?: React.MouseEvent) => {
@@ -768,21 +826,24 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     };
   }, [safeMediaLibrary]);
 
-  // Compute category counts for Movies & Series
+  // Compute category counts for Movies & Series in a single pass
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = { all: safeMediaLibrary.length };
-    MOVIE_SERIES_CATEGORIES.forEach((cat) => {
-      if (cat.id === 'all') return;
-      const matching = safeMediaLibrary.filter((m) => {
-        if (selectedType !== 'all' && selectedType !== 'collections' && m.type !== selectedType) return false;
-        const genresJoined = (m.genres || []).join(' ').toLowerCase();
-        const overviewJoined = (m.overview || '').toLowerCase();
-        return cat.keywords.some(
-          (k) => genresJoined.includes(k) || overviewJoined.includes(k)
-        );
-      });
-      counts[cat.id] = matching.length;
-    });
+    const nonAllCats = MOVIE_SERIES_CATEGORIES.filter((c) => c.id !== 'all');
+    for (const cat of nonAllCats) {
+      counts[cat.id] = 0;
+    }
+
+    for (const m of safeMediaLibrary) {
+      if (selectedType !== 'all' && selectedType !== 'collections' && m.type !== selectedType) continue;
+      const genresJoined = (m.genres || []).join(' ').toLowerCase();
+      const overviewJoined = (m.overview || '').toLowerCase();
+      for (const cat of nonAllCats) {
+        if (cat.keywords.some((k) => genresJoined.includes(k) || overviewJoined.includes(k))) {
+          counts[cat.id]++;
+        }
+      }
+    }
     return counts;
   }, [safeMediaLibrary, selectedType]);
 
@@ -1003,6 +1064,20 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
 
   // Filter items based on type, origin, category, multi-genres, date-range, and search query
   const filteredMedia = useMemo(() => {
+    const activeCatDef =
+      activeCategory !== 'all'
+        ? MOVIE_SERIES_CATEGORIES.find((c) => c.id === activeCategory) || null
+        : null;
+    const selectedGenresSet =
+      selectedGenres.length > 0
+        ? new Set(selectedGenres.map((sg) => sg.toLowerCase()))
+        : null;
+    const q = debouncedSearchQuery.trim().toLowerCase();
+    const genreTagMatch = q ? q.match(/^genre[:=]\s*(.+)$/i) : null;
+    const genreTagTarget = genreTagMatch ? genreTagMatch[1].trim() : '';
+    const yearTagMatch = q && !genreTagMatch ? q.match(/^year[:=]\s*(\d{4})$/i) : null;
+    const yearTagTarget = yearTagMatch ? parseInt(yearTagMatch[1], 10) : null;
+
     return safeMediaLibrary.filter((media) => {
       // Type filter
       if (selectedType !== 'all' && selectedType !== 'collections' && media.type !== selectedType) {
@@ -1010,43 +1085,36 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       }
 
       // Origin filter
-      const isImported =
-        media.id.startsWith('imported-') ||
-        media.id.startsWith('batch-') ||
-        Boolean(media.matchedFilename);
-      if (originFilter === 'imported' && !isImported) return false;
-      if (originFilter === 'curated' && isImported) return false;
+      if (originFilter !== 'all') {
+        const isImported =
+          media.id.startsWith('imported-') ||
+          media.id.startsWith('batch-') ||
+          Boolean(media.matchedFilename);
+        if (originFilter === 'imported' && !isImported) return false;
+        if (originFilter === 'curated' && isImported) return false;
+      }
+
+      const mediaGenres = Array.isArray(media.genres) ? media.genres : getSafeGenres(media.genres);
 
       // Category filter (Sci-Fi, Drama, Comedy, Action, etc.)
-      if (activeCategory !== 'all') {
-        const catDef = MOVIE_SERIES_CATEGORIES.find((c) => c.id === activeCategory);
-        if (catDef) {
-          const genresJoined = (media.genres || []).join(' ').toLowerCase();
-          const overviewJoined = (media.overview || '').toLowerCase();
-          const matchesCategory = catDef.keywords.some(
-            (k) => genresJoined.includes(k) || overviewJoined.includes(k)
-          );
-          if (!matchesCategory) return false;
-        }
+      if (activeCatDef) {
+        const genresJoined = mediaGenres.join(' ').toLowerCase();
+        const overviewJoined = (media.overview || '').toLowerCase();
+        const matchesCategory = activeCatDef.keywords.some(
+          (k) => genresJoined.includes(k) || overviewJoined.includes(k)
+        );
+        if (!matchesCategory) return false;
       }
 
       // Multi-select Genre Filter: Matches if media has ANY of the selected genres
-      if (selectedGenres.length > 0) {
-        let mediaGenres: string[] = [];
-        if (Array.isArray(media.genres)) {
-          mediaGenres = media.genres;
-        } else if (typeof media.genres === 'string') {
-          try {
-            const parsed = JSON.parse(media.genres);
-            if (Array.isArray(parsed)) mediaGenres = parsed;
-            else mediaGenres = (media.genres as string).split(',').map((s) => s.trim());
-          } catch {
-            mediaGenres = (media.genres as string).split(',').map((s) => s.trim());
+      if (selectedGenresSet) {
+        let hasAnySelectedGenre = false;
+        for (const g of mediaGenres) {
+          if (selectedGenresSet.has(g.toLowerCase())) {
+            hasAnySelectedGenre = true;
+            break;
           }
         }
-        const hasAnySelectedGenre = mediaGenres.some((g) =>
-          selectedGenres.some((sg) => sg.toLowerCase() === g.toLowerCase())
-        );
         if (!hasAnySelectedGenre) return false;
       }
 
@@ -1058,43 +1126,26 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
       }
 
       // Search Query (filtered using debounced query for maximum UI smoothness)
-      if (debouncedSearchQuery.trim()) {
-        const q = debouncedSearchQuery.toLowerCase().trim();
-
-        // Check if query is an explicit genre tag
-        const genreTagMatch = q.match(/^genre[:=]\s*(.+)$/i);
+      if (q) {
         if (genreTagMatch) {
-          const targetG = genreTagMatch[1].trim();
-          return getSafeGenres(media.genres).some((g) => g.toLowerCase().includes(targetG));
+          return mediaGenres.some((g) => g.toLowerCase().includes(genreTagTarget));
         }
 
-        // Check if query is an explicit year tag
-        const yearTagMatch = q.match(/^year[:=]\s*(\d{4})$/i);
-        if (yearTagMatch) {
-          return media.year === parseInt(yearTagMatch[1], 10);
+        if (yearTagTarget !== null) {
+          return media.year === yearTagTarget;
         }
 
         const matchesTitle = media.title.toLowerCase().includes(q);
-        const matchesOriginalTitle = media.originalTitle?.toLowerCase().includes(q);
-        const matchesGenre = getSafeGenres(media.genres).some((g) => g.toLowerCase().includes(q));
-        const matchesYear = media.year ? String(media.year).includes(q) : false;
-        const matchesArtist = media.artists?.some((a) => a.toLowerCase().includes(q));
-        const matchesDirector = media.directors?.some((d) => d.toLowerCase().includes(q));
-        const matchesFolder = media.recommendedFolderStructure.toLowerCase().includes(q);
-        const matchesFilename = media.matchedFilename?.toLowerCase().includes(q);
-        const matchesOverview = media.overview?.toLowerCase().includes(q);
-
-        return (
-          matchesTitle ||
-          matchesOriginalTitle ||
-          matchesGenre ||
-          matchesYear ||
-          matchesArtist ||
-          matchesDirector ||
-          matchesFolder ||
-          matchesFilename ||
-          matchesOverview
-        );
+        if (matchesTitle) return true;
+        if (media.originalTitle?.toLowerCase().includes(q)) return true;
+        if (mediaGenres.some((g) => g.toLowerCase().includes(q))) return true;
+        if (media.year && String(media.year).includes(q)) return true;
+        if (media.artists?.some((a) => a.toLowerCase().includes(q))) return true;
+        if (media.directors?.some((d) => d.toLowerCase().includes(q))) return true;
+        if (media.recommendedFolderStructure.toLowerCase().includes(q)) return true;
+        if (media.matchedFilename?.toLowerCase().includes(q)) return true;
+        if (media.overview?.toLowerCase().includes(q)) return true;
+        return false;
       }
 
       return true;
@@ -1183,7 +1234,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
     } catch (err) {
       console.error('Failed to save to SQLite:', err);
     }
-  }, [mediaLibrary]);
+  }, [fetchRecentMedia]);
 
   const handleSearchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1889,11 +1940,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                   initial="rest"
                   animate="rest"
                   whileHover="hover"
-                  variants={{
-                    rest: { y: 0 },
-                    hover: { y: shouldReduceMotion ? 0 : -3 },
-                  }}
-                  transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                  variants={shouldReduceMotion ? CARD_VARIANTS_REDUCED : RECENT_CARD_VARIANTS}
+                  transition={MEDIA_CARD_TRANSITION}
                   onClick={() => onOpenDetails(item)}
                   className="group relative w-48 sm:w-56 shrink-0 bg-slate-950 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden transition-colors duration-200 hover:shadow-xl hover:shadow-indigo-500/10 cursor-pointer flex flex-col"
                 >
@@ -1905,11 +1953,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                       loading="lazy"
                       decoding="async"
                       referrerPolicy="no-referrer"
-                      variants={{
-                        rest: { scale: 1 },
-                        hover: { scale: shouldReduceMotion ? 1 : 1.05 },
-                      }}
-                      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                      variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
+                      transition={POSTER_IMG_TRANSITION}
                       className="w-full h-full object-cover will-change-transform"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
@@ -3411,11 +3456,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                     initial="rest"
                     animate="rest"
                     whileHover="hover"
-                    variants={{
-                      rest: { y: 0 },
-                      hover: { y: shouldReduceMotion ? 0 : -4 },
-                    }}
-                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                    variants={shouldReduceMotion ? CARD_VARIANTS_REDUCED : COLLECTION_CARD_VARIANTS}
+                    transition={MEDIA_CARD_TRANSITION}
                     onClick={() => setSelectedUniverseModal(col)}
                     className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden flex flex-col group cursor-pointer transition-colors"
                   >
@@ -3429,11 +3471,8 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                         onError={(e) => {
                           e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
                         }}
-                        variants={{
-                          rest: { scale: 1 },
-                          hover: { scale: shouldReduceMotion ? 1 : 1.05 },
-                        }}
-                        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                        variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
+                        transition={POSTER_IMG_TRANSITION}
                         className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity duration-200 will-change-transform"
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />

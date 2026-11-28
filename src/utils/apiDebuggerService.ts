@@ -275,11 +275,49 @@ class ApiDebuggerStore {
           throw err;
         }
 
-        // Parse Response asynchronously using clone so application continues without delay
-        const responseClone = response.clone();
+        // Skip cloning and double-parsing massive OK payloads when no debugger UI is open
         const status = response.status;
         const statusText = response.statusText;
         const redirected = response.redirected;
+        const contentType = response.headers.get('content-type') || '';
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        const isHeavyCatalogRoute =
+          url.includes('/api/vault/state') ||
+          url.includes('/api/db/media');
+        const shouldSkipBodyClone =
+          status >= 200 &&
+          status < 300 &&
+          !isMetadataRequest &&
+          (isHeavyCatalogRoute || contentLength > 131072) &&
+          self.subscribers.size === 0;
+
+        if (shouldSkipBodyClone) {
+          self.addLog({
+            id,
+            timestamp,
+            startTime,
+            durationMs,
+            method,
+            url,
+            targetDomain: self.extractDomain(url),
+            category,
+            requestHeaders,
+            requestBody: parsedRequestBody,
+            rawRequestBody: rawRequestBody.length > 1000 ? rawRequestBody.substring(0, 1000) + '... [truncated]' : rawRequestBody,
+            status,
+            statusText,
+            redirected,
+            responseHeaders: contentType ? { 'content-type': contentType } : {},
+            rawResponseBody: '[Skipped body clone for large payload performance]',
+            responseType: contentType.includes('application/json') ? 'json' : 'text',
+            isFailed: false,
+            isMetadataRequest,
+            queryTarget,
+          });
+          return response;
+        }
+
+        const responseClone = response.clone();
 
         // Extract Response Headers
         const responseHeaders: Record<string, string> = {};
@@ -545,9 +583,11 @@ class ApiDebuggerStore {
   }
 
   private notifySubscribers() {
+    if (this.subscribers.size === 0) return;
+    const snapshot = [...this.logs];
     this.subscribers.forEach((fn) => {
       try {
-        fn([...this.logs]);
+        fn(snapshot);
       } catch (err) {
         console.error('API Debugger subscriber error:', err);
       }

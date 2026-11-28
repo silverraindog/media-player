@@ -84,6 +84,7 @@ import { sqliteBatchWriter } from './services/sqliteBatchWriter';
 import { loadAppPersistenceState, saveAppPersistenceState } from './utils/persistence';
 import { checkFullDiskAccess, FullDiskAccessStatus, openMacOSSecurityPrivacy } from './utils/permissionsManager';
 import { mediaLibraryReducer } from './reducers/mediaLibraryReducer';
+import { createMediaLibrarySelectors } from './selectors/mediaLibrarySelectors';
 import { mediaScannerWorkerPool } from './workers/mediaScannerWorkerPool';
 import { APP_VERSION, APP_RELEASE_TAG } from './version';
 import { AlertTriangle, RotateCw } from 'lucide-react';
@@ -242,7 +243,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('search');
   const [selectedSearchMediaType, setSelectedSearchMediaType] = useState<'all' | MediaType | 'collections'>('all');
 
-  const [mediaLibrary, dispatchMediaLibrary] = useReducer(
+  const [rawMediaLibrary, dispatchMediaLibrary] = useReducer(
     mediaLibraryReducer,
     undefined,
     initMediaLibrary
@@ -286,6 +287,7 @@ export default function App() {
   );
 
   const [watchlistCount, setWatchlistCount] = useState<number>(0);
+  const [initialWatchlistIds, setInitialWatchlistIds] = useState<string[] | null>(null);
   const [serverVersionInfo, setServerVersionInfo] = useState<any>({
     version: APP_VERSION,
     releaseTag: APP_RELEASE_TAG,
@@ -320,13 +322,42 @@ export default function App() {
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  const [removedMediaIds, setRemovedMediaIds] = useState<string[]>(() =>
+    readStorageJson<string[]>('sambavault_removed_media_ids', [])
+  );
+  const removedMediaIdsRef = useRef<string[]>(removedMediaIds);
+  removedMediaIdsRef.current = removedMediaIds;
+
+  const mediaLibrarySelectors = useMemo(() => createMediaLibrarySelectors(), []);
+  const mediaLibrarySelectorState = useMemo(
+    () => ({
+      mediaLibrary: rawMediaLibrary,
+      removedMediaIds,
+      sambaConfig,
+    }),
+    [rawMediaLibrary, removedMediaIds, sambaConfig]
+  );
+  const mediaLibrary = mediaLibrarySelectors.selectMediaLibrary(mediaLibrarySelectorState);
+  const mediaByIdMap = mediaLibrarySelectors.selectMediaByIdMap(mediaLibrarySelectorState);
+  const selectedScanRootPath = mediaLibrarySelectors.selectScanRootPath(mediaLibrarySelectorState);
+
+  const sambaConfigRef = useRef(sambaConfig);
+  sambaConfigRef.current = sambaConfig;
+  const mediaExtensionConfigRef = useRef(mediaExtensionConfig);
+  mediaExtensionConfigRef.current = mediaExtensionConfig;
+  const scanDepthLimitRef = useRef(scanDepthLimit);
+  scanDepthLimitRef.current = scanDepthLimit;
+  const isSyncingRef = useRef(isSyncing);
+  isSyncingRef.current = isSyncing;
+
   const localImportInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasHydratedRef = useRef<boolean>(false);
   const skipNextVaultPersistRef = useRef<boolean>(false);
   const didMountSettingsPersistRef = useRef<boolean>(false);
-  const removedMediaIdsRef = useRef<string[]>(readStorageJson<string[]>('sambavault_removed_media_ids', []));
   const latestVaultPayloadRef = useRef<any>(null);
+  const lastPersistedSectionsRef = useRef<Record<string, any> | null>(null);
+  const lastSavedLocalMediaRef = useRef<MediaMetadata[] | null>(null);
   const vaultPersistTimerRef = useRef<number | null>(null);
   const createdBlobUrlsRef = useRef<Set<string>>(new Set());
 
@@ -445,9 +476,11 @@ export default function App() {
         }
 
         if (Array.isArray(st?.removedMediaIds)) {
-          removedMediaIdsRef.current = Array.from(new Set([...removedMediaIdsRef.current, ...st.removedMediaIds]));
+          const mergedRemoved = Array.from(new Set([...removedMediaIdsRef.current, ...st.removedMediaIds]));
+          removedMediaIdsRef.current = mergedRemoved;
+          setRemovedMediaIds(mergedRemoved);
           try {
-            localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(removedMediaIdsRef.current));
+            localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(mergedRemoved));
           } catch {}
         }
         const removedSet = new Set(removedMediaIdsRef.current);
@@ -521,6 +554,9 @@ export default function App() {
 
         if (wlData?.success && Array.isArray(wlData.watchlist)) {
           setWatchlistCount(wlData.watchlist.length);
+          setInitialWatchlistIds(wlData.watchlist.map((w: any) => w.media_id).filter(Boolean));
+        } else {
+          setInitialWatchlistIds([]);
         }
 
         if (storageRes?.success) {
@@ -532,6 +568,9 @@ export default function App() {
         }
       } catch (err) {
         console.warn('[App] Hydration warning:', err);
+        if (!cancelled) {
+          setInitialWatchlistIds((prev) => prev ?? []);
+        }
       } finally {
         if (!cancelled) {
           skipNextVaultPersistRef.current = true;
@@ -587,7 +626,9 @@ export default function App() {
     const timer = window.setTimeout(() => {
       const writeLib = () => {
         try {
+          if (lastSavedLocalMediaRef.current === mediaLibrary) return;
           localStorage.setItem('sambavault_media_library_v2', JSON.stringify(mediaLibrary));
+          lastSavedLocalMediaRef.current = mediaLibrary;
         } catch {}
       };
       if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
@@ -658,19 +699,69 @@ export default function App() {
     } catch {}
   }, [transcodeConfig]);
 
+  const buildChangedVaultDiff = useCallback((payload: any) => {
+    if (!payload) return null;
+    const prev = lastPersistedSectionsRef.current;
+    if (!prev) {
+      return payload;
+    }
+    const diff: Record<string, any> = {};
+    const keys = [
+      'mediaLibrary',
+      'sambaTree',
+      'syncLogs',
+      'sambaConfig',
+      'classifierSettings',
+      'mediaExtensionConfig',
+      'transcodeConfig',
+      'customCollections',
+    ];
+    for (const key of keys) {
+      if (payload[key] !== prev[key]) {
+        diff[key] = payload[key];
+      }
+    }
+    const nextRemoved: string[] = Array.isArray(payload.removedMediaIds) ? payload.removedMediaIds : [];
+    const prevRemoved: string[] = Array.isArray(prev.removedMediaIds) ? prev.removedMediaIds : [];
+    const removedChanged =
+      nextRemoved.length !== prevRemoved.length ||
+      nextRemoved.some((id, idx) => id !== prevRemoved[idx]);
+    if (removedChanged) {
+      diff.removedMediaIds = [...nextRemoved];
+    }
+    return Object.keys(diff).length > 0 ? diff : null;
+  }, []);
+
+  const recordPersistedVaultSnapshot = useCallback((payload: any) => {
+    if (!payload) return;
+    lastPersistedSectionsRef.current = {
+      ...payload,
+      removedMediaIds: Array.isArray(payload.removedMediaIds) ? [...payload.removedMediaIds] : [],
+    };
+  }, []);
+
   const flushVaultPayloadToDisk = useCallback(async (payload: any) => {
     if (!payload) return;
-    await apiCall('/api/vault/state', {
+    const diff = buildChangedVaultDiff(payload);
+    if (!diff) return;
+
+    const ok = await apiCall('/api/vault/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch(() => null);
+      body: JSON.stringify(diff),
+    })
+      .then(() => true)
+      .catch(() => false);
+
+    if (ok) {
+      recordPersistedVaultSnapshot(payload);
+    }
 
     if (isTauriEnvironment()) {
       saveState(payload).catch(() => null);
       saveAppPersistenceState(payload).catch(() => null);
     }
-  }, []);
+  }, [buildChangedVaultDiff, recordPersistedVaultSnapshot]);
 
   const vaultPayload = useMemo(
     () => ({
@@ -682,7 +773,7 @@ export default function App() {
       mediaExtensionConfig,
       transcodeConfig,
       customCollections,
-      removedMediaIds: removedMediaIdsRef.current,
+      removedMediaIds,
     }),
     [
       mediaLibrary,
@@ -693,16 +784,19 @@ export default function App() {
       mediaExtensionConfig,
       transcodeConfig,
       customCollections,
+      removedMediaIds,
     ]
   );
 
-  // Auto-persist full vault state (imported media, trees, collections, settings) to permanent disk storage
+  // Auto-persist changed vault state sections to permanent disk storage
   useEffect(() => {
     latestVaultPayloadRef.current = vaultPayload;
 
     if (!hasHydratedRef.current) return;
     if (skipNextVaultPersistRef.current) {
       skipNextVaultPersistRef.current = false;
+      recordPersistedVaultSnapshot(vaultPayload);
+      lastSavedLocalMediaRef.current = vaultPayload.mediaLibrary;
       return;
     }
 
@@ -718,22 +812,29 @@ export default function App() {
         window.clearTimeout(vaultPersistTimerRef.current);
       }
     };
-  }, [vaultPayload, flushVaultPayloadToDisk]);
+  }, [vaultPayload, flushVaultPayloadToDisk, recordPersistedVaultSnapshot]);
 
-  // Flush pending vault snapshot when closing or replacing the app
+  // Flush pending vault changes when closing or replacing the app
   useEffect(() => {
     const handleBeforeExitFlush = () => {
       if (!hasHydratedRef.current || !latestVaultPayloadRef.current) return;
       const payload = latestVaultPayloadRef.current;
-      try {
-        localStorage.setItem('sambavault_media_library_v2', JSON.stringify(payload.mediaLibrary || []));
-      } catch {}
+      if (lastSavedLocalMediaRef.current !== payload.mediaLibrary) {
+        try {
+          localStorage.setItem('sambavault_media_library_v2', JSON.stringify(payload.mediaLibrary || []));
+          lastSavedLocalMediaRef.current = payload.mediaLibrary;
+        } catch {}
+      }
+      const diff = buildChangedVaultDiff(payload);
+      if (!diff) return;
       if (isTauriEnvironment()) {
         flushVaultPayloadToDisk(payload).catch(() => null);
       } else if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
         try {
-          const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-          navigator.sendBeacon('/api/vault/state', blob);
+          const blob = new Blob([JSON.stringify(diff)], { type: 'application/json' });
+          if (navigator.sendBeacon('/api/vault/state', blob)) {
+            recordPersistedVaultSnapshot(payload);
+          }
         } catch {}
       }
     };
@@ -744,7 +845,7 @@ export default function App() {
       window.removeEventListener('beforeunload', handleBeforeExitFlush);
       window.removeEventListener('pagehide', handleBeforeExitFlush);
     };
-  }, [flushVaultPayloadToDisk]);
+  }, [buildChangedVaultDiff, flushVaultPayloadToDisk, recordPersistedVaultSnapshot]);
 
   // Revoke any blob: URLs created during file imports once they are no longer referenced by mediaLibrary
   useEffect(() => {
@@ -830,12 +931,12 @@ export default function App() {
 
   const persistVaultSnapshot = useCallback(async () => {
     try {
-      await flushVaultPayloadToDisk(vaultPayload);
+      await flushVaultPayloadToDisk(latestVaultPayloadRef.current);
       showToast('Vault state saved to disk.');
     } catch (err) {
       console.warn('[App] Failed persisting vault snapshot:', err);
     }
-  }, [vaultPayload, flushVaultPayloadToDisk, showToast]);
+  }, [flushVaultPayloadToDisk, showToast]);
 
   // Collections CRUD (SQLite + local fallback)
   const handleCreateCollection = useCallback(
@@ -924,10 +1025,14 @@ export default function App() {
 
       const incomingIds = new Set(incoming.map((i) => i.id));
       if (removedMediaIdsRef.current.length > 0) {
-        removedMediaIdsRef.current = removedMediaIdsRef.current.filter((id) => !incomingIds.has(id));
-        try {
-          localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(removedMediaIdsRef.current));
-        } catch {}
+        const nextRemoved = removedMediaIdsRef.current.filter((id) => !incomingIds.has(id));
+        if (nextRemoved.length !== removedMediaIdsRef.current.length) {
+          removedMediaIdsRef.current = nextRemoved;
+          setRemovedMediaIds(nextRemoved);
+          try {
+            localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(nextRemoved));
+          } catch {}
+        }
       }
 
       dispatchMediaLibrary({ type: 'UPSERT_ITEMS', items: incoming });
@@ -952,6 +1057,7 @@ export default function App() {
     if (!Array.isArray(ids) || ids.length === 0) return;
     const mergedRemoved = Array.from(new Set([...removedMediaIdsRef.current, ...ids]));
     removedMediaIdsRef.current = mergedRemoved;
+    setRemovedMediaIds(mergedRemoved);
     try {
       localStorage.setItem('sambavault_removed_media_ids', JSON.stringify(mergedRemoved));
     } catch {}
@@ -966,14 +1072,6 @@ export default function App() {
     },
     [removeMediaItemsByIds, showToast]
   );
-
-  const mediaByIdMap = useMemo(() => {
-    const map = new Map<string, MediaMetadata>();
-    for (const item of mediaLibrary) {
-      map.set(item.id, item);
-    }
-    return map;
-  }, [mediaLibrary]);
 
   // Import local files / folder drops preserving webkitRelativePath for collection auto-grouping
   const handleImportFiles = useCallback(
@@ -1087,14 +1185,21 @@ export default function App() {
 
   const handleScanSambaVolume = useCallback(
     async (customPath?: string, customDepthLimit?: number) => {
-      if (isSyncing) return;
+      if (isSyncingRef.current) return;
+      const currentSambaConfig = sambaConfigRef.current;
+      const currentMediaExtensionConfig = mediaExtensionConfigRef.current;
+      const currentScanDepthLimit = scanDepthLimitRef.current;
       setIsSyncing(true);
       const effectiveDepth =
         typeof customDepthLimit === 'number' && customDepthLimit > 0
           ? customDepthLimit
-          : scanDepthLimit || sambaConfig.depthLimit || 30;
+          : currentScanDepthLimit || currentSambaConfig.depthLimit || 30;
       const rootTarget =
-        customPath || sambaConfig.hostPath || sambaConfig.mountPath || sambaConfig.baseMountPath || '/Volumes/media';
+        customPath ||
+        currentSambaConfig.hostPath ||
+        currentSambaConfig.mountPath ||
+        currentSambaConfig.baseMountPath ||
+        '/Volumes/media';
 
       setSyncProgress({
         isActive: true,
@@ -1131,7 +1236,7 @@ export default function App() {
         // Fallback to direct scanSambaVolume if performFastScan did not return success
         if (!scanResult?.success) {
           scanResult = await scanSambaVolume(
-            sambaConfig.share || 'media',
+            currentSambaConfig.share || 'media',
             rootTarget,
             180000,
             false,
@@ -1152,10 +1257,10 @@ export default function App() {
         const nodeMap = new Map<string, SambaShareNode>();
         const roots: SambaShareNode[] = [];
         const baseMount = (
-          sambaConfig.hostPath ||
-          sambaConfig.mountPath ||
-          sambaConfig.baseMountPath ||
-          `/Volumes/${sambaConfig.share || 'media'}`
+          currentSambaConfig.hostPath ||
+          currentSambaConfig.mountPath ||
+          currentSambaConfig.baseMountPath ||
+          `/Volumes/${currentSambaConfig.share || 'media'}`
         ).replace(/\/+$/, '');
         let effectivePrefix = customPath ? baseMount : (scanResult.mountPath || rootTarget).replace(/\/+$/, '');
         if (rawItems.length > 0) {
@@ -1224,7 +1329,7 @@ export default function App() {
 
         const extracted = await extractAllMediaFromSambaTreeAsync(
           normalizedTree,
-          mediaExtensionConfig,
+          currentMediaExtensionConfig,
           30,
           (poolProgress) => {
             const pct =
@@ -1287,7 +1392,7 @@ export default function App() {
         setSyncProgress(INITIAL_SYNC_PROGRESS);
       }
     },
-    [isSyncing, sambaConfig, mediaExtensionConfig, scanDepthLimit, upsertMediaItems, appendSyncLog, showToast]
+    [upsertMediaItems, appendSyncLog, showToast]
   );
 
   const handleQuickSync = useCallback(async () => {
@@ -1312,7 +1417,7 @@ export default function App() {
             media,
             nfoContent: nfoXml,
             targetFolder,
-            sambaConfig,
+            sambaConfig: sambaConfigRef.current,
           }),
         }).catch(() => null);
       } finally {
@@ -1325,7 +1430,7 @@ export default function App() {
         showToast(`Pushed metadata for "${media.title}" to Samba.`);
       }
     },
-    [sambaConfig, appendSyncLog, showToast]
+    [appendSyncLog, showToast]
   );
 
   const handleOpenClassifier = useCallback(() => {
@@ -1361,13 +1466,14 @@ export default function App() {
   );
 
   const handleExportLibraryBackup = useCallback(() => {
+    const currentPayload = latestVaultPayloadRef.current;
     const payload = {
       version: APP_VERSION,
       exportedAt: new Date().toISOString(),
-      mediaLibrary,
-      customCollections,
-      sambaConfig,
-      classifierSettings,
+      mediaLibrary: currentPayload?.mediaLibrary ?? mediaLibrary,
+      customCollections: currentPayload?.customCollections ?? customCollections,
+      sambaConfig: currentPayload?.sambaConfig ?? sambaConfig,
+      classifierSettings: currentPayload?.classifierSettings ?? classifierSettings,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1377,7 +1483,7 @@ export default function App() {
     a.click();
     URL.revokeObjectURL(url);
     showToast('Exported Media Vault backup JSON.');
-  }, [mediaLibrary, customCollections, sambaConfig, classifierSettings, showToast]);
+  }, [showToast]);
 
   const handleClearThumbnailCache = useCallback(async () => {
     try {
@@ -1482,6 +1588,18 @@ export default function App() {
     setLastScanSummary(null);
   }, []);
 
+  const handleOpenQuickMountTab = useCallback(() => {
+    setActiveTab('samba-mount');
+  }, []);
+
+  const handleOpenEmptyManualMatch = useCallback(() => {
+    setManualMatchState({ isOpen: true, rawPathOrName: '' });
+  }, []);
+
+  const handleRefreshSambaStatus = useCallback(() => {
+    handleTestSambaConnection();
+  }, [handleTestSambaConnection]);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       {/* Hidden local file input for menu / toolbar import trigger */}
@@ -1506,17 +1624,17 @@ export default function App() {
         selectedMediaType={selectedSearchMediaType}
         sambaConfig={sambaConfig}
         isConnected={isConnected}
-        onScanSamba={() => handleScanSambaVolume()}
+        onScanSamba={handleScanRootSamba}
         onQuickSync={handleQuickSync}
         isQuickSyncing={isQuickSyncing}
         onOpenClassifierModal={handleOpenClassifier}
-        onOpenQuickMount={() => setActiveTab('samba-mount')}
-        onOpenManualMatch={() => setManualMatchState({ isOpen: true, rawPathOrName: '' })}
+        onOpenQuickMount={handleOpenQuickMountTab}
+        onOpenManualMatch={handleOpenEmptyManualMatch}
         onClearThumbnailCache={handleClearThumbnailCache}
-        onTriggerLocalImport={() => localImportInputRef.current?.click()}
+        onTriggerLocalImport={handleTriggerLocalImport}
         onExportLibraryBackup={handleExportLibraryBackup}
-        onRefreshStatus={() => handleTestSambaConnection()}
-        onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+        onRefreshStatus={handleRefreshSambaStatus}
+        onOpenApiDebugger={handleOpenApiDebugger}
       />
 
       <Header
@@ -1525,11 +1643,11 @@ export default function App() {
         sambaConfig={sambaConfig}
         setSambaConfig={setSambaConfig}
         isConnected={isConnected}
-        onOpenQuickMount={() => setActiveTab('samba-mount')}
+        onOpenQuickMount={handleOpenQuickMountTab}
         onQuickSync={handleQuickSync}
         isQuickSyncing={isQuickSyncing}
         watchlistCount={watchlistCount}
-        onOpenApiDebugger={() => setIsApiDebuggerOpen(true)}
+        onOpenApiDebugger={handleOpenApiDebugger}
         serverVersionInfo={serverVersionInfo}
         syncProgress={syncProgress}
       />
@@ -1561,7 +1679,7 @@ export default function App() {
               onSaveCategorizedMedia={handleSaveCategorizedMedia}
               onImportMediaBatch={handleImportMediaBatch}
               isSyncing={isSyncing}
-              scanRootPath={sambaConfig.hostPath || sambaConfig.mountPath}
+              scanRootPath={selectedScanRootPath}
               selectedMediaType={selectedSearchMediaType}
               onSelectMediaType={setSelectedSearchMediaType}
               onOpenApiDebugger={handleOpenApiDebugger}
@@ -1569,6 +1687,7 @@ export default function App() {
               onOpenCollectionsTab={handleOpenCollectionsTab}
               enableVirtualization={true}
               onIndexedDbSearch={queryIndexedSqliteMedia}
+              initialWatchlistIds={initialWatchlistIds}
             />
           </ErrorBoundary>
         )}

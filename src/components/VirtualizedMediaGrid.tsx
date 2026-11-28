@@ -38,6 +38,26 @@ const EMPTY_AFFINITY = {
   matchingGenres: [] as string[],
 };
 
+const CARD_VARIANTS = {
+  rest: { y: 0 },
+  hover: { y: -4 },
+};
+const CARD_VARIANTS_REDUCED = {
+  rest: { y: 0 },
+  hover: { y: 0 },
+};
+const CARD_TRANSITION = { duration: 0.2, ease: [0.16, 1, 0.3, 1] as const };
+
+const POSTER_IMG_VARIANTS = {
+  rest: { scale: 1 },
+  hover: { scale: 1.05 },
+};
+const POSTER_IMG_VARIANTS_REDUCED = {
+  rest: { scale: 1 },
+  hover: { scale: 1 },
+};
+const POSTER_IMG_TRANSITION = { duration: 0.25, ease: [0.16, 1, 0.3, 1] as const };
+
 function safeGenres(genres: any): string[] {
   if (Array.isArray(genres)) return genres;
   if (typeof genres === 'string') {
@@ -174,11 +194,8 @@ export const MediaLibraryCard: React.FC<MediaCardProps> = React.memo(({
       initial="rest"
       animate="rest"
       whileHover="hover"
-      variants={{
-        rest: { y: 0 },
-        hover: { y: shouldReduceMotion ? 0 : -4 },
-      }}
-      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+      variants={shouldReduceMotion ? CARD_VARIANTS_REDUCED : CARD_VARIANTS}
+      transition={CARD_TRANSITION}
       className={`bg-slate-900 border rounded-2xl overflow-hidden shadow-lg flex flex-col group cursor-pointer transition-colors duration-200 hover:shadow-xl hover:shadow-indigo-500/15 h-full ${
         sortBy === 'affinity' && affinity.percentage >= 60
           ? 'border-emerald-500/50 hover:border-emerald-400/80 shadow-emerald-950/20'
@@ -196,11 +213,8 @@ export const MediaLibraryCard: React.FC<MediaCardProps> = React.memo(({
             decoding="async"
             referrerPolicy="no-referrer"
             onError={() => setHasImageError(true)}
-            variants={{
-              rest: { scale: 1 },
-              hover: { scale: shouldReduceMotion ? 1 : 1.05 },
-            }}
-            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+            variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
+            transition={POSTER_IMG_TRANSITION}
             className="w-full h-full object-cover opacity-80 group-hover:opacity-95 transition-opacity duration-200 will-change-transform"
           />
         ) : (

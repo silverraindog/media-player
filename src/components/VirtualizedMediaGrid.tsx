@@ -30,6 +30,7 @@ import {
 import { GenreAffinityScore, MediaMetadata, MediaSortOption, MediaType, SambaConfig } from '../types';
 import { downloadMediaArtwork, downloadMediaBundleZip } from '../utils/zipDownloader';
 import { getMountedDisplayPath } from '../utils/pathSanitizer';
+import { LazyThumbnail } from './LazyThumbnail';
 
 const EMPTY_AFFINITY = {
   score: 0,
@@ -174,11 +175,6 @@ export const MediaLibraryCard: React.FC<MediaCardProps> = React.memo(({
   onOpenInNfoStudio,
 }) => {
   const imageSrc = media.fanartUrl || media.posterUrl;
-  const [hasImageError, setHasImageError] = useState(false);
-
-  useEffect(() => {
-    setHasImageError(false);
-  }, [imageSrc]);
 
   const isImported =
     media.id.startsWith('imported-') ||
@@ -187,6 +183,18 @@ export const MediaLibraryCard: React.FC<MediaCardProps> = React.memo(({
   const isWatched = Boolean(watchInfo?.isCompleted);
   const progressPercent = watchInfo?.progress || (watchInfo?.isCompleted ? 100 : 0);
   const genresList = safeGenres(media.genres);
+
+  const posterFallback = (
+    <div className="w-full h-full bg-gradient-to-br from-slate-900 via-indigo-950/40 to-slate-950 flex items-center justify-center">
+      {media.type === 'series' ? (
+        <Tv className="w-12 h-12 text-slate-600" />
+      ) : media.type === 'movie' ? (
+        <Film className="w-12 h-12 text-slate-600" />
+      ) : (
+        <Music className="w-12 h-12 text-slate-600" />
+      )}
+    </div>
+  );
 
   return (
     <motion.article
@@ -203,31 +211,16 @@ export const MediaLibraryCard: React.FC<MediaCardProps> = React.memo(({
       }`}
       onClick={(e) => onToggleExpand(media.id, e)}
     >
-      {/* Media Poster & Header Image (consistent 16:10 aspect ratio + Framer Motion hover zoom) */}
+      {/* Media Poster & Header Image (consistent 16:10 aspect ratio + IntersectionObserver lazy load + Framer Motion hover zoom) */}
       <div className="relative w-full aspect-[16/10] bg-slate-950 overflow-hidden group/poster shrink-0">
-        {imageSrc && !hasImageError ? (
-          <motion.img
-            src={imageSrc}
-            alt={media.title}
-            loading="lazy"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => setHasImageError(true)}
-            variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
-            transition={POSTER_IMG_TRANSITION}
-            className="w-full h-full object-cover opacity-80 group-hover:opacity-95 transition-opacity duration-200 will-change-transform"
-          />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-br from-slate-900 via-indigo-950/40 to-slate-950 flex items-center justify-center">
-            {media.type === 'series' ? (
-              <Tv className="w-12 h-12 text-slate-600" />
-            ) : media.type === 'movie' ? (
-              <Film className="w-12 h-12 text-slate-600" />
-            ) : (
-              <Music className="w-12 h-12 text-slate-600" />
-            )}
-          </div>
-        )}
+        <LazyThumbnail
+          src={imageSrc}
+          alt={media.title}
+          variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
+          transition={POSTER_IMG_TRANSITION}
+          className="w-full h-full object-cover opacity-80 group-hover:opacity-95 transition-opacity duration-200 will-change-transform"
+          fallback={posterFallback}
+        />
 
         {/* Hover Tooltip - delayed by 10s to prevent obstructing action buttons */}
         <div className="absolute inset-0 z-10 p-4 bg-slate-950/95 opacity-0 group-hover/poster:opacity-100 transition-opacity duration-300 delay-0 group-hover/poster:delay-[10000ms] flex flex-col justify-start pointer-events-none">

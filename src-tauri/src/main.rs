@@ -1055,9 +1055,8 @@ fn generate_media_id(path: &str) -> String {
 async fn scan_and_import_volumes(
     app_handle: tauri::AppHandle,
     mount_paths: Option<Vec<String>>,
-    mountPaths: Option<Vec<String>>,
 ) -> Result<Vec<String>, String> {
-    let paths = mount_paths.or(mountPaths).unwrap_or_default();
+    let paths = mount_paths.unwrap_or_default();
     let mut results = Vec::new();
 
     for path_str in paths {
@@ -1122,11 +1121,6 @@ async fn scan_and_import_volumes(
     Ok(results)
 }
 
-#[tauri::command]
-async fn sanitize_samba_path_command(raw_path: String) -> Result<String, String> {
-    Ok(sanitize_samba_path(&raw_path))
-}
-
 fn should_skip_walk_entry(raw_name: &std::ffi::OsStr) -> bool {
     let name = raw_name.to_string_lossy();
     let lower = name.to_ascii_lowercase();
@@ -1150,20 +1144,17 @@ fn should_skip_walk_entry(raw_name: &std::ffi::OsStr) -> bool {
 async fn perform_fast_scan(
     window: tauri::Window,
     root_path: Option<String>,
-    rootPath: Option<String>,
     safe_scan: Option<bool>,
-    safeScan: Option<bool>,
     max_depth: Option<usize>,
-    maxDepth: Option<usize>,
 ) -> Result<Vec<ScannedFileItem>, String> {
-    let target = root_path.or(rootPath).unwrap_or_default();
+    let target = root_path.unwrap_or_default();
     let resolved_path = resolve_absolute_samba_path(&target);
     if !resolved_path.exists() {
         return Err(format!("Root path does not exist: {}", resolved_path.display()));
     }
 
-    let is_safe = safe_scan.or(safeScan).unwrap_or(false);
-    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 3 } else { 30 });
+    let is_safe = safe_scan.unwrap_or(false);
+    let depth_limit = max_depth.unwrap_or(if is_safe { 3 } else { 30 });
     let max_scan_items = if is_safe { 20000 } else { 500000 };
 
     let debug_enabled = std::env::var("RUST_LOG").map(|v| v == "debug" || v == "trace").unwrap_or(false)
@@ -1302,9 +1293,8 @@ async fn perform_fast_scan(
 #[tauri::command]
 async fn check_volume_mounted(
     share_name: Option<String>,
-    shareName: Option<String>,
 ) -> Result<VolumeMountInfo, String> {
-    let target_share = share_name.or(shareName).unwrap_or_default();
+    let target_share = share_name.unwrap_or_default();
     let candidate_paths = scanner::get_candidate_mount_paths(&target_share);
 
     for path in candidate_paths {
@@ -1426,10 +1416,9 @@ async fn mount_samba_share(
     password: Option<String>,
     guest: Option<bool>,
     is_guest: Option<bool>,
-    isGuest: Option<bool>,
 ) -> Result<MountActionResult, String> {
     let srv = server.or(host).unwrap_or_else(|| "127.0.0.1".to_string());
-    let is_g = is_guest.or(isGuest).or(guest).unwrap_or(false);
+    let is_g = is_guest.or(guest).unwrap_or(false);
     let port_num = port.unwrap_or(445);
 
     let smb_url = if is_g || username.as_deref().unwrap_or("").is_empty() {
@@ -1500,18 +1489,14 @@ async fn mount_samba_share(
 async fn scan_samba_volume(
     window: tauri::Window,
     share_name: Option<String>,
-    shareName: Option<String>,
     custom_path: Option<String>,
-    customPath: Option<String>,
     extensions: Option<Vec<String>>,
     safe_scan: Option<bool>,
-    safeScan: Option<bool>,
     max_depth: Option<usize>,
-    maxDepth: Option<usize>,
 ) -> Result<ScanVolumeResult, String> {
-    let target_share = share_name.or(shareName).unwrap_or_default();
+    let target_share = share_name.unwrap_or_default();
     let default_mount = Path::new("/Volumes").join(&target_share);
-    let resolved_path = if let Some(custom) = custom_path.or(customPath) {
+    let resolved_path = if let Some(custom) = custom_path {
         resolve_absolute_samba_path(&custom)
     } else {
         default_mount
@@ -1527,8 +1512,8 @@ async fn scan_samba_volume(
         });
     }
 
-    let is_safe = safe_scan.or(safeScan).unwrap_or(false);
-    let depth_limit = max_depth.or(maxDepth).unwrap_or(if is_safe { 12 } else { 30 });
+    let is_safe = safe_scan.unwrap_or(false);
+    let depth_limit = max_depth.unwrap_or(if is_safe { 12 } else { 30 });
     let max_scan_items = if is_safe { 50000 } else { 500000 };
 
     let allowed_exts: Option<HashSet<String>> = extensions.map(|exts| {
@@ -1677,9 +1662,8 @@ fn reap_child_in_background(mut child: std::process::Child) {
 #[tauri::command]
 async fn open_in_system_player(
     file_path: Option<String>,
-    filePath: Option<String>,
 ) -> Result<String, String> {
-    let target = file_path.or(filePath).unwrap_or_default();
+    let target = file_path.unwrap_or_default();
     #[cfg(target_os = "macos")]
     let res = Command::new("open").arg(&target).spawn();
     #[cfg(target_os = "windows")]
@@ -1699,9 +1683,8 @@ async fn open_in_system_player(
 #[tauri::command]
 async fn open_in_vlc(
     file_path: Option<String>,
-    filePath: Option<String>,
 ) -> Result<String, String> {
-    let raw = file_path.or(filePath).unwrap_or_default();
+    let raw = file_path.unwrap_or_default();
     let mut target = raw.trim().to_string();
     if target.starts_with("file://") {
         target = target.trim_start_matches("file://").to_string();
@@ -1734,9 +1717,8 @@ async fn open_in_vlc(
 #[tauri::command]
 async fn open_in_iina(
     file_path: Option<String>,
-    filePath: Option<String>,
 ) -> Result<String, String> {
-    let raw = file_path.or(filePath).unwrap_or_default();
+    let raw = file_path.unwrap_or_default();
     let mut target = raw.trim().to_string();
     if target.starts_with("file://") {
         target = target.trim_start_matches("file://").to_string();

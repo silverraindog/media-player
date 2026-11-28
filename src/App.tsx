@@ -86,6 +86,7 @@ import { checkFullDiskAccess, FullDiskAccessStatus, openMacOSSecurityPrivacy } f
 import { mediaLibraryReducer } from './reducers/mediaLibraryReducer';
 import { createMediaLibrarySelectors } from './selectors/mediaLibrarySelectors';
 import { mediaScannerWorkerPool } from './workers/mediaScannerWorkerPool';
+import { backgroundSyncService } from './services/backgroundSyncService';
 import { APP_VERSION, APP_RELEASE_TAG } from './version';
 import { AlertTriangle, RotateCw } from 'lucide-react';
 
@@ -349,6 +350,11 @@ export default function App() {
   scanDepthLimitRef.current = scanDepthLimit;
   const isSyncingRef = useRef(isSyncing);
   isSyncingRef.current = isSyncing;
+  const sambaTreeRef = useRef(sambaTree);
+  sambaTreeRef.current = sambaTree;
+  const mediaLibraryRef = useRef(mediaLibrary);
+  mediaLibraryRef.current = mediaLibrary;
+  const upsertMediaItemsRef = useRef<(incoming: MediaMetadata[]) => void>(() => {});
 
   const localImportInputRef = useRef<HTMLInputElement>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -575,6 +581,33 @@ export default function App() {
         if (!cancelled) {
           skipNextVaultPersistRef.current = true;
           hasHydratedRef.current = true;
+
+          backgroundSyncService.start(
+            {
+              sambaConfig: sambaConfigRef.current,
+              extensionConfig: mediaExtensionConfigRef.current,
+              maxDepth: scanDepthLimitRef.current,
+              intervalMs: 60_000,
+              paused: isSyncingRef.current,
+              sambaTree: sambaTreeRef.current,
+              mediaLibrary: mediaLibraryRef.current,
+            },
+            {
+              onNewMediaDiscovered: (discoveredItems, _rawEntries, resolvedPath) => {
+                if (discoveredItems.length === 0) return;
+                upsertMediaItemsRef.current(discoveredItems);
+                appendSyncLog({
+                  type: 'metadata_created',
+                  title: 'Background Sync',
+                  details: `Discovered ${discoveredItems.length} new media file(s) in ${resolvedPath}`,
+                  status: 'success',
+                });
+              },
+              onSyncError: (error) => {
+                logger.warn(`[BackgroundSync] ${error}`, 'Sync');
+              },
+            }
+          );
         }
       }
 
@@ -885,6 +918,22 @@ export default function App() {
     }
   }, [mediaLibrary]);
 
+  // Keep periodic background sync worker updated with latest scan settings and known paths
+  useEffect(() => {
+    if (!hasHydratedRef.current) return;
+    backgroundSyncService.updateConfig({
+      sambaConfig,
+      extensionConfig: mediaExtensionConfig,
+      maxDepth: scanDepthLimit,
+      paused: isSyncing,
+    });
+  }, [sambaConfig, mediaExtensionConfig, scanDepthLimit, isSyncing]);
+
+  useEffect(() => {
+    if (!hasHydratedRef.current) return;
+    backgroundSyncService.seedKnownPaths(sambaTree, mediaLibrary);
+  }, [sambaTree, mediaLibrary]);
+
   useEffect(() => {
     return () => {
       for (const blobUrl of createdBlobUrlsRef.current) {
@@ -892,6 +941,7 @@ export default function App() {
       }
       createdBlobUrlsRef.current.clear();
       mediaScannerWorkerPool.terminateAll();
+      backgroundSyncService.stop();
     };
   }, []);
 
@@ -1052,6 +1102,7 @@ export default function App() {
     },
     [ensureSqliteMediaIndexes]
   );
+  upsertMediaItemsRef.current = upsertMediaItems;
 
   const removeMediaItemsByIds = useCallback((ids: string[]) => {
     if (!Array.isArray(ids) || ids.length === 0) return;

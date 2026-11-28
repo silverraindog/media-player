@@ -54,6 +54,7 @@ import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
 import { isMediaUncategorized } from '../utils/mediaExtractor';
 import { buildUnifiedCollections, COLLECTION_FALLBACK_POSTER, UnifiedCollection } from '../utils/collections';
 import { VirtualizedMediaGrid } from './VirtualizedMediaGrid';
+import { LazyThumbnail } from './LazyThumbnail';
 
 const WebSearchCategorizerModal = lazy(() =>
   import('./WebSearchCategorizerModal').then((m) => ({ default: m.WebSearchCategorizerModal }))
@@ -1945,17 +1946,26 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                   onClick={() => onOpenDetails(item)}
                   className="group relative w-48 sm:w-56 shrink-0 bg-slate-950 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden transition-colors duration-200 hover:shadow-xl hover:shadow-indigo-500/10 cursor-pointer flex flex-col"
                 >
-                  {/* Poster image (consistent 16:10 aspect ratio + Framer Motion hover zoom) */}
+                  {/* Poster image (consistent 16:10 aspect ratio + IntersectionObserver lazy load + Framer Motion hover zoom) */}
                   <div className="relative aspect-[16/10] w-full bg-slate-900 overflow-hidden">
-                    <motion.img
+                    <LazyThumbnail
                       src={item.fanartUrl || item.posterUrl}
                       alt={item.title}
-                      loading="lazy"
-                      decoding="async"
-                      referrerPolicy="no-referrer"
+                      rootMargin="120px 180px"
                       variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
                       transition={POSTER_IMG_TRANSITION}
                       className="w-full h-full object-cover will-change-transform"
+                      fallback={
+                        <div className="w-full h-full bg-gradient-to-br from-slate-900 via-indigo-950/40 to-slate-950 flex items-center justify-center">
+                          {item.type === 'series' ? (
+                            <Tv className="w-8 h-8 text-slate-600" />
+                          ) : item.type === 'movie' ? (
+                            <Film className="w-8 h-8 text-slate-600" />
+                          ) : (
+                            <Music className="w-8 h-8 text-slate-600" />
+                          )}
+                        </div>
+                      }
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
 
@@ -3462,18 +3472,21 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
                     className="bg-slate-900 border border-slate-800 hover:border-indigo-500/60 rounded-xl overflow-hidden flex flex-col group cursor-pointer transition-colors"
                   >
                     <div className="relative w-full aspect-[16/10] bg-slate-950 overflow-hidden border-b border-slate-800 shrink-0">
-                      <motion.img
+                      <LazyThumbnail
                         src={col.posterUrl || COLLECTION_FALLBACK_POSTER}
                         alt={col.name}
-                        loading="lazy"
-                        decoding="async"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          e.currentTarget.src = COLLECTION_FALLBACK_POSTER;
-                        }}
                         variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
                         transition={POSTER_IMG_TRANSITION}
                         className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity duration-200 will-change-transform"
+                        fallback={
+                          <motion.img
+                            src={COLLECTION_FALLBACK_POSTER}
+                            alt={col.name}
+                            variants={shouldReduceMotion ? POSTER_IMG_VARIANTS_REDUCED : POSTER_IMG_VARIANTS}
+                            transition={POSTER_IMG_TRANSITION}
+                            className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity duration-200 will-change-transform"
+                          />
+                        }
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent" />
                       <div className="absolute bottom-3 left-4 right-4">

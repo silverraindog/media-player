@@ -1,13 +1,5 @@
-use serde::{Deserialize, Serialize};
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use std::env;
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct GeminiResponse {
-    pub success: bool,
-    pub data: Option<serde_json::Value>,
-    pub error: Option<String>,
-}
 
 pub async fn call_gemini(prompt: &str) -> Result<serde_json::Value, String> {
     let api_key = env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not found in environment".to_string())?;

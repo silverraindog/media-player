@@ -1,3 +1,6 @@
+  private normalizeKey(mediaPath: string): string {
+    return mediaPath.trim().replace(/^(\\/\\\\/|[\\\\\\\\/])+/, '').replace(/\\\\\\\\/g, '/');
+  }
 import { ThumbnailMetadata, ThumbnailCacheStats, SambaShareNode, MediaMetadata } from '../types';
 import { CURATED_MEDIA_DATABASE } from '../data/curatedMedia';
 import { parseTitleAndYear, detectMediaType, getFileCategory } from './mediaExtractor';

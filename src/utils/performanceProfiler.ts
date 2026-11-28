@@ -39,30 +39,6 @@ declare global {
 
 class MainThreadPerformanceProfiler {
   private records: SlowTaskRecord[] = [];
-  private activeScopes = new Set<string>();
-  private rafId: number | null = null;
-  private lastRafTime: number | null = null;
-  private perfObserver: PerformanceObserver | null = null;
-  private loaObserver: PerformanceObserver | null = null;
-
-  constructor() {
-    if (typeof window !== 'undefined') {
-      window.__SAMBAVAULT_PERF_PROFILER__ = {
-        getSlowTasks: () => this.getSlowTasks(),
-        clearSlowTasks: () => this.clearSlowTasks(),
-        getThresholdMs: () => MAIN_THREAD_FRAME_BUDGET_MS,
-      };
-    }
-  }
-
-  public getSlowTasks(): SlowTaskRecord[] {
-    return [...this.records];
-  }
-
-  public clearSlowTasks(): void {
-    this.records = [];
-  }
-
   public recordSlowTask(
     entry: Omit<SlowTaskRecord, 'id' | 'timestamp' | 'thresholdMs'> & { thresholdMs?: number }
   ): SlowTaskRecord | null {
@@ -75,6 +51,10 @@ class MainThreadPerformanceProfiler {
     const record: SlowTaskRecord = {
       id: `perf-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       timestamp: new Date().toISOString(),
+      scope: entry.scope,
+      taskName: entry.taskName,
+      source: entry.source,
+      durationMs: roundedDuration,
       thresholdMs,
       ...entry,
       durationMs: roundedDuration,
@@ -82,7 +62,7 @@ class MainThreadPerformanceProfiler {
 
     this.records = [record, ...this.records].slice(0, MAX_SLOW_TASK_RECORDS);
 
-    const summary = `[PerfProfiler][>${thresholdMs}ms] ${record.scope} :: ${record.taskName} (${record.source}) took ${roundedDuration}ms`;
+    const summary = `[PerfProfiler][${thresholdMs}ms] ${record.scope} :: ${record.taskName} (${record.source}) took ${roundedDuration}ms`;
     console.warn(summary, record.metadata || '');
     logger.warn(summary, 'System', {
       durationMs: roundedDuration,
@@ -95,30 +75,6 @@ class MainThreadPerformanceProfiler {
     return record;
   }
 
-  public profileSyncTask<T>(
-    scope: string,
-    taskName: string,
-    fn: () => T,
-    metadata?: Record<string, unknown>
-  ): T {
-    const start = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    try {
-      return fn();
-    } finally {
-      const end = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      const durationMs = end - start;
-      if (durationMs > MAIN_THREAD_FRAME_BUDGET_MS) {
-        this.recordSlowTask({
-          scope,
-          taskName,
-          source: 'sync-task',
-          durationMs,
-          metadata,
-        });
-      }
-    }
-  }
-
   public traceNavigation(
     scope: string,
     action: string,
@@ -126,6 +82,7 @@ class MainThreadPerformanceProfiler {
   ): { endSync: () => number } {
     const start = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const markStart = `sv_nav_${action}_start_${start}`;
+
     if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
       try {
         performance.mark(markStart);
@@ -147,11 +104,11 @@ class MainThreadPerformanceProfiler {
             durationMs: frameDurationMs,
             metadata,
           });
-        }
-        if (typeof performance !== 'undefined' && typeof performance.clearMarks === 'function') {
-          try {
-            performance.clearMarks(markStart);
-          } catch {}
+          if (typeof performance !== 'undefined' && typeof performance.clearMarks === 'function') {
+            try {
+              performance.clearMarks(markStart);
+            } catch {}
+          }
         }
       });
     }
@@ -193,184 +150,108 @@ class MainThreadPerformanceProfiler {
     };
   }
 
-  public startScopeMonitor(scope: string): () => void {
-    this.activeScopes.add(scope);
-    if (this.activeScopes.size === 1) {
-      this.startObservers();
-      this.startRafMonitor();
-    }
-    return () => {
-      this.stopScopeMonitor(scope);
-    };
-  }
-
-  public stopScopeMonitor(scope: string): void {
-    this.activeScopes.delete(scope);
-    if (this.activeScopes.size === 0) {
-      this.stopObservers();
-      this.stopRafMonitor();
-    }
-  }
-
-  private getCurrentScopeLabel(): string {
-    if (this.activeScopes.size === 0) return 'App';
-    return Array.from(this.activeScopes).join(',');
-  }
-
-  private startRafMonitor(): void {
-    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') return;
-    if (this.rafId !== null) return;
-
-    this.lastRafTime = performance.now();
-    const tick = (now: number) => {
-      if (this.activeScopes.size === 0) {
-        this.rafId = null;
-        this.lastRafTime = null;
-        return;
+  public profileSyncTask<T>(
+    scope: string,
+    taskName: string,
+    fn: () => T,
+    metadata?: Record<string, unknown>
+  ): T {
+    const start = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    try {
+      return fn();
+    } finally {
+      const end = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const durationMs = end - start;
+      if (durationMs > MAIN_THREAD_FRAME_BUDGET_MS) {
+        this.recordSlowTask({
+          scope,
+          taskName,
+          source: 'sync-task',
+          durationMs,
+          metadata,
+        });
       }
+    }
+  }
 
-      const prev = this.lastRafTime;
-      this.lastRafTime = now;
+  public startObservers(): void {
+    const threshold = MAIN_THREAD_FRAME_BUDGET_MS;
 
-      if (
-        prev !== null &&
-        (typeof document === 'undefined' || document.visibilityState === 'visible')
-      ) {
-        const deltaMs = now - prev;
-        // Ignore multi-second jumps caused by tab suspension / window minimization
-        if (deltaMs > RAF_FRAME_BUDGET_MS && deltaMs < 2000) {
+    // Setup PerformanceObserver for long tasks
+    if (typeof performance !== 'undefined') {
+      this.perfObserver = new PerformanceObserver((entry) => {
+        if (entry.type === 'longtask') {
           this.recordSlowTask({
-            scope: this.getCurrentScopeLabel(),
-            taskName: 'Main-thread frame budget exceeded',
-            source: 'raf-frame-drop',
-            durationMs: deltaMs,
+            scope: window.__SAMBAVAULT_PERF_PROFILER__?.activeScope || 'global',
+            taskName: 'Long task completed',
+            source: 'longtask-observer',
+            durationMs: entry.duration,
             metadata: {
-              droppedFramesApprox: Math.max(1, Math.floor(deltaMs / MAIN_THREAD_FRAME_BUDGET_MS) - 1),
+              entries: Array.from(entry.entries).map((e) => ({
+                name: e.name,
+                duration: e.duration,
+                start: e.startTime,
+              })),
             },
           });
         }
-      }
-
-      this.rafId = window.requestAnimationFrame(tick);
-    };
-
-    this.rafId = window.requestAnimationFrame(tick);
-  }
-
-  private stopRafMonitor(): void {
-    if (this.rafId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
-      window.cancelAnimationFrame(this.rafId);
-    }
-    this.rafId = null;
-    this.lastRafTime = null;
-  }
-
-  private startObservers(): void {
-    if (typeof PerformanceObserver === 'undefined') return;
-    const supported = Array.isArray(PerformanceObserver.supportedEntryTypes)
-      ? PerformanceObserver.supportedEntryTypes
-      : [];
-
-    if (!this.perfObserver && supported.includes('longtask')) {
-      try {
-        this.perfObserver = new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            if (entry.duration > MAIN_THREAD_FRAME_BUDGET_MS) {
-              this.recordSlowTask({
-                scope: this.getCurrentScopeLabel(),
-                taskName: entry.name || 'longtask',
-                source: 'longtask-observer',
-                durationMs: entry.duration,
-              });
-            }
-          }
-        });
-        this.perfObserver.observe({ entryTypes: ['longtask'] });
-      } catch {
-        this.perfObserver = null;
-      }
+      });
     }
 
-    if (!this.loaObserver && supported.includes('long-animation-frame')) {
-      try {
-        this.loaObserver = new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            if (entry.duration > MAIN_THREAD_FRAME_BUDGET_MS) {
-              this.recordSlowTask({
-                scope: this.getCurrentScopeLabel(),
-                taskName: entry.name || 'long-animation-frame',
-                source: 'long-animation-frame',
-                durationMs: entry.duration,
-              });
-            }
-          }
-        });
-        this.loaObserver.observe({ entryTypes: ['long-animation-frame'] });
-      } catch {
-        this.loaObserver = null;
-      }
+    // Setup long animation frame observer
+    if (typeof performance !== 'undefined') {
+      this.loaObserver = new PerformanceObserver((entry) => {
+        if (entry.type === 'longanimationframe') {
+          this.recordSlowTask({
+            scope: window.__SAMBAVAULT_PERF_PROFILER__?.activeScope || 'global',
+            taskName: 'Long animation frame completed',
+            source: 'long-animation-frame',
+            durationMs: entry.duration,
+            metadata: {},
+          });
+        }
+      });
     }
   }
 
-  private stopObservers(): void {
-    try {
-      this.perfObserver?.disconnect();
-    } catch {}
-    this.perfObserver = null;
-    try {
-      this.loaObserver?.disconnect();
-    } catch {}
-    this.loaObserver = null;
+  public stopObservers(): void {
+    if (this.perfObserver) {
+      this.perfObserver.disconnect();
+      this.perfObserver = null;
+    }
+    if (this.loaObserver) {
+      this.loaObserver.disconnect();
+      this.loaObserver = null;
+    }
+  }
 
-  /**
-   * Cleanup function for disposal (prevent memory leaks on unmount/dispose)
-   */
   public dispose(): void {
-    // Cancel RAF monitor
-    if (this.rafId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
-      window.cancelAnimationFrame(this.rafId);
-    }
-    this.rafId = null;
-
-    // Disconnect performance observers
-    try {
-      this.perfObserver?.disconnect();
-    } catch {}
-    this.perfObserver = null;
-
-    try {
-      this.loaObserver?.disconnect();
-    } catch {}
-    this.loaObserver = null;
-
-    // Clear active scopes (optional - could be external state)
-  }
+    this.stopScopeMonitor('App');
+    this.stopRafMonitor();
+    this.stopObservers();
   }
 
-  /**
-   * Cleanup function for disposal (prevent memory leaks on unmount/dispose)
-   */
-  public dispose(): void {
-    // Cancel RAF monitor
-    if (this.rafId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
-      window.cancelAnimationFrame(this.rafId);
+  private activeScopes = new Set<string>();
+  private rafId: number | null = null;
+  private lastRafTime: number | null = null;
+  private perfObserver: PerformanceObserver | null = null;
+  private loaObserver: PerformanceObserver | null = null;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      window.__SAMBAVAULT_PERF_PROFILER__ = {
+        getSlowTasks: () => this.getSlowTasks(),
+        clearSlowTasks: () => this.clearSlowTasks(),
+        getThresholdMs: () => MAIN_THREAD_FRAME_BUDGET_MS,
+      };
     }
-    this.rafId = null;
+  }
 
-    // Disconnect performance observers
-    try {
-      this.perfObserver?.disconnect();
-    } catch {}
-    this.perfObserver = null;
+  public getSlowTasks(): SlowTaskRecord[] {
+    return [...this.records];
+  }
 
-    try {
-      this.loaObserver?.disconnect();
-    } catch {}
-    this.loaObserver = null;
-
-    // Clear active scopes (optional - could be external state)
+  public clearSlowTasks(): void {
+    this.records = [];
   }
 }
-}
-
-export const mainThreadProfiler = new MainThreadPerformanceProfiler();

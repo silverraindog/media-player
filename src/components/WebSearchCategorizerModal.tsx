@@ -36,6 +36,7 @@ import {
   SlidersHorizontal,
   FolderOpen,
   FolderSync,
+  Music,
 } from 'lucide-react';
 import { MediaMetadata, MediaType, SambaShareNode } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
@@ -50,7 +51,7 @@ import {
   nodeToMediaMetadata,
   type UnimportedUnsortedEntry,
 } from '../utils/mediaExtractor';
-import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
+import { categorizeMediaWithRetry, type CategorizerDiagnosticLog } from '../utils/metadataCategorizer';
 import { mainThreadProfiler } from '../utils/performanceProfiler';
 
 interface MediaDefectFlags {
@@ -224,7 +225,8 @@ const UncategorizedMediaRow = ({
   );
 };
 
-type UncatSubFilter = 'all' | 'unsorted' | 'synopsis' | 'artwork' | 'genres' | 'series' | 'movie' | 'album';
+type UncatCategoryFilter = 'all' | 'movie' | 'series' | 'album';
+type UncatSubFilter = 'all' | 'unsorted' | 'synopsis' | 'artwork' | 'genres';
 
 interface UncatNavItem {
   id: UncatSubFilter;
@@ -317,47 +319,85 @@ interface ApiLogRowExtraProps {
   logs: ApiLogItemEntry[];
 }
 
+const ApiLogItemCard = React.memo(({ log }: { log: ApiLogItemEntry }) => {
+  const headerKeys = log.headers ? Object.keys(log.headers) : [];
+  const isOk = log.status >= 200 && log.status < 300;
+  const methodBadgeClass =
+    log.method === 'POST'
+      ? 'bg-indigo-950 text-indigo-300 border border-indigo-800/60'
+      : log.method.includes('FALLBACK') || log.method.includes('RESOLVER')
+      ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
+      : log.method.startsWith('BATCH')
+      ? 'bg-purple-950 text-purple-300 border border-purple-800/60'
+      : 'bg-emerald-950 text-emerald-300 border border-emerald-800/60';
+
+  const formattedResponse = useMemo(() => {
+    if (log.responseBody === undefined || log.responseBody === null) return '';
+    if (typeof log.responseBody === 'string') return log.responseBody;
+    try {
+      return JSON.stringify(log.responseBody, null, 2);
+    } catch {
+      return String(log.responseBody);
+    }
+  }, [log.responseBody]);
+
+  return (
+    <div className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${methodBadgeClass}`}>
+            {log.method}
+          </span>
+          <span className="text-slate-200 font-bold truncate" title={log.url}>
+            {log.url}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span
+            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+              isOk ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'
+            }`}
+          >
+            {log.status} {log.statusText}
+          </span>
+          <span className="text-slate-500 text-[10px]">{log.timestamp.split('T')[1]?.slice(0, 8)}</span>
+        </div>
+      </div>
+
+      {log.requestBody !== undefined && (
+        <div className="text-[11px] text-slate-400 break-all">
+          <strong className="text-indigo-400">Payload:</strong> {JSON.stringify(log.requestBody)}
+        </div>
+      )}
+
+      {headerKeys.length > 0 && (
+        <div className="text-[10px] text-slate-400 break-all">
+          <strong className="text-cyan-400">Headers:</strong>{' '}
+          {headerKeys.map((k) => `${k}: ${log.headers[k]}`).join(' | ')}
+        </div>
+      )}
+
+      {formattedResponse && (
+        <pre className="text-[10px] text-emerald-300/90 bg-slate-950/90 border border-slate-800/80 rounded p-2 max-h-24 overflow-y-auto whitespace-pre-wrap break-words">
+          {formattedResponse}
+        </pre>
+      )}
+
+      {log.error && (
+        <div className="text-[11px] text-rose-400 break-words">
+          <strong>Error:</strong> {log.error}
+        </div>
+      )}
+    </div>
+  );
+});
+
 const ApiLogRow = ({ index, style, logs }: RowComponentProps<ApiLogRowExtraProps>): React.ReactElement | null => {
   const log = logs[index];
   if (!log) return null;
   return (
     <div style={style} className="pb-2.5 pr-1">
-      <div className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span
-              className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
-                log.method === 'POST' ? 'bg-indigo-950 text-indigo-300' : 'bg-emerald-950 text-emerald-300'
-              }`}
-            >
-              {log.method}
-            </span>
-            <span className="text-slate-200 font-bold truncate">{log.url}</span>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <span
-              className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                log.status >= 200 && log.status < 300
-                  ? 'bg-emerald-950 text-emerald-400'
-                  : 'bg-rose-950 text-rose-400'
-              }`}
-            >
-              {log.status} {log.statusText}
-            </span>
-            <span className="text-slate-500 text-[10px]">{log.timestamp.split('T')[1]?.slice(0, 8)}</span>
-          </div>
-        </div>
-        {log.requestBody && (
-          <div className="text-[11px] text-slate-400 truncate">
-            <strong className="text-indigo-400">Payload:</strong> {JSON.stringify(log.requestBody)}
-          </div>
-        )}
-        {log.error && (
-          <div className="text-[11px] text-rose-400 truncate">
-            <strong>Error:</strong> {log.error}
-          </div>
-        )}
-      </div>
+      <ApiLogItemCard log={log} />
     </div>
   );
 };
@@ -409,7 +449,8 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   sambaTree = [],
 }) => {
   const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
-  const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'unsorted' | 'synopsis' | 'artwork' | 'genres' | 'series' | 'movie' | 'album'>('all');
+  const [uncatCategoryFilter, setUncatCategoryFilter] = useState<UncatCategoryFilter>('all');
+  const [uncatSubFilter, setUncatSubFilter] = useState<UncatSubFilter>('all');
   const [uncatSearchQuery, setUncatSearchQuery] = useState('');
   const deferredUncatSearchQuery = useDeferredValue(uncatSearchQuery);
   const [batchProcessing, setBatchProcessing] = useState(false);
@@ -432,102 +473,17 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     fileNodes: UnimportedUnsortedEntry[];
   }>({ folderPaths: [], fileNodes: [] });
 
-  interface ApiLogEntry {
-    id: string;
-    timestamp: string;
-    method: string;
-    url: string;
-    requestBody?: any;
-    status: number;
-    statusText: string;
-    headers: Record<string, string>;
-    responseBody?: any;
-    error?: string;
-  }
-  const [apiLogs, setApiLogs] = useState<ApiLogEntry[]>([]);
+  const [apiLogs, setApiLogs] = useState<ApiLogItemEntry[]>([]);
   const [showLogsPanel, setShowLogsPanel] = useState(false);
 
-  const performLoggedFetch = async (url: string, options: RequestInit) => {
-    const startTime = new Date().toISOString();
-    const reqBody = options.body ? JSON.parse(options.body as string) : undefined;
-    try {
-      let targetUrl = url;
-      // In Tauri desktop environment, check if local Node server is running on port 3000
-      const isTauriEnv = window.location.protocol === 'tauri:' || 
-                         window.location.origin.includes('tauri.localhost') || 
-                         (window as any).__TAURI__;
-      const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
-
-      if (url.startsWith('/api/') && isTauriEnv && !isHttp) {
-        try {
-          // Probe local port 3000
-          const testRes = await fetch(`http://127.0.0.1:3000${url}`, { ...options, signal: AbortSignal.timeout(1000) });
-          const contentType = testRes.headers.get('content-type') || '';
-          if (contentType.includes('application/json')) {
-            targetUrl = `http://127.0.0.1:3000${url}`;
-          }
-        } catch {
-          // Local server port 3000 not listening or timed out, fallback to current origin
-        }
-      }
-
-      const res = await fetch(targetUrl, options);
-      const status = res.status;
-      const statusText = res.statusText;
-      const headersObj: Record<string, string> = {};
-      res.headers.forEach((val, key) => {
-        headersObj[key] = val;
-      });
-      const text = await res.text();
-      let parsedBody: any;
-      try {
-        parsedBody = text ? JSON.parse(text) : null;
-      } catch {
-        parsedBody = text;
-      }
-
-      setApiLogs((prev) => [
-        {
-          id: Math.random().toString(36).substring(2, 9),
-          timestamp: startTime,
-          method: options.method || 'GET',
-          url: targetUrl,
-          requestBody: reqBody,
-          status,
-          statusText,
-          headers: headersObj,
-          responseBody: parsedBody,
-        },
-        ...prev.slice(0, 49),
-      ]);
-
-      return {
-        ok: res.ok,
-        status,
-        statusText,
-        headers: res.headers,
-        text: () => Promise.resolve(text),
-        json: () => Promise.resolve(parsedBody),
-        data: parsedBody,
-      };
-    } catch (err: any) {
-      setApiLogs((prev) => [
-        {
-          id: Math.random().toString(36).substring(2, 9),
-          timestamp: startTime,
-          method: options.method || 'GET',
-          url,
-          requestBody: reqBody,
-          status: 500,
-          statusText: 'Network Error',
-          headers: {},
-          error: err?.message || String(err),
-        },
-        ...prev.slice(0, 49),
-      ]);
-      throw err;
-    }
-  };
+  const appendApiLog = useCallback((entry: CategorizerDiagnosticLog) => {
+    const newEntry: ApiLogItemEntry = {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`,
+      timestamp: new Date().toISOString(),
+      ...entry,
+    };
+    setApiLogs((prev) => [newEntry, ...prev.slice(0, 149)]);
+  }, []);
 
   // Synchronize when initialQuery or initialType changes
   React.useEffect(() => {
@@ -678,30 +634,85 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         extracted.forEach((item) => onSaveCategorizedMedia(item));
       }
       setBatchMessage(`Imported ${extracted.length} media item(s) from Unsorted / Staging folders for categorization.`);
+      setUncatCategoryFilter('all');
       setUncatSubFilter('unsorted');
       setShowAllLibraryInUncat(false);
     }
   };
 
-  const { seriesIncompleteCount, movieIncompleteCount, albumIncompleteCount } = useMemo(() => {
+  const {
+    seriesIncompleteCount,
+    movieIncompleteCount,
+    albumIncompleteCount,
+    categoryScopedCount,
+    scopedUnsortedCount,
+    scopedMissingGenCount,
+    scopedMissingSynCount,
+    scopedMissingArtCount,
+  } = useMemo(() => {
     if (!isOpen) {
-      return { seriesIncompleteCount: 0, movieIncompleteCount: 0, albumIncompleteCount: 0 };
+      return {
+        seriesIncompleteCount: 0,
+        movieIncompleteCount: 0,
+        albumIncompleteCount: 0,
+        categoryScopedCount: 0,
+        scopedUnsortedCount: 0,
+        scopedMissingGenCount: 0,
+        scopedMissingSynCount: 0,
+        scopedMissingArtCount: 0,
+      };
     }
     let series = 0;
     let movie = 0;
     let album = 0;
+    let scopedTotal = 0;
+    let unsorted = 0;
+    let missingGen = 0;
+    let missingSyn = 0;
+    let missingArt = 0;
+
     for (let i = 0; i < sourceUncatList.length; i++) {
-      const t = sourceUncatList[i].type;
-      if (t === 'series') series++;
-      else if (t === 'movie') movie++;
-      else if (t === 'album') album++;
+      const m = sourceUncatList[i];
+      if (m.type === 'series') series++;
+      else if (m.type === 'movie') movie++;
+      else if (m.type === 'album') album++;
+
+      if (uncatCategoryFilter === 'all' || m.type === uncatCategoryFilter) {
+        scopedTotal++;
+        const flags = flagsById.get(m.id);
+        if (flags ? flags.inUnsorted : isMediaInUnsortedPath(m)) unsorted++;
+        if (flags ? flags.missingGen : isMediaMissingGenres(m)) missingGen++;
+        if (flags ? flags.missingSyn : isMediaMissingSynopsis(m)) missingSyn++;
+        if (flags ? flags.missingArt : isMediaMissingArtwork(m)) missingArt++;
+      }
     }
+
     return {
       seriesIncompleteCount: series,
       movieIncompleteCount: movie,
       albumIncompleteCount: album,
+      categoryScopedCount: scopedTotal,
+      scopedUnsortedCount: unsorted,
+      scopedMissingGenCount: missingGen,
+      scopedMissingSynCount: missingSyn,
+      scopedMissingArtCount: missingArt,
     };
-  }, [isOpen, sourceUncatList]);
+  }, [isOpen, sourceUncatList, uncatCategoryFilter, flagsById]);
+
+  const batchTargetItems = useMemo(() => {
+    if (!isOpen) return [] as MediaMetadata[];
+    if (uncatCategoryFilter === 'all') return incompleteItems;
+    return incompleteItems.filter((item) => item.type === uncatCategoryFilter);
+  }, [isOpen, incompleteItems, uncatCategoryFilter]);
+
+  const uncatCategoryLabel =
+    uncatCategoryFilter === 'movie'
+      ? 'Movies'
+      : uncatCategoryFilter === 'series'
+      ? 'Series'
+      : uncatCategoryFilter === 'album'
+      ? 'Music'
+      : 'All';
 
   const filteredUncategorized = useMemo(() => {
     if (!isOpen || activeTabFilter !== 'uncategorized') return [] as MediaMetadata[];
@@ -712,6 +723,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         const qLower = deferredUncatSearchQuery.trim().toLowerCase();
 
         return sourceUncatList.filter((item) => {
+          if (uncatCategoryFilter !== 'all' && item.type !== uncatCategoryFilter) {
+            return false;
+          }
+
           if (qLower) {
             const matchText =
               item.title.toLowerCase().includes(qLower) ||
@@ -719,10 +734,6 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
               (item.recommendedFolderStructure || '').toLowerCase().includes(qLower);
             if (!matchText) return false;
           }
-
-          if (uncatSubFilter === 'series') return item.type === 'series';
-          if (uncatSubFilter === 'movie') return item.type === 'movie';
-          if (uncatSubFilter === 'album') return item.type === 'album';
 
           const flags = flagsById.get(item.id);
           if (uncatSubFilter === 'unsorted') return flags ? flags.inUnsorted : isMediaInUnsortedPath(item);
@@ -732,13 +743,21 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           return true;
         });
       },
-      { sourceCount: sourceUncatList.length, filter: uncatSubFilter }
+      { sourceCount: sourceUncatList.length, category: uncatCategoryFilter, filter: uncatSubFilter }
     );
-  }, [isOpen, activeTabFilter, sourceUncatList, deferredUncatSearchQuery, uncatSubFilter, flagsById]);
+  }, [
+    isOpen,
+    activeTabFilter,
+    sourceUncatList,
+    uncatCategoryFilter,
+    deferredUncatSearchQuery,
+    uncatSubFilter,
+    flagsById,
+  ]);
 
   const dynamicUncatRowHeight = useDynamicRowHeight({
     defaultRowHeight: 88,
-    key: `${uncatSubFilter}-${showAllLibraryInUncat}-${filteredUncategorized.length}`,
+    key: `${uncatCategoryFilter}-${uncatSubFilter}-${showAllLibraryInUncat}-${filteredUncategorized.length}`,
   });
 
   const getUncatRowKey = useCallback(
@@ -761,6 +780,21 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     [incompleteItems.length]
   );
 
+  const handleSelectUncatCategory = useCallback(
+    (nextCategory: UncatCategoryFilter) => {
+      const trace = mainThreadProfiler.traceNavigation(
+        'WebSearchCategorizerModal',
+        `category-filter:${nextCategory}`
+      );
+      setUncatCategoryFilter(nextCategory);
+      try {
+        uncatListRef.current?.scrollToRow({ index: 0 });
+      } catch {}
+      trace.endSync();
+    },
+    [uncatListRef]
+  );
+
   const handleSelectUncatFilter = useCallback((nextFilter: UncatSubFilter) => {
     const trace = mainThreadProfiler.traceNavigation(
       'WebSearchCategorizerModal',
@@ -774,34 +808,19 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   }, [uncatListRef]);
 
   const uncatNavItems: UncatNavItem[] = useMemo(() => {
-    const items: UncatNavItem[] = [
-      { id: 'all', label: 'All', count: incompleteItems.length, activeClass: 'bg-amber-600 text-white', width: 92 },
-      { id: 'unsorted', label: 'Unsorted Path', count: unsortedPathCount, activeClass: 'bg-orange-600 text-white', width: 132 },
-      { id: 'genres', label: 'Needs Genres', count: missingGenresCount, activeClass: 'bg-indigo-600 text-white', width: 134 },
-      { id: 'synopsis', label: 'No Synopsis', count: missingSynopsisCount, activeClass: 'bg-red-600 text-white', width: 124 },
-      { id: 'artwork', label: 'No Artwork', count: missingArtworkCount, activeClass: 'bg-cyan-600 text-white', width: 118 },
-      { id: 'series', label: 'Series', count: seriesIncompleteCount, activeClass: 'bg-purple-600 text-white', width: 98 },
-      { id: 'movie', label: 'Movies', count: movieIncompleteCount, activeClass: 'bg-blue-600 text-white', width: 102 },
+    return [
+      { id: 'all', label: 'All Issues', count: categoryScopedCount, activeClass: 'bg-amber-600 text-white', width: 112 },
+      { id: 'unsorted', label: 'Unsorted Path', count: scopedUnsortedCount, activeClass: 'bg-orange-600 text-white', width: 132 },
+      { id: 'genres', label: 'Needs Genres', count: scopedMissingGenCount, activeClass: 'bg-indigo-600 text-white', width: 134 },
+      { id: 'synopsis', label: 'No Synopsis', count: scopedMissingSynCount, activeClass: 'bg-red-600 text-white', width: 124 },
+      { id: 'artwork', label: 'No Artwork', count: scopedMissingArtCount, activeClass: 'bg-cyan-600 text-white', width: 118 },
     ];
-    if (albumIncompleteCount > 0) {
-      items.push({
-        id: 'album',
-        label: 'Music',
-        count: albumIncompleteCount,
-        activeClass: 'bg-emerald-600 text-white',
-        width: 98,
-      });
-    }
-    return items;
   }, [
-    incompleteItems.length,
-    unsortedPathCount,
-    missingGenresCount,
-    missingSynopsisCount,
-    missingArtworkCount,
-    seriesIncompleteCount,
-    movieIncompleteCount,
-    albumIncompleteCount,
+    categoryScopedCount,
+    scopedUnsortedCount,
+    scopedMissingGenCount,
+    scopedMissingSynCount,
+    scopedMissingArtCount,
   ]);
 
   const uncatNavCellProps: UncatNavCellExtraProps = useMemo(
@@ -825,22 +844,59 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   );
 
   const handleBatchCategorizeAll = async () => {
-    if (incompleteItems.length === 0 || batchProcessing) return;
+    if (batchTargetItems.length === 0 || batchProcessing) return;
+    const scopeLabel = uncatCategoryLabel;
     setBatchProcessing(true);
-    setBatchProgress({ current: 0, total: incompleteItems.length });
+    setBatchProgress({ current: 0, total: batchTargetItems.length });
     setBatchMessage(null);
 
+    appendApiLog({
+      method: 'BATCH_START',
+      url: `categorize://${uncatCategoryFilter}`,
+      requestBody: {
+        categoryScope: uncatCategoryFilter,
+        categoryLabel: scopeLabel,
+        totalItems: batchTargetItems.length,
+      },
+      status: 200,
+      statusText: `Started (${scopeLabel})`,
+      headers: {},
+    });
+
     let successCount = 0;
-    for (let i = 0; i < incompleteItems.length; i++) {
-      const item = incompleteItems[i];
-      setBatchProgress({ current: i + 1, total: incompleteItems.length });
+    let failedCount = 0;
+    for (let i = 0; i < batchTargetItems.length; i++) {
+      const item = batchTargetItems[i];
+      setBatchProgress({ current: i + 1, total: batchTargetItems.length });
       try {
-        const itemData = await categorizeMediaWithRetry(
+        let itemData = await categorizeMediaWithRetry(
           item.title,
           item.type,
           item.year,
-          { maxRetries: 2, timeoutMs: 7000 }
-        ) || await resolveMediaWithFallback(item.title, item.type, item.year);
+          { maxRetries: 2, timeoutMs: 7000, onDiagnosticLog: appendApiLog }
+        );
+
+        if (!itemData) {
+          const fallbackResolved = await resolveMediaWithFallback(item.title, item.type, item.year);
+          appendApiLog({
+            method: 'CLIENT_RESOLVER',
+            url: `fallback://${item.type}/${encodeURIComponent(item.title)}`,
+            requestBody: { title: item.title, type: item.type, year: item.year },
+            status: fallbackResolved ? 200 : 404,
+            statusText: fallbackResolved ? `200 OK (${fallbackResolved.source || 'Client Fallback'})` : 'No Fallback Match',
+            headers: { 'x-resolver': 'clientMediaResolver' },
+            responseBody: fallbackResolved
+              ? {
+                  title: fallbackResolved.title,
+                  type: fallbackResolved.type,
+                  genres: fallbackResolved.genres,
+                  source: fallbackResolved.source,
+                }
+              : undefined,
+            error: fallbackResolved ? undefined : `No metadata resolved for "${item.title}"`,
+          });
+          itemData = fallbackResolved;
+        }
 
         if (itemData) {
           onSaveCategorizedMedia({
@@ -855,14 +911,43 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             status: 'categorized',
           });
           successCount++;
+        } else {
+          failedCount++;
         }
-      } catch (e) {
+      } catch (e: any) {
+        failedCount++;
         console.warn(`Failed to auto-categorize ${item.title}:`, e);
+        appendApiLog({
+          method: 'BATCH_ITEM_ERROR',
+          url: `categorize://${encodeURIComponent(item.title)}`,
+          requestBody: { id: item.id, title: item.title, type: item.type },
+          status: 500,
+          statusText: 'Item Categorization Failed',
+          headers: {},
+          error: e?.message || String(e),
+        });
       }
     }
 
+    appendApiLog({
+      method: 'BATCH_COMPLETE',
+      url: `categorize://${uncatCategoryFilter}`,
+      requestBody: { categoryScope: uncatCategoryFilter, categoryLabel: scopeLabel },
+      status: successCount > 0 || failedCount === 0 ? 200 : 207,
+      statusText: `Finished (${successCount}/${batchTargetItems.length} updated)`,
+      headers: {},
+      responseBody: {
+        categoryScope: scopeLabel,
+        updatedCount: successCount,
+        failedCount,
+        totalItems: batchTargetItems.length,
+      },
+    });
+
     setBatchProcessing(false);
-    setBatchMessage(`Batch categorization complete! Updated ${successCount} of ${incompleteItems.length} items.`);
+    setBatchMessage(
+      `Batch categorization (${scopeLabel}) complete! Updated ${successCount} of ${batchTargetItems.length} item(s).`
+    );
     setTimeout(() => setBatchMessage(null), 5000);
   };
 
@@ -879,13 +964,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setErrorMsg(null);
     setIsSaved(false);
 
+    const effectiveType = targetType || mediaType;
+
     try {
       const parsedYear = yearHint ? parseInt(yearHint, 10) : undefined;
       let media: MediaMetadata | null = await categorizeMediaWithRetry(
         q,
-        targetType || mediaType,
+        effectiveType,
         parsedYear,
-        { maxRetries: 3, timeoutMs: 9000 }
+        { maxRetries: 3, timeoutMs: 9000, onDiagnosticLog: appendApiLog }
       );
 
       if (!media) {
@@ -896,46 +983,90 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         try {
           const secondary = await fetchSecondaryMetadata(
             q,
-            targetType || mediaType,
+            effectiveType,
             parsedYear
           );
 
           if (secondary) {
             media = secondary;
-            setApiLogs((prev) => [
-              {
-                id: Math.random().toString(36).substring(2, 9),
-                timestamp: new Date().toISOString(),
-                method: 'SECONDARY_FALLBACK',
-                url: `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(q)}`,
-                requestBody: { name: q, type: targetType || mediaType, year: yearHint },
-                status: 200,
-                statusText: '200 OK (TVMaze Secondary Fallback)',
-                headers: {
-                  'content-type': 'application/json',
-                  'x-fallback-provider': 'TVMaze API',
-                },
-                responseBody: { success: true, source: secondary.source, data: secondary },
+            appendApiLog({
+              method: 'SECONDARY_FALLBACK',
+              url: `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(q)}`,
+              requestBody: { name: q, type: effectiveType, year: yearHint || undefined },
+              status: 200,
+              statusText: '200 OK (TVMaze Secondary Fallback)',
+              headers: {
+                'content-type': 'application/json',
+                'x-fallback-provider': 'TVMaze API',
               },
-              ...prev.slice(0, 49),
-            ]);
+              responseBody: {
+                success: true,
+                source: secondary.source,
+                title: secondary.title,
+                type: secondary.type,
+                genres: secondary.genres,
+                year: secondary.year,
+              },
+            });
           } else {
+            appendApiLog({
+              method: 'SECONDARY_FALLBACK',
+              url: `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(q)}`,
+              requestBody: { name: q, type: effectiveType, year: yearHint || undefined },
+              status: 404,
+              statusText: 'No Secondary Match',
+              headers: { 'x-fallback-provider': 'TVMaze / iTunes' },
+              error: `Secondary metadata providers returned no match for "${q}". Falling back to client resolver.`,
+            });
             const resolved = await resolveMediaWithFallback(
               q,
-              targetType || mediaType,
+              effectiveType,
               parsedYear
             );
+            appendApiLog({
+              method: 'CLIENT_RESOLVER',
+              url: `fallback://${effectiveType}/${encodeURIComponent(q)}`,
+              requestBody: { name: q, type: effectiveType, year: parsedYear },
+              status: resolved ? 200 : 404,
+              statusText: resolved ? `200 OK (${resolved.source || 'Client Resolver'})` : 'No Client Match',
+              headers: { 'x-resolver': 'clientMediaResolver' },
+              responseBody: resolved
+                ? { title: resolved.title, type: resolved.type, genres: resolved.genres, source: resolved.source }
+                : undefined,
+              error: resolved ? undefined : `Client fallback resolver could not find metadata for "${q}".`,
+            });
             if (resolved) {
               media = resolved;
             }
           }
-        } catch (resolverErr) {
+        } catch (resolverErr: any) {
           console.warn('Secondary / universal resolver warning:', resolverErr);
+          appendApiLog({
+            method: 'SECONDARY_FALLBACK',
+            url: `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(q)}`,
+            requestBody: { name: q, type: effectiveType, year: parsedYear },
+            status: 500,
+            statusText: 'Secondary Provider Error',
+            headers: {},
+            error: resolverErr?.message || String(resolverErr),
+          });
           const resolved = await resolveMediaWithFallback(
             q,
-            targetType || mediaType,
+            effectiveType,
             parsedYear
           );
+          appendApiLog({
+            method: 'CLIENT_RESOLVER',
+            url: `fallback://${effectiveType}/${encodeURIComponent(q)}`,
+            requestBody: { name: q, type: effectiveType, year: parsedYear },
+            status: resolved ? 200 : 404,
+            statusText: resolved ? `200 OK (${resolved.source || 'Client Resolver'})` : 'No Client Match',
+            headers: { 'x-resolver': 'clientMediaResolver' },
+            responseBody: resolved
+              ? { title: resolved.title, type: resolved.type, genres: resolved.genres, source: resolved.source }
+              : undefined,
+            error: resolved ? undefined : `Client fallback resolver could not find metadata for "${q}".`,
+          });
           if (resolved) {
             media = resolved;
           }
@@ -948,6 +1079,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           (m) => m.title.toLowerCase() === q.toLowerCase() || m.title.toLowerCase().includes(q.toLowerCase())
         );
         if (local) {
+          appendApiLog({
+            method: 'LOCAL_MATCH',
+            url: `library://${local.id}`,
+            requestBody: { query: q, type: effectiveType },
+            status: 200,
+            statusText: '200 OK (Local Library Match)',
+            headers: { 'x-source': 'mediaLibrary' },
+            responseBody: { title: local.title, type: local.type, genres: local.genres, year: local.year },
+          });
           setResultData(local);
           setDetectedCategories(local.genres || ['Drama']);
           setSelectedPrimaryCategory(local.genres?.[0] || 'Drama');
@@ -965,10 +1105,19 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
       try {
         const resolved = await resolveMediaWithFallback(
           q,
-          targetType || mediaType,
+          effectiveType,
           yearHint ? parseInt(yearHint, 10) : undefined
         );
         if (resolved) {
+          appendApiLog({
+            method: 'CLIENT_RESOLVER',
+            url: `fallback://${effectiveType}/${encodeURIComponent(q)}`,
+            requestBody: { query: q, type: effectiveType },
+            status: 200,
+            statusText: `200 OK (Recovery: ${resolved.source || 'Client Resolver'})`,
+            headers: { 'x-resolver': 'clientMediaResolver' },
+            responseBody: { title: resolved.title, type: resolved.type, genres: resolved.genres },
+          });
           setResultData(resolved);
           setDetectedCategories(resolved.genres || ['Drama']);
           setSelectedPrimaryCategory(resolved.genres?.[0] || 'Drama');
@@ -981,6 +1130,15 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         (m) => m.title.toLowerCase() === q.toLowerCase() || m.title.toLowerCase().includes(q.toLowerCase())
       );
       if (local) {
+        appendApiLog({
+          method: 'LOCAL_MATCH',
+          url: `library://${local.id}`,
+          requestBody: { query: q, type: effectiveType },
+          status: 200,
+          statusText: '200 OK (Local Recovery Match)',
+          headers: { 'x-source': 'mediaLibrary' },
+          responseBody: { title: local.title, type: local.type, genres: local.genres },
+        });
         setResultData(local);
         setDetectedCategories(local.genres || ['Drama']);
         setSelectedPrimaryCategory(local.genres?.[0] || 'Drama');
@@ -1021,29 +1179,59 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
     // Build finalized media metadata with assigned categories
     const updatedMedia = buildUpdatedMediaRecord(resultData);
+    const dbPayload = {
+      id: updatedMedia.id,
+      media_type: updatedMedia.type,
+      title: updatedMedia.title,
+      original_title: updatedMedia.originalTitle || updatedMedia.title,
+      synopsis: updatedMedia.overview,
+      year: updatedMedia.year,
+      rating: updatedMedia.rating,
+      poster_url: updatedMedia.posterUrl,
+      fanart_url: updatedMedia.fanartUrl,
+      genres: JSON.stringify(updatedMedia.genres),
+      cast: updatedMedia.cast ? JSON.stringify(updatedMedia.cast) : null,
+      recommended_folder: updatedMedia.recommendedFolderStructure,
+      raw_data: updatedMedia.source || 'web-categorizer',
+    };
 
     try {
-      await fetch('/api/db/media', {
+      const dbRes = await fetch('/api/db/media', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: updatedMedia.id,
-          media_type: updatedMedia.type,
-          title: updatedMedia.title,
-          original_title: updatedMedia.originalTitle || updatedMedia.title,
-          synopsis: updatedMedia.overview,
-          year: updatedMedia.year,
-          rating: updatedMedia.rating,
-          poster_url: updatedMedia.posterUrl,
-          fanart_url: updatedMedia.fanartUrl,
-          genres: JSON.stringify(updatedMedia.genres),
-          cast: updatedMedia.cast ? JSON.stringify(updatedMedia.cast) : null,
-          recommended_folder: updatedMedia.recommendedFolderStructure,
-          raw_data: updatedMedia.source || 'web-categorizer'
-        })
+        body: JSON.stringify(dbPayload),
       });
-    } catch (e) {
+      const dbHeaders: Record<string, string> = {};
+      dbRes.headers.forEach((v, k) => {
+        dbHeaders[k] = v;
+      });
+      let dbBody: any = null;
+      try {
+        dbBody = await dbRes.json();
+      } catch {
+        dbBody = await dbRes.text().catch(() => null);
+      }
+      appendApiLog({
+        method: 'POST',
+        url: '/api/db/media',
+        requestBody: { id: dbPayload.id, title: dbPayload.title, media_type: dbPayload.media_type },
+        status: dbRes.status,
+        statusText: dbRes.ok ? 'Saved to SQLite Vault' : dbRes.statusText || 'Save Error',
+        headers: dbHeaders,
+        responseBody: dbBody,
+        error: dbRes.ok ? undefined : `SQLite save failed (${dbRes.status})`,
+      });
+    } catch (e: any) {
       console.error('Failed to save media asset to SQLite vault:', e);
+      appendApiLog({
+        method: 'POST',
+        url: '/api/db/media',
+        requestBody: { id: dbPayload.id, title: dbPayload.title, media_type: dbPayload.media_type },
+        status: 500,
+        statusText: 'SQLite Save Error',
+        headers: {},
+        error: e?.message || String(e),
+      });
     }
 
     onSaveCategorizedMedia(updatedMedia);
@@ -1120,6 +1308,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   );
 
   const apiLogRowProps: ApiLogRowExtraProps = useMemo(() => ({ logs: apiLogs }), [apiLogs]);
+  const dynamicApiLogRowHeight = useDynamicRowHeight({
+    defaultRowHeight: 120,
+    key: `${showLogsPanel}-${apiLogs.length}`,
+  });
   const getApiLogRowKey = useCallback(
     (index: number, data: ApiLogRowExtraProps) => data.logs[index]?.id || `apilog-${index}`,
     []
@@ -1215,38 +1407,117 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
           {/* TAB 1: DEDICATED UNCATEGORIZED MEDIA VIEW */}
           {activeTabFilter === 'uncategorized' && (
             <div className="space-y-4">
-              {/* Header explanation & summary */}
+              {/* Header explanation, scoped batch action & logs trigger */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-amber-950/20 border border-amber-800/40 rounded-xl">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
                     <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Dedicated View Filter: Uncategorized Media</span>
+                    <span>
+                      Dedicated View Filter: Uncategorized Media
+                      {uncatCategoryFilter !== 'all' ? ` — ${uncatCategoryLabel} Only` : ''}
+                    </span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    These {incompleteItems.length} library items lack official genres, synopsis, or artwork. Use one-click triggers to re-categorize or manually match.
+                    {uncatCategoryFilter === 'all'
+                      ? `These ${batchTargetItems.length} library items lack official genres, synopsis, or artwork. Select a category below to filter or batch categorize.`
+                      : `Filtered to ${uncatCategoryLabel}: ${batchTargetItems.length} uncategorized item(s) ready for metadata retrieval.`}
                   </p>
                 </div>
 
-                {incompleteItems.length > 0 && (
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
                   <button
                     type="button"
-                    disabled={batchProcessing}
-                    onClick={handleBatchCategorizeAll}
-                    className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    onClick={() => setShowLogsPanel((prev) => !prev)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition flex items-center gap-1.5 cursor-pointer ${
+                      showLogsPanel
+                        ? 'bg-amber-600 text-white border-amber-500'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700'
+                    }`}
+                    title="Inspect Media Retrieval & API Logs"
                   >
-                    {batchProcessing ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Processing ({batchProgress.current}/{batchProgress.total})...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>Auto-Categorize All ({incompleteItems.length})</span>
-                      </>
-                    )}
+                    <FileCode className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Logs ({apiLogs.length})</span>
                   </button>
-                )}
+
+                  {batchTargetItems.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={batchProcessing}
+                      onClick={handleBatchCategorizeAll}
+                      className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    >
+                      {batchProcessing ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Processing ({batchProgress.current}/{batchProgress.total})...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Auto-Categorize {uncatCategoryLabel} ({batchTargetItems.length})</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Dedicated Category Filter Selector: All, Movies, Series, Music */}
+              <div
+                className="flex flex-wrap items-center gap-2 p-2 bg-slate-900/90 border border-slate-800 rounded-xl"
+                data-category-filter="true"
+              >
+                <span className="text-[11px] font-semibold text-slate-400 px-1.5 shrink-0">
+                  Category:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleSelectUncatCategory('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    uncatCategoryFilter === 'all'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <ListFilter className="w-3.5 h-3.5" />
+                  <span>All ({sourceUncatList.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectUncatCategory('movie')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    uncatCategoryFilter === 'movie'
+                      ? 'bg-cyan-600 text-white shadow-xs'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <Film className="w-3.5 h-3.5" />
+                  <span>Movies ({movieIncompleteCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectUncatCategory('series')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    uncatCategoryFilter === 'series'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <Tv className="w-3.5 h-3.5" />
+                  <span>Series ({seriesIncompleteCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectUncatCategory('album')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    uncatCategoryFilter === 'album'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <Music className="w-3.5 h-3.5" />
+                  <span>Music ({albumIncompleteCount})</span>
+                </button>
               </div>
 
               {/* Batch feedback message */}
@@ -1257,7 +1528,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 </div>
               )}
 
-              {/* Virtualized Sub-Filters Navigation & Quick Search */}
+              {/* Virtualized Defect Sub-Filters Navigation & Quick Search */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                 {/* Virtualized Horizontal Navigation Strip */}
                 <div className="flex-1 min-w-0" data-virtualized-nav="true">
@@ -1336,15 +1607,16 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   <div className="text-xs font-bold text-white">No uncategorized items found matching this filter!</div>
                   <p className="text-[11px] text-slate-400 max-w-xl mx-auto">
                     {unimportedUnsorted.fileNodes.length > 0
-                      ? `Your active library has 0 uncategorized records, but ${unimportedUnsorted.fileNodes.length} file(s) in Unsorted / Staging folders have not been imported yet. Click "Import ${unimportedUnsorted.fileNodes.length} Unsorted" above to queue them for Web Search categorization.`
+                      ? `Your active library has 0 uncategorized records matching ${uncatCategoryLabel}, but ${unimportedUnsorted.fileNodes.length} file(s) in Unsorted / Staging folders have not been imported yet. Click "Import ${unimportedUnsorted.fileNodes.length} Unsorted" above to queue them for Web Search categorization.`
                       : sambaTree.length === 0
-                      ? `All ${mediaLibrary.length} active library item(s) currently have genres, synopses, and artwork. No Samba or local folder scan tree is loaded yet — scan a share or import files to inspect new unsorted/uncategorized media here.`
-                      : `All ${mediaLibrary.length} items in your active library currently have genres, synopses, and artwork.`}
+                      ? `All ${mediaLibrary.length} active library item(s) matching this view currently have genres, synopses, and artwork. No Samba or local folder scan tree is loaded yet — scan a share or import files to inspect new unsorted/uncategorized media here.`
+                      : `All ${mediaLibrary.length} items matching this view in your active library currently have genres, synopses, and artwork.`}
                   </p>
                   {mediaLibrary.length > 0 && !showAllLibraryInUncat && (
                     <button
                       type="button"
                       onClick={() => {
+                        setUncatCategoryFilter('all');
                         setUncatSubFilter('all');
                         setUncatSearchQuery('');
                         setShowAllLibraryInUncat(true);
@@ -1684,7 +1956,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         </div>
         {/* Diagnostic Logs Panel Drawer */}
         {showLogsPanel && (
-          <div className="bg-slate-950 border-t border-slate-800 p-4 max-h-60 overflow-y-auto shrink-0 font-mono text-xs">
+          <div className="bg-slate-950 border-t border-slate-800 p-4 max-h-72 overflow-y-auto shrink-0 font-mono text-xs">
             <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
               <div className="flex items-center gap-2 text-amber-400 font-bold">
                 <FileCode className="w-4 h-4" />
@@ -1705,14 +1977,14 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 <button
                   type="button"
                   onClick={() => setApiLogs([])}
-                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px]"
+                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] cursor-pointer"
                 >
                   Clear Logs
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowLogsPanel(false)}
-                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px]"
+                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] cursor-pointer"
                 >
                   Close Logs
                 </button>
@@ -1723,13 +1995,13 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             ) : (
               <List<ApiLogRowExtraProps>
                 rowCount={apiLogs.length}
-                rowHeight={76}
+                rowHeight={dynamicApiLogRowHeight}
                 rowComponent={ApiLogRow}
                 rowProps={apiLogRowProps}
                 rowKey={getApiLogRowKey}
-                defaultHeight={160}
+                defaultHeight={200}
                 overscanCount={4}
-                style={{ height: Math.min(180, Math.max(80, apiLogs.length * 76)), width: '100%' }}
+                style={{ height: Math.min(220, Math.max(96, apiLogs.length * 124)), width: '100%' }}
               />
             )}
           </div>

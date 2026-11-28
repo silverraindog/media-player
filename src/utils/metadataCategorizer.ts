@@ -16,14 +16,26 @@ export interface CategorizeResponse {
   warning?: string;
 }
 
+export interface CategorizerDiagnosticLog {
+  method: string;
+  url: string;
+  requestBody?: any;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  responseBody?: any;
+  error?: string;
+}
+
 export interface RetryOptions {
   maxRetries?: number;
   initialDelayMs?: number;
   backoffFactor?: number;
   timeoutMs?: number;
+  onDiagnosticLog?: (entry: CategorizerDiagnosticLog) => void;
 }
 
-const DEFAULT_RETRY_OPTIONS: Required<RetryOptions> = {
+const DEFAULT_RETRY_OPTIONS = {
   maxRetries: 3,
   initialDelayMs: 400,
   backoffFactor: 2,
@@ -40,10 +52,11 @@ export async function categorizeMediaWithRetry(
   year?: number,
   options?: RetryOptions
 ): Promise<MediaMetadata | null> {
-  const { maxRetries, initialDelayMs, backoffFactor, timeoutMs } = {
-    ...DEFAULT_RETRY_OPTIONS,
-    ...options,
-  };
+  const maxRetries = options?.maxRetries ?? DEFAULT_RETRY_OPTIONS.maxRetries;
+  const initialDelayMs = options?.initialDelayMs ?? DEFAULT_RETRY_OPTIONS.initialDelayMs;
+  const backoffFactor = options?.backoffFactor ?? DEFAULT_RETRY_OPTIONS.backoffFactor;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_RETRY_OPTIONS.timeoutMs;
+  const onDiagnosticLog = options?.onDiagnosticLog;
 
   // 1. Validation Check: Ensure 'name' is correctly populated as a non-empty string
   const cleanTitle = (typeof rawTitle === 'string' ? rawTitle : String(rawTitle || ''))
@@ -52,6 +65,15 @@ export async function categorizeMediaWithRetry(
 
   if (!cleanTitle || cleanTitle.length === 0) {
     console.warn('[Categorizer] ❌ Pre-flight validation failed: \'name\'/title field is empty or missing. Request aborted.');
+    onDiagnosticLog?.({
+      method: 'PREFLIGHT',
+      url: '/api/metadata/categorize',
+      requestBody: { rawTitle, type, year },
+      status: 400,
+      statusText: 'Validation Failed (Empty Title)',
+      headers: {},
+      error: "Pre-flight validation failed: 'name'/title field is empty or missing.",
+    });
     return null;
   }
 
@@ -115,20 +137,37 @@ export async function categorizeMediaWithRetry(
 
       clearTimeout(timer);
       const attemptDuration = Date.now() - attemptStart;
+      const headersObj: Record<string, string> = {};
+      res.headers.forEach((val, key) => {
+        headersObj[key] = val;
+      });
 
       if (!res.ok) {
         let errorText = '';
+        let parsedErrBody: any = null;
         try {
-          const errJson = await res.json();
-          errorText = errJson.error || errJson.details || JSON.stringify(errJson);
+          parsedErrBody = await res.json();
+          errorText = parsedErrBody.error || parsedErrBody.details || JSON.stringify(parsedErrBody);
         } catch {
           errorText = await res.text();
+          parsedErrBody = errorText;
         }
 
         const isServerError = res.status >= 500;
         console.warn(
           `[Categorizer] ⚠️ Server returned HTTP ${res.status} for "${cleanTitle}" (${attemptDuration}ms). Error: ${errorText}`
         );
+
+        onDiagnosticLog?.({
+          method: 'POST',
+          url: '/api/metadata/categorize',
+          requestBody: payload,
+          status: res.status,
+          statusText: `${res.statusText || 'Error'} (Attempt ${attempt + 1}, ${attemptDuration}ms)`,
+          headers: headersObj,
+          responseBody: parsedErrBody,
+          error: errorText,
+        });
 
         lastError = new Error(`HTTP ${res.status}: ${errorText}`);
 
@@ -143,6 +182,15 @@ export async function categorizeMediaWithRetry(
       const contentType = res.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
         console.warn(`[Categorizer] ⚠️ Non-JSON response received from /api/metadata/categorize (${contentType})`);
+        onDiagnosticLog?.({
+          method: 'POST',
+          url: '/api/metadata/categorize',
+          requestBody: payload,
+          status: res.status,
+          statusText: `Non-JSON (${contentType || 'unknown'})`,
+          headers: headersObj,
+          error: `Expected JSON but got ${contentType}`,
+        });
         lastError = new Error(`Expected JSON but got ${contentType}`);
         continue;
       }
@@ -152,15 +200,50 @@ export async function categorizeMediaWithRetry(
         console.log(
           `[Categorizer] ✅ Successfully categorized "${cleanTitle}" via source "${data.source}" in ${Date.now() - startTime}ms.`
         );
+        onDiagnosticLog?.({
+          method: 'POST',
+          url: '/api/metadata/categorize',
+          requestBody: payload,
+          status: res.status,
+          statusText: `200 OK (${data.source || 'categorizer'}, ${attemptDuration}ms)`,
+          headers: headersObj,
+          responseBody: {
+            success: true,
+            source: data.source,
+            title: data.data.title,
+            type: data.data.type,
+            genres: data.data.genres,
+            year: data.data.year,
+          },
+        });
         return data.data;
       }
 
       console.warn(`[Categorizer] ⚠️ Response payload did not contain valid data:`, data);
+      onDiagnosticLog?.({
+        method: 'POST',
+        url: '/api/metadata/categorize',
+        requestBody: payload,
+        status: res.status,
+        statusText: `Invalid Response Payload (${attemptDuration}ms)`,
+        headers: headersObj,
+        responseBody: data,
+        error: data?.error || 'Invalid response structure',
+      });
       lastError = new Error('Invalid response structure');
     } catch (err: any) {
       const isAbort = err.name === 'AbortError';
-      const errMsg = isAbort ? `Request timed out after ${timeoutMs}ms` : err.message || err;
+      const errMsg = isAbort ? `Request timed out after ${timeoutMs}ms` : err.message || String(err);
       console.warn(`[Categorizer] ❌ Error during categorize attempt ${attempt + 1}: ${errMsg}`);
+      onDiagnosticLog?.({
+        method: 'POST',
+        url: '/api/metadata/categorize',
+        requestBody: payload,
+        status: isAbort ? 408 : 500,
+        statusText: isAbort ? 'Request Timeout' : 'Network Error',
+        headers: {},
+        error: errMsg,
+      });
       lastError = err;
     }
   }

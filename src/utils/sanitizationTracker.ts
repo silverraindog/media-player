@@ -322,6 +322,12 @@ class SanitizationTracker {
     };
   }
 
+  public unsubscribeAll(): void {
+    // Cleanup listeners and reset state
+    this.listeners.clear();
+    this.history = [];
+  }
+
   public auditTreeNodes(nodes: any[]): SanitizationLogEntry[] {
     const recorded: SanitizationLogEntry[] = [];
     const traverse = (items: any[]) => {

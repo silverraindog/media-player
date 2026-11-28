@@ -326,6 +326,18 @@ class SanitizationTracker {
     // Cleanup listeners and reset state
     this.listeners.clear();
     this.history = [];
+
+  /**
+   * Cleanup function for disposal (prevent memory leaks on unmount/dispose)
+   */
+  public dispose(): void {
+    // Clear the history array
+    this.history = [];
+
+    // Clear listeners
+    this.listeners.clear();
+  }
+}
   }
 
   public auditTreeNodes(nodes: any[]): SanitizationLogEntry[] {

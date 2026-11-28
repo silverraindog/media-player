@@ -321,7 +321,56 @@ class MainThreadPerformanceProfiler {
       this.loaObserver?.disconnect();
     } catch {}
     this.loaObserver = null;
+
+  /**
+   * Cleanup function for disposal (prevent memory leaks on unmount/dispose)
+   */
+  public dispose(): void {
+    // Cancel RAF monitor
+    if (this.rafId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(this.rafId);
+    }
+    this.rafId = null;
+
+    // Disconnect performance observers
+    try {
+      this.perfObserver?.disconnect();
+    } catch {}
+    this.perfObserver = null;
+
+    try {
+      this.loaObserver?.disconnect();
+    } catch {}
+    this.loaObserver = null;
+
+    // Clear active scopes (optional - could be external state)
   }
+  }
+
+  /**
+   * Cleanup function for disposal (prevent memory leaks on unmount/dispose)
+   */
+  public dispose(): void {
+    // Cancel RAF monitor
+    if (this.rafId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(this.rafId);
+    }
+    this.rafId = null;
+
+    // Disconnect performance observers
+    try {
+      this.perfObserver?.disconnect();
+    } catch {}
+    this.perfObserver = null;
+
+    try {
+      this.loaObserver?.disconnect();
+    } catch {}
+    this.loaObserver = null;
+
+    // Clear active scopes (optional - could be external state)
+  }
+}
 }
 
 export const mainThreadProfiler = new MainThreadPerformanceProfiler();

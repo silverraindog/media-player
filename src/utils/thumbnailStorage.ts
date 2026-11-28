@@ -492,8 +492,26 @@ class ThumbnailStorageService {
     return { cached: this.memoryCache.size, totalScanned: candidates.length };
   }
 
-  // Evict single item or clear entire cache
-  public async clearCache(targetPath?: string): Promise<void> {
+
+  /**
+   * Cleanup function for disposal (prevent memory leaks on unmount/dispose)
+   */
+  public dispose(): void {
+    // Cancel all in-flight timers
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    if (this.localStorageTimer) clearTimeout(this.localStorageTimer);
+    if (this.notifyTimer) clearTimeout(this.notifyTimer);
+
+    // Clear the listener set
+    this.listeners.clear();
+
+    // Clear pending backend sync
+    this.pendingBackendSync = [];
+  }
+}
+
+  // Global Singleton Instance of the Thumbnail Storage Layer
+  export const thumbnailStorage = new ThumbnailStorageService();
     if (targetPath) {
       const key = this.normalizeKey(targetPath);
       this.memoryCache.delete(key);

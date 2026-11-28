@@ -135,6 +135,9 @@ class MainThreadPerformanceProfiler {
 
   public createReactProfilerCallback(scope: string): ProfilerOnRenderCallback {
     return (id, phase, actualDuration, baseDuration) => {
+      if (typeof actualDuration !== 'number' || !Number.isFinite(actualDuration)) {
+        return;
+      }
       if (actualDuration > MAIN_THREAD_FRAME_BUDGET_MS) {
         this.recordSlowTask({
           scope,
@@ -168,7 +171,7 @@ class MainThreadPerformanceProfiler {
           taskName,
           source: 'sync-task',
           durationMs,
-          metadata,
+          metadata: metadata || {},
         });
       }
     }

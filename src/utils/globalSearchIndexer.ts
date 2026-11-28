@@ -442,3 +442,6 @@ class GlobalSearchIndexerService {
     this.searchCache.set(cacheKey, result);
 
     return result;
+  }
+}
+return result;

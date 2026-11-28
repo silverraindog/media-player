@@ -528,3 +528,4 @@ class ThumbnailStorageService {
     this.notifyListeners();
   }
 
+}

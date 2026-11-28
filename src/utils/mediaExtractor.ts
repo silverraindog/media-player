@@ -480,15 +480,10 @@ export interface UnimportedUnsortedEntry {
   fullPath: string;
 }
 
-export function findUnimportedUnsortedNodes(
-  nodes: SambaShareNode[] = [],
-  existingLibrary: MediaMetadata[] = [],
-  config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG
-): { folderPaths: string[]; fileNodes: UnimportedUnsortedEntry[] } {
-  if (!Array.isArray(nodes) || nodes.length === 0) {
-    return { folderPaths: [], fileNodes: [] };
-  }
-
+function buildKnownMediaLookup(existingLibrary: MediaMetadata[] = []): {
+  knownPaths: Set<string>;
+  knownFilenames: Set<string>;
+} {
   const normalize = (p?: string) =>
     (p || '')
       .replace(/\\/g, '/')
@@ -499,15 +494,26 @@ export function findUnimportedUnsortedNodes(
 
   const knownPaths = new Set<string>();
   const knownFilenames = new Set<string>();
-  for (const item of existingLibrary) {
-    [item.path, item.folderPath, item.recommendedFolderStructure].forEach((p) => {
-      const n = normalize(p);
+
+  for (let i = 0; i < existingLibrary.length; i++) {
+    const item = existingLibrary[i];
+    if (item.path) {
+      const n = normalize(item.path);
       if (n) knownPaths.add(n);
-    });
+    }
+    if (item.folderPath) {
+      const n = normalize(item.folderPath);
+      if (n) knownPaths.add(n);
+    }
+    if (item.recommendedFolderStructure) {
+      const n = normalize(item.recommendedFolderStructure);
+      if (n) knownPaths.add(n);
+    }
     if (item.matchedFilename) knownFilenames.add(item.matchedFilename.toLowerCase());
     if (Array.isArray(item.seasons)) {
       for (const s of item.seasons) {
-        for (const ep of s.episodes || []) {
+        if (!Array.isArray(s.episodes)) continue;
+        for (const ep of s.episodes) {
           const epPath = normalize(ep.filePath);
           if (epPath) knownPaths.add(epPath);
           if (ep.filename) knownFilenames.add(ep.filename.toLowerCase());
@@ -516,41 +522,144 @@ export function findUnimportedUnsortedNodes(
     }
   }
 
+  return { knownPaths, knownFilenames };
+}
+
+function normalizeSambaLookupPath(p?: string): string {
+  return (p || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/\/$/, '')
+    .toLowerCase()
+    .trim();
+}
+
+export function findUnimportedUnsortedNodes(
+  nodes: SambaShareNode[] = [],
+  existingLibrary: MediaMetadata[] = [],
+  config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG
+): { folderPaths: string[]; fileNodes: UnimportedUnsortedEntry[] } {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return { folderPaths: [], fileNodes: [] };
+  }
+
+  const { knownPaths, knownFilenames } = buildKnownMediaLookup(existingLibrary);
   const folderPathSet = new Set<string>();
   const fileNodes: UnimportedUnsortedEntry[] = [];
 
-  const walk = (list: SambaShareNode[], parentPath: string, insideUnsorted: boolean) => {
-    for (const node of list) {
-      const fullPath = (node.path || (parentPath ? `${parentPath}/${node.name}` : node.name)).replace(/\/+/g, '/');
-      const isNodeUnsorted =
-        insideUnsorted ||
-        UNSORTED_FOLDER_REGEX.test(`/${node.name}/`) ||
-        UNSORTED_FOLDER_REGEX.test(fullPath);
+  const stack: Array<{ node: SambaShareNode; parentPath: string; insideUnsorted: boolean }> = [];
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    stack.push({ node: nodes[i], parentPath: '', insideUnsorted: false });
+  }
 
-      if (node.type === 'folder') {
-        if (UNSORTED_FOLDER_REGEX.test(`/${node.name}/`)) {
-          folderPathSet.add(fullPath);
-        }
-        if (node.children && node.children.length > 0) {
-          walk(node.children, fullPath, isNodeUnsorted);
-        }
-      } else if (node.type === 'file' && isNodeUnsorted && isMediaFile(node.name, config)) {
-        const normFull = normalize(fullPath);
-        const normParent = normalize(parentPath);
-        const alreadyImported =
-          knownPaths.has(normFull) ||
-          (normParent && knownPaths.has(normParent)) ||
-          knownFilenames.has(node.name.toLowerCase());
+  while (stack.length > 0) {
+    const { node, parentPath, insideUnsorted } = stack.pop()!;
+    const rawFull = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+    const fullPath = rawFull.includes('//') ? rawFull.replace(/\/+/g, '/') : rawFull;
 
-        if (!alreadyImported) {
-          if (parentPath) folderPathSet.add(parentPath);
-          fileNodes.push({ node, parentPath, fullPath });
+    const nameMatchesUnsorted = UNSORTED_FOLDER_REGEX.test(`/${node.name}/`);
+    const isNodeUnsorted =
+      insideUnsorted ||
+      nameMatchesUnsorted ||
+      (!parentPath && UNSORTED_FOLDER_REGEX.test(fullPath));
+
+    if (node.type === 'folder') {
+      if (nameMatchesUnsorted) {
+        folderPathSet.add(fullPath);
+      }
+      if (node.children && node.children.length > 0) {
+        for (let i = node.children.length - 1; i >= 0; i--) {
+          stack.push({ node: node.children[i], parentPath: fullPath, insideUnsorted: isNodeUnsorted });
         }
       }
-    }
-  };
+    } else if (node.type === 'file' && isNodeUnsorted && isMediaFile(node.name, config)) {
+      const normFull = normalizeSambaLookupPath(fullPath);
+      const normParent = normalizeSambaLookupPath(parentPath);
+      const alreadyImported =
+        knownPaths.has(normFull) ||
+        (normParent && knownPaths.has(normParent)) ||
+        knownFilenames.has(node.name.toLowerCase());
 
-  walk(nodes, '', false);
+      if (!alreadyImported) {
+        if (parentPath) folderPathSet.add(parentPath);
+        fileNodes.push({ node, parentPath, fullPath });
+      }
+    }
+  }
+
+  return {
+    folderPaths: Array.from(folderPathSet),
+    fileNodes,
+  };
+}
+
+export async function findUnimportedUnsortedNodesAsync(
+  nodes: SambaShareNode[] = [],
+  existingLibrary: MediaMetadata[] = [],
+  config: MediaScanExtensionConfig = DEFAULT_MEDIA_SCAN_CONFIG,
+  signal?: AbortSignal
+): Promise<{ folderPaths: string[]; fileNodes: UnimportedUnsortedEntry[] }> {
+  if (!Array.isArray(nodes) || nodes.length === 0 || signal?.aborted) {
+    return { folderPaths: [], fileNodes: [] };
+  }
+
+  const { knownPaths, knownFilenames } = buildKnownMediaLookup(existingLibrary);
+  const folderPathSet = new Set<string>();
+  const fileNodes: UnimportedUnsortedEntry[] = [];
+
+  const stack: Array<{ node: SambaShareNode; parentPath: string; insideUnsorted: boolean }> = [];
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    stack.push({ node: nodes[i], parentPath: '', insideUnsorted: false });
+  }
+
+  const CHUNK_SIZE = 1500;
+  let processed = 0;
+
+  while (stack.length > 0) {
+    if (signal?.aborted) {
+      return { folderPaths: [], fileNodes: [] };
+    }
+
+    const { node, parentPath, insideUnsorted } = stack.pop()!;
+    const rawFull = node.path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+    const fullPath = rawFull.includes('//') ? rawFull.replace(/\/+/g, '/') : rawFull;
+
+    const nameMatchesUnsorted = UNSORTED_FOLDER_REGEX.test(`/${node.name}/`);
+    const isNodeUnsorted =
+      insideUnsorted ||
+      nameMatchesUnsorted ||
+      (!parentPath && UNSORTED_FOLDER_REGEX.test(fullPath));
+
+    if (node.type === 'folder') {
+      if (nameMatchesUnsorted) {
+        folderPathSet.add(fullPath);
+      }
+      if (node.children && node.children.length > 0) {
+        for (let i = node.children.length - 1; i >= 0; i--) {
+          stack.push({ node: node.children[i], parentPath: fullPath, insideUnsorted: isNodeUnsorted });
+        }
+      }
+    } else if (node.type === 'file' && isNodeUnsorted && isMediaFile(node.name, config)) {
+      const normFull = normalizeSambaLookupPath(fullPath);
+      const normParent = normalizeSambaLookupPath(parentPath);
+      const alreadyImported =
+        knownPaths.has(normFull) ||
+        (normParent && knownPaths.has(normParent)) ||
+        knownFilenames.has(node.name.toLowerCase());
+
+      if (!alreadyImported) {
+        if (parentPath) folderPathSet.add(parentPath);
+        fileNodes.push({ node, parentPath, fullPath });
+      }
+    }
+
+    processed++;
+    if (processed >= CHUNK_SIZE && stack.length > 0) {
+      processed = 0;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
   return {
     folderPaths: Array.from(folderPathSet),
     fileNodes,

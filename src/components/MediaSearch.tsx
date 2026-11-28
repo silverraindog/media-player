@@ -55,6 +55,7 @@ import { isMediaUncategorized } from '../utils/mediaExtractor';
 import { buildUnifiedCollections, COLLECTION_FALLBACK_POSTER, UnifiedCollection } from '../utils/collections';
 import { VirtualizedMediaGrid } from './VirtualizedMediaGrid';
 import { LazyThumbnail } from './LazyThumbnail';
+import { mainThreadProfiler } from '../utils/performanceProfiler';
 
 const WebSearchCategorizerModal = lazy(() =>
   import('./WebSearchCategorizerModal').then((m) => ({ default: m.WebSearchCategorizerModal }))
@@ -1277,11 +1278,32 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
   };
 
   const handleOpenCategorizerForTitle = useCallback((title: string, type?: MediaType) => {
+    const trace = mainThreadProfiler.traceNavigation('MediaSearch', 'open-web-categorizer', { title });
     const curType = selectedTypeRef.current;
     setCategorizerInitialQuery(title);
     setCategorizerInitialType(type || (curType !== 'all' && curType !== 'collections' ? curType : 'all'));
     setIsCategorizerModalOpen(true);
+    trace.endSync();
   }, []);
+
+  const handleCloseCategorizerModal = useCallback(() => {
+    setIsCategorizerModalOpen(false);
+  }, []);
+
+  const handleSaveFromCategorizer = useCallback(
+    (media: MediaMetadata) => {
+      onSaveCategorizedMedia?.(media);
+    },
+    [onSaveCategorizedMedia]
+  );
+
+  const handleManualMatchFromCategorizer = useCallback(
+    (media: MediaMetadata) => {
+      setIsCategorizerModalOpen(false);
+      onOpenManualMatch?.(media.title, media.type);
+    },
+    [onOpenManualMatch]
+  );
 
   const handleBatchCategorizeAll = async () => {
     if (isBatchCategorizing) return;
@@ -1636,7 +1658,7 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
         <Suspense fallback={null}>
           <WebSearchCategorizerModal
             isOpen={isCategorizerModalOpen}
-            onClose={() => setIsCategorizerModalOpen(false)}
+            onClose={handleCloseCategorizerModal}
             initialQuery={categorizerInitialQuery}
             initialType={categorizerInitialType}
             mediaLibrary={mediaLibrary}
@@ -1644,19 +1666,10 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
             onOpenApiDebugger={onOpenApiDebugger}
             onOpenClassifierModal={onOpenClassifierModal}
             onImportMediaBatch={onImportMediaBatch}
-            onSaveCategorizedMedia={(media) => {
-              if (onSaveCategorizedMedia) {
-                onSaveCategorizedMedia(media);
-              }
-            }}
+            onSaveCategorizedMedia={handleSaveFromCategorizer}
             onPlayMedia={onPlayMedia}
             onOpenInNfoStudio={onOpenInNfoStudio}
-            onOpenManualMatch={(media) => {
-              setIsCategorizerModalOpen(false);
-              if (onOpenManualMatch) {
-                onOpenManualMatch(media.title, media.type);
-              }
-            }}
+            onOpenManualMatch={handleManualMatchFromCategorizer}
           />
         </Suspense>
       )}
@@ -2667,9 +2680,11 @@ export const MediaSearch: React.FC<MediaSearchProps> = React.memo(({
             </p>
             <button
               onClick={() => {
+                const trace = mainThreadProfiler.traceNavigation('MediaSearch', 'open-web-categorizer-sidebar');
                 setCategorizerInitialQuery(searchQuery || '');
                 setCategorizerInitialType(selectedType === 'collections' ? 'all' : selectedType);
                 setIsCategorizerModalOpen(true);
+                trace.endSync();
               }}
               className="w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] transition shadow cursor-pointer text-center"
             >

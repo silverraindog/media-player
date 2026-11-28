@@ -1,4 +1,12 @@
-import React, { useState } from 'react';
+import React, { Profiler, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Grid,
+  List,
+  useDynamicRowHeight,
+  useListRef,
+  type CellComponentProps,
+  type RowComponentProps,
+} from 'react-window';
 import {
   X,
   Search,
@@ -33,15 +41,326 @@ import { MediaMetadata, MediaType, SambaShareNode } from '../types';
 import { resolveMediaWithFallback } from '../utils/clientMediaResolver';
 import {
   fetchSecondaryMetadata,
-  findUnimportedUnsortedNodes,
+  findUnimportedUnsortedNodesAsync,
+  isMediaImportedOrUnverified,
   isMediaInUnsortedPath,
   isMediaMissingArtwork,
   isMediaMissingGenres,
   isMediaMissingSynopsis,
-  isMediaUncategorized,
   nodeToMediaMetadata,
+  type UnimportedUnsortedEntry,
 } from '../utils/mediaExtractor';
 import { categorizeMediaWithRetry } from '../utils/metadataCategorizer';
+import { mainThreadProfiler } from '../utils/performanceProfiler';
+
+interface MediaDefectFlags {
+  inUnsorted: boolean;
+  missingSyn: boolean;
+  missingArt: boolean;
+  missingGen: boolean;
+  isUncategorized: boolean;
+}
+
+interface UncategorizedRowExtraProps {
+  items: MediaMetadata[];
+  flagsById: Map<string, MediaDefectFlags>;
+  hasManualMatch: boolean;
+  onSelectForWebCategorize: (item: MediaMetadata) => void;
+  onManualMatch?: (item: MediaMetadata) => void;
+}
+
+const UncategorizedMediaItemCard = React.memo(
+  ({
+    item,
+    flags,
+    hasManualMatch,
+    onSelectForWebCategorize,
+    onManualMatch,
+  }: {
+    item: MediaMetadata;
+    flags?: MediaDefectFlags;
+    hasManualMatch: boolean;
+    onSelectForWebCategorize: (item: MediaMetadata) => void;
+    onManualMatch?: (item: MediaMetadata) => void;
+  }) => {
+    const missingSyn = flags ? flags.missingSyn : isMediaMissingSynopsis(item);
+    const missingArt = flags ? flags.missingArt : isMediaMissingArtwork(item);
+    const missingGen = flags ? flags.missingGen : isMediaMissingGenres(item);
+    const inUnsorted = flags ? flags.inUnsorted : isMediaInUnsortedPath(item);
+    const displayPath = item.folderPath || item.recommendedFolderStructure || item.path;
+
+    return (
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 transition">
+        {/* Media Item Info */}
+        <div className="flex items-center gap-3 min-w-0">
+          {/* Thumbnail / Artwork Placeholder */}
+          <div className="w-11 h-14 rounded-lg bg-slate-950 border border-slate-800 shrink-0 overflow-hidden flex items-center justify-center relative">
+            {item.posterUrl && !missingArt ? (
+              <img
+                src={item.posterUrl}
+                alt={item.title}
+                loading="lazy"
+                decoding="async"
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center text-slate-600">
+                <ImageOff className="w-4 h-4 text-amber-500/70 mb-0.5" />
+                <span className="text-[8px] font-mono">No Art</span>
+              </div>
+            )}
+          </div>
+
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-bold text-white truncate max-w-xs sm:max-w-sm">
+                {item.title}
+              </span>
+              {item.year && (
+                <span className="text-[10px] text-slate-400 font-mono">
+                  ({item.year})
+                </span>
+              )}
+              <span
+                className={`px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase ${
+                  item.type === 'series'
+                    ? 'bg-purple-950 text-purple-300 border border-purple-800/60'
+                    : item.type === 'album'
+                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/60'
+                    : 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
+                }`}
+              >
+                {item.type}
+              </span>
+            </div>
+
+            {/* Defect Badges */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {inUnsorted && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-950/80 border border-orange-700/70 text-orange-300 flex items-center gap-1 font-medium">
+                  <FolderOpen className="w-3 h-3" />
+                  <span>Unsorted Path</span>
+                </span>
+              )}
+              {missingGen && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-950/80 border border-indigo-800/70 text-indigo-300 flex items-center gap-1 font-medium">
+                  <Tag className="w-3 h-3" />
+                  <span>Needs Genres</span>
+                </span>
+              )}
+              {missingSyn && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950/80 border border-red-800/70 text-red-300 flex items-center gap-1 font-medium">
+                  <FileQuestion className="w-3 h-3" />
+                  <span>Missing Synopsis</span>
+                </span>
+              )}
+              {missingArt && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950/80 border border-amber-800/70 text-amber-300 flex items-center gap-1 font-medium">
+                  <ImageOff className="w-3 h-3" />
+                  <span>Missing Artwork</span>
+                </span>
+              )}
+              {displayPath && (
+                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[220px] hidden md:inline" title={displayPath}>
+                  {displayPath}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* One-Click Action Buttons */}
+        <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0">
+          <button
+            type="button"
+            onClick={() => onSelectForWebCategorize(item)}
+            className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+            title="One-click AI Web Search & Categorize"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Web Categorize</span>
+          </button>
+
+          {hasManualMatch && onManualMatch && (
+            <button
+              type="button"
+              onClick={() => onManualMatch(item)}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-[11px] font-semibold transition border border-slate-700 flex items-center gap-1 cursor-pointer"
+              title="Manual TMDB Match & AI Synopsis"
+            >
+              <Tag className="w-3.5 h-3.5 text-amber-400" />
+              <span>Manual Match</span>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+);
+
+const UncategorizedMediaRow = ({
+  index,
+  style,
+  items,
+  flagsById,
+  hasManualMatch,
+  onSelectForWebCategorize,
+  onManualMatch,
+}: RowComponentProps<UncategorizedRowExtraProps>): React.ReactElement => {
+  const item = items[index];
+  return (
+    <div style={style} className="pb-2.5 pr-1">
+      {item ? (
+        <UncategorizedMediaItemCard
+          item={item}
+          flags={flagsById.get(item.id)}
+          hasManualMatch={hasManualMatch}
+          onSelectForWebCategorize={onSelectForWebCategorize}
+          onManualMatch={onManualMatch}
+        />
+      ) : null}
+    </div>
+  );
+};
+
+type UncatSubFilter = 'all' | 'unsorted' | 'synopsis' | 'artwork' | 'genres' | 'series' | 'movie' | 'album';
+
+interface UncatNavItem {
+  id: UncatSubFilter;
+  label: string;
+  count: number;
+  activeClass: string;
+  width: number;
+}
+
+interface UncatNavCellExtraProps {
+  items: UncatNavItem[];
+  activeFilter: UncatSubFilter;
+  onSelectFilter: (id: UncatSubFilter) => void;
+}
+
+const UncatNavCell = ({
+  columnIndex,
+  style,
+  items,
+  activeFilter,
+  onSelectFilter,
+}: CellComponentProps<UncatNavCellExtraProps>): React.ReactElement | null => {
+  const navItem = items[columnIndex];
+  if (!navItem) return null;
+  const isActive = activeFilter === navItem.id;
+  return (
+    <div style={style} className="pr-1.5 flex items-center">
+      <button
+        type="button"
+        onClick={() => onSelectFilter(navItem.id)}
+        className={`w-full h-[30px] px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer whitespace-nowrap truncate ${
+          isActive
+            ? navItem.activeClass
+            : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+        }`}
+      >
+        {navItem.label} ({navItem.count})
+      </button>
+    </div>
+  );
+};
+
+interface SearchPresetItem {
+  name: string;
+  type: string;
+  category: string;
+}
+
+interface PresetNavCellExtraProps {
+  presets: SearchPresetItem[];
+  onSelectPreset: (preset: SearchPresetItem) => void;
+}
+
+const PresetNavCell = ({
+  columnIndex,
+  style,
+  presets,
+  onSelectPreset,
+}: CellComponentProps<PresetNavCellExtraProps>): React.ReactElement | null => {
+  const preset = presets[columnIndex];
+  if (!preset) return null;
+  return (
+    <div style={style} className="pr-1.5 flex items-center">
+      <button
+        type="button"
+        onClick={() => onSelectPreset(preset)}
+        className="w-full h-[28px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 text-[11px] font-medium transition cursor-pointer flex items-center justify-center gap-1 whitespace-nowrap truncate"
+      >
+        <span className="truncate">{preset.name}</span>
+        <span className="text-[10px] text-indigo-400 opacity-80 shrink-0">({preset.category})</span>
+      </button>
+    </div>
+  );
+};
+
+interface ApiLogItemEntry {
+  id: string;
+  timestamp: string;
+  method: string;
+  url: string;
+  requestBody?: any;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  responseBody?: any;
+  error?: string;
+}
+
+interface ApiLogRowExtraProps {
+  logs: ApiLogItemEntry[];
+}
+
+const ApiLogRow = ({ index, style, logs }: RowComponentProps<ApiLogRowExtraProps>): React.ReactElement | null => {
+  const log = logs[index];
+  if (!log) return null;
+  return (
+    <div style={style} className="pb-2.5 pr-1">
+      <div className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                log.method === 'POST' ? 'bg-indigo-950 text-indigo-300' : 'bg-emerald-950 text-emerald-300'
+              }`}
+            >
+              {log.method}
+            </span>
+            <span className="text-slate-200 font-bold truncate">{log.url}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span
+              className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                log.status >= 200 && log.status < 300
+                  ? 'bg-emerald-950 text-emerald-400'
+                  : 'bg-rose-950 text-rose-400'
+              }`}
+            >
+              {log.status} {log.statusText}
+            </span>
+            <span className="text-slate-500 text-[10px]">{log.timestamp.split('T')[1]?.slice(0, 8)}</span>
+          </div>
+        </div>
+        {log.requestBody && (
+          <div className="text-[11px] text-slate-400 truncate">
+            <strong className="text-indigo-400">Payload:</strong> {JSON.stringify(log.requestBody)}
+          </div>
+        )}
+        {log.error && (
+          <div className="text-[11px] text-rose-400 truncate">
+            <strong>Error:</strong> {log.error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 interface WebSearchCategorizerModalProps {
   isOpen: boolean;
@@ -74,7 +393,7 @@ const POPULAR_SEARCH_PRESETS = [
   { name: 'The Office', type: 'series', category: 'Comedy' },
 ];
 
-export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps> = ({
+export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps> = React.memo(({
   isOpen,
   onClose,
   onSaveCategorizedMedia,
@@ -92,6 +411,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [activeTabFilter, setActiveTabFilter] = useState<'search' | 'uncategorized'>('search');
   const [uncatSubFilter, setUncatSubFilter] = useState<'all' | 'unsorted' | 'synopsis' | 'artwork' | 'genres' | 'series' | 'movie' | 'album'>('all');
   const [uncatSearchQuery, setUncatSearchQuery] = useState('');
+  const deferredUncatSearchQuery = useDeferredValue(uncatSearchQuery);
   const [batchProcessing, setBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
@@ -107,7 +427,10 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
   const [detectedCategories, setDetectedCategories] = useState<string[]>([]);
   const [selectedPrimaryCategory, setSelectedPrimaryCategory] = useState<string>('Drama');
   const [isSaved, setIsSaved] = useState(false);
-  const [showIncompleteList, setShowIncompleteList] = useState(false);
+  const [unimportedUnsorted, setUnimportedUnsorted] = useState<{
+    folderPaths: string[];
+    fileNodes: UnimportedUnsortedEntry[];
+  }>({ folderPaths: [], fileNodes: [] });
 
   interface ApiLogEntry {
     id: string;
@@ -216,18 +539,125 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   }, [initialQuery, initialType]);
 
-  const incompleteItems = mediaLibrary.filter(isMediaUncategorized);
+  const uncatListRef = useListRef(null);
+  const modalProfilerOnRender = useMemo(
+    () => mainThreadProfiler.createReactProfilerCallback('WebSearchCategorizerModal'),
+    []
+  );
+
+  // Start >16ms frame-budget & long-task monitoring while Web Search & Media Categorizer is open
+  useEffect(() => {
+    if (!isOpen) return;
+    const stopMonitor = mainThreadProfiler.startScopeMonitor('WebSearchCategorizerModal');
+    const navTrace = mainThreadProfiler.traceNavigation('WebSearchCategorizerModal', 'open-modal', {
+      libraryCount: mediaLibrary.length,
+      sambaRootCount: sambaTree.length,
+    });
+    navTrace.endSync();
+    return () => {
+      stopMonitor();
+    };
+  }, [isOpen]);
+
+  // Single-pass O(N) memoized defect analysis profiled against 16ms frame budget
+  const {
+    flagsById,
+    incompleteItems,
+    unsortedPathCount,
+    missingSynopsisCount,
+    missingArtworkCount,
+    missingGenresCount,
+  } = useMemo(() => {
+    const flagsMap = new Map<string, MediaDefectFlags>();
+    if (!isOpen || mediaLibrary.length === 0) {
+      return {
+        flagsById: flagsMap,
+        incompleteItems: [] as MediaMetadata[],
+        unsortedPathCount: 0,
+        missingSynopsisCount: 0,
+        missingArtworkCount: 0,
+        missingGenresCount: 0,
+      };
+    }
+
+    return mainThreadProfiler.profileSyncTask(
+      'WebSearchCategorizerModal',
+      'classifyLibrary',
+      () => {
+        const incomplete: MediaMetadata[] = [];
+        let unsorted = 0;
+        let missingSynCount = 0;
+        let missingArtCount = 0;
+        let missingGenCount = 0;
+
+        for (let i = 0; i < mediaLibrary.length; i++) {
+          const m = mediaLibrary[i];
+          const missingSyn = isMediaMissingSynopsis(m);
+          const missingArt = isMediaMissingArtwork(m);
+          const missingGen = isMediaMissingGenres(m);
+          const inUnsorted = isMediaInUnsortedPath(m);
+          const isUncategorized =
+            missingSyn ||
+            missingArt ||
+            missingGen ||
+            (inUnsorted && m.status !== 'categorized') ||
+            (isMediaImportedOrUnverified(m) && m.status !== 'categorized');
+
+          flagsMap.set(m.id, {
+            inUnsorted,
+            missingSyn,
+            missingArt,
+            missingGen,
+            isUncategorized,
+          });
+
+          if (isUncategorized) {
+            incomplete.push(m);
+            if (inUnsorted) unsorted++;
+            if (missingSyn) missingSynCount++;
+            if (missingArt) missingArtCount++;
+            if (missingGen) missingGenCount++;
+          }
+        }
+
+        return {
+          flagsById: flagsMap,
+          incompleteItems: incomplete,
+          unsortedPathCount: unsorted,
+          missingSynopsisCount: missingSynCount,
+          missingArtworkCount: missingArtCount,
+          missingGenresCount: missingGenCount,
+        };
+      },
+      { itemCount: mediaLibrary.length }
+    );
+  }, [isOpen, mediaLibrary]);
+
   const sourceUncatList = showAllLibraryInUncat ? mediaLibrary : incompleteItems;
 
-  const unsortedPathCount = incompleteItems.filter(isMediaInUnsortedPath).length;
-  const missingSynopsisCount = incompleteItems.filter(isMediaMissingSynopsis).length;
-  const missingArtworkCount = incompleteItems.filter(isMediaMissingArtwork).length;
-  const missingGenresCount = incompleteItems.filter(isMediaMissingGenres).length;
+  // Non-blocking chunked scan of sambaTree so large trees never freeze modal open
+  useEffect(() => {
+    if (!isOpen || !Array.isArray(sambaTree) || sambaTree.length === 0) {
+      setUnimportedUnsorted({ folderPaths: [], fileNodes: [] });
+      return;
+    }
 
-  const unimportedUnsorted = React.useMemo(
-    () => findUnimportedUnsortedNodes(sambaTree, mediaLibrary),
-    [sambaTree, mediaLibrary]
-  );
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      findUnimportedUnsortedNodesAsync(sambaTree, mediaLibrary, undefined, controller.signal)
+        .then((result) => {
+          if (!controller.signal.aborted) {
+            setUnimportedUnsorted(result);
+          }
+        })
+        .catch(() => null);
+    }, 16);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [isOpen, sambaTree, mediaLibrary]);
 
   const handleImportUnsortedFromTree = () => {
     if (unimportedUnsorted.fileNodes.length === 0) return;
@@ -253,45 +683,146 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     }
   };
 
-  const seriesIncompleteCount = sourceUncatList.filter((m) => m.type === 'series').length;
-  const movieIncompleteCount = sourceUncatList.filter((m) => m.type === 'movie').length;
-  const albumIncompleteCount = sourceUncatList.filter((m) => m.type === 'album').length;
+  const { seriesIncompleteCount, movieIncompleteCount, albumIncompleteCount } = useMemo(() => {
+    if (!isOpen) {
+      return { seriesIncompleteCount: 0, movieIncompleteCount: 0, albumIncompleteCount: 0 };
+    }
+    let series = 0;
+    let movie = 0;
+    let album = 0;
+    for (let i = 0; i < sourceUncatList.length; i++) {
+      const t = sourceUncatList[i].type;
+      if (t === 'series') series++;
+      else if (t === 'movie') movie++;
+      else if (t === 'album') album++;
+    }
+    return {
+      seriesIncompleteCount: series,
+      movieIncompleteCount: movie,
+      albumIncompleteCount: album,
+    };
+  }, [isOpen, sourceUncatList]);
 
-  const filteredUncategorized = sourceUncatList.filter((item) => {
-    // Text search filter
-    if (uncatSearchQuery.trim()) {
-      const qLower = uncatSearchQuery.toLowerCase();
-      const matchText =
-        item.title.toLowerCase().includes(qLower) ||
-        (item.folderPath || '').toLowerCase().includes(qLower) ||
-        (item.recommendedFolderStructure || '').toLowerCase().includes(qLower);
-      if (!matchText) return false;
-    }
+  const filteredUncategorized = useMemo(() => {
+    if (!isOpen || activeTabFilter !== 'uncategorized') return [] as MediaMetadata[];
+    return mainThreadProfiler.profileSyncTask(
+      'WebSearchCategorizerModal',
+      'filterUncategorized',
+      () => {
+        const qLower = deferredUncatSearchQuery.trim().toLowerCase();
 
-    // Sub-category filter
-    if (uncatSubFilter === 'unsorted') {
-      return isMediaInUnsortedPath(item);
-    }
-    if (uncatSubFilter === 'synopsis') {
-      return isMediaMissingSynopsis(item);
-    }
-    if (uncatSubFilter === 'artwork') {
-      return isMediaMissingArtwork(item);
-    }
-    if (uncatSubFilter === 'genres') {
-      return isMediaMissingGenres(item);
-    }
-    if (uncatSubFilter === 'series') {
-      return item.type === 'series';
-    }
-    if (uncatSubFilter === 'movie') {
-      return item.type === 'movie';
-    }
-    if (uncatSubFilter === 'album') {
-      return item.type === 'album';
-    }
-    return true;
+        return sourceUncatList.filter((item) => {
+          if (qLower) {
+            const matchText =
+              item.title.toLowerCase().includes(qLower) ||
+              (item.folderPath || '').toLowerCase().includes(qLower) ||
+              (item.recommendedFolderStructure || '').toLowerCase().includes(qLower);
+            if (!matchText) return false;
+          }
+
+          if (uncatSubFilter === 'series') return item.type === 'series';
+          if (uncatSubFilter === 'movie') return item.type === 'movie';
+          if (uncatSubFilter === 'album') return item.type === 'album';
+
+          const flags = flagsById.get(item.id);
+          if (uncatSubFilter === 'unsorted') return flags ? flags.inUnsorted : isMediaInUnsortedPath(item);
+          if (uncatSubFilter === 'synopsis') return flags ? flags.missingSyn : isMediaMissingSynopsis(item);
+          if (uncatSubFilter === 'artwork') return flags ? flags.missingArt : isMediaMissingArtwork(item);
+          if (uncatSubFilter === 'genres') return flags ? flags.missingGen : isMediaMissingGenres(item);
+          return true;
+        });
+      },
+      { sourceCount: sourceUncatList.length, filter: uncatSubFilter }
+    );
+  }, [isOpen, activeTabFilter, sourceUncatList, deferredUncatSearchQuery, uncatSubFilter, flagsById]);
+
+  const dynamicUncatRowHeight = useDynamicRowHeight({
+    defaultRowHeight: 88,
+    key: `${uncatSubFilter}-${showAllLibraryInUncat}-${filteredUncategorized.length}`,
   });
+
+  const getUncatRowKey = useCallback(
+    (index: number, data: UncategorizedRowExtraProps) => {
+      return data.items[index]?.id || `uncat-${index}`;
+    },
+    []
+  );
+
+  const handleSwitchTab = useCallback(
+    (nextTab: 'search' | 'uncategorized') => {
+      const trace = mainThreadProfiler.traceNavigation(
+        'WebSearchCategorizerModal',
+        `switch-tab:${nextTab}`,
+        { itemCount: incompleteItems.length }
+      );
+      setActiveTabFilter(nextTab);
+      trace.endSync();
+    },
+    [incompleteItems.length]
+  );
+
+  const handleSelectUncatFilter = useCallback((nextFilter: UncatSubFilter) => {
+    const trace = mainThreadProfiler.traceNavigation(
+      'WebSearchCategorizerModal',
+      `sub-filter:${nextFilter}`
+    );
+    setUncatSubFilter(nextFilter);
+    try {
+      uncatListRef.current?.scrollToRow({ index: 0 });
+    } catch {}
+    trace.endSync();
+  }, [uncatListRef]);
+
+  const uncatNavItems: UncatNavItem[] = useMemo(() => {
+    const items: UncatNavItem[] = [
+      { id: 'all', label: 'All', count: incompleteItems.length, activeClass: 'bg-amber-600 text-white', width: 92 },
+      { id: 'unsorted', label: 'Unsorted Path', count: unsortedPathCount, activeClass: 'bg-orange-600 text-white', width: 132 },
+      { id: 'genres', label: 'Needs Genres', count: missingGenresCount, activeClass: 'bg-indigo-600 text-white', width: 134 },
+      { id: 'synopsis', label: 'No Synopsis', count: missingSynopsisCount, activeClass: 'bg-red-600 text-white', width: 124 },
+      { id: 'artwork', label: 'No Artwork', count: missingArtworkCount, activeClass: 'bg-cyan-600 text-white', width: 118 },
+      { id: 'series', label: 'Series', count: seriesIncompleteCount, activeClass: 'bg-purple-600 text-white', width: 98 },
+      { id: 'movie', label: 'Movies', count: movieIncompleteCount, activeClass: 'bg-blue-600 text-white', width: 102 },
+    ];
+    if (albumIncompleteCount > 0) {
+      items.push({
+        id: 'album',
+        label: 'Music',
+        count: albumIncompleteCount,
+        activeClass: 'bg-emerald-600 text-white',
+        width: 98,
+      });
+    }
+    return items;
+  }, [
+    incompleteItems.length,
+    unsortedPathCount,
+    missingGenresCount,
+    missingSynopsisCount,
+    missingArtworkCount,
+    seriesIncompleteCount,
+    movieIncompleteCount,
+    albumIncompleteCount,
+  ]);
+
+  const uncatNavCellProps: UncatNavCellExtraProps = useMemo(
+    () => ({
+      items: uncatNavItems,
+      activeFilter: uncatSubFilter,
+      onSelectFilter: handleSelectUncatFilter,
+    }),
+    [uncatNavItems, uncatSubFilter, handleSelectUncatFilter]
+  );
+
+  const getUncatNavColWidth = useCallback(
+    (index: number, data: UncatNavCellExtraProps) => data.items[index]?.width ?? 116,
+    []
+  );
+
+  const getUncatNavColKey = useCallback(
+    ({ columnIndex, data }: { columnIndex: number; data: UncatNavCellExtraProps; rowIndex: number }) =>
+      data.items[columnIndex]?.id || `nav-${columnIndex}`,
+    []
+  );
 
   const handleBatchCategorizeAll = async () => {
     if (incompleteItems.length === 0 || batchProcessing) return;
@@ -335,7 +866,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     setTimeout(() => setBatchMessage(null), 5000);
   };
 
-  if (!isOpen) return null;
+  const handleSearchRef = useRef<(targetQuery?: string, targetType?: MediaType | 'all') => Promise<void>>(async () => {});
 
   const handleSearch = async (targetQuery?: string, targetType?: MediaType | 'all') => {
     const q = (targetQuery || query).trim();
@@ -534,8 +1065,71 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
     onClose();
   };
 
+  handleSearchRef.current = handleSearch;
+
+  const handleSelectItemForWebCategorize = useCallback(
+    (item: MediaMetadata) => {
+      setActiveSourceItem(item);
+      setActiveTabFilter('search');
+      setQuery(item.title);
+      setMediaType(item.type);
+      if (item.year) setYearHint(item.year.toString());
+      void handleSearchRef.current(item.title, item.type);
+    },
+    []
+  );
+
+  const uncatRowProps: UncategorizedRowExtraProps = useMemo(
+    () => ({
+      items: filteredUncategorized,
+      flagsById,
+      hasManualMatch: Boolean(onOpenManualMatch),
+      onSelectForWebCategorize: handleSelectItemForWebCategorize,
+      onManualMatch: onOpenManualMatch,
+    }),
+    [filteredUncategorized, flagsById, onOpenManualMatch, handleSelectItemForWebCategorize]
+  );
+
+  const handleSelectPreset = useCallback((preset: SearchPresetItem) => {
+    setQuery(preset.name);
+    setMediaType(preset.type as any);
+    void handleSearchRef.current(preset.name, preset.type as any);
+  }, []);
+
+  const presetCellProps: PresetNavCellExtraProps = useMemo(
+    () => ({
+      presets: POPULAR_SEARCH_PRESETS,
+      onSelectPreset: handleSelectPreset,
+    }),
+    [handleSelectPreset]
+  );
+
+  const getPresetColWidth = useCallback(
+    (index: number, data: PresetNavCellExtraProps) => {
+      const p = data.presets[index];
+      if (!p) return 150;
+      return Math.min(260, Math.max(125, (p.name.length + p.category.length) * 7 + 44));
+    },
+    []
+  );
+
+  const getPresetColKey = useCallback(
+    ({ columnIndex, data }: { columnIndex: number; data: PresetNavCellExtraProps; rowIndex: number }) =>
+      data.presets[columnIndex]?.name || `preset-${columnIndex}`,
+    []
+  );
+
+  const apiLogRowProps: ApiLogRowExtraProps = useMemo(() => ({ logs: apiLogs }), [apiLogs]);
+  const getApiLogRowKey = useCallback(
+    (index: number, data: ApiLogRowExtraProps) => data.logs[index]?.id || `apilog-${index}`,
+    []
+  );
+
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+    <Profiler id="WebSearchCategorizerModal" onRender={modalProfilerOnRender}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 animate-in fade-in duration-150">
       <div className="relative w-full max-w-3xl bg-slate-950 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-slate-800 shrink-0">
@@ -582,7 +1176,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
         <div className="flex items-center gap-2 px-6 pt-3 pb-2.5 bg-slate-900/90 border-b border-slate-800 shrink-0">
           <button
             type="button"
-            onClick={() => setActiveTabFilter('search')}
+            onClick={() => handleSwitchTab('search')}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
               activeTabFilter === 'search'
                 ? 'bg-indigo-600 text-white shadow-xs'
@@ -595,7 +1189,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
 
           <button
             type="button"
-            onClick={() => setActiveTabFilter('uncategorized')}
+            onClick={() => handleSwitchTab('uncategorized')}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
               activeTabFilter === 'uncategorized'
                 ? 'bg-amber-600 text-white shadow-xs ring-1 ring-amber-400/50'
@@ -663,104 +1257,27 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                 </div>
               )}
 
-              {/* Sub-Filters & Quick Search */}
+              {/* Virtualized Sub-Filters Navigation & Quick Search */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
-                {/* Filter Pills */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('all')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'all'
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    All ({incompleteItems.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('unsorted')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'unsorted'
-                        ? 'bg-orange-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    Unsorted Path ({unsortedPathCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('genres')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'genres'
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    Needs Genres ({missingGenresCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('synopsis')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'synopsis'
-                        ? 'bg-red-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    No Synopsis ({missingSynopsisCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('artwork')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'artwork'
-                        ? 'bg-cyan-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    No Artwork ({missingArtworkCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('series')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'series'
-                        ? 'bg-purple-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    Series ({seriesIncompleteCount})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUncatSubFilter('movie')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                      uncatSubFilter === 'movie'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                    }`}
-                  >
-                    Movies ({movieIncompleteCount})
-                  </button>
-                  {albumIncompleteCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setUncatSubFilter('album')}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
-                        uncatSubFilter === 'album'
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                      }`}
-                    >
-                      Music ({albumIncompleteCount})
-                    </button>
-                  )}
+                {/* Virtualized Horizontal Navigation Strip */}
+                <div className="flex-1 min-w-0" data-virtualized-nav="true">
+                  <Grid<UncatNavCellExtraProps>
+                    columnCount={uncatNavItems.length}
+                    columnWidth={getUncatNavColWidth}
+                    columnKey={getUncatNavColKey}
+                    rowCount={1}
+                    rowHeight={34}
+                    cellComponent={UncatNavCell}
+                    cellProps={uncatNavCellProps}
+                    defaultHeight={38}
+                    defaultWidth={480}
+                    overscanCount={3}
+                    style={{ height: 40, width: '100%' }}
+                  />
                 </div>
 
                 {/* Search in uncategorized */}
-                <div className="relative min-w-[200px]">
+                <div className="relative min-w-[200px] shrink-0">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                   <input
                     type="text"
@@ -839,7 +1356,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   )}
                 </div>
               ) : (
-                <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+                <div className="space-y-2.5">
                   {showAllLibraryInUncat && (
                     <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-indigo-950/40 border border-indigo-800/50 text-[11px] text-indigo-200">
                       <span>Showing all {mediaLibrary.length} library items for optional re-categorization.</span>
@@ -852,128 +1369,20 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                       </button>
                     </div>
                   )}
-                  {filteredUncategorized.map((item) => {
-                    const missingSyn = isMediaMissingSynopsis(item);
-                    const missingArt = isMediaMissingArtwork(item);
-                    const missingGen = isMediaMissingGenres(item);
-                    const displayPath = item.folderPath || item.recommendedFolderStructure || item.path;
-
-                    return (
-                      <div
-                        key={item.id}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 transition"
-                      >
-                        {/* Media Item Info */}
-                        <div className="flex items-center gap-3 min-w-0">
-                          {/* Thumbnail / Artwork Placeholder */}
-                          <div className="w-11 h-14 rounded-lg bg-slate-950 border border-slate-800 shrink-0 overflow-hidden flex items-center justify-center relative">
-                            {item.posterUrl && !missingArt ? (
-                              <img
-                                src={item.posterUrl}
-                                alt={item.title}
-                                className="w-full h-full object-cover"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <div className="flex flex-col items-center justify-center text-slate-600">
-                                <ImageOff className="w-4 h-4 text-amber-500/70 mb-0.5" />
-                                <span className="text-[8px] font-mono">No Art</span>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="min-w-0 space-y-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-xs font-bold text-white truncate max-w-xs sm:max-w-sm">
-                                {item.title}
-                              </span>
-                              {item.year && (
-                                <span className="text-[10px] text-slate-400 font-mono">
-                                  ({item.year})
-                                </span>
-                              )}
-                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase ${
-                                item.type === 'series'
-                                  ? 'bg-purple-950 text-purple-300 border border-purple-800/60'
-                                  : item.type === 'album'
-                                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/60'
-                                  : 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
-                              }`}>
-                                {item.type}
-                              </span>
-                            </div>
-
-                            {/* Defect Badges */}
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {isMediaInUnsortedPath(item) && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-orange-950/80 border border-orange-700/70 text-orange-300 flex items-center gap-1 font-medium">
-                                  <FolderOpen className="w-3 h-3" />
-                                  <span>Unsorted Path</span>
-                                </span>
-                              )}
-                              {missingGen && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-indigo-950/80 border border-indigo-800/70 text-indigo-300 flex items-center gap-1 font-medium">
-                                  <Tag className="w-3 h-3" />
-                                  <span>Needs Genres</span>
-                                </span>
-                              )}
-                              {missingSyn && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-950/80 border border-red-800/70 text-red-300 flex items-center gap-1 font-medium">
-                                  <FileQuestion className="w-3 h-3" />
-                                  <span>Missing Synopsis</span>
-                                </span>
-                              )}
-                              {missingArt && (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-950/80 border border-amber-800/70 text-amber-300 flex items-center gap-1 font-medium">
-                                  <ImageOff className="w-3 h-3" />
-                                  <span>Missing Artwork</span>
-                                </span>
-                              )}
-                              {displayPath && (
-                                <span className="text-[10px] font-mono text-slate-500 truncate max-w-[220px] hidden md:inline" title={displayPath}>
-                                  {displayPath}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* One-Click Action Buttons */}
-                        <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0">
-                          {/* 1. One-Click Re-Categorization flow */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveSourceItem(item);
-                              setActiveTabFilter('search');
-                              setQuery(item.title);
-                              setMediaType(item.type);
-                              if (item.year) setYearHint(item.year.toString());
-                              handleSearch(item.title, item.type);
-                            }}
-                            className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
-                            title="One-click AI Web Search & Categorize"
-                          >
-                            <Sparkles className="w-3.5 h-3.5" />
-                            <span>Web Categorize</span>
-                          </button>
-
-                          {/* 2. One-Click Manual Match flow */}
-                          {onOpenManualMatch && (
-                            <button
-                              type="button"
-                              onClick={() => onOpenManualMatch(item)}
-                              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-[11px] font-semibold transition border border-slate-700 flex items-center gap-1 cursor-pointer"
-                              title="Manual TMDB Match & AI Synopsis"
-                            >
-                              <Tag className="w-3.5 h-3.5 text-amber-400" />
-                              <span>Manual Match</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                  <List<UncategorizedRowExtraProps>
+                    listRef={uncatListRef}
+                    rowCount={filteredUncategorized.length}
+                    rowHeight={dynamicUncatRowHeight}
+                    rowComponent={UncategorizedMediaRow}
+                    rowProps={uncatRowProps}
+                    rowKey={getUncatRowKey}
+                    defaultHeight={400}
+                    overscanCount={5}
+                    style={{
+                      height: Math.min(420, Math.max(108, filteredUncategorized.length * 88)),
+                      width: '100%',
+                    }}
+                  />
                 </div>
               )}
             </div>
@@ -994,7 +1403,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setActiveTabFilter('uncategorized')}
+                    onClick={() => handleSwitchTab('uncategorized')}
                     className="px-2.5 py-1 rounded-md bg-amber-900/60 hover:bg-amber-800/80 border border-amber-700/60 text-amber-200 text-xs font-bold transition cursor-pointer"
                   >
                     View Uncategorized Media →
@@ -1010,7 +1419,7 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setActiveTabFilter('uncategorized')}
+                    onClick={() => handleSwitchTab('uncategorized')}
                     className="px-2.5 py-1 rounded-md bg-orange-900/60 hover:bg-orange-800/80 border border-orange-700/60 text-orange-200 text-xs font-bold transition cursor-pointer"
                   >
                     Inspect Unsorted →
@@ -1079,27 +1488,27 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
               </div>
             </div>
 
-            {/* Preset Suggestions */}
-            <div className="flex flex-wrap items-center gap-1.5 text-xs pt-1">
-              <span className="text-slate-400 text-[11px] font-medium flex items-center gap-1">
+            {/* Virtualized Preset Suggestions Strip */}
+            <div className="flex items-center gap-2 text-xs pt-1">
+              <span className="text-slate-400 text-[11px] font-medium flex items-center gap-1 shrink-0">
                 <Compass className="w-3.5 h-3.5 text-indigo-400" />
                 <span>Try:</span>
               </span>
-              {POPULAR_SEARCH_PRESETS.map((preset) => (
-                <button
-                  key={preset.name}
-                  type="button"
-                  onClick={() => {
-                    setQuery(preset.name);
-                    setMediaType(preset.type as any);
-                    handleSearch(preset.name, preset.type as any);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 text-[11px] font-medium transition cursor-pointer flex items-center gap-1"
-                >
-                  <span>{preset.name}</span>
-                  <span className="text-[10px] text-indigo-400 opacity-80">({preset.category})</span>
-                </button>
-              ))}
+              <div className="flex-1 min-w-0" data-virtualized-presets="true">
+                <Grid<PresetNavCellExtraProps>
+                  columnCount={POPULAR_SEARCH_PRESETS.length}
+                  columnWidth={getPresetColWidth}
+                  columnKey={getPresetColKey}
+                  rowCount={1}
+                  rowHeight={30}
+                  cellComponent={PresetNavCell}
+                  cellProps={presetCellProps}
+                  defaultHeight={36}
+                  defaultWidth={560}
+                  overscanCount={3}
+                  style={{ height: 36, width: '100%' }}
+                />
+              </div>
             </div>
           </form>
 
@@ -1312,50 +1721,21 @@ export const WebSearchCategorizerModal: React.FC<WebSearchCategorizerModalProps>
             {apiLogs.length === 0 ? (
               <p className="text-slate-500 italic py-2 text-center">No API requests recorded yet. Perform a search or categorize media to view network traces.</p>
             ) : (
-              <div className="space-y-3">
-                {apiLogs.map((log) => (
-                  <div key={log.id} className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${log.method === 'POST' ? 'bg-indigo-950 text-indigo-300' : 'bg-emerald-950 text-emerald-300'}`}>
-                          {log.method}
-                        </span>
-                        <span className="text-slate-200 font-bold">{log.url}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${log.status >= 200 && log.status < 300 ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'}`}>
-                          {log.status} {log.statusText}
-                        </span>
-                        <span className="text-slate-500 text-[10px]">{log.timestamp.split('T')[1]?.slice(0, 8)}</span>
-                      </div>
-                    </div>
-                    {log.requestBody && (
-                      <div className="text-[11px] text-slate-400">
-                        <strong className="text-indigo-400">Payload:</strong> {JSON.stringify(log.requestBody)}
-                      </div>
-                    )}
-                    {log.headers && Object.keys(log.headers).length > 0 && (
-                      <div className="text-[10px] text-slate-400 bg-slate-950/60 p-1.5 rounded">
-                        <span className="text-cyan-400 font-bold">Response Headers:</span> {JSON.stringify(log.headers)}
-                      </div>
-                    )}
-                    {log.responseBody && (
-                      <div className="text-[11px] text-slate-300 bg-slate-950 p-2 rounded max-h-32 overflow-y-auto">
-                        <strong className="text-emerald-400">Response Body:</strong> <pre className="whitespace-pre-wrap">{typeof log.responseBody === 'string' ? log.responseBody : JSON.stringify(log.responseBody, null, 2)}</pre>
-                      </div>
-                    )}
-                    {log.error && (
-                      <div className="text-[11px] text-rose-400">
-                        <strong>Error:</strong> {log.error}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+              <List<ApiLogRowExtraProps>
+                rowCount={apiLogs.length}
+                rowHeight={76}
+                rowComponent={ApiLogRow}
+                rowProps={apiLogRowProps}
+                rowKey={getApiLogRowKey}
+                defaultHeight={160}
+                overscanCount={4}
+                style={{ height: Math.min(180, Math.max(80, apiLogs.length * 76)), width: '100%' }}
+              />
             )}
           </div>
         )}
       </div>
     </div>
+    </Profiler>
   );
-};
+});

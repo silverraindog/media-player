@@ -58,14 +58,14 @@ class ThumbnailStorageService {
               cacheTier: 'persistent_local',
             });
           });
-        }
 
-        const savedStats = localStorage.getItem(STATS_STORAGE_KEY);
-        if (savedStats) {
-          const p = JSON.parse(savedStats);
-          this.hitCount = p.hitCount || 0;
-          this.missCount = p.missCount || 0;
-          this.totalLookupDurationMs = p.totalLookupDurationMs || 0;
+          const savedStats = localStorage.getItem(STATS_STORAGE_KEY);
+          if (savedStats) {
+            const p = JSON.parse(savedStats);
+            this.hitCount = p.hitCount || 0;
+            this.missCount = p.missCount || 0;
+            this.totalLookupDurationMs = p.totalLookupDurationMs || 0;
+          }
         }
       }
     } catch (err) {
@@ -204,7 +204,7 @@ class ThumbnailStorageService {
         aspect_ratio: t.aspectRatio,
         color_dominant: t.colorDominant,
         source: t.source,
-        file_size_bytes: t.fileSizeBytes,
+        fileSizeBytes: t.fileSizeBytes,
         format: t.format,
         resolution_label: t.resolutionLabel,
         cached_at: t.cachedAt,
@@ -224,7 +224,7 @@ class ThumbnailStorageService {
 
   // Normalize path for consistent cache keys
   private normalizeKey(mediaPath: string): string {
-    return mediaPath.trim().replace(/^(\/\/|[\\/])+/, '').replace(/\\/g, '/');
+    return mediaPath.trim().replace(/^(\\/\\/|[\\\\/])+/, '').replace(/\\\\/g, '/');
   }
 
   // Instant synchronous lookup from memory / local cache - purely non-reactive to avoid render storms
@@ -492,7 +492,6 @@ class ThumbnailStorageService {
     return { cached: this.memoryCache.size, totalScanned: candidates.length };
   }
 
-
   /**
    * Cleanup function for disposal (prevent memory leaks on unmount/dispose)
    */
@@ -507,79 +506,22 @@ class ThumbnailStorageService {
 
     // Clear pending backend sync
     this.pendingBackendSync = [];
-  }
-}
 
-  // Global Singleton Instance of the Thumbnail Storage Layer
-  export const thumbnailStorage = new ThumbnailStorageService();
-    if (targetPath) {
-      const key = this.normalizeKey(targetPath);
-      this.memoryCache.delete(key);
-      try {
-        await fetch(`/api/thumbnails/cache?path=${encodeURIComponent(targetPath)}`, { method: 'DELETE' });
-      } catch (e) {
-        // ignore
-      }
-    } else {
-      this.memoryCache.clear();
-      this.hitCount = 0;
-      this.missCount = 0;
-      this.totalLookupDurationMs = 0;
-      try {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          localStorage.removeItem(LOCAL_STORAGE_KEY);
-          localStorage.removeItem(STATS_STORAGE_KEY);
-        }
-        await fetch('/api/thumbnails/cache', { method: 'DELETE' });
-      } catch (e) {
-        // ignore
-      }
+    // Persist current stats to localStorage for recovery on future re-initialization
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({
+        hitCount: this.hitCount,
+        missCount: this.missCount,
+        totalLookupDurationMs: this.totalLookupDurationMs,
+      }));
+      localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify({
+        hitCount: this.hitCount,
+        missCount: this.missCount,
+        totalLookupDurationMs: this.totalLookupDurationMs,
+      }));
     }
+
     this.persistToLocalStorage();
     this.notifyListeners();
   }
 
-  // Telemetry statistics
-  public getStats(): ThumbnailCacheStats {
-    const totalHits = this.hitCount;
-    const totalRequests = this.hitCount + this.missCount;
-    const hitRatio = totalRequests > 0 ? totalHits / totalRequests : 1.0;
-    const avgLoadTimeMs = totalRequests > 0 ? this.totalLookupDurationMs / totalRequests : 0.2;
-
-    // Approximate size
-    let storageSizeBytes = 0;
-    this.memoryCache.forEach((item) => {
-      storageSizeBytes += (item.mediaPath.length + item.thumbnailUrl.length + 150);
-    });
-
-    let memTier = 0;
-    let localTier = 0;
-    let sqlTier = 0;
-    this.memoryCache.forEach((item) => {
-      if (item.cacheTier === 'memory_lru') memTier++;
-      else if (item.cacheTier === 'persistent_local') localTier++;
-      else if (item.cacheTier === 'sqlite_backend') sqlTier++;
-    });
-
-    return {
-      totalCached: this.memoryCache.size,
-      hitCount: this.hitCount,
-      missCount: this.missCount,
-      hitRatio: Number(hitRatio.toFixed(3)),
-      avgLoadTimeMs: Number(avgLoadTimeMs.toFixed(2)),
-      storageSizeBytes,
-      memoryTierCount: memTier || this.memoryCache.size,
-      localTierCount: localTier,
-      sqliteTierCount: sqlTier,
-      lastSyncedAt: Date.now(),
-    };
-  }
-
-  // Get all items in cache for inspection
-  public getAllCachedItems(): ThumbnailMetadata[] {
-    return Array.from(this.memoryCache.values()).sort((a, b) => b.lastAccessedAt - a.lastAccessedAt);
-  }
-}
-
-// Global Singleton Instance of the Thumbnail Storage Layer
-export const thumbnailStorage = new ThumbnailStorageService();
